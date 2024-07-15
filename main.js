@@ -263,6 +263,7 @@ async function writeFileAtomically(filePath, data) {
     await fs.mkdir(dir, { recursive: true });
 
     await writeFileWithRetry(tempPath, data);
+    await fs.rename(tempPath, filePath);
   } catch (error) {
     console.error(`Error in writeFileAtomically: ${error.message}`);
     // If rename fails, try direct write as a fallback
