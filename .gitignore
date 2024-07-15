@@ -3,3 +3,5 @@ backup
 dist
 dist.old
 out
+.gitignore
+

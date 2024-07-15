@@ -32,6 +32,7 @@ let clipLocation;
 let isLoading = false;
 let currentCleanup = null;
 let allClips = [];
+let contextMenuClip = null;
 
 const settingsModal = document.createElement('div');
 settingsModal.id = 'settingsModal';
@@ -95,7 +96,7 @@ function showThumbnailGenerationText() {
     textElement.style.padding = '10px 20px';
     textElement.style.borderRadius = '20px';
     textElement.style.zIndex = '10000';
-    textElement.style.fontWeight = 'bold';
+    textElement.style.fontWeight = 'normal';
     textElement.textContent = 'Generating thumbnails...';
     document.body.appendChild(textElement);
   }
@@ -255,6 +256,119 @@ function debounce(func, delay) {
   }
 }
 
+function setupContextMenu() {
+  const contextMenu = document.getElementById('context-menu');
+  const contextMenuExport = document.getElementById('context-menu-export');
+  const contextMenuDelete = document.getElementById('context-menu-delete');
+  const contextMenuFavorite = document.getElementById('context-menu-favorite');
+
+  if (!contextMenu || !contextMenuExport || !contextMenuDelete || !contextMenuFavorite) {
+    console.error('One or more context menu elements not found');
+    return;
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!contextMenu.contains(e.target)) {
+      contextMenu.style.display = 'none';
+    }
+  });
+
+  contextMenuExport.addEventListener('click', () => {
+    console.log('Export clicked for clip:', contextMenuClip?.originalName);
+    if (contextMenuClip) {
+      exportClipFromContextMenu(contextMenuClip);
+    }
+    contextMenu.style.display = 'none';
+  });
+
+  contextMenuFavorite.addEventListener('click', () => {
+    console.log('Favorite clicked for clip:', contextMenuClip?.originalName);
+    if (contextMenuClip) {
+      toggleFavorite(contextMenuClip.originalName);
+    }
+    contextMenu.style.display = 'none';
+  });
+
+  contextMenuDelete.addEventListener('click', async () => {
+    console.log('Delete clicked for clip:', contextMenuClip?.originalName);
+    if (contextMenuClip) {
+      await confirmAndDeleteClip(contextMenuClip);
+    }
+    contextMenu.style.display = 'none';
+  });
+
+  // Close context menu when clicking outside
+  document.addEventListener('click', () => {
+    contextMenu.style.display = 'none';
+  });
+}
+
+function showContextMenu(e, clip) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const contextMenu = document.getElementById('context-menu');
+  const contextMenuFavorite = document.getElementById('context-menu-favorite');
+
+  if (contextMenu && contextMenuFavorite) {
+    contextMenu.style.display = 'block';
+    contextMenu.style.left = `${e.clientX}px`;
+    contextMenu.style.top = `${e.clientY}px`;
+    contextMenuClip = clip;  // Update the global contextMenuClip
+    
+    contextMenuFavorite.textContent = favorites.has(clip.originalName) ? 'Unfavorite' : 'Favorite';
+
+    console.log('Context menu shown for clip:', clip.originalName);
+  } else { 
+    console.error('Context menu elements not found');
+  }
+}
+
+function showExportProgress(current, total) {
+  let progressElement = document.getElementById('export-progress');
+  let textElement = document.getElementById('export-progress-text');
+  
+  if (!progressElement) {
+    progressElement = document.createElement('div');
+    progressElement.id = 'export-progress';
+    progressElement.style.position = 'fixed';
+    progressElement.style.top = '0';
+    progressElement.style.left = '0';
+    progressElement.style.width = '100%';
+    progressElement.style.height = '5px';
+    progressElement.style.backgroundColor = '#4CAF50';
+    progressElement.style.transition = 'width 0.3s';
+    progressElement.style.zIndex = '9999';
+    document.body.appendChild(progressElement);
+    
+    textElement = document.createElement('div');
+    textElement.id = 'export-progress-text';
+    textElement.style.position = 'fixed';
+    textElement.style.top = '100px';
+    textElement.style.left = '50%';
+    textElement.style.transform = 'translateX(-50%)';
+    textElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    textElement.style.color = 'white';
+    textElement.style.padding = '10px 20px';
+    textElement.style.borderRadius = '20px';
+    textElement.style.zIndex = '10000';
+    textElement.style.fontWeight = "normal";
+    
+    document.body.appendChild(textElement);
+  }
+
+  const percentage = (current / total) * 100;
+  progressElement.style.width = `${percentage}%`;
+  textElement.textContent = `Exporting clip... ${Math.round(percentage)}%`;
+  
+  if (current === total) {
+    setTimeout(() => {
+      progressElement.remove();
+      textElement.remove();
+    }, 1000);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const settingsButton = document.getElementById('settingsButton');
   if (settingsButton) {
@@ -287,6 +401,8 @@ document.addEventListener('DOMContentLoaded', () => {
           volumeSlider.classList.add('collapsed');
       }
   });
+
+  setupContextMenu();
 });
 
 
@@ -431,6 +547,10 @@ function createClipElement(clip) {
     });
 
     clipElement.addEventListener('click', () => openClip(clip.originalName, clip.customName));
+    clipElement.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); // Prevent the default context menu
+      showContextMenu(e, clip);
+    });
 
     const favoriteButton = clipElement.querySelector('.favorite-button');
     favoriteButton.addEventListener('click', (e) => {
@@ -574,9 +694,37 @@ async function exportTrimmedVideo() {
   }
 }
 
+async function exportClipFromContextMenu(clip) {
+  try {
+    const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
+    const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+    const start = trimData ? trimData.start : 0;
+    const end = trimData ? trimData.end : clipInfo.format.duration;
+
+    // Show initial progress
+    showExportProgress(0, 100);
+
+    const result = await ipcRenderer.invoke('export-trimmed-video', clip.originalName, start, end);
+    if (result.success) {
+      console.log('Clip exported successfully:', result.path);
+      showExportProgress(100, 100); // Show completed progress
+      await showCustomAlert(`Clip exported successfully. Path copied to clipboard.`);
+    } else {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    console.error('Error exporting clip:', error);
+    await showCustomAlert(`Failed to export clip. Error: ${error.message}`);
+  }
+}
 
 ipcRenderer.on('export-progress', (event, progress) => {
-  exportButton.textContent = `Exporting... ${Math.round(progress)}%`;
+  if (exportButton.disabled && exportButton.textContent.startsWith('Exporting')) {
+    exportButton.textContent = `Exporting... ${Math.round(progress)}%`;
+  } else {
+    // This is a context menu export
+    showExportProgress(progress, 100);
+  }
 });
 
 

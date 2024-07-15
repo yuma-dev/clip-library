@@ -237,6 +237,32 @@ body {
   color: white;
 }
 
+.context-menu {
+  display: none;
+  position: fixed; /* Change this from absolute to fixed */
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 5px 0;
+  min-width: 150px;
+  z-index: 2000; /* Increase this to ensure it's above other elements */
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+.context-menu-item {
+  padding: 8px 15px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.context-menu-item:hover {
+  background-color: #3a3a3a;
+}
+
+#context-menu-delete {
+  color: #e74c3c;
+}
+
 .favorite-button {
   position: absolute;
   top: 10px;
