@@ -18,7 +18,6 @@ const execPromise = util.promisify(exec);
 
 const isDev = !app.isPackaged;
 const path = require("path");
-const chokidar = require("chokidar");
 const fs = require("fs").promises;
 const os = require("os");
 const crypto = require("crypto");
@@ -42,7 +41,6 @@ setupTitlebar();
 
 async function createWindow() {
   settings = await loadSettings();
-  setupFileWatcher(settings.clipLocation);
 
   mainWindow = new BrowserWindow({
     width: 1024,
@@ -147,31 +145,6 @@ ipcMain.handle("get-clips", async () => {
     console.error("Error reading directory:", error);
     return [];
   }
-});
-
-function setupFileWatcher(clipLocation) {
-  const watcher = chokidar.watch(clipLocation, {
-    ignored: /(^|[\/\\])\../, // ignore dotfiles
-    persistent: true
-  });
-
-  watcher.on('add', (filePath) => {
-    const ext = path.extname(filePath).toLowerCase();
-    if (['.mp4', '.avi', '.mov'].includes(ext)) {
-      const fileName = path.basename(filePath);
-      mainWindow.webContents.send('new-clip-added', fileName);
-    }
-  });
-}
-
-ipcMain.handle('get-new-clip-info', async (event, fileName) => {
-  const filePath = path.join(settings.clipLocation, fileName);
-  const stats = await fs.stat(filePath);
-  return {
-    originalName: fileName,
-    customName: path.basename(fileName, path.extname(fileName)),
-    createdAt: stats.birthtimeMs || stats.ctimeMs,
-  };
 });
 
 ipcMain.handle("save-custom-name", async (event, originalName, customName) => {

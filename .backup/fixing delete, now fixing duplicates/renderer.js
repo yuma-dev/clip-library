@@ -53,21 +53,11 @@ const currentClipLocationSpan = document.getElementById("currentClipLocation");
 
 async function loadClips() {
   try {
-    console.log("Loading clips...");
     clipLocation = await ipcRenderer.invoke("get-clip-location");
     currentClipLocationSpan.textContent = clipLocation;
 
     allClips = await ipcRenderer.invoke("get-clips");
-    console.log("Clips received:", allClips.length);
-    
-    // Remove duplicates based on originalName
-    allClips = allClips.filter((clip, index, self) =>
-      index === self.findIndex((t) => t.originalName === clip.originalName)
-    );
-
-    allClips.sort((a, b) => b.createdAt - a.createdAt);
-
-    renderClips(allClips, true);
+    renderClips(allClips, true); // Pass true to indicate initial render
     setupClipTitleEditing();
 
     // Start progressive thumbnail generation
@@ -87,7 +77,6 @@ async function loadClips() {
         updateClipThumbnail(clipName, thumbnailPath);
       },
     );
-    console.log("Clips loaded and rendered.");
   } catch (error) {
     console.error("Error loading clips:", error);
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
@@ -95,21 +84,6 @@ async function loadClips() {
     hideThumbnailGenerationText(); // Hide the text if there's an error
   }
 }
-
-async function addNewClipToLibrary(fileName) {
-  const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
-  const newClipElement = await createClipElement(newClipInfo);
-  
-  allClips.unshift(newClipInfo);
-  clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
-  updateFavoriteUI(fileName);
-  
-  ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
-}
-
-ipcRenderer.on('new-clip-added', (event, fileName) => {
-  addNewClipToLibrary(fileName);
-});
 
 function showThumbnailGenerationText() {
   if (!document.getElementById("thumbnail-generation-text")) {
@@ -1530,3 +1504,6 @@ function filterClips(filter) {
 
   renderClips(filteredClips);
 }
+
+// Initial load
+loadClips().then(loadFavorites);

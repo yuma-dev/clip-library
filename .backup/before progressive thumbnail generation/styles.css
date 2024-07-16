@@ -50,34 +50,6 @@ body {
   background: #f1f1f1; 
 }
 
-#current-time, #total-time {
-  color: white;
-  font-size: 14px;
-  margin: 0 10px;
-  position: absolute;
-}
-
-#current-time {
-  bottom: 10px;
-  left: 10px;
-}
-
-#total-time {
-  bottom: 10px;
-  right: 10px;
-}
-
-#thumbnail-generation-text {
-  font-family: 'Roboto', sans-serif;
-  font-size: 14px;
-  font-weight: normal;
-  background-color: rgba(30, 30, 30, 0.9);
-  color: #e0e0e0;
-  padding: 8px 16px;
-  border-radius: 20px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-  transition: opacity 0.3s ease;
-}
 
 #loading-overlay {
   position: absolute;
@@ -254,82 +226,6 @@ body {
   color: white;
 }
 
-.context-menu {
-  display: none;
-  position: fixed; /* Change this from absolute to fixed */
-  background-color: #2a2a2a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  padding: 5px 0;
-  min-width: 150px;
-  z-index: 2000; /* Increase this to ensure it's above other elements */
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-}
-
-.context-menu-item {
-  padding: 8px 15px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.context-menu-item:hover {
-  background-color: #3a3a3a;
-}
-
-#context-menu-delete {
-  color: #e74c3c;
-}
-
-.favorite-button {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  color: rgba(255, 255, 255, 0.308);
-  padding: 6px;
-  border-radius: 20%;
-  z-index: 3;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
-  width: 24px;
-  height: 24px;
-}
-
-.favorite-button-player {
-  background-color: rgba(0, 0, 0, 0);
-  width: 20px;
-  height: 20px;
-  transition: background-color 0.3s ease;
-  cursor: pointer;
-  color: white;
-  padding: 6px;
-  z-index: 3;
-}
-
-.favorite-button-player svg{
-  width: 20px;
-  height: 20px;
-}
-
-
-.favorite-button:hover {
-  background-color: rgba(0, 0, 0, 0.7);
-}
-
-.favorite-button.active svg {
-  fill: rgba(255, 255, 255, 0.5);
-  stroke: white;
-}
-
-/* Style for the filter dropdown */
-#filter-dropdown {
-  margin-left: 10px;
-  padding: 5px 10px;
-  background-color: #2a2a2a;
-  color: #e0e0e0;
-  border: 1px solid #444;
-  border-radius: 4px;
-}
-
 /* Clip grid styles */
 .trimmed-indicator {
   position: absolute;
@@ -398,22 +294,6 @@ body {
   z-index: 1;
 }
 
-.video-preview-disabled .clip-item-media-container::after {
-  content: 'Deleting...';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(255, 0, 0, 0.493);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  text-align: center;
-}
-
 .clip-item::after {
   content: '';
   position: absolute;
@@ -424,6 +304,7 @@ body {
   border-radius: 8px;
   pointer-events: none;
 }
+
 
 .clip-info {
   padding: 10px;
@@ -674,7 +555,7 @@ body {
 
 #progress-bar {
   height: 100%;
-  background-color: #c2c2c2;
+  background-color: #3498db;
   position: absolute;
   left: 0;
   right: 0;
@@ -704,11 +585,10 @@ body {
 #playhead {
   z-index: 3;
   position: absolute;
-  top: -10%;
-  width: 5px;
-  height: 120%;
-  background-color: #008cff;
-  border-radius: 25%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background-color: #ffffff;
 }
 
 #player-overlay {

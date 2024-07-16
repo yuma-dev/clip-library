@@ -1,8 +1,8 @@
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
-const { exec } = require("child_process");
-const util = require("util");
+const { exec } = require('child_process');
+const util = require('util');
 const execPromise = util.promisify(exec);
 
 const clipGrid = document.getElementById("clip-grid");
@@ -14,9 +14,9 @@ const progressBar = document.getElementById("progress-bar");
 const trimStart = document.getElementById("trim-start");
 const trimEnd = document.getElementById("trim-end");
 const playhead = document.getElementById("playhead");
-const loadingOverlay = document.getElementById("loading-overlay");
-const playerOverlay = document.getElementById("player-overlay");
-const videoClickTarget = document.getElementById("video-click-target");
+const loadingOverlay = document.getElementById('loading-overlay');
+const playerOverlay = document.getElementById('player-overlay');
+const videoClickTarget = document.getElementById('video-click-target');
 
 let currentClip = null;
 let trimStartTime = 0;
@@ -34,9 +34,9 @@ let currentCleanup = null;
 let allClips = [];
 let contextMenuClip = null;
 
-const settingsModal = document.createElement("div");
-settingsModal.id = "settingsModal";
-settingsModal.className = "modal";
+const settingsModal = document.createElement('div');
+settingsModal.id = 'settingsModal';
+settingsModal.className = 'modal';
 settingsModal.innerHTML = `
   <div class="modal-content">
     <h2>Settings</h2>
@@ -48,126 +48,98 @@ settingsModal.innerHTML = `
 
 document.body.appendChild(settingsModal);
 
-const closeSettingsBtn = document.getElementById("closeSettingsBtn");
-const currentClipLocationSpan = document.getElementById("currentClipLocation");
+const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+const currentClipLocationSpan = document.getElementById('currentClipLocation');
 
 async function loadClips() {
   try {
-    console.log("Loading clips...");
-    clipLocation = await ipcRenderer.invoke("get-clip-location");
+    clipLocation = await ipcRenderer.invoke('get-clip-location');
     currentClipLocationSpan.textContent = clipLocation;
-
-    allClips = await ipcRenderer.invoke("get-clips");
-    console.log("Clips received:", allClips.length);
     
-    // Remove duplicates based on originalName
-    allClips = allClips.filter((clip, index, self) =>
-      index === self.findIndex((t) => t.originalName === clip.originalName)
-    );
-
-    allClips.sort((a, b) => b.createdAt - a.createdAt);
-
-    renderClips(allClips, true);
+    allClips = await ipcRenderer.invoke('get-clips');
+    renderClips(allClips, true); // Pass true to indicate initial render
     setupClipTitleEditing();
 
     // Start progressive thumbnail generation
-    const clipNames = allClips.map((clip) => clip.originalName);
-
-    ipcRenderer.invoke("generate-thumbnails-progressively", clipNames);
+    const clipNames = allClips.map(clip => clip.originalName);
+    
+    ipcRenderer.invoke('generate-thumbnails-progressively', clipNames);
 
     // Listen for thumbnail generation progress
-    ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
+    ipcRenderer.on('thumbnail-progress', (event, { current, total }) => {
       updateThumbnailProgress(current, total);
     });
 
     // Listen for generated thumbnails
-    ipcRenderer.on(
-      "thumbnail-generated",
-      (event, { clipName, thumbnailPath }) => {
-        updateClipThumbnail(clipName, thumbnailPath);
-      },
-    );
-    console.log("Clips loaded and rendered.");
+    ipcRenderer.on('thumbnail-generated', (event, { clipName, thumbnailPath }) => {
+      updateClipThumbnail(clipName, thumbnailPath);
+    });
+
   } catch (error) {
-    console.error("Error loading clips:", error);
+    console.error('Error loading clips:', error);
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
-    currentClipLocationSpan.textContent = "Error: Unable to load location";
+    currentClipLocationSpan.textContent = 'Error: Unable to load location';
     hideThumbnailGenerationText(); // Hide the text if there's an error
   }
 }
 
-async function addNewClipToLibrary(fileName) {
-  const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
-  const newClipElement = await createClipElement(newClipInfo);
-  
-  allClips.unshift(newClipInfo);
-  clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
-  updateFavoriteUI(fileName);
-  
-  ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
-}
-
-ipcRenderer.on('new-clip-added', (event, fileName) => {
-  addNewClipToLibrary(fileName);
-});
-
 function showThumbnailGenerationText() {
-  if (!document.getElementById("thumbnail-generation-text")) {
-    const textElement = document.createElement("div");
-    textElement.id = "thumbnail-generation-text";
-    textElement.style.position = "fixed";
-    textElement.style.top = "100px";
-    textElement.style.left = "50%";
-    textElement.style.transform = "translateX(-50%)";
-    textElement.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-    textElement.style.color = "white";
-    textElement.style.padding = "10px 20px";
-    textElement.style.borderRadius = "20px";
-    textElement.style.zIndex = "10000";
-    textElement.style.fontWeight = "normal";
-    textElement.textContent = "Generating thumbnails...";
+  if (!document.getElementById('thumbnail-generation-text')) {
+    const textElement = document.createElement('div');
+    textElement.id = 'thumbnail-generation-text';
+    textElement.style.position = 'fixed';
+    textElement.style.top = '100px';
+    textElement.style.left = '50%';
+    textElement.style.transform = 'translateX(-50%)';
+    textElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    textElement.style.color = 'white';
+    textElement.style.padding = '10px 20px';
+    textElement.style.borderRadius = '20px';
+    textElement.style.zIndex = '10000';
+    textElement.style.fontWeight = 'normal';
+    textElement.textContent = 'Generating thumbnails...';
     document.body.appendChild(textElement);
   }
 }
 
 function updateThumbnailGenerationText(current, total) {
-  const textElement = document.getElementById("thumbnail-generation-text");
+  const textElement = document.getElementById('thumbnail-generation-text');
   if (textElement) {
     textElement.textContent = `Generating thumbnails... ${current}/${total}`;
   }
 }
 
 function hideThumbnailGenerationText() {
-  const textElement = document.getElementById("thumbnail-generation-text");
+  const textElement = document.getElementById('thumbnail-generation-text');
   if (textElement) {
     textElement.remove();
   }
 }
 
 function updateThumbnailProgress(current, total) {
-  let progressElement = document.getElementById("thumbnail-progress");
+  let progressElement = document.getElementById('thumbnail-progress');
   if (!progressElement) {
-    progressElement = document.createElement("div");
-    progressElement.id = "thumbnail-progress";
-    progressElement.style.position = "fixed";
-    progressElement.style.top = "0";
-    progressElement.style.left = "0";
-    progressElement.style.width = "100%";
-    progressElement.style.height = "5px";
-    progressElement.style.backgroundColor = "#4CAF50";
-    progressElement.style.transition = "width 0.3s";
-    progressElement.style.zIndex = "9999";
+    progressElement = document.createElement('div');
+    progressElement.id = 'thumbnail-progress';
+    progressElement.style.position = 'fixed';
+    progressElement.style.top = '0';
+    progressElement.style.left = '0';
+    progressElement.style.width = '100%';
+    progressElement.style.height = '5px';
+    progressElement.style.backgroundColor = '#4CAF50';
+    progressElement.style.transition = 'width 0.3s';
+    progressElement.style.zIndex = '9999';
     document.body.appendChild(progressElement);
-
+    
     // Show the text indicator when we start
     showThumbnailGenerationText();
   }
   const percentage = (current / total) * 100;
   progressElement.style.width = `${percentage}%`;
-
+  
   // Update the text indicator
   updateThumbnailGenerationText(current, total);
-
+  
   if (current === total) {
     setTimeout(() => {
       progressElement.remove();
@@ -177,29 +149,27 @@ function updateThumbnailProgress(current, total) {
 }
 
 function updateClipThumbnail(clipName, thumbnailPath) {
-  const clipElement = document.querySelector(
-    `.clip-item[data-original-name="${clipName}"]`,
-  );
+  const clipElement = document.querySelector(`.clip-item[data-original-name="${clipName}"]`);
   if (clipElement) {
-    const imgElement = clipElement.querySelector("img");
-    if (imgElement && imgElement.src.endsWith("loading-thumbnail.gif")) {
+    const imgElement = clipElement.querySelector('img');
+    if (imgElement && imgElement.src.endsWith('loading-thumbnail.gif')) {
       imgElement.src = `file://${thumbnailPath}`;
     }
   }
 }
 
 async function renderClips(clips) {
-  clipGrid.innerHTML = ""; // Clear the grid
-
+  clipGrid.innerHTML = ''; // Clear the grid
+  
   const clipPromises = clips.map(createClipElement);
   const clipElements = await Promise.all(clipPromises);
-
-  clipElements.forEach((clipElement) => {
+  
+  clipElements.forEach(clipElement => {
     clipGrid.appendChild(clipElement);
   });
 
   // Update favorite UI for all rendered clips
-  clips.forEach((clip) => updateFavoriteUI(clip.originalName));
+  clips.forEach(clip => updateFavoriteUI(clip.originalName));
 }
 
 let favorites = new Set();
@@ -210,42 +180,38 @@ async function toggleFavorite(clipName) {
   } else {
     favorites.add(clipName);
   }
-
+  
   // Update UI
   updateFavoriteUI(clipName);
-
+  
   // Save favorites to main process
-  await ipcRenderer.invoke("save-favorites", Array.from(favorites));
+  await ipcRenderer.invoke('save-favorites', Array.from(favorites));
 }
 
 function updateFavoriteUI(clipName) {
   const isFavorite = favorites.has(clipName);
-
+  
   // Update grid item
-  const gridItem = document.querySelector(
-    `.clip-item[data-original-name="${clipName}"]`,
-  );
+  const gridItem = document.querySelector(`.clip-item[data-original-name="${clipName}"]`);
   if (gridItem) {
-    const favoriteButton = gridItem.querySelector(".favorite-button");
-    favoriteButton.classList.toggle("active", isFavorite);
+    const favoriteButton = gridItem.querySelector('.favorite-button');
+    favoriteButton.classList.toggle('active', isFavorite);
   }
-
+  
   // Update video player
   if (currentClip && currentClip.originalName === clipName) {
-    const playerFavoriteButton = document.querySelector(
-      "#video-controls .favorite-button",
-    );
-    playerFavoriteButton.classList.toggle("active", isFavorite);
+    const playerFavoriteButton = document.querySelector('#video-controls .favorite-button');
+    playerFavoriteButton.classList.toggle('active', isFavorite);
   }
 }
 
 // Load favorites when the app starts
 async function loadFavorites() {
-  const savedFavorites = await ipcRenderer.invoke("load-favorites");
+  const savedFavorites = await ipcRenderer.invoke('load-favorites');
   favorites = new Set(savedFavorites);
-
+  
   // Update UI for all clips
-  document.querySelectorAll(".clip-item").forEach((clipElement) => {
+  document.querySelectorAll('.clip-item').forEach(clipElement => {
     const clipName = clipElement.dataset.originalName;
     updateFavoriteUI(clipName);
   });
@@ -253,94 +219,87 @@ async function loadFavorites() {
 
 // Call loadFavorites after loading clips
 
+
+
 function setupSearch() {
-  const searchInput = document.getElementById("search-input");
-  searchInput.addEventListener("input", debounce(performSearch, 300));
+  const searchInput = document.getElementById('search-input');
+  searchInput.addEventListener('input', debounce(performSearch, 300));
 }
 
 function performSearch() {
-  const searchTerm = document
-    .getElementById("search-input")
-    .value.trim()
-    .toLowerCase();
-
-  if (searchTerm === "") {
+  const searchTerm = document.getElementById('search-input').value.trim().toLowerCase();
+  
+  if (searchTerm === '') {
     renderClips(allClips);
     return;
   }
 
   const searchWords = searchTerm.split(/\s+/);
-  const filteredClips = allClips.filter((clip) =>
-    searchWords.every(
-      (word) =>
-        clip.customName.toLowerCase().includes(word) ||
-        clip.originalName.toLowerCase().includes(word),
-    ),
+  const filteredClips = allClips.filter(clip => 
+    searchWords.every(word => 
+      clip.customName.toLowerCase().includes(word) ||
+      clip.originalName.toLowerCase().includes(word)
+    )
   );
-
+  
   renderClips(filteredClips);
 }
 
 // Debounce function to limit how often the search is performed
 function debounce(func, delay) {
   let debounceTimer;
-  return function () {
+  return function() {
     const context = this;
     const args = arguments;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => func.apply(context, args), delay);
-  };
+  }
 }
 
 function setupContextMenu() {
-  const contextMenu = document.getElementById("context-menu");
-  const contextMenuExport = document.getElementById("context-menu-export");
-  const contextMenuDelete = document.getElementById("context-menu-delete");
-  const contextMenuFavorite = document.getElementById("context-menu-favorite");
+  const contextMenu = document.getElementById('context-menu');
+  const contextMenuExport = document.getElementById('context-menu-export');
+  const contextMenuDelete = document.getElementById('context-menu-delete');
+  const contextMenuFavorite = document.getElementById('context-menu-favorite');
 
-  if (
-    !contextMenu ||
-    !contextMenuExport ||
-    !contextMenuDelete ||
-    !contextMenuFavorite
-  ) {
-    console.error("One or more context menu elements not found");
+  if (!contextMenu || !contextMenuExport || !contextMenuDelete || !contextMenuFavorite) {
+    console.error('One or more context menu elements not found');
     return;
   }
 
-  document.addEventListener("click", (e) => {
+  document.addEventListener('click', (e) => {
     if (!contextMenu.contains(e.target)) {
-      contextMenu.style.display = "none";
+      contextMenu.style.display = 'none';
     }
   });
 
-  contextMenuExport.addEventListener("click", () => {
-    console.log("Export clicked for clip:", contextMenuClip?.originalName);
+  contextMenuExport.addEventListener('click', () => {
+    console.log('Export clicked for clip:', contextMenuClip?.originalName);
     if (contextMenuClip) {
       exportClipFromContextMenu(contextMenuClip);
     }
-    contextMenu.style.display = "none";
+    contextMenu.style.display = 'none';
   });
 
-  contextMenuFavorite.addEventListener("click", () => {
-    console.log("Favorite clicked for clip:", contextMenuClip?.originalName);
+  contextMenuFavorite.addEventListener('click', () => {
+    console.log('Favorite clicked for clip:', contextMenuClip?.originalName);
     if (contextMenuClip) {
       toggleFavorite(contextMenuClip.originalName);
     }
-    contextMenu.style.display = "none";
+    contextMenu.style.display = 'none';
   });
 
-  contextMenuDelete.addEventListener("click", async () => {
-    console.log("Delete clicked for clip:", contextMenuClip?.originalName);
+  contextMenuDelete.addEventListener('click', async () => {
+    console.log('Delete clicked for clip:', contextMenuClip?.originalName);
     if (contextMenuClip) {
       await confirmAndDeleteClip(contextMenuClip);
     }
-    contextMenu.style.display = "none";
+    contextMenu.style.display = 'none';
   });
 
   // Close context menu when clicking outside
-  document.addEventListener("click", () => {
-    contextMenu.style.display = "none";
+  document.addEventListener('click', () => {
+    contextMenu.style.display = 'none';
   });
 }
 
@@ -348,62 +307,60 @@ function showContextMenu(e, clip) {
   e.preventDefault();
   e.stopPropagation();
 
-  const contextMenu = document.getElementById("context-menu");
-  const contextMenuFavorite = document.getElementById("context-menu-favorite");
+  const contextMenu = document.getElementById('context-menu');
+  const contextMenuFavorite = document.getElementById('context-menu-favorite');
 
   if (contextMenu && contextMenuFavorite) {
-    contextMenu.style.display = "block";
+    contextMenu.style.display = 'block';
     contextMenu.style.left = `${e.clientX}px`;
     contextMenu.style.top = `${e.clientY}px`;
-    contextMenuClip = clip; // Update the global contextMenuClip
+    contextMenuClip = clip;  // Update the global contextMenuClip
+    
+    contextMenuFavorite.textContent = favorites.has(clip.originalName) ? 'Unfavorite' : 'Favorite';
 
-    contextMenuFavorite.textContent = favorites.has(clip.originalName)
-      ? "Unfavorite"
-      : "Favorite";
-
-    console.log("Context menu shown for clip:", clip.originalName);
-  } else {
-    console.error("Context menu elements not found");
+    console.log('Context menu shown for clip:', clip.originalName);
+  } else { 
+    console.error('Context menu elements not found');
   }
 }
 
 function showExportProgress(current, total) {
-  let progressElement = document.getElementById("export-progress");
-  let textElement = document.getElementById("export-progress-text");
-
+  let progressElement = document.getElementById('export-progress');
+  let textElement = document.getElementById('export-progress-text');
+  
   if (!progressElement) {
-    progressElement = document.createElement("div");
-    progressElement.id = "export-progress";
-    progressElement.style.position = "fixed";
-    progressElement.style.top = "0";
-    progressElement.style.left = "0";
-    progressElement.style.width = "100%";
-    progressElement.style.height = "5px";
-    progressElement.style.backgroundColor = "#4CAF50";
-    progressElement.style.transition = "width 0.3s";
-    progressElement.style.zIndex = "9999";
+    progressElement = document.createElement('div');
+    progressElement.id = 'export-progress';
+    progressElement.style.position = 'fixed';
+    progressElement.style.top = '0';
+    progressElement.style.left = '0';
+    progressElement.style.width = '100%';
+    progressElement.style.height = '5px';
+    progressElement.style.backgroundColor = '#4CAF50';
+    progressElement.style.transition = 'width 0.3s';
+    progressElement.style.zIndex = '9999';
     document.body.appendChild(progressElement);
-
-    textElement = document.createElement("div");
-    textElement.id = "export-progress-text";
-    textElement.style.position = "fixed";
-    textElement.style.top = "100px";
-    textElement.style.left = "50%";
-    textElement.style.transform = "translateX(-50%)";
-    textElement.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-    textElement.style.color = "white";
-    textElement.style.padding = "10px 20px";
-    textElement.style.borderRadius = "20px";
-    textElement.style.zIndex = "10000";
+    
+    textElement = document.createElement('div');
+    textElement.id = 'export-progress-text';
+    textElement.style.position = 'fixed';
+    textElement.style.top = '100px';
+    textElement.style.left = '50%';
+    textElement.style.transform = 'translateX(-50%)';
+    textElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    textElement.style.color = 'white';
+    textElement.style.padding = '10px 20px';
+    textElement.style.borderRadius = '20px';
+    textElement.style.zIndex = '10000';
     textElement.style.fontWeight = "normal";
-
+    
     document.body.appendChild(textElement);
   }
 
   const percentage = (current / total) * 100;
   progressElement.style.width = `${percentage}%`;
   textElement.textContent = `Exporting clip... ${Math.round(percentage)}%`;
-
+  
   if (current === total) {
     setTimeout(() => {
       progressElement.remove();
@@ -412,75 +369,74 @@ function showExportProgress(current, total) {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  const settingsButton = document.getElementById("settingsButton");
+document.addEventListener('DOMContentLoaded', () => {
+  const settingsButton = document.getElementById('settingsButton');
   if (settingsButton) {
-    settingsButton.addEventListener("click", openSettingsModal);
+      settingsButton.addEventListener('click', openSettingsModal);
   } else {
-    console.error("Settings button not found");
+      console.error('Settings button not found');
   }
 
   const titlebarOptions = {
-    backgroundColor: TitlebarColor.fromHex("#1e1e1e"),
-    menu: null,
-    titleHorizontalAlignment: "center",
-    unfocusEffect: false,
+      backgroundColor: TitlebarColor.fromHex('#1e1e1e'),
+      menu: null,
+      titleHorizontalAlignment: 'center',
+      unfocusEffect: false
   };
 
   new Titlebar(titlebarOptions);
   loadClips();
   setupSearch();
 
-  const volumeButton = document.getElementById("volume-button");
-  const volumeSlider = document.getElementById("volume-slider");
+  const volumeButton = document.getElementById('volume-button');
+  const volumeSlider = document.getElementById('volume-slider');
 
-  volumeSlider.addEventListener("input", (e) => {
+  volumeSlider.addEventListener('input', (e) => {
     videoPlayer.volume = e.target.value;
   });
-  volumeButton.addEventListener("click", () => {
-    if (volumeSlider.classList.contains("collapsed")) {
-      volumeSlider.classList.remove("collapsed");
-    } else {
-      volumeSlider.classList.add("collapsed");
-    }
+  volumeButton.addEventListener('click', () => {
+      if (volumeSlider.classList.contains('collapsed')) {
+          volumeSlider.classList.remove('collapsed');
+      } else {
+          volumeSlider.classList.add('collapsed');
+      }
   });
 
   setupContextMenu();
 });
 
+
 async function changeClipLocation() {
-  const newLocation = await ipcRenderer.invoke("open-folder-dialog");
+  const newLocation = await ipcRenderer.invoke('open-folder-dialog');
   if (newLocation) {
     try {
-      await ipcRenderer.invoke("set-clip-location", newLocation);
+      await ipcRenderer.invoke('set-clip-location', newLocation);
       clipLocation = newLocation;
       currentClipLocationSpan.textContent = newLocation;
       await loadClips(); // Reload clips with the new location
     } catch (error) {
-      console.error("Error changing clip location:", error);
+      console.error('Error changing clip location:', error);
       await showCustomAlert(`Failed to change clip location: ${error.message}`);
     }
   }
 }
 
 function openSettingsModal() {
-  const settingsModal = document.getElementById("settingsModal");
+  const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
-    settingsModal.style.display = "block";
+    settingsModal.style.display = 'block';
   }
 }
 
 function closeSettingsModal() {
-  settingsModal.style.display = "none";
+  settingsModal.style.display = 'none';
 }
 
-document
-  .getElementById("settingsButton")
-  .addEventListener("click", openSettingsModal);
-closeSettingsBtn.addEventListener("click", closeSettingsModal);
-document
-  .getElementById("changeLocationBtn")
-  .addEventListener("click", changeClipLocation);
+document.getElementById('settingsButton').addEventListener('click', openSettingsModal);
+closeSettingsBtn.addEventListener('click', closeSettingsModal);
+document.getElementById('changeLocationBtn').addEventListener('click', changeClipLocation);
+
+
 
 // Add this function to calculate relative time
 function getRelativeTimeString(timestamp) {
@@ -489,41 +445,36 @@ function getRelativeTimeString(timestamp) {
   const diffInSeconds = Math.floor((now - date) / 1000);
 
   const intervals = [
-    { label: "year", seconds: 31536000 },
-    { label: "month", seconds: 2592000 },
-    { label: "day", seconds: 86400 },
-    { label: "hour", seconds: 3600 },
-    { label: "minute", seconds: 60 },
-    { label: "second", seconds: 1 },
+    { label: 'year', seconds: 31536000 },
+    { label: 'month', seconds: 2592000 },
+    { label: 'day', seconds: 86400 },
+    { label: 'hour', seconds: 3600 },
+    { label: 'minute', seconds: 60 },
+    { label: 'second', seconds: 1 }
   ];
 
   for (let i = 0; i < intervals.length; i++) {
     const interval = intervals[i];
     const count = Math.floor(diffInSeconds / interval.seconds);
     if (count >= 1) {
-      return count === 1
-        ? `1 ${interval.label} ago`
-        : `${count} ${interval.label}s ago`;
+      return count === 1 ? `1 ${interval.label} ago` : `${count} ${interval.label}s ago`;
     }
   }
 
-  return "just now";
+  return 'just now';
 }
 
 function createClipElement(clip) {
   return new Promise(async (resolve) => {
-    const clipElement = document.createElement("div");
-    clipElement.className = "clip-item";
+    const clipElement = document.createElement('div');
+    clipElement.className = 'clip-item';
     clipElement.dataset.originalName = clip.originalName;
-
-    let thumbnailPath = await ipcRenderer.invoke(
-      "get-thumbnail-path",
-      clip.originalName,
-    );
-
+    
+    let thumbnailPath = await ipcRenderer.invoke('get-thumbnail-path', clip.originalName);
+    
     // If thumbnailPath is null, use the loading gif
     if (thumbnailPath === null) {
-      thumbnailPath = "assets/loading-thumbnail.gif";
+      thumbnailPath = 'assets/loading-thumbnail.gif';
     } else {
       thumbnailPath = `file://${thumbnailPath}`;
     }
@@ -531,87 +482,78 @@ function createClipElement(clip) {
     const relativeTime = getRelativeTimeString(clip.createdAt);
 
     const scissorsIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+
     const starIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
 
     clipElement.innerHTML = `
       <div class="clip-item-media-container">
         <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
       </div>
-      ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ""}
+      ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ''}
       <div class="favorite-button" title="Add to favorites">${starIcon}</div>
       <div class="clip-info">
         <p class="clip-name">${clip.customName}</p>
         <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
       </div>
     `;
-
+    
     let hoverTimeout;
     let videoElement;
     let playPromise;
 
-    clipElement.addEventListener("mouseenter", () => {
-      if (clipElement.classList.contains("video-preview-disabled")) return;
+    clipElement.addEventListener('mouseenter', () => {
+      if (clipElement.classList.contains('video-preview-disabled')) return;
       hoverTimeout = setTimeout(() => {
-        videoElement = document.createElement("video");
+        videoElement = document.createElement('video');
         videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
         videoElement.muted = true;
         videoElement.loop = true;
         videoElement.poster = thumbnailPath;
-        videoElement.preload = "metadata";
+        videoElement.preload = 'metadata';
 
-        const mediaContainer = clipElement.querySelector(
-          ".clip-item-media-container",
-        );
-        const imgElement = mediaContainer.querySelector("img");
-        imgElement.style.display = "none";
+        const mediaContainer = clipElement.querySelector('.clip-item-media-container');
+        const imgElement = mediaContainer.querySelector('img');
+        imgElement.style.display = 'none';
         mediaContainer.appendChild(videoElement);
 
-        videoElement.currentTime = clip.isTrimmed
-          ? window.trimStartTime || 0
-          : 0;
+        videoElement.currentTime = clip.isTrimmed ? (window.trimStartTime || 0) : 0;
         playPromise = videoElement.play();
-
+        
         if (playPromise !== undefined) {
-          playPromise.catch((error) => {
-            if (error.name !== "AbortError") {
-              console.error("Error playing video:", error);
+          playPromise.catch(error => {
+            if (error.name !== 'AbortError') {
+              console.error('Error playing video:', error);
             }
           });
         }
       }, 0);
     });
 
-    clipElement.addEventListener("mouseleave", () => {
-      if (clipElement.classList.contains("video-preview-disabled")) return;
+    clipElement.addEventListener('mouseleave', () => {
+      if (clipElement.classList.contains('video-preview-disabled')) return;
       clearTimeout(hoverTimeout);
       if (videoElement) {
         if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              videoElement.pause();
-            })
-            .catch(() => {
-              // Ignore the error if play was interrupted
-            });
+          playPromise.then(() => {
+            videoElement.pause();
+          }).catch(() => {
+            // Ignore the error if play was interrupted
+          });
         }
         videoElement.remove();
-        const imgElement = clipElement.querySelector(
-          ".clip-item-media-container img",
-        );
-        imgElement.style.display = "";
+        const imgElement = clipElement.querySelector('.clip-item-media-container img');
+        imgElement.style.display = '';
       }
     });
 
-    clipElement.addEventListener("click", () =>
-      openClip(clip.originalName, clip.customName),
-    );
-    clipElement.addEventListener("contextmenu", (e) => {
+    clipElement.addEventListener('click', () => openClip(clip.originalName, clip.customName));
+    clipElement.addEventListener('contextmenu', (e) => {
       e.preventDefault(); // Prevent the default context menu
       showContextMenu(e, clip);
     });
 
-    const favoriteButton = clipElement.querySelector(".favorite-button");
-    favoriteButton.addEventListener("click", (e) => {
+    const favoriteButton = clipElement.querySelector('.favorite-button');
+    favoriteButton.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleFavorite(clip.originalName);
     });
@@ -619,23 +561,16 @@ function createClipElement(clip) {
   });
 }
 
-function formatDuration(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.floor(seconds % 60);
-  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-}
+const exportButton = document.getElementById('export-button');
+const deleteButton = document.getElementById('delete-button');
 
-const exportButton = document.getElementById("export-button");
-const deleteButton = document.getElementById("delete-button");
+deleteButton.addEventListener('click', confirmAndDeleteClip);
+exportButton.addEventListener('click', exportTrimmedVideo);
 
-deleteButton.addEventListener("click", confirmAndDeleteClip);
-exportButton.addEventListener("click", exportTrimmedVideo);
-
-ipcRenderer.on("close-video-player", () => {
+ipcRenderer.on('close-video-player', () => {
   if (videoPlayer) {
     videoPlayer.pause();
-    videoPlayer.src = "";
-    videoPlayer.load();
+    videoPlayer.src = '';
   }
 });
 
@@ -654,7 +589,7 @@ async function confirmAndDeleteClip() {
       closePlayer();
       disableVideoThumbnail(clipToDelete.originalName);
       
-      const result = await ipcRenderer.invoke('delete-clip', clipToDelete.originalName, videoPlayer);
+      const result = await ipcRenderer.invoke('delete-clip', clipToDelete.originalName);
       if (result.success) {
         // Remove the deleted clip from the grid
         const clipElement = document.querySelector(`.clip-item[data-original-name="${clipToDelete.originalName}"]`);
@@ -673,33 +608,26 @@ async function confirmAndDeleteClip() {
 }
 
 function disableVideoThumbnail(clipName) {
-  const clipElement = document.querySelector(
-    `.clip-item[data-original-name="${clipName}"]`,
-  );
+  const clipElement = document.querySelector(`.clip-item[data-original-name="${clipName}"]`);
   if (!clipElement) return;
 
   // Remove the video element if it exists
-  const videoElement = clipElement.querySelector("video");
+  const videoElement = clipElement.querySelector('video');
   if (videoElement) {
     videoElement.remove();
   }
 
   // Remove event listeners that trigger video preview
-  clipElement.removeEventListener(
-    "mouseenter",
-    clipElement.videoPreviewHandler,
-  );
-  clipElement.removeEventListener(
-    "mouseleave",
-    clipElement.videoPreviewHandler,
-  );
+  clipElement.removeEventListener('mouseenter', clipElement.videoPreviewHandler);
+  clipElement.removeEventListener('mouseleave', clipElement.videoPreviewHandler);
 
   // Add a class to indicate that video preview is disabled
-  clipElement.classList.add("video-preview-disabled");
+  clipElement.classList.add('video-preview-disabled');
 
   // Optionally, you can add a visual indicator that video preview is disabled
-  const disabledIndicator = document.createElement("div");
-  disabledIndicator.className = "video-preview-disabled-indicator";
+  const disabledIndicator = document.createElement('div');
+  disabledIndicator.className = 'video-preview-disabled-indicator';
+  disabledIndicator.textContent = 'Video preview disabled';
   clipElement.appendChild(disabledIndicator);
 }
 
@@ -707,42 +635,34 @@ function toggleFullscreen() {
   if (!document.fullscreenElement) {
     if (videoPlayer.requestFullscreen) {
       videoPlayer.requestFullscreen();
-    } else if (videoPlayer.mozRequestFullScreen) {
-      // Firefox
+    } else if (videoPlayer.mozRequestFullScreen) { // Firefox
       videoPlayer.mozRequestFullScreen();
-    } else if (videoPlayer.webkitRequestFullscreen) {
-      // Chrome, Safari and Opera
+    } else if (videoPlayer.webkitRequestFullscreen) { // Chrome, Safari and Opera
       videoPlayer.webkitRequestFullscreen();
-    } else if (videoPlayer.msRequestFullscreen) {
-      // IE/Edge
+    } else if (videoPlayer.msRequestFullscreen) { // IE/Edge
       videoPlayer.msRequestFullscreen();
     }
   } else {
     if (document.exitFullscreen) {
       document.exitFullscreen();
-    } else if (document.mozCancelFullScreen) {
-      // Firefox
+    } else if (document.mozCancelFullScreen) { // Firefox
       document.mozCancelFullScreen();
-    } else if (document.webkitExitFullscreen) {
-      // Chrome, Safari and Opera
+    } else if (document.webkitExitFullscreen) { // Chrome, Safari and Opera
       document.webkitExitFullscreen();
-    } else if (document.msExitFullscreen) {
-      // IE/Edge
+    } else if (document.msExitFullscreen) { // IE/Edge
       document.msExitFullscreen();
     }
   }
 }
 
-document
-  .getElementById("fullscreen-button")
-  .addEventListener("click", toggleFullscreen);
+document.getElementById('fullscreen-button').addEventListener('click', toggleFullscreen);
 
 function isVideoInFullscreen(videoElement) {
   return (
-    document.fullscreenElement === videoElement ||
-    document.webkitFullscreenElement === videoElement || // for Safari
-    document.mozFullScreenElement === videoElement || // for Firefox
-    document.msFullscreenElement === videoElement // for IE/Edge
+      document.fullscreenElement === videoElement ||
+      document.webkitFullscreenElement === videoElement || // for Safari
+      document.mozFullScreenElement === videoElement || // for Firefox
+      document.msFullscreenElement === videoElement // for IE/Edge
   );
 }
 
@@ -750,33 +670,25 @@ async function exportTrimmedVideo() {
   if (!currentClip) return;
 
   exportButton.disabled = true;
-  exportButton.textContent = "Exporting...";
+  exportButton.textContent = 'Exporting...';
 
   try {
-    const result = await ipcRenderer.invoke(
-      "export-trimmed-video",
-      currentClip.originalName,
-      trimStartTime,
-      trimEndTime,
-    );
+    const result = await ipcRenderer.invoke('export-trimmed-video', currentClip.originalName, trimStartTime, trimEndTime);
     if (result.success) {
-      console.log(
-        "Trimmed video exported and copied to clipboard:",
-        result.path,
-      );
-      exportButton.textContent = "Export Complete!";
+      console.log('Trimmed video exported and copied to clipboard:', result.path);
+      exportButton.textContent = 'Export Complete!';
       setTimeout(() => {
-        exportButton.textContent = "Export";
+        exportButton.textContent = 'Export';
         exportButton.disabled = false;
       }, 2000);
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
-    console.error("Error exporting video:", error);
-    exportButton.textContent = "Export Failed";
+    console.error('Error exporting video:', error);
+    exportButton.textContent = 'Export Failed';
     setTimeout(() => {
-      exportButton.textContent = "Export";
+      exportButton.textContent = 'Export';
       exportButton.disabled = false;
     }, 2000);
   }
@@ -784,10 +696,7 @@ async function exportTrimmedVideo() {
 
 async function exportClipFromContextMenu(clip) {
   try {
-    const clipInfo = await ipcRenderer.invoke(
-      "get-clip-info",
-      clip.originalName,
-    );
+    const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
     const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
     const start = trimData ? trimData.start : 0;
     const end = trimData ? trimData.end : clipInfo.format.duration;
@@ -795,32 +704,22 @@ async function exportClipFromContextMenu(clip) {
     // Show initial progress
     showExportProgress(0, 100);
 
-    const result = await ipcRenderer.invoke(
-      "export-trimmed-video",
-      clip.originalName,
-      start,
-      end,
-    );
+    const result = await ipcRenderer.invoke('export-trimmed-video', clip.originalName, start, end);
     if (result.success) {
-      console.log("Clip exported successfully:", result.path);
+      console.log('Clip exported successfully:', result.path);
       showExportProgress(100, 100); // Show completed progress
-      await showCustomAlert(
-        `Clip exported successfully. Path copied to clipboard.`,
-      );
+      await showCustomAlert(`Clip exported successfully. Path copied to clipboard.`);
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
-    console.error("Error exporting clip:", error);
+    console.error('Error exporting clip:', error);
     await showCustomAlert(`Failed to export clip. Error: ${error.message}`);
   }
 }
 
-ipcRenderer.on("export-progress", (event, progress) => {
-  if (
-    exportButton.disabled &&
-    exportButton.textContent.startsWith("Exporting")
-  ) {
+ipcRenderer.on('export-progress', (event, progress) => {
+  if (exportButton.disabled && exportButton.textContent.startsWith('Exporting')) {
     exportButton.textContent = `Exporting... ${Math.round(progress)}%`;
   } else {
     // This is a context menu export
@@ -828,28 +727,18 @@ ipcRenderer.on("export-progress", (event, progress) => {
   }
 });
 
-const currentTimeDisplay = document.getElementById("current-time");
-const totalTimeDisplay = document.getElementById("total-time");
-
-function updateTimeDisplay() {
-  currentTimeDisplay.textContent = formatDuration(videoPlayer.currentTime);
-  totalTimeDisplay.textContent = formatDuration(videoPlayer.duration);
-}
-
-videoPlayer.addEventListener("loadedmetadata", updateTimeDisplay);
-videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
 
 async function openClip(originalName, customName) {
   currentClip = { originalName, customName };
   const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
-
+  
   videoPlayer.preload = "auto";
   videoPlayer.autoplay = false;
   videoPlayer.src = `file://${clipInfo.format.filename}`;
-
+  
   clipTitle.value = customName;
-
-  playerOverlay.style.display = "block";
+  
+  playerOverlay.style.display = 'block';
   fullscreenPlayer.style.display = "flex";
 
   const trimData = await ipcRenderer.invoke("get-trim", originalName);
@@ -861,43 +750,37 @@ async function openClip(originalName, customName) {
     trimEndTime = clipInfo.format.duration;
   }
 
-  // Update the clip duration in the allClips array
-  const clipIndex = allClips.findIndex(
-    (clip) => clip.originalName === originalName,
-  );
-  if (clipIndex !== -1) {
-    allClips[clipIndex].duration = clipInfo.format.duration;
-  }
-
   showLoadingOverlay();
 
-  videoPlayer.addEventListener("loadedmetadata", handleVideoMetadataLoaded);
-  videoPlayer.addEventListener("canplay", handleVideoCanPlay);
-  videoPlayer.addEventListener("progress", updateLoadingProgress);
-  videoPlayer.addEventListener("waiting", showLoadingOverlay);
-  videoPlayer.addEventListener("playing", hideLoadingOverlay);
-  videoPlayer.addEventListener("seeked", handleVideoSeeked);
+  videoPlayer.addEventListener('loadedmetadata', handleVideoMetadataLoaded);
+  videoPlayer.addEventListener('canplay', handleVideoCanPlay);
+  videoPlayer.addEventListener('progress', updateLoadingProgress);
+  videoPlayer.addEventListener('waiting', showLoadingOverlay);
+  videoPlayer.addEventListener('playing', hideLoadingOverlay);
+  videoPlayer.addEventListener('seeked', handleVideoSeeked);
 
   setupClipTitleEditing();
 
-  playerOverlay.addEventListener("click", handleOverlayClick);
+  playerOverlay.addEventListener('click', handleOverlayClick);
 
-  const videoContainer = document.getElementById("video-container");
-  const videoControls = document.getElementById("video-controls");
+
+  
+  const videoContainer = document.getElementById('video-container');
+  const videoControls = document.getElementById('video-controls');
 
   let controlsTimeout;
 
   function showControls() {
-    videoControls.classList.add("visible");
+    videoControls.classList.add('visible');
     clearTimeout(controlsTimeout);
   }
 
   function hideControls() {
     controlsTimeout = setTimeout(() => {
       const isClipTitleFocused = document.activeElement === clipTitle;
-      console.log(isClipTitleFocused);
+      console.log(isClipTitleFocused)
       if (!videoPlayer.paused && !isClipTitleFocused) {
-        videoControls.classList.remove("visible");
+        videoControls.classList.remove('visible');
       }
     }, 3000);
   }
@@ -914,18 +797,18 @@ async function openClip(originalName, customName) {
     }
   }
 
-  videoContainer.addEventListener("mousemove", handleMouseMove);
-  videoContainer.addEventListener("mouseenter", showControls);
-  videoContainer.addEventListener("mouseleave", hideControls);
+  videoContainer.addEventListener('mousemove', handleMouseMove);
+  videoContainer.addEventListener('mouseenter', showControls);
+  videoContainer.addEventListener('mouseleave', hideControls);
 
-  videoPlayer.addEventListener("pause", showControls);
-  videoPlayer.addEventListener("play", hideControls);
+  videoPlayer.addEventListener('pause', showControls);
+  videoPlayer.addEventListener('play', hideControls);
 
-  videoControls.addEventListener("mouseenter", () => {
+  videoControls.addEventListener('mouseenter', () => {
     clearTimeout(controlsTimeout);
   });
 
-  videoControls.addEventListener("mouseleave", () => {
+  videoControls.addEventListener('mouseleave', () => {
     if (!videoPlayer.paused) {
       hideControls();
     }
@@ -934,16 +817,17 @@ async function openClip(originalName, customName) {
   // Show controls initially
   showControls();
 
+
   // Clean up function to remove event listeners
   const cleanup = () => {
-    videoContainer.removeEventListener("mousemove", handleMouseMove);
-    videoContainer.removeEventListener("mouseenter", showControls);
-    videoContainer.removeEventListener("mouseleave", hideControls);
-    videoPlayer.removeEventListener("pause", showControls);
-    videoPlayer.removeEventListener("play", hideControls);
-    videoControls.removeEventListener("mouseenter", showControls);
-    videoControls.removeEventListener("mouseleave", hideControls);
-    videoPlayer.removeEventListener("click", showControls);
+    videoContainer.removeEventListener('mousemove', handleMouseMove);
+    videoContainer.removeEventListener('mouseenter', showControls);
+    videoContainer.removeEventListener('mouseleave', hideControls);
+    videoPlayer.removeEventListener('pause', showControls);
+    videoPlayer.removeEventListener('play', hideControls);
+    videoControls.removeEventListener('mouseenter', showControls);
+    videoControls.removeEventListener('mouseleave', hideControls);
+    videoPlayer.removeEventListener('click', showControls);
   };
 
   // Call cleanup when closing the player
@@ -965,8 +849,8 @@ function handleVideoMetadataLoaded() {
 function handleVideoSeeked() {
   // If we've seeked to the trim start time, start playing
   if (Math.abs(videoPlayer.currentTime - trimStartTime) < 0.1) {
-    videoPlayer.play().catch((error) => {
-      console.error("Error attempting to play the video:", error);
+    videoPlayer.play().catch(error => {
+      console.error('Error attempting to play the video:', error);
     });
   }
 }
@@ -981,18 +865,17 @@ function handleVideoCanPlay() {
 
 function updateLoadingProgress() {
   if (videoPlayer.buffered.length > 0) {
-    const loadedPercentage =
-      (videoPlayer.buffered.end(0) / videoPlayer.duration) * 100;
-    progressBar.style.backgroundImage = `linear-gradient(to right, #c2c2c2 ${loadedPercentage}%, #3a3a3a ${loadedPercentage}%)`;
+    const loadedPercentage = (videoPlayer.buffered.end(0) / videoPlayer.duration) * 100;
+    progressBar.style.backgroundImage = `linear-gradient(to right, #3498db ${loadedPercentage}%, #3a3a3a ${loadedPercentage}%)`;
   }
 }
 
 function showLoadingOverlay() {
-  loadingOverlay.style.display = "flex";
+  loadingOverlay.style.display = 'flex';
 }
 
 function hideLoadingOverlay() {
-  loadingOverlay.style.display = "none";
+  loadingOverlay.style.display = 'none';
 }
 
 function setupClipTitleEditing() {
@@ -1009,35 +892,22 @@ function setupClipTitleEditing() {
 
 function clipTitleInputHandler() {
   if (currentClip) {
-    saveTitleChange(
-      currentClip.originalName,
-      currentClip.customName,
-      clipTitle.value,
-      false,
-    );
+    saveTitleChange(currentClip.originalName, currentClip.customName, clipTitle.value, false);
   }
 }
 
 function clipTitleFocusHandler() {
   isRenamingActive = true;
-
+  
   clipTitle.dataset.originalValue = clipTitle.value;
 
-  console.log(
-    "Clip title focused. Original value:",
-    clipTitle.dataset.originalValue,
-  );
+  console.log('Clip title focused. Original value:', clipTitle.dataset.originalValue);
 }
 
 function clipTitleBlurHandler() {
   isRenamingActive = false;
   if (currentClip) {
-    saveTitleChange(
-      currentClip.originalName,
-      currentClip.customName,
-      clipTitle.value,
-      false,
-    );
+    saveTitleChange(currentClip.originalName, currentClip.customName, clipTitle.value, false);
   }
 }
 
@@ -1061,30 +931,27 @@ function closePlayer() {
 
   // Save any pending changes immediately
   saveTitleChange(originalName, oldCustomName, newCustomName, true).then(() => {
-    playerOverlay.style.display = "none";
-    fullscreenPlayer.style.display = "none";
+    playerOverlay.style.display = 'none';
+    fullscreenPlayer.style.display = 'none';
     videoPlayer.pause();
-    videoPlayer.removeEventListener(
-      "loadedmetadata",
-      handleVideoMetadataLoaded,
-    );
-    videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
-    videoPlayer.removeEventListener("progress", updateLoadingProgress);
-    videoPlayer.removeEventListener("waiting", showLoadingOverlay);
-    videoPlayer.removeEventListener("playing", hideLoadingOverlay);
-    videoPlayer.removeEventListener("seeked", handleVideoSeeked);
-    videoPlayer.src = "";
+    videoPlayer.removeEventListener('loadedmetadata', handleVideoMetadataLoaded);
+    videoPlayer.removeEventListener('canplay', handleVideoCanPlay);
+    videoPlayer.removeEventListener('progress', updateLoadingProgress);
+    videoPlayer.removeEventListener('waiting', showLoadingOverlay);
+    videoPlayer.removeEventListener('playing', hideLoadingOverlay);
+    videoPlayer.removeEventListener('seeked', handleVideoSeeked);
+    videoPlayer.src = '';
 
     clipTitle.removeEventListener("focus", clipTitleFocusHandler);
     clipTitle.removeEventListener("blur", clipTitleBlurHandler);
     clipTitle.removeEventListener("keydown", clipTitleKeydownHandler);
     clipTitle.removeEventListener("input", clipTitleInputHandler);
 
-    playerOverlay.removeEventListener("click", handleOverlayClick);
+    playerOverlay.removeEventListener('click', handleOverlayClick);
 
-    const clipTitleElement = document.getElementById("clip-title");
+    const clipTitleElement = document.getElementById('clip-title');
     if (clipTitleElement) {
-      clipTitleElement.value = "";
+      clipTitleElement.value = '';
     }
 
     // Update the clip's display in the grid if we have the original name
@@ -1102,17 +969,16 @@ function closePlayer() {
 }
 
 // Make sure this event listener is present on the fullscreenPlayer
-fullscreenPlayer.addEventListener("click", (e) => {
+fullscreenPlayer.addEventListener('click', (e) => {
   e.stopPropagation();
 });
 
-playerOverlay.addEventListener("click", closePlayer);
+playerOverlay.addEventListener('click', closePlayer);
 
 function handleOutsideClick(e) {
   if (e.target === playerOverlay) {
     const timeSinceMouseUp = Date.now() - mouseUpTime;
-    if (timeSinceMouseUp > 50) {
-      // 50ms threshold
+    if (timeSinceMouseUp > 50) { // 50ms threshold
       closePlayer();
     }
   }
@@ -1120,13 +986,11 @@ function handleOutsideClick(e) {
 
 function handleKeyPress(e) {
   const isClipTitleFocused = document.activeElement === clipTitle;
-  const isSearching =
-    document.activeElement === document.getElementById("search-input");
 
-  if (e.key === "Escape") {
+  if (e.key === 'Escape') {
     closePlayer();
   }
-  if (e.key === " " && !isClipTitleFocused && !isSearching) {
+  if (e.key === ' ' && !isClipTitleFocused) {
     if (videoPlayer.src) {
       e.preventDefault();
       togglePlayPause();
@@ -1135,7 +999,7 @@ function handleKeyPress(e) {
 }
 
 // Optionally, you can add this event listener if you want to use handleKeyPress
-document.addEventListener("keydown", handleKeyPress);
+document.addEventListener('keydown', handleKeyPress);
 
 function togglePlayPause() {
   if (!isVideoInFullscreen(videoPlayer)) {
@@ -1166,14 +1030,15 @@ function updateTrimControls() {
 }
 
 function updatePlayhead() {
-  if (!videoPlayer) return;
-
   const duration = videoPlayer.duration;
   const currentTime = videoPlayer.currentTime;
   const percent = (currentTime / duration) * 100;
   playhead.style.left = `${percent}%`;
 
-  // Check if the current time is beyond the trim end
+  // Remove the automatic seeking here, as it's now handled in handleVideoMetadataLoaded
+  // if (currentTime < trimStartTime) {
+  //   videoPlayer.currentTime = trimStartTime;
+  // } else 
   if (currentTime > trimEndTime) {
     videoPlayer.currentTime = trimStartTime;
   }
@@ -1181,10 +1046,7 @@ function updatePlayhead() {
   // Check if the current time is within the buffered range
   let isBuffered = false;
   for (let i = 0; i < videoPlayer.buffered.length; i++) {
-    if (
-      currentTime >= videoPlayer.buffered.start(i) &&
-      currentTime <= videoPlayer.buffered.end(i)
-    ) {
+    if (currentTime >= videoPlayer.buffered.start(i) && currentTime <= videoPlayer.buffered.end(i)) {
       isBuffered = true;
       break;
     }
@@ -1195,14 +1057,9 @@ function updatePlayhead() {
   } else {
     hideLoadingOverlay();
   }
-
-  // Request the next animation frame
-  requestAnimationFrame(updatePlayhead);
 }
 
-videoPlayer.addEventListener("loadedmetadata", () => {
-  requestAnimationFrame(updatePlayhead);
-});
+videoPlayer.addEventListener('timeupdate', updatePlayhead);
 
 progressBarContainer.addEventListener("mousedown", (e) => {
   isMouseDown = true;
@@ -1259,7 +1116,7 @@ progressBarContainer.addEventListener("mousedown", (e) => {
 
 document.addEventListener("mousemove", (e) => {
   lastMousePosition = { x: e.clientX, y: e.clientY };
-
+  
   if (isDragging) {
     const rect = progressBarContainer.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -1306,9 +1163,7 @@ function checkDragState() {
       lastMousePosition.y < rect.top ||
       lastMousePosition.y > rect.bottom
     ) {
-      console.log(
-        "Drag state reset due to mouse being outside the progress bar and mouse button not pressed",
-      );
+      console.log("Drag state reset due to mouse being outside the progress bar and mouse button not pressed");
       isDragging = null;
       isDraggingTrim = false;
       updateTrimControls();
@@ -1319,32 +1174,31 @@ function checkDragState() {
 let saveTrimTimeout = null;
 
 async function updateClipDisplay(originalName) {
-  const clipElement = document.querySelector(
-    `.clip-item[data-original-name="${originalName}"]`,
-  );
+  const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
   if (!clipElement) return;
 
   try {
-    const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
+    const clipInfo = await ipcRenderer.invoke('get-clip-info', originalName);
     const trimData = await ipcRenderer.invoke("get-trim", originalName);
     const isTrimmed = trimData !== null;
 
     const scissorsIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
 
     // Remove existing trimmed indicator if it exists
-    const existingIndicator = clipElement.querySelector(".trimmed-indicator");
+    const existingIndicator = clipElement.querySelector('.trimmed-indicator');
     if (existingIndicator) {
       existingIndicator.remove();
     }
 
     // Add new trimmed indicator if the clip is trimmed
     if (isTrimmed) {
-      const indicatorElement = document.createElement("div");
-      indicatorElement.className = "trimmed-indicator";
-      indicatorElement.title = "This video has been trimmed";
+      const indicatorElement = document.createElement('div');
+      indicatorElement.className = 'trimmed-indicator';
+      indicatorElement.title = 'This video has been trimmed';
       indicatorElement.innerHTML = scissorsIcon;
       clipElement.appendChild(indicatorElement);
     }
+
   } catch (error) {
     console.error(`Error updating clip display for ${originalName}:`, error);
   }
@@ -1363,7 +1217,7 @@ async function saveTrimChanges() {
         "save-trim",
         currentClip.originalName,
         trimStartTime,
-        trimEndTime,
+        trimEndTime
       );
       console.log("Trim data saved successfully");
       await updateClipDisplay(currentClip.originalName);
@@ -1376,21 +1230,14 @@ async function saveTrimChanges() {
 
 let saveTitleTimeout = null;
 
-async function saveTitleChange(
-  originalName,
-  oldCustomName,
-  newCustomName,
-  immediate = false,
-) {
+async function saveTitleChange(originalName, oldCustomName, newCustomName, immediate = false) {
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
   }
 
   const saveOperation = async () => {
     if (!originalName) {
-      console.warn(
-        "Attempted to save title change, but no original name provided.",
-      );
+      console.warn("Attempted to save title change, but no original name provided.");
       return;
     }
 
@@ -1400,7 +1247,7 @@ async function saveTitleChange(
       const result = await ipcRenderer.invoke(
         "save-custom-name",
         originalName,
-        newCustomName,
+        newCustomName
       );
       if (result.success) {
         updateClipNameInLibrary(originalName, newCustomName);
@@ -1410,9 +1257,7 @@ async function saveTitleChange(
       }
     } catch (error) {
       console.error("Error saving custom name:", error);
-      await showCustomAlert(
-        `Failed to save custom name. Please try again later. Error: ${error.message}`,
-      );
+      await showCustomAlert(`Failed to save custom name. Please try again later. Error: ${error.message}`);
       clipTitle.value = oldCustomName; // Revert to the original name
     }
   };
@@ -1426,17 +1271,13 @@ async function saveTitleChange(
 
 function updateClipNameInLibrary(originalName, newCustomName) {
   if (!originalName) {
-    console.warn(
-      "Attempted to update clip name in library with undefined originalName",
-    );
+    console.warn("Attempted to update clip name in library with undefined originalName");
     return;
   }
 
-  const clipElement = clipGrid.querySelector(
-    `[data-original-name="${originalName}"]`,
-  );
+  const clipElement = clipGrid.querySelector(`[data-original-name="${originalName}"]`);
   if (clipElement) {
-    const clipNameElement = clipElement.querySelector(".clip-name");
+    const clipNameElement = clipElement.querySelector('.clip-name');
     if (clipNameElement) {
       clipNameElement.textContent = newCustomName;
     }
@@ -1461,30 +1302,28 @@ clipTitle.addEventListener("keydown", (e) => {
   }
 });
 
-document
-  .getElementById("clip-grid")
-  .addEventListener("click", async (event) => {
-    const clipItem = event.target.closest(".clip-item");
-    if (clipItem) {
-      const originalName = clipItem.dataset.originalName;
-      const customName = clipItem.querySelector(".clip-name").textContent;
-      currentCleanup = await openClip(originalName, customName);
-    }
-  });
+document.getElementById('clip-grid').addEventListener('click', async (event) => {
+  const clipItem = event.target.closest('.clip-item');
+  if (clipItem) {
+    const originalName = clipItem.dataset.originalName;
+    const customName = clipItem.querySelector('.clip-name').textContent;
+    currentCleanup = await openClip(originalName, customName);
+  }
+});
 
 function showCustomAlert(message) {
   return new Promise((resolve) => {
-    const modal = document.getElementById("custom-modal");
-    const modalMessage = document.getElementById("modal-message");
-    const modalOk = document.getElementById("modal-ok");
-    const modalCancel = document.getElementById("modal-cancel");
+    const modal = document.getElementById('custom-modal');
+    const modalMessage = document.getElementById('modal-message');
+    const modalOk = document.getElementById('modal-ok');
+    const modalCancel = document.getElementById('modal-cancel');
 
     modalMessage.textContent = message;
-    modalCancel.style.display = "none";
-    modal.style.display = "block";
+    modalCancel.style.display = 'none';
+    modal.style.display = 'block';
 
     modalOk.onclick = () => {
-      modal.style.display = "none";
+      modal.style.display = 'none';
       resolve();
     };
   });
@@ -1492,41 +1331,44 @@ function showCustomAlert(message) {
 
 function showCustomConfirm(message) {
   return new Promise((resolve) => {
-    const modal = document.getElementById("custom-modal");
-    const modalMessage = document.getElementById("modal-message");
-    const modalOk = document.getElementById("modal-ok");
-    const modalCancel = document.getElementById("modal-cancel");
+    const modal = document.getElementById('custom-modal');
+    const modalMessage = document.getElementById('modal-message');
+    const modalOk = document.getElementById('modal-ok');
+    const modalCancel = document.getElementById('modal-cancel');
 
     modalMessage.textContent = message;
-    modalCancel.style.display = "inline-block";
-    modal.style.display = "block";
+    modalCancel.style.display = 'inline-block';
+    modal.style.display = 'block';
 
     modalOk.onclick = () => {
-      modal.style.display = "none";
+      modal.style.display = 'none';
       resolve(true);
     };
 
     modalCancel.onclick = () => {
-      modal.style.display = "none";
+      modal.style.display = 'none';
       resolve(false);
     };
   });
 }
 
-const filterDropdown = document.getElementById("filter-dropdown");
+const filterDropdown = document.getElementById('filter-dropdown');
 
-filterDropdown.addEventListener("change", () => {
+filterDropdown.addEventListener('change', () => {
   const selectedFilter = filterDropdown.value;
   filterClips(selectedFilter);
 });
 
 function filterClips(filter) {
   let filteredClips;
-  if (filter === "all") {
+  if (filter === 'all') {
     filteredClips = allClips;
-  } else if (filter === "favorites") {
-    filteredClips = allClips.filter((clip) => favorites.has(clip.originalName));
+  } else if (filter === 'favorites') {
+    filteredClips = allClips.filter(clip => favorites.has(clip.originalName));
   }
-
+  
   renderClips(filteredClips);
 }
+
+// Initial load
+loadClips().then(loadFavorites);

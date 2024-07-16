@@ -65,8 +65,6 @@ async function loadClips() {
       index === self.findIndex((t) => t.originalName === clip.originalName)
     );
 
-    allClips.sort((a, b) => b.createdAt - a.createdAt);
-
     renderClips(allClips, true);
     setupClipTitleEditing();
 
@@ -95,21 +93,6 @@ async function loadClips() {
     hideThumbnailGenerationText(); // Hide the text if there's an error
   }
 }
-
-async function addNewClipToLibrary(fileName) {
-  const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
-  const newClipElement = await createClipElement(newClipInfo);
-  
-  allClips.unshift(newClipInfo);
-  clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
-  updateFavoriteUI(fileName);
-  
-  ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
-}
-
-ipcRenderer.on('new-clip-added', (event, fileName) => {
-  addNewClipToLibrary(fileName);
-});
 
 function showThumbnailGenerationText() {
   if (!document.getElementById("thumbnail-generation-text")) {

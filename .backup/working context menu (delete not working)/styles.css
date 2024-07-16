@@ -50,23 +50,6 @@ body {
   background: #f1f1f1; 
 }
 
-#current-time, #total-time {
-  color: white;
-  font-size: 14px;
-  margin: 0 10px;
-  position: absolute;
-}
-
-#current-time {
-  bottom: 10px;
-  left: 10px;
-}
-
-#total-time {
-  bottom: 10px;
-  right: 10px;
-}
-
 #thumbnail-generation-text {
   font-family: 'Roboto', sans-serif;
   font-size: 14px;
@@ -405,7 +388,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(255, 0, 0, 0.493);
+  background-color: rgba(0, 0, 0, 0.7);
   color: white;
   display: flex;
   align-items: center;
@@ -674,7 +657,7 @@ body {
 
 #progress-bar {
   height: 100%;
-  background-color: #c2c2c2;
+  background-color: #3498db;
   position: absolute;
   left: 0;
   right: 0;
@@ -704,11 +687,10 @@ body {
 #playhead {
   z-index: 3;
   position: absolute;
-  top: -10%;
-  width: 5px;
-  height: 120%;
-  background-color: #008cff;
-  border-radius: 25%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background-color: #ffffff;
 }
 
 #player-overlay {
