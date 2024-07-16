@@ -34,12 +34,9 @@
   "license": "ISC",
   "devDependencies": {
     "electron": "^31.1.0",
-    "electron-builder": "^24.13.3",
-    "electron-reload": "^2.0.0-alpha.1",
-    "electron-reloader": "^1.2.3"
+    "electron-builder": "^24.13.3"
   },
   "dependencies": {
-    "chokidar": "^3.6.0",
     "custom-electron-titlebar": "^4.2.8",
     "electron-squirrel-startup": "^1.0.1",
     "fluent-ffmpeg": "^2.1.3",
