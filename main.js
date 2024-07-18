@@ -6,7 +6,6 @@ const {
   clipboard,
   dialog,
   Menu,
-  ipcRenderer,
 } = require("electron");
 const {
   setupTitlebar,
@@ -211,36 +210,100 @@ ipcMain.handle("get-trim", async (event, clipName) => {
   }
 });
 
-const favoritesPath = path.join(app.getPath("userData"), "favorites.json");
+ipcMain.handle("save-volume", async (event, clipName, volume) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+  await ensureDirectoryExists(metadataFolder);
+  const volumeFilePath = path.join(metadataFolder, `${clipName}.volume`);
 
-async function saveFavorites(favorites) {
   try {
-    await fs.writeFile(favoritesPath, JSON.stringify(favorites));
+    await writeFileAtomically(volumeFilePath, volume.toString());
+    await setHiddenAttribute(volumeFilePath);
+    console.log(`Volume saved successfully for ${clipName}: ${volume}`);
+    return { success: true };
   } catch (error) {
-    console.error("Error saving favorites:", error);
+    console.error(`Error saving volume for ${clipName}:`, error);
+    return { success: false, error: error.message };
   }
-}
-
-async function loadFavorites() {
-  try {
-    const data = await fs.readFile(favoritesPath, "utf-8");
-    return JSON.parse(data);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      // File doesn't exist, return an empty array
-      return [];
-    }
-    console.error("Error loading favorites:", error);
-    return [];
-  }
-}
-
-ipcMain.handle("save-favorites", async (event, favorites) => {
-  await saveFavorites(favorites);
 });
 
-ipcMain.handle("load-favorites", async () => {
-  return await loadFavorites();
+ipcMain.handle("get-volume", async (event, clipName) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+  const volumeFilePath = path.join(metadataFolder, `${clipName}.volume`);
+
+  try {
+    const volumeData = await fs.readFile(volumeFilePath, "utf8");
+    const parsedVolume = parseFloat(volumeData);
+    if (isNaN(parsedVolume)) {
+      console.warn(`Invalid volume data for ${clipName}, using default`);
+      return 1;
+    }
+    return parsedVolume;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      console.log(`No volume data found for ${clipName}, using default`);
+      return 1; // Default volume if not set
+    }
+    console.error(`Error reading volume for ${clipName}:`, error);
+    throw error;
+  }
+});
+
+ipcMain.handle("get-clip-tags", async (event, clipName) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+  const tagsFilePath = path.join(metadataFolder, `${clipName}.tags`);
+
+  try {
+    const tagsData = await fs.readFile(tagsFilePath, "utf8");
+    return JSON.parse(tagsData);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return []; // No tags file exists
+    }
+    console.error("Error reading tags:", error);
+    return [];
+  }
+});
+
+ipcMain.handle("save-clip-tags", async (event, clipName, tags) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+  const tagsFilePath = path.join(metadataFolder, `${clipName}.tags`);
+
+  try {
+    await fs.writeFile(tagsFilePath, JSON.stringify(tags));
+    return { success: true };
+  } catch (error) {
+    console.error("Error saving tags:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("load-global-tags", async () => {
+  const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
+  try {
+    const tagsData = await fs.readFile(tagsFilePath, "utf8");
+    return JSON.parse(tagsData);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return []; // No tags file exists yet
+    }
+    console.error("Error reading global tags:", error);
+    return [];
+  }
+});
+
+ipcMain.handle("save-global-tags", async (event, tags) => {
+  const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
+  try {
+    await fs.writeFile(tagsFilePath, JSON.stringify(tags));
+    return { success: true };
+  } catch (error) {
+    console.error("Error saving global tags:", error);
+    return { success: false, error: error.message };
+  }
 });
 
 async function saveCustomNameData(clipName, customName) {
@@ -545,12 +608,22 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
   };
 });
 
-ipcMain.handle("export-trimmed-video", async (event, clipName, start, end) => {
+ipcMain.handle("open-save-dialog", async (event, type) => {
+  const options = {
+    filters: type === "audio" 
+      ? [{ name: "Audio Files", extensions: ["mp3"] }]
+      : [{ name: "Video Files", extensions: ["mp4"] }],
+  };
+  const result = await dialog.showSaveDialog(options);
+  return result.canceled ? null : result.filePath;
+});
+
+ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume) => {
   try {
     const inputPath = path.join(settings.clipLocation, clipName);
     const outputPath = path.join(
       os.tmpdir(),
-      `trimmed_${Date.now()}_${clipName}`,
+      `trimmed_${Date.now()}_${clipName}`
     );
 
     await new Promise((resolve, reject) => {
@@ -558,6 +631,13 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end) => {
       ffmpeg(inputPath)
         .setStartTime(start)
         .setDuration(end - start)
+        .audioFilters(`volume=${volume}`)
+        .outputOptions([
+          '-c:v libx264',
+          '-c:a aac',
+          '-preset medium',
+          '-avoid_negative_ts make_zero'
+        ])
         .output(outputPath)
         .on("progress", (info) => {
           progress = info.percent;
@@ -571,7 +651,7 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end) => {
     if (process.platform === "win32") {
       clipboard.writeBuffer(
         "FileNameW",
-        Buffer.from(outputPath + "\0", "ucs2"),
+        Buffer.from(outputPath + "\0", "ucs2")
       );
     } else {
       clipboard.writeText(outputPath);
@@ -583,3 +663,84 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end) => {
     return { success: false, error: error.message };
   }
 });
+
+ipcMain.handle("export-video", async (event, clipName, start, end, volume, savePath) => {
+  try {
+    const inputPath = path.join(settings.clipLocation, clipName);
+    const outputPath = savePath || path.join(os.tmpdir(), `trimmed_${Date.now()}_${clipName}`);
+
+    await new Promise((resolve, reject) => {
+      let progress = 0;
+      ffmpeg(inputPath)
+        .setStartTime(start)
+        .setDuration(end - start)
+        .audioFilters(`volume=${volume}`)
+        .outputOptions([
+          '-c:v libx264',
+          '-c:a aac',
+          '-preset medium',
+          '-avoid_negative_ts make_zero'
+        ])
+        .output(outputPath)
+        .on("progress", (info) => {
+          progress = info.percent;
+          event.sender.send("export-progress", progress);
+        })
+        .on("end", resolve)
+        .on("error", reject)
+        .run();
+    });
+
+    if (!savePath) {
+      // Copy to clipboard if no save path provided
+      if (process.platform === "win32") {
+        clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
+      } else {
+        clipboard.writeText(outputPath);
+      }
+    }
+
+    return { success: true, path: outputPath };
+  } catch (error) {
+    console.error("Error in export-video:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("export-audio", async (event, clipName, start, end, volume, savePath) => {
+  const inputPath = path.join(settings.clipLocation, clipName);
+  const outputPath = savePath || path.join(os.tmpdir(), `audio_${Date.now()}_${path.parse(clipName).name}.mp3`);
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .setStartTime(start)
+      .setDuration(end - start)
+      .audioFilters(`volume=${volume}`)
+      .output(outputPath)
+      .audioCodec("libmp3lame")
+      .on("end", resolve)
+      .on("error", reject)
+      .run();
+  });
+
+  if (!savePath) {
+    // Copy to clipboard if no save path provided
+    if (process.platform === "win32") {
+      clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
+    } else {
+      clipboard.writeText(outputPath);
+    }
+  }
+
+  return { success: true, path: outputPath };
+});
+
+// Helper function to get video information
+function getVideoInfo(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata);
+    });
+  });
+}
