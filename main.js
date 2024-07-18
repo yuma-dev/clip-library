@@ -26,6 +26,15 @@ const { loadSettings, saveSettings } = require("./settings-manager");
 const readify = require("readify");
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
+let ffmpegPath;
+if (app.isPackaged) {
+  ffmpegPath = path.join(process.resourcesPath, 'ffmpeg-bin', 'ffmpeg.exe');
+} else {
+  ffmpegPath = path.join(__dirname, 'ffmpeg-bin', 'ffmpeg.exe');
+}
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+
 const THUMBNAIL_CACHE_DIR = path.join(
   app.getPath("userData"),
   "thumbnail-cache",
