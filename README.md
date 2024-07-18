@@ -8,7 +8,7 @@ Clip Library is a versatile desktop application designed to manage and enhance y
 
 Clip Library was born out of a need for a comprehensive clip management solution that bridges the gap between powerful recording software like OBS Studio and user-friendly clip management tools. While OBS Studio excels at capturing high-quality clips, it lacks built-in features for easy trimming, organizing, and exporting. On the other hand, solutions like Steelseries GG Moments, while user-friendly, have limitations such as:
 
-
+ - Lack of support for videos not made by their own software
  - Lack of automatic consistent desktop capture
  - Limited support for large clip libraries
  - Intrusive watermarks 
@@ -18,8 +18,8 @@ Clip Library was born out of a need for a comprehensive clip management solution
 
 **Clip Library aims to provide the best of both worlds:**
 
-Use OBS Studio (or other preferred software) for high-quality clip capture
-Use Clip Library for efficient management, editing, and exporting of your clips
+1. Use OBS Studio (or other preferred software) for high-quality clip capture
+2. Use Clip Library for efficient management, editing, and exporting of your clips
 
 This project allows content creators, gamers, and video enthusiasts to leverage the power of professional capture tools while enjoying streamlined clip management.
 
@@ -32,7 +32,7 @@ Clip Library saves edit information separately, preserving your original video f
 `Exluding Deletion, this will permanently Delete the actual Video file!`
 
 ### ✂️ Quick Trim and Edit
-Trim your clips with precision using our built-in video player and editing tools.
+Trim your clips with precision using the program's built-in video player and editing tools.
 
 ![Trim Feature](https://github.com/user-attachments/assets/9738caec-8d56-4a1c-b16e-2d39cdd1e2cf)
 
