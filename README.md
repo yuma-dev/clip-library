@@ -1,8 +1,6 @@
 # Clip Library
-
+![Title Image](https://github.com/user-attachments/assets/26aac2d1-d5a8-442d-9831-29941401de52)
 Clip Library is a versatile desktop application designed to manage and enhance your video clip collection. Built to complement OBS Studio and other video capture tools, it offers a user-friendly interface for organizing, editing, and exporting your clips.
-
-![Clip Library Main Interface](https://github.com/user-attachments/assets/f7b6572c-3c45-4751-8b98-2215b6061b29)
 
 ## Reasoning
 
