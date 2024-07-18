@@ -6,6 +6,9 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div id="clip-counter-container">
+      <div id="clip-counter">Clips: 0</div>
+    </div>
     <div id="top-bar">
       <button id="settingsButton" aria-label="Settings">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -18,58 +21,59 @@
       </div>
       <select id="filter-dropdown">
         <option value="all">All Clips</option>
-        <option value="favorites">Favorites</option>
       </select>
     </div>
     <div id="clip-grid"></div>
-    <div id="player-overlay" style="display: none"></div>
-    <div id="fullscreen-player" style="display: none">
-      <div id="video-container">
-        <div id="video-click-target"></div>
-        <video id="video-player"></video>
-        <div id="loading-overlay" style="display: none;">
-          <div class="loading-spinner"></div>
-        </div>
-      </div>
-      <div id="video-controls">
-        <div id="bottom-controls">
-          <div class="left-controls">
-            <div id="current-time">0:00</div>
-            <button id="fullscreen-button" aria-label="Fullscreen">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
-              </svg>
-            </button>
-            <div class="favorite-button-player" title="Add to favorites">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+      <div id="player-overlay" style="display: none">
+        <div id="player-container">
+          <button id="prev-video" class="video-nav-button">&lt;</button>
+          <button id="next-video" class="video-nav-button">&gt;</button>
+          <div id="fullscreen-player" style="display: none">
+            <div id="video-container">
+              <div id="video-click-target"></div>
+              <video id="video-player"></video>
+              <div id="loading-overlay" style="display: none;">
+                <div class="loading-spinner"></div>
+              </div>
             </div>
-            <input type="text" id="clip-title" placeholder="Clip Title" />
-            <div id="volume-container">
-              <button id="volume-button" aria-label="Volume">
-                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M753.85-481q0-82.5-44.21-150.58-44.21-68.09-118.56-101.88-11.54-5.46-17-16.31-5.46-10.84-1.34-22.12 4.95-12.03 17.18-16.72 12.23-4.7 24.77.77 90.46 41.07 144.81 123.6 54.34 82.52 54.34 183.23 0 100.7-54.34 183.24-54.35 82.54-144.81 123.61-12.54 5.47-24.77.77-12.23-4.69-17.18-16.72-4.12-11.28 1.34-22.12 5.46-10.85 17-16.31 74.35-33.79 118.56-101.88Q753.85-398.5 753.85-481ZM294.62-380H182.31q-15.37 0-25.76-10.4-10.39-10.39-10.39-25.76v-127.68q0-15.37 10.39-25.76 10.39-10.4 25.76-10.4h112.31l119.69-119.69q14.38-14.38 33.11-6.49 18.73 7.89 18.73 28.18v396q0 20.29-18.73 28.18-18.73 7.89-33.11-6.49L294.62-380Zm351.53-99.96q0 37.43-15.54 70.85-15.53 33.42-41.88 56.19-8.5 5.69-17.85 1.15-9.34-4.54-9.34-15v-228.46q0-10.46 9.34-15 9.35-4.54 17.85 1.09 26.35 23.45 41.88 57.6 15.54 34.16 15.54 71.58ZM406.15-606l-86 86h-114v80h114l86 86v-252Zm-100 126Z"/></svg>
-              </button>
-              <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1" class="collapsed">
+          <div id="video-controls">
+            <div id="bottom-controls">
+              <div class="left-controls">
+                <div id="current-time">0:00</div>
+                <button id="fullscreen-button" aria-label="Fullscreen">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+                    <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+                  </svg>
+                </button>
+                <input type="text" id="clip-title" placeholder="Clip Title" />
+                <div id="volume-container">
+                  <button id="volume-button" aria-label="Volume">
+                    <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M753.85-481q0-82.5-44.21-150.58-44.21-68.09-118.56-101.88-11.54-5.46-17-16.31-5.46-10.84-1.34-22.12 4.95-12.03 17.18-16.72 12.23-4.7 24.77.77 90.46 41.07 144.81 123.6 54.34 82.52 54.34 183.23 0 100.7-54.34 183.24-54.35 82.54-144.81 123.61-12.54 5.47-24.77.77-12.23-4.69-17.18-16.72-4.12-11.28 1.34-22.12 5.46-10.85 17-16.31 74.35-33.79 118.56-101.88Q753.85-398.5 753.85-481ZM294.62-380H182.31q-15.37 0-25.76-10.4-10.39-10.39-10.39-25.76v-127.68q0-15.37 10.39-25.76 10.39-10.4 25.76-10.4h112.31l119.69-119.69q14.38-14.38 33.11-6.49 18.73 7.89 18.73 28.18v396q0 20.29-18.73 28.18-18.73 7.89-33.11-6.49L294.62-380Zm351.53-99.96q0 37.43-15.54 70.85-15.53 33.42-41.88 56.19-8.5 5.69-17.85 1.15-9.34-4.54-9.34-15v-228.46q0-10.46 9.34-15 9.35-4.54 17.85 1.09 26.35 23.45 41.88 57.6 15.54 34.16 15.54 71.58ZM406.15-606l-86 86h-114v80h114l86 86v-252Zm-100 126Z"/></svg>
+                  </button>
+                  <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1" class="collapsed">
+                </div>
+              </div>
+              <div class="right-controls">
+                <div id="total-time">0:00</div>
+                <button id="export-button">Export</button>
+                <button id="delete-button" aria-label="Delete">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                  </svg>
+                </button>
+              </div>
             </div>
-          </div>
-          <div class="right-controls">
-            <div id="total-time">0:00</div>
-            <button id="export-button">Export</button>
-            <button id="delete-button" aria-label="Delete">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                <line x1="10" y1="11" x2="10" y2="17"></line>
-                <line x1="14" y1="11" x2="14" y2="17"></line>
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div id="trim-controls">
-          <div id="progress-bar-container">
-            <div id="progress-bar"></div>
-            <div id="trim-start"></div>
-            <div id="trim-end"></div>
-            <div id="playhead"></div>
+            <div id="trim-controls">
+              <div id="progress-bar-container">
+                <div id="progress-bar"></div>
+                <div id="trim-start"></div>
+                <div id="trim-end"></div>
+                <div id="playhead"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -85,9 +89,15 @@
     </div>
     <script src="renderer.js"></script>
     <div id="context-menu" class="context-menu">
-      <div class="context-menu-item" id="context-menu-export">Export</div>
-      <div class="context-menu-item" id="context-menu-favorite">Favorite</div>
-      <div class="context-menu-item" id="context-menu-delete">Delete</div>
+      <div id="context-menu-export" class="context-menu-item">Export</div>
+      <div id="context-menu-tags" class="context-menu-item">
+        Manage Tags
+        <div id="tags-dropdown" class="tags-dropdown" style="display: none;">
+          <input type="text" id="tag-search-input" placeholder="Search or create tag">
+          <div id="tag-list"></div>
+        </div>
+      </div>
+      <div id="context-menu-delete" class="context-menu-item">Delete</div>
     </div>
   </body>
 </html>

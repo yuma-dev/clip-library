@@ -1,9 +1,6 @@
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
-const { exec } = require("child_process");
-const util = require("util");
-const execPromise = util.promisify(exec);
 
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
@@ -17,7 +14,9 @@ const playhead = document.getElementById("playhead");
 const loadingOverlay = document.getElementById("loading-overlay");
 const playerOverlay = document.getElementById("player-overlay");
 const videoClickTarget = document.getElementById("video-click-target");
+const MAX_FRAME_RATE = 10;
 
+let currentClipList = [];
 let currentClip = null;
 let trimStartTime = 0;
 let trimEndTime = 0;
@@ -33,6 +32,16 @@ let isLoading = false;
 let currentCleanup = null;
 let allClips = [];
 let contextMenuClip = null;
+let isTagsDropdownOpen = false;
+let isFrameStepping = false;
+let frameStepDirection = 0;
+let lastFrameStepTime = 0;
+let lastKeyPressed = null;
+let pendingFrameStep = false;
+let currentContextClip;
+let controlsTimeout;
+let isMouseOverControls = false;
+let isRendering = false;
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
@@ -60,15 +69,26 @@ async function loadClips() {
     allClips = await ipcRenderer.invoke("get-clips");
     console.log("Clips received:", allClips.length);
     
+    // Load tags for each clip
+    for (let clip of allClips) {
+      clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
+    }
+
     // Remove duplicates based on originalName
-    allClips = allClips.filter((clip, index, self) =>
-      index === self.findIndex((t) => t.originalName === clip.originalName)
-    );
+    allClips = removeDuplicates(allClips);
+    console.log("Clips after removing duplicates:", allClips.length);
 
     allClips.sort((a, b) => b.createdAt - a.createdAt);
 
-    renderClips(allClips, true);
+    // Filter out private clips for initial render
+    currentClipList = allClips.filter(clip => !clip.tags.includes("Private"));
+
+    console.log("Initial currentClipList length:", currentClipList.length);
+
+    updateClipCounter(currentClipList.length);
+    renderClips(currentClipList);
     setupClipTitleEditing();
+    validateClipLists();
 
     // Start progressive thumbnail generation
     const clipNames = allClips.map((clip) => clip.originalName);
@@ -88,27 +108,46 @@ async function loadClips() {
       },
     );
     console.log("Clips loaded and rendered.");
+
+    // Update the filter dropdown with all tags
+    updateFilterDropdown();
   } catch (error) {
     console.error("Error loading clips:", error);
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
     currentClipLocationSpan.textContent = "Error: Unable to load location";
-    hideThumbnailGenerationText(); // Hide the text if there's an error
+    hideThumbnailGenerationText();
   }
 }
 
 async function addNewClipToLibrary(fileName) {
   const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
-  const newClipElement = await createClipElement(newClipInfo);
   
-  allClips.unshift(newClipInfo);
-  clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
-  updateFavoriteUI(fileName);
+  // Check if the clip already exists in allClips
+  const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
+  
+  if (existingClipIndex === -1) {
+    // If it doesn't exist, add it to allClips
+    allClips.unshift(newClipInfo);
+    const newClipElement = await createClipElement(newClipInfo);
+    clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
+  } else {
+    // If it exists, update the existing clip info
+    allClips[existingClipIndex] = newClipInfo;
+    // Update the existing clip element in the grid
+    const existingElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+    if (existingElement) {
+      const updatedElement = await createClipElement(newClipInfo);
+      existingElement.replaceWith(updatedElement);
+    }
+  }
   
   ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
+  updateFilterDropdown();
 }
 
 ipcRenderer.on('new-clip-added', (event, fileName) => {
   addNewClipToLibrary(fileName);
+  updateFilterDropdown();
 });
 
 function showThumbnailGenerationText() {
@@ -127,6 +166,13 @@ function showThumbnailGenerationText() {
     textElement.style.fontWeight = "normal";
     textElement.textContent = "Generating thumbnails...";
     document.body.appendChild(textElement);
+  }
+}
+
+function updateClipCounter(count) {
+  const counter = document.getElementById('clip-counter');
+  if (counter) {
+    counter.textContent = `Clips: ${count}`;
   }
 }
 
@@ -189,69 +235,82 @@ function updateClipThumbnail(clipName, thumbnailPath) {
 }
 
 async function renderClips(clips) {
+  if (isRendering) {
+    console.log("Render already in progress, skipping");
+    return;
+  }
+  
+  isRendering = true;
+  console.log("Rendering clips. Input length:", clips.length);
   clipGrid.innerHTML = ""; // Clear the grid
+
+  clips = removeDuplicates(clips);
+  console.log("Clips to render after removing duplicates:", clips.length);
 
   const clipPromises = clips.map(createClipElement);
   const clipElements = await Promise.all(clipPromises);
 
   clipElements.forEach((clipElement) => {
     clipGrid.appendChild(clipElement);
+    const clip = clips.find(c => c.originalName === clipElement.dataset.originalName);
+    if (clip) {
+      updateClipTags(clip);
+    }
   });
 
-  // Update favorite UI for all rendered clips
-  clips.forEach((clip) => updateFavoriteUI(clip.originalName));
+  setupTooltips();
+  currentClipList = clips;
+  addHoverEffect();
+
+  document.querySelectorAll('.clip-item').forEach(card => {
+    card.addEventListener('mouseenter', handleMouseEnter);
+    card.addEventListener('mouseleave', handleMouseLeave);
+  });
+
+  console.log("Rendered clips count:", clipGrid.children.length);
+  isRendering = false;
 }
 
-let favorites = new Set();
+let currentHoveredCard = null;
 
-async function toggleFavorite(clipName) {
-  if (favorites.has(clipName)) {
-    favorites.delete(clipName);
-  } else {
-    favorites.add(clipName);
-  }
+function handleOnMouseMove(e) {
+  if (!currentHoveredCard) return;
 
-  // Update UI
-  updateFavoriteUI(clipName);
+  const rect = currentHoveredCard.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
 
-  // Save favorites to main process
-  await ipcRenderer.invoke("save-favorites", Array.from(favorites));
-}
+  const centerX = rect.width / 2;
+  const centerY = rect.height / 2;
 
-function updateFavoriteUI(clipName) {
-  const isFavorite = favorites.has(clipName);
+  const tiltX = (y - centerY) / centerY;
+  const tiltY = (centerX - x) / centerX;
 
-  // Update grid item
-  const gridItem = document.querySelector(
-    `.clip-item[data-original-name="${clipName}"]`,
-  );
-  if (gridItem) {
-    const favoriteButton = gridItem.querySelector(".favorite-button");
-    favoriteButton.classList.toggle("active", isFavorite);
-  }
-
-  // Update video player
-  if (currentClip && currentClip.originalName === clipName) {
-    const playerFavoriteButton = document.querySelector(
-      "#video-controls .favorite-button",
-    );
-    playerFavoriteButton.classList.toggle("active", isFavorite);
-  }
-}
-
-// Load favorites when the app starts
-async function loadFavorites() {
-  const savedFavorites = await ipcRenderer.invoke("load-favorites");
-  favorites = new Set(savedFavorites);
-
-  // Update UI for all clips
-  document.querySelectorAll(".clip-item").forEach((clipElement) => {
-    const clipName = clipElement.dataset.originalName;
-    updateFavoriteUI(clipName);
+  requestAnimationFrame(() => {
+    if (currentHoveredCard) {
+      currentHoveredCard.style.setProperty("--mouse-x", `${x}px`);
+      currentHoveredCard.style.setProperty("--mouse-y", `${y}px`);
+      currentHoveredCard.style.setProperty("--tilt-x", `${tiltX * 5}deg`);
+      currentHoveredCard.style.setProperty("--tilt-y", `${tiltY * 5}deg`);
+    }
   });
 }
 
-// Call loadFavorites after loading clips
+function handleMouseEnter(e) {
+  currentHoveredCard = e.currentTarget;
+}
+
+function handleMouseLeave(e) {
+  const card = e.currentTarget;
+  card.style.setProperty("--tilt-x", "0deg");
+  card.style.setProperty("--tilt-y", "0deg");
+  currentHoveredCard = null;
+}
+
+function addHoverEffect() {
+  const wrapper = document.getElementById("clip-grid");
+  wrapper.addEventListener("mousemove", handleOnMouseMove);
+}
 
 function setupSearch() {
   const searchInput = document.getElementById("search-input");
@@ -259,26 +318,30 @@ function setupSearch() {
 }
 
 function performSearch() {
-  const searchTerm = document
-    .getElementById("search-input")
-    .value.trim()
-    .toLowerCase();
+  const searchTerm = document.getElementById("search-input").value.trim().toLowerCase();
 
   if (searchTerm === "") {
-    renderClips(allClips);
-    return;
+    currentClipList = allClips.filter(clip => !clip.tags.includes("Private"));
+  } else {
+    const searchWords = searchTerm.split(/\s+/);
+    currentClipList = allClips.filter((clip) =>
+      !clip.tags.includes("Private") &&
+      searchWords.every(
+        (word) =>
+          clip.customName.toLowerCase().includes(word) ||
+          clip.originalName.toLowerCase().includes(word),
+      ),
+    );
   }
-
-  const searchWords = searchTerm.split(/\s+/);
-  const filteredClips = allClips.filter((clip) =>
-    searchWords.every(
-      (word) =>
-        clip.customName.toLowerCase().includes(word) ||
-        clip.originalName.toLowerCase().includes(word),
-    ),
+  // Remove duplicates
+  currentClipList = currentClipList.filter((clip, index, self) =>
+    index === self.findIndex((t) => t.originalName === clip.originalName)
   );
+  renderClips(currentClipList);
 
-  renderClips(filteredClips);
+  if (currentClip) {
+    updateNavigationButtons();
+  }
 }
 
 // Debounce function to limit how often the search is performed
@@ -296,14 +359,15 @@ function setupContextMenu() {
   const contextMenu = document.getElementById("context-menu");
   const contextMenuExport = document.getElementById("context-menu-export");
   const contextMenuDelete = document.getElementById("context-menu-delete");
-  const contextMenuFavorite = document.getElementById("context-menu-favorite");
+  const contextMenuTags = document.getElementById("context-menu-tags");
+  const tagsDropdown = document.getElementById("tags-dropdown");
+  const tagSearchInput = document.getElementById("tag-search-input");
+  const tagList = document.getElementById("tag-list");
 
   if (
     !contextMenu ||
     !contextMenuExport ||
-    !contextMenuDelete ||
-    !contextMenuFavorite
-  ) {
+    !contextMenuDelete) {
     console.error("One or more context menu elements not found");
     return;
   }
@@ -311,6 +375,8 @@ function setupContextMenu() {
   document.addEventListener("click", (e) => {
     if (!contextMenu.contains(e.target)) {
       contextMenu.style.display = "none";
+      isTagsDropdownOpen = false;
+      tagsDropdown.style.display = "none";
     }
   });
 
@@ -322,12 +388,39 @@ function setupContextMenu() {
     contextMenu.style.display = "none";
   });
 
-  contextMenuFavorite.addEventListener("click", () => {
-    console.log("Favorite clicked for clip:", contextMenuClip?.originalName);
-    if (contextMenuClip) {
-      toggleFavorite(contextMenuClip.originalName);
+  contextMenuTags.addEventListener("click", (e) => {
+    e.stopPropagation();
+    isTagsDropdownOpen = !isTagsDropdownOpen;
+    const tagsDropdown = document.getElementById("tags-dropdown");
+    tagsDropdown.style.display = isTagsDropdownOpen ? "block" : "none";
+    if (isTagsDropdownOpen) {
+      const tagSearchInput = document.getElementById("tag-search-input");
+      tagSearchInput.focus();
+      updateTagList();
     }
-    contextMenu.style.display = "none";
+  });
+
+  tagSearchInput.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+
+  tagsDropdown.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+
+  tagSearchInput.addEventListener("input", updateTagList);
+  tagSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const newTag = tagSearchInput.value.trim();
+      if (newTag && !globalTags.includes(newTag)) {
+        addGlobalTag(newTag);
+      }
+      if (newTag && contextMenuClip) {
+        toggleClipTag(contextMenuClip, newTag);
+      }
+      tagSearchInput.value = "";
+      updateTagList();
+    }
   });
 
   contextMenuDelete.addEventListener("click", async () => {
@@ -344,24 +437,261 @@ function setupContextMenu() {
   });
 }
 
+let globalTags = [];
+
+function addGlobalTag(tag) {
+  if (!globalTags.includes(tag)) {
+    globalTags.push(tag);
+    saveGlobalTags();
+    updateFilterDropdown(); // Update the dropdown after adding a new tag
+  }
+}
+
+function deleteGlobalTag(tag) {
+  const index = globalTags.indexOf(tag);
+  if (index > -1) {
+    globalTags.splice(index, 1);
+    saveGlobalTags();
+    updateTagList();
+    updateFilterDropdown();
+    
+    // Remove the tag from all clips
+    allClips.forEach(clip => {
+      const tagIndex = clip.tags.indexOf(tag);
+      if (tagIndex > -1) {
+        clip.tags.splice(tagIndex, 1);
+        updateClipTags(clip);
+        saveClipTags(clip);
+      }
+    });
+  }
+}
+
+async function loadGlobalTags() {
+  try {
+    globalTags = await ipcRenderer.invoke("load-global-tags");
+  } catch (error) {
+    console.error("Error loading global tags:", error);
+    globalTags = [];
+  }
+}
+
+function saveGlobalTags() {
+  ipcRenderer.invoke("save-global-tags", globalTags);
+}
+
+function updateTagList() {
+  const tagList = document.getElementById("tag-list");
+  const searchTerm = document.getElementById("tag-search-input").value.toLowerCase();
+  
+  let tagsToShow = globalTags.filter(tag => tag.toLowerCase().includes(searchTerm));
+  if (tagsToShow.length > 5) tagsToShow = tagsToShow.slice(0, 10);
+  
+  tagList.innerHTML = "";
+  tagsToShow.forEach(tag => {
+    const tagElement = document.createElement("div");
+    tagElement.className = "tag-item";
+    
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = contextMenuClip && contextMenuClip.tags && contextMenuClip.tags.includes(tag);
+    checkbox.onclick = (e) => {
+      e.stopPropagation();
+      if (contextMenuClip) {
+        toggleClipTag(contextMenuClip, tag);
+      }
+    };
+    
+    const tagText = document.createElement("span");
+    tagText.textContent = truncateTag(tag);
+    
+    const deleteButton = document.createElement("button");
+    deleteButton.textContent = "X";
+    deleteButton.className = "delete-tag-button";
+    deleteButton.onclick = (e) => {
+      e.stopPropagation();
+      deleteGlobalTag(tag);
+    };
+    
+    tagElement.appendChild(checkbox);
+    tagElement.appendChild(tagText);
+    tagElement.appendChild(deleteButton);
+    
+    tagElement.onclick = (e) => {
+      e.stopPropagation();
+      checkbox.click();
+    };
+    
+    tagList.appendChild(tagElement);
+  });
+}
+
+function toggleClipTag(clip, tag) {
+  if (!clip.tags) clip.tags = [];
+  const index = clip.tags.indexOf(tag);
+  if (index > -1) {
+    clip.tags.splice(index, 1);
+  } else {
+    clip.tags.push(tag);
+    if (!globalTags.includes(tag)) {
+      addGlobalTag(tag);
+    }
+  }
+  updateClipTags(clip);
+  saveClipTags(clip);
+  updateFilterDropdown(); // Update the dropdown after modifying tags
+}
+
+function addTag(clip, tag) {
+  if (!clip.tags) clip.tags = [];
+  clip.tags.push(tag);
+  updateClipTags(clip);
+  saveClipTags(clip);
+}
+
+function removeTag(clip, tag) {
+  clip.tags = clip.tags.filter(t => t !== tag);
+  updateClipTags(clip);
+  saveClipTags(clip);
+}
+
+function updateClipTags(clip) {
+  const clipElement = document.querySelector(`.clip-item[data-original-name="${clip.originalName}"]`);
+  if (clipElement) {
+    const tagContainer = clipElement.querySelector(".tag-container");
+    tagContainer.innerHTML = "";
+    
+    const visibleTags = clip.tags.slice(0, 3);  // Show only first 3 tags
+    visibleTags.forEach(tag => {
+      const tagElement = document.createElement("span");
+      tagElement.className = "tag";
+      tagElement.textContent = truncateTag(tag);
+      tagElement.title = tag; // Show full tag on hover
+      tagContainer.appendChild(tagElement);
+    });
+    
+    if (clip.tags.length > 3) {
+      const moreTagsElement = document.createElement("span");
+      moreTagsElement.className = "tag more-tags";
+      moreTagsElement.textContent = `+${clip.tags.length - 3}`;
+      
+      // Create a tooltip element
+      const tooltip = document.createElement("div");
+      tooltip.className = "tags-tooltip";
+      
+      // Add remaining tags to the tooltip
+      clip.tags.slice(3).forEach(tag => {
+        const tooltipTag = document.createElement("span");
+        tooltipTag.className = "tooltip-tag";
+        tooltipTag.textContent = tag;
+        tooltip.appendChild(tooltipTag);
+      });
+      
+      moreTagsElement.appendChild(tooltip);
+      tagContainer.appendChild(moreTagsElement);
+
+      // Add event listeners
+      moreTagsElement.addEventListener('mouseenter', (e) => showTooltip(e, tooltip));
+      moreTagsElement.addEventListener('mouseleave', () => hideTooltip(tooltip));
+    }
+  }
+}
+
+function showTooltip(event, tooltip) {
+  const rect = event.target.getBoundingClientRect();
+  tooltip.style.display = 'flex';
+  tooltip.style.position = 'fixed';
+  tooltip.style.zIndex = '10000';  // Ensure this is higher than any other z-index in your app
+  tooltip.style.left = `${rect.left}px`;
+  tooltip.style.top = `${rect.bottom + 5}px`; // 5px below the tag
+
+  // Ensure the tooltip doesn't go off-screen
+  const tooltipRect = tooltip.getBoundingClientRect();
+  if (tooltipRect.right > window.innerWidth) {
+    tooltip.style.left = `${window.innerWidth - tooltipRect.width}px`;
+  }
+  if (tooltipRect.bottom > window.innerHeight) {
+    tooltip.style.top = `${rect.top - tooltipRect.height - 5}px`;
+  }
+
+  // Move the tooltip to the body to ensure it's not constrained by any parent elements
+  document.body.appendChild(tooltip);
+}
+
+function hideTooltip(tooltip) {
+  tooltip.style.display = 'none';
+  // Move the tooltip back to its original parent
+  if (tooltip.parentElement === document.body) {
+    const moreTagsElement = tooltip.previousElementSibling;
+    if (moreTagsElement) {
+      moreTagsElement.appendChild(tooltip);
+    }
+  }
+}
+
+async function saveClipTags(clip) {
+  try {
+    await ipcRenderer.invoke("save-clip-tags", clip.originalName, clip.tags);
+  } catch (error) {
+    console.error("Error saving clip tags:", error);
+  }
+}
+
+function truncateTag(tag, maxLength = 15) {
+  if (tag.length <= maxLength) return tag;
+  return tag.slice(0, maxLength - 1) + '..';
+}
+
+function setupTooltips() {
+  document.querySelectorAll('.more-tags').forEach(moreTags => {
+    const tooltip = moreTags.querySelector('.tags-tooltip');
+    
+    moreTags.addEventListener('mouseenter', () => {
+      tooltip.style.display = 'flex';
+      console.log('Tooltip shown');
+    });
+    
+    moreTags.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+      console.log('Tooltip hidden');
+    });
+  });
+}
+
 function showContextMenu(e, clip) {
+  currentContextClip = clip;
   e.preventDefault();
   e.stopPropagation();
 
   const contextMenu = document.getElementById("context-menu");
-  const contextMenuFavorite = document.getElementById("context-menu-favorite");
+  const tagsDropdown = document.getElementById("tags-dropdown");
 
-  if (contextMenu && contextMenuFavorite) {
-    contextMenu.style.display = "block";
+  if (contextMenu) {
+    // Reset the context menu state
+    contextMenu.style.display = "none";
+    tagsDropdown.style.display = "none";
+    isTagsDropdownOpen = false; 
+    
+    // Clear any checked checkboxes
+    const checkboxes = tagsDropdown.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(checkbox => checkbox.checked = false);
+    
+    // Clear the tag search input
+    const tagSearchInput = document.getElementById("tag-search-input");
+    if (tagSearchInput) tagSearchInput.value = '';
+
+    // Set new position and show the menu
     contextMenu.style.left = `${e.clientX}px`;
     contextMenu.style.top = `${e.clientY}px`;
-    contextMenuClip = clip; // Update the global contextMenuClip
+    contextMenu.style.display = "block";
 
-    contextMenuFavorite.textContent = favorites.has(clip.originalName)
-      ? "Unfavorite"
-      : "Favorite";
+    // Update the contextMenuClip
+    contextMenuClip = clip;
 
     console.log("Context menu shown for clip:", clip.originalName);
+    
+    // Update the tag list for the new clip
+    updateTagList();
   } else {
     console.error("Context menu elements not found");
   }
@@ -428,25 +758,107 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   new Titlebar(titlebarOptions);
+
   loadClips();
   setupSearch();
 
+  const filterDropdown = document.getElementById("filter-dropdown");
+  filterDropdown.addEventListener("change", (e) => {
+    const selectedFilter = e.target.value;
+    filterClips(selectedFilter);
+  });
+
   const volumeButton = document.getElementById("volume-button");
   const volumeSlider = document.getElementById("volume-slider");
-
+  const volumeContainer = document.getElementById("volume-container");
+  
   volumeSlider.addEventListener("input", (e) => {
-    videoPlayer.volume = e.target.value;
-  });
-  volumeButton.addEventListener("click", () => {
-    if (volumeSlider.classList.contains("collapsed")) {
-      volumeSlider.classList.remove("collapsed");
-    } else {
-      volumeSlider.classList.add("collapsed");
+    const newVolume = parseFloat(e.target.value);
+    videoPlayer.volume = newVolume;
+    updateVolumeSlider(newVolume);
+    
+    if (currentClip) {
+      debouncedSaveVolume(currentClip.originalName, newVolume);
     }
+  });
+  
+  volumeButton.addEventListener("click", () => {
+    volumeSlider.classList.toggle("collapsed");
+    clearTimeout(volumeContainer.timeout);
+  });
+  
+  volumeContainer.addEventListener("mouseenter", () => {
+    clearTimeout(volumeContainer.timeout);
+    volumeSlider.classList.remove("collapsed");
+  });
+  
+  volumeContainer.addEventListener("mouseleave", () => {
+    volumeContainer.timeout = setTimeout(() => {
+      volumeSlider.classList.add("collapsed");
+    }, 2000);
   });
 
   setupContextMenu();
+  loadGlobalTags();
 });
+
+function changeVolume(delta) {
+  const newVolume = Math.min(Math.max(videoPlayer.volume + delta, 0), 1);
+  videoPlayer.volume = newVolume;
+  updateVolumeSlider(newVolume);
+  showVolumeContainer();
+  
+  if (currentClip) {
+    debouncedSaveVolume(currentClip.originalName, newVolume);
+  }
+}
+
+function updateVolumeSlider(volume) {
+  const volumeSlider = document.getElementById("volume-slider");
+  if (volumeSlider) {
+    volumeSlider.value = volume;
+  }
+}
+
+const debouncedSaveVolume = debounce(async (clipName, volume) => {
+  try {
+    await ipcRenderer.invoke("save-volume", clipName, volume);
+    console.log(`Volume saved for ${clipName}: ${volume}`);
+  } catch (error) {
+    console.error('Error saving volume:', error);
+  }
+}, 300); // 300ms debounce time
+
+async function saveVolume(clipName, volume) {
+  try {
+    await ipcRenderer.invoke("save-volume", clipName, volume);
+  } catch (error) {
+    console.error("Error saving volume:", error);
+  }
+}
+
+async function loadVolume(clipName) {
+  try {
+    const volume = await ipcRenderer.invoke("get-volume", clipName);
+    console.log(`Loaded volume for ${clipName}: ${volume}`);
+    return volume;
+  } catch (error) {
+    console.error("Error loading volume:", error);
+    return 1; // Default volume
+  }
+}
+
+function showVolumeContainer() {
+  const volumeContainer = document.getElementById("volume-container");
+  const volumeSlider = document.getElementById("volume-slider");
+  
+  volumeSlider.classList.remove("collapsed");
+  
+  clearTimeout(volumeContainer.timeout);
+  volumeContainer.timeout = setTimeout(() => {
+    volumeSlider.classList.add("collapsed");
+  }, 2000); // Hide after 2 seconds
+}
 
 async function changeClipLocation() {
   const newLocation = await ipcRenderer.invoke("open-folder-dialog");
@@ -516,6 +928,9 @@ function createClipElement(clip) {
     clipElement.className = "clip-item";
     clipElement.dataset.originalName = clip.originalName;
 
+    const contentElement = document.createElement("div");
+    contentElement.className = "clip-item-content";
+
     let thumbnailPath = await ipcRenderer.invoke(
       "get-thumbnail-path",
       clip.originalName,
@@ -534,87 +949,102 @@ function createClipElement(clip) {
     const starIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
 
     clipElement.innerHTML = `
-      <div class="clip-item-media-container">
-        <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
-      </div>
-      ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ""}
-      <div class="favorite-button" title="Add to favorites">${starIcon}</div>
-      <div class="clip-info">
-        <p class="clip-name">${clip.customName}</p>
-        <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
-      </div>
-    `;
+    <div class="clip-item-media-container">
+      <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
+    </div>
+    <div class="tag-container"></div>
+    ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ""}
+    <div class="clip-info">
+      <p class="clip-name">${clip.customName}</p>
+      <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
+    </div>
+  `;
 
     let hoverTimeout;
     let videoElement;
     let playPromise;
+    let isVideoPlaying = false;
 
-    clipElement.addEventListener("mouseenter", () => {
+    function cleanupVideoPreview() {
+      clearTimeout(hoverTimeout);
+      if (videoElement) {
+        videoElement.pause();
+        videoElement.removeAttribute('src'); // Empty source
+        videoElement.load(); // Reset the video element
+        videoElement.remove();
+        videoElement = null;
+      }
+      isVideoPlaying = false;
+      const imgElement = clipElement.querySelector(".clip-item-media-container img");
+      if (imgElement) {
+        imgElement.style.display = "";
+      }
+    }
+
+    function handleMouseEnter() {
       if (clipElement.classList.contains("video-preview-disabled")) return;
+      cleanupVideoPreview(); // Always cleanup before starting a new preview
       hoverTimeout = setTimeout(() => {
+        if (!clipElement.matches(':hover')) return; // Exit if mouse is no longer over the element
+
         videoElement = document.createElement("video");
         videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
         videoElement.muted = true;
         videoElement.loop = true;
-        videoElement.poster = thumbnailPath;
         videoElement.preload = "metadata";
+        videoElement.style.zIndex = "1";
 
-        const mediaContainer = clipElement.querySelector(
-          ".clip-item-media-container",
-        );
+        const mediaContainer = clipElement.querySelector(".clip-item-media-container");
         const imgElement = mediaContainer.querySelector("img");
-        imgElement.style.display = "none";
-        mediaContainer.appendChild(videoElement);
+        videoElement.poster = imgElement.src;
 
-        videoElement.currentTime = clip.isTrimmed
-          ? window.trimStartTime || 0
-          : 0;
-        playPromise = videoElement.play();
-
-        if (playPromise !== undefined) {
-          playPromise.catch((error) => {
-            if (error.name !== "AbortError") {
-              console.error("Error playing video:", error);
-            }
-          });
-        }
-      }, 0);
-    });
-
-    clipElement.addEventListener("mouseleave", () => {
-      if (clipElement.classList.contains("video-preview-disabled")) return;
-      clearTimeout(hoverTimeout);
-      if (videoElement) {
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              videoElement.pause();
-            })
-            .catch(() => {
-              // Ignore the error if play was interrupted
+        videoElement.addEventListener('loadedmetadata', () => {
+          if (clipElement.matches(':hover')) {
+            imgElement.style.display = "none";
+            videoElement.currentTime = clip.isTrimmed ? window.trimStartTime || 0 : 0;
+            videoElement.play().then(() => {
+              isVideoPlaying = true;
+            }).catch((error) => {
+              if (error.name !== "AbortError") {
+                console.error("Error playing video:", error);
+              }
+              cleanupVideoPreview();
             });
-        }
-        videoElement.remove();
-        const imgElement = clipElement.querySelector(
-          ".clip-item-media-container img",
-        );
-        imgElement.style.display = "";
-      }
-    });
+          } else {
+            cleanupVideoPreview();
+          }
+        });
+
+        mediaContainer.appendChild(videoElement);
+      }, 100);
+    }
+
+    function handleMouseLeave() {
+      if (clipElement.classList.contains("video-preview-disabled")) return;
+      cleanupVideoPreview();
+    }
+
+    clipElement.addEventListener("mouseenter", handleMouseEnter);
+    clipElement.addEventListener("mouseleave", handleMouseLeave);
 
     clipElement.addEventListener("click", () =>
       openClip(clip.originalName, clip.customName),
     );
+
+    clipElement.addEventListener("mousemove", handleOnMouseMove);
+
     clipElement.addEventListener("contextmenu", (e) => {
       e.preventDefault(); // Prevent the default context menu
       showContextMenu(e, clip);
     });
+    clipElement.appendChild(contentElement);
 
-    const favoriteButton = clipElement.querySelector(".favorite-button");
-    favoriteButton.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleFavorite(clip.originalName);
-    });
+    clipElement.cleanup = () => {
+      cleanupVideoPreview();
+      clipElement.removeEventListener("mouseenter", handleMouseEnter);
+      clipElement.removeEventListener("mouseleave", handleMouseLeave);
+    };
+
     resolve(clipElement);
   });
 }
@@ -629,7 +1059,17 @@ const exportButton = document.getElementById("export-button");
 const deleteButton = document.getElementById("delete-button");
 
 deleteButton.addEventListener("click", confirmAndDeleteClip);
-exportButton.addEventListener("click", exportTrimmedVideo);
+exportButton.addEventListener("click", (e) => {
+  if (e.ctrlKey && e.shiftKey) {
+    exportAudioWithFileSelection();
+  } else if (e.ctrlKey) {
+    exportVideoWithFileSelection();
+  } else if (e.shiftKey) {
+    exportAudioToClipboard();
+  } else {
+    exportTrimmedVideo();
+  }
+});
 
 ipcRenderer.on("close-video-player", () => {
   if (videoPlayer) {
@@ -639,28 +1079,68 @@ ipcRenderer.on("close-video-player", () => {
   }
 });
 
-async function confirmAndDeleteClip() {
-  if (!currentClip) return;
+function updateNavigationButtons() {
+  const currentIndex = currentClipList.findIndex(clip => clip.originalName === currentClip.originalName);
+  document.getElementById('prev-video').disabled = currentIndex <= 0;
+  document.getElementById('next-video').disabled = currentIndex >= currentClipList.length - 1;
+}
 
-  videoPlayer.pause();
+function pauseVideoIfPlaying() {
+  if (!videoPlayer.paused) {
+    videoPlayer.pause();
+  }
+}
 
-  const clipToDelete = { ...currentClip }; // Create a copy of currentClip
+function navigateToVideo(direction) {
+  const currentIndex = currentClipList.findIndex(clip => clip.originalName === currentClip.originalName);
+  const newIndex = currentIndex + direction;
+  if (newIndex >= 0 && newIndex < currentClipList.length) {
+    const nextClip = currentClipList[newIndex];
+    openClip(nextClip.originalName, nextClip.customName);
+  }
+}
 
-  const isConfirmed = await showCustomConfirm(`Are you sure you want to delete "${clipToDelete.customName}"? This action cannot be undone.`);
+document.getElementById('prev-video').addEventListener('click', (e) => {
+  e.stopPropagation();
+  navigateToVideo(-1);
+});
+
+document.getElementById('next-video').addEventListener('click', (e) => {
+  e.stopPropagation();
+  navigateToVideo(1);
+});
+
+async function confirmAndDeleteClip(clipToDelete = null) {
+  if (!clipToDelete && !currentClip) return;
+  
+  const clipInfo = clipToDelete || currentClip;
+  
+  const isConfirmed = await showCustomConfirm(`Are you sure you want to delete "${clipInfo.customName}"? This action cannot be undone.`);
 
   if (isConfirmed) {
+    // Immediately remove the clip from UI
+    const clipElement = document.querySelector(`.clip-item[data-original-name="${clipInfo.originalName}"]`);
+    if (clipElement) {
+      clipElement.remove();
+    }
+
+    // Remove from allClips and currentClipList
+    const allClipsIndex = allClips.findIndex(clip => clip.originalName === clipInfo.originalName);
+    const currentClipListIndex = currentClipList.findIndex(clip => clip.originalName === clipInfo.originalName);
+    
+    if (allClipsIndex > -1) allClips.splice(allClipsIndex, 1);
+    if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 1);
+
     try {
-      // Close the player before attempting to delete
-      closePlayer();
-      disableVideoThumbnail(clipToDelete.originalName);
+      // Close the player if we're deleting the current clip
+      if (currentClip && currentClip.originalName === clipInfo.originalName) {
+        closePlayer();
+      }
       
-      const result = await ipcRenderer.invoke('delete-clip', clipToDelete.originalName, videoPlayer);
+      disableVideoThumbnail(clipInfo.originalName);
+      
+      const result = await ipcRenderer.invoke('delete-clip', clipInfo.originalName);
       if (result.success) {
-        // Remove the deleted clip from the grid
-        const clipElement = document.querySelector(`.clip-item[data-original-name="${clipToDelete.originalName}"]`);
-        if (clipElement) {
-          clipElement.remove();
-        }
         console.log('Clip deleted successfully');
       } else {
         throw new Error(result.error);
@@ -668,7 +1148,18 @@ async function confirmAndDeleteClip() {
     } catch (error) {
       console.error('Error deleting clip:', error);
       await showCustomAlert(`Failed to delete clip: ${error.message}`);
+      
+      // Revert the UI changes if deletion fails
+      if (clipElement && clipElement.parentNode === null) {
+        clipGrid.appendChild(clipElement);
+      }
+      
+      // Revert data changes
+      if (allClipsIndex > -1) allClips.splice(allClipsIndex, 0, clipInfo);
+      if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 0, clipInfo);
     }
+
+    updateClipCounter(currentClipList.length);
   }
 }
 
@@ -697,10 +1188,11 @@ function disableVideoThumbnail(clipName) {
   // Add a class to indicate that video preview is disabled
   clipElement.classList.add("video-preview-disabled");
 
-  // Optionally, you can add a visual indicator that video preview is disabled
-  const disabledIndicator = document.createElement("div");
-  disabledIndicator.className = "video-preview-disabled-indicator";
-  clipElement.appendChild(disabledIndicator);
+  // Add a visual indicator that the clip is being deleted
+  const deletingIndicator = document.createElement("div");
+  deletingIndicator.className = "deleting-indicator";
+  deletingIndicator.textContent = "Deleting...";
+  clipElement.appendChild(deletingIndicator);
 }
 
 function toggleFullscreen() {
@@ -746,6 +1238,89 @@ function isVideoInFullscreen(videoElement) {
   );
 }
 
+async function exportVideoWithFileSelection() {
+  if (!currentClip) return;
+  const savePath = await ipcRenderer.invoke("open-save-dialog", "video");
+  if (savePath) {
+    await exportVideo(savePath);
+  }
+}
+
+async function exportAudioWithFileSelection() {
+  if (!currentClip) return;
+  const savePath = await ipcRenderer.invoke("open-save-dialog", "audio");
+  if (savePath) {
+    await exportAudio(savePath);
+  }
+}
+
+async function exportAudioToClipboard() {
+  if (!currentClip) return;
+  await exportAudio();
+}
+
+async function exportVideo(savePath = null) {
+  exportButton.disabled = true;
+  exportButton.textContent = "Exporting...";
+
+  try {
+    const volume = await loadVolume(currentClip.originalName);
+    const result = await ipcRenderer.invoke(
+      "export-video",
+      currentClip.originalName,
+      trimStartTime,
+      trimEndTime,
+      volume,
+      savePath
+    );
+    if (result.success) {
+      console.log("Video exported successfully:", result.path);
+      exportButton.textContent = "Export Complete!";
+    } else {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    console.error("Error exporting video:", error);
+    exportButton.textContent = "Export Failed";
+  } finally {
+    setTimeout(() => {
+      exportButton.textContent = "Export";
+      exportButton.disabled = false;
+    }, 2000);
+  }
+}
+
+async function exportAudio(savePath = null) {
+  exportButton.disabled = true;
+  exportButton.textContent = "Exporting Audio...";
+
+  try {
+    const volume = await loadVolume(currentClip.originalName);
+    const result = await ipcRenderer.invoke(
+      "export-audio",
+      currentClip.originalName,
+      trimStartTime,
+      trimEndTime,
+      volume,
+      savePath
+    );
+    if (result.success) {
+      console.log("Audio exported successfully:", result.path);
+      exportButton.textContent = "Audio Export Complete!";
+    } else {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    console.error("Error exporting audio:", error);
+    exportButton.textContent = "Audio Export Failed";
+  } finally {
+    setTimeout(() => {
+      exportButton.textContent = "Export";
+      exportButton.disabled = false;
+    }, 2000);
+  }
+}
+
 async function exportTrimmedVideo() {
   if (!currentClip) return;
 
@@ -753,11 +1328,13 @@ async function exportTrimmedVideo() {
   exportButton.textContent = "Exporting...";
 
   try {
+    const volume = await loadVolume(currentClip.originalName);
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
       currentClip.originalName,
       trimStartTime,
       trimEndTime,
+      volume
     );
     if (result.success) {
       console.log(
@@ -791,6 +1368,7 @@ async function exportClipFromContextMenu(clip) {
     const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
     const start = trimData ? trimData.start : 0;
     const end = trimData ? trimData.end : clipInfo.format.duration;
+    const volume = await loadVolume(clip.originalName);
 
     // Show initial progress
     showExportProgress(0, 100);
@@ -800,6 +1378,7 @@ async function exportClipFromContextMenu(clip) {
       clip.originalName,
       start,
       end,
+      volume
     );
     if (result.success) {
       console.log("Clip exported successfully:", result.path);
@@ -840,6 +1419,11 @@ videoPlayer.addEventListener("loadedmetadata", updateTimeDisplay);
 videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
 
 async function openClip(originalName, customName) {
+  if (currentCleanup) {
+    currentCleanup();
+    currentCleanup = null;
+  }
+
   currentClip = { originalName, customName };
   const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
 
@@ -849,8 +1433,23 @@ async function openClip(originalName, customName) {
 
   clipTitle.value = customName;
 
+  // Load and set the volume before playing the video
+  try {
+    const savedVolume = await loadVolume(originalName);
+    console.log(`Loaded volume for ${originalName}: ${savedVolume}`);
+    videoPlayer.volume = savedVolume;
+    updateVolumeSlider(savedVolume);
+  } catch (error) {
+    console.error('Error loading volume:', error);
+    videoPlayer.volume = 1; // Default to full volume if there's an error
+    updateVolumeSlider(1);
+  }
+
   playerOverlay.style.display = "block";
-  fullscreenPlayer.style.display = "flex";
+  fullscreenPlayer.style.display = "block";
+
+  document.addEventListener("keydown", handleKeyPress);
+  document.addEventListener("keyup", handleKeyRelease);
 
   const trimData = await ipcRenderer.invoke("get-trim", originalName);
   if (trimData) {
@@ -885,26 +1484,12 @@ async function openClip(originalName, customName) {
   const videoContainer = document.getElementById("video-container");
   const videoControls = document.getElementById("video-controls");
 
-  let controlsTimeout;
-
-  function showControls() {
-    videoControls.classList.add("visible");
-    clearTimeout(controlsTimeout);
-  }
-
-  function hideControls() {
-    controlsTimeout = setTimeout(() => {
-      const isClipTitleFocused = document.activeElement === clipTitle;
-      console.log(isClipTitleFocused);
-      if (!videoPlayer.paused && !isClipTitleFocused) {
-        videoControls.classList.remove("visible");
-      }
-    }, 3000);
-  }
-
   function resetControlsTimeout() {
     showControls();
-    hideControls();
+    if (!videoPlayer.paused) {
+      clearTimeout(controlsTimeout);
+      controlsTimeout = setTimeout(hideControls, 3000);
+    }
   }
 
   function handleMouseMove(e) {
@@ -916,38 +1501,71 @@ async function openClip(originalName, customName) {
 
   videoContainer.addEventListener("mousemove", handleMouseMove);
   videoContainer.addEventListener("mouseenter", showControls);
-  videoContainer.addEventListener("mouseleave", hideControls);
+  videoContainer.addEventListener("mouseleave", () => {
+    isMouseOverControls = false;
+    hideControls();
+  });
 
   videoPlayer.addEventListener("pause", showControls);
-  videoPlayer.addEventListener("play", hideControls);
+  videoPlayer.addEventListener("play", () => {
+    showControls();
+    controlsTimeout = setTimeout(hideControls, 3000);
+  });
 
   videoControls.addEventListener("mouseenter", () => {
-    clearTimeout(controlsTimeout);
+    isMouseOverControls = true;
+    showControls();
   });
 
   videoControls.addEventListener("mouseleave", () => {
+    isMouseOverControls = false;
     if (!videoPlayer.paused) {
-      hideControls();
+      controlsTimeout = setTimeout(hideControls, 3000);
     }
   });
 
-  // Show controls initially
-  showControls();
+  // Add this for all interactive elements within the controls
+const interactiveElements = videoControls.querySelectorAll('button, input, #clip-title');
+interactiveElements.forEach(element => {
+  element.addEventListener('focus', () => {
+    clearTimeout(controlsTimeout);
+    showControls();
+  });
+  
+  element.addEventListener('blur', () => {
+    if (!videoPlayer.paused && !isMouseOverControls) {
+      controlsTimeout = setTimeout(hideControls, 3000);
+    }
+  });
+});
+
+  updateNavigationButtons();
 
   // Clean up function to remove event listeners
-  const cleanup = () => {
-    videoContainer.removeEventListener("mousemove", handleMouseMove);
-    videoContainer.removeEventListener("mouseenter", showControls);
-    videoContainer.removeEventListener("mouseleave", hideControls);
-    videoPlayer.removeEventListener("pause", showControls);
-    videoPlayer.removeEventListener("play", hideControls);
-    videoControls.removeEventListener("mouseenter", showControls);
-    videoControls.removeEventListener("mouseleave", hideControls);
-    videoPlayer.removeEventListener("click", showControls);
+  currentCleanup = () => {
+    document.removeEventListener("keydown", handleKeyPress);
+    document.removeEventListener("keyup", handleKeyRelease);
+    videoPlayer.removeEventListener("loadedmetadata", handleVideoMetadataLoaded);
+    videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
+    videoPlayer.removeEventListener("progress", updateLoadingProgress);
+    videoPlayer.removeEventListener("waiting", showLoadingOverlay);
+    videoPlayer.removeEventListener("playing", hideLoadingOverlay);
+    videoPlayer.removeEventListener("seeked", handleVideoSeeked);
+    playerOverlay.removeEventListener("click", handleOverlayClick);
   };
+}
 
-  // Call cleanup when closing the player
-  return cleanup;
+const videoControls = document.getElementById("video-controls");
+
+function showControls() {
+  videoControls.classList.add("visible");
+  clearTimeout(controlsTimeout);
+}
+
+function hideControls() {
+  if (!videoPlayer.paused && !isMouseOverControls) {
+    videoControls.classList.remove("visible");
+  }
 }
 
 // Add this new function to handle overlay clicks
@@ -1052,6 +1670,8 @@ function closePlayer() {
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
     saveTitleTimeout = null;
+    document.removeEventListener("keydown", handleKeyPress);
+    document.removeEventListener("keyup", handleKeyRelease);
   }
 
   // Capture necessary information before resetting currentClip
@@ -1108,20 +1728,21 @@ fullscreenPlayer.addEventListener("click", (e) => {
 
 playerOverlay.addEventListener("click", closePlayer);
 
-function handleOutsideClick(e) {
-  if (e.target === playerOverlay) {
-    const timeSinceMouseUp = Date.now() - mouseUpTime;
-    if (timeSinceMouseUp > 50) {
-      // 50ms threshold
-      closePlayer();
-    }
+function handleKeyRelease(e) {
+  if (e.key === "," || e.key === ".") {
+    isFrameStepping = false;
+    frameStepDirection = 0;
   }
 }
 
 function handleKeyPress(e) {
   const isClipTitleFocused = document.activeElement === clipTitle;
-  const isSearching =
-    document.activeElement === document.getElementById("search-input");
+  const isSearching = document.activeElement === document.getElementById("search-input");
+  const isPlayerActive = playerOverlay.style.display === "block";
+
+  if (!isPlayerActive) return;
+
+  showControls();
 
   if (e.key === "Escape") {
     closePlayer();
@@ -1132,10 +1753,140 @@ function handleKeyPress(e) {
       togglePlayPause();
     }
   }
+
+  // New keybinds
+  if (!isClipTitleFocused && !isSearching) {
+    switch (e.key) {
+      case ",":
+      case ".":
+        e.preventDefault();
+        moveFrame(e.key === "," ? -1 : 1);
+        break;
+        case "ArrowLeft":
+          case "ArrowRight":
+              e.preventDefault();
+              if (e.ctrlKey) {
+                  navigateToVideo(e.key === "ArrowLeft" ? -1 : 1);
+              } else {
+                  skipTime(e.key === "ArrowLeft" ? -1 : 1);
+              }
+              break;
+      case "ArrowUp":
+        case "ArrowDown":
+          e.preventDefault();
+          changeVolume(e.key === "ArrowUp" ? 0.1 : -0.1);
+          break;
+      case "e":
+      case "E":
+        e.preventDefault();
+        if (e.ctrlKey && e.shiftKey) {
+          exportAudioWithFileSelection();
+        } else if (e.ctrlKey) {
+          exportVideoWithFileSelection();
+        } else if (e.shiftKey) {
+          exportAudioToClipboard();
+        } else {
+          exportTrimmedVideo();
+        }
+        break;
+      case "Delete":
+        e.preventDefault();
+        confirmAndDeleteClip();
+        break;
+      case "[":
+        e.preventDefault();
+        setTrimPoint("start");
+        break;
+      case "]":
+        e.preventDefault();
+        setTrimPoint("end");
+        break;
+      case "Tab":
+        e.preventDefault();
+        clipTitle.focus();
+        break;
+    }
+  }
 }
 
-// Optionally, you can add this event listener if you want to use handleKeyPress
-document.addEventListener("keydown", handleKeyPress);
+function moveFrame(direction) {
+  pauseVideoIfPlaying();
+
+  if (!isFrameStepping) {
+    isFrameStepping = true;
+    frameStepDirection = direction;
+    lastFrameStepTime = 0;
+    pendingFrameStep = false;
+    requestAnimationFrame(frameStep);
+  } else {
+    frameStepDirection = direction;
+  }
+}
+
+function frameStep(timestamp) {
+  if (!isFrameStepping) return;
+
+  const minFrameDuration = 1000 / MAX_FRAME_RATE;
+  const elapsedTime = timestamp - lastFrameStepTime;
+
+  if (elapsedTime >= minFrameDuration) {
+    if (!pendingFrameStep) {
+      pendingFrameStep = true;
+      const newTime = videoPlayer.currentTime + frameStepDirection * (1 / 30);
+      videoPlayer.currentTime = Math.max(0, Math.min(newTime, videoPlayer.duration));
+    }
+    showControls();
+  }
+
+  requestAnimationFrame(frameStep);
+}
+
+videoPlayer.addEventListener('seeked', function() {
+  if (pendingFrameStep) {
+    lastFrameStepTime = performance.now();
+    pendingFrameStep = false;
+    updateVideoDisplay();
+  }
+});
+
+function updateVideoDisplay() {
+  if (videoPlayer.paused) {
+    const canvas = document.createElement('canvas');
+    canvas.width = videoPlayer.videoWidth;
+    canvas.height = videoPlayer.videoHeight;
+    canvas.getContext('2d').drawImage(videoPlayer, 0, 0, canvas.width, canvas.height);
+    
+    // Force a repaint of the video element
+    videoPlayer.style.display = 'none';
+    videoPlayer.offsetHeight; // Trigger a reflow
+    videoPlayer.style.display = '';
+  }
+}
+
+function calculateSkipTime(videoDuration) {
+  const skipPercentage = 0.03; // 5% of total duration
+  return videoDuration * skipPercentage;
+}
+
+function skipTime(direction) {
+  const skipDuration = calculateSkipTime(videoPlayer.duration);
+  console.log(`Video duration: ${videoPlayer.duration.toFixed(2)}s, Skip duration: ${skipDuration.toFixed(2)}s`);
+  
+  const newTime = videoPlayer.currentTime + (direction * skipDuration);
+  videoPlayer.currentTime = Math.max(0, Math.min(newTime, videoPlayer.duration));
+  
+  showControls();
+}
+
+function setTrimPoint(point) {
+  if (point === "start") {
+    trimStartTime = videoPlayer.currentTime;
+  } else {
+    trimEndTime = videoPlayer.currentTime;
+  }
+  updateTrimControls();
+  saveTrimChanges();
+}
 
 function togglePlayPause() {
   if (!isVideoInFullscreen(videoPlayer)) {
@@ -1376,21 +2127,14 @@ async function saveTrimChanges() {
 
 let saveTitleTimeout = null;
 
-async function saveTitleChange(
-  originalName,
-  oldCustomName,
-  newCustomName,
-  immediate = false,
-) {
+async function saveTitleChange(originalName, oldCustomName, newCustomName, immediate = false) {
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
   }
 
   const saveOperation = async () => {
     if (!originalName) {
-      console.warn(
-        "Attempted to save title change, but no original name provided.",
-      );
+      console.warn("Attempted to save title change, but no original name provided.");
       return;
     }
 
@@ -1400,18 +2144,29 @@ async function saveTitleChange(
       const result = await ipcRenderer.invoke(
         "save-custom-name",
         originalName,
-        newCustomName,
+        newCustomName
       );
       if (result.success) {
         updateClipNameInLibrary(originalName, newCustomName);
         console.log(`Title successfully changed to: ${newCustomName}`);
+        
+        // Update the currentClip object
+        if (currentClip && currentClip.originalName === originalName) {
+          currentClip.customName = newCustomName;
+        }
+        
+        // Update the clip in allClips array
+        const clipIndex = allClips.findIndex(clip => clip.originalName === originalName);
+        if (clipIndex !== -1) {
+          allClips[clipIndex].customName = newCustomName;
+        }
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
       console.error("Error saving custom name:", error);
       await showCustomAlert(
-        `Failed to save custom name. Please try again later. Error: ${error.message}`,
+        `Failed to save custom name. Please try again later. Error: ${error.message}`
       );
       clipTitle.value = oldCustomName; // Revert to the original name
     }
@@ -1520,13 +2275,86 @@ filterDropdown.addEventListener("change", () => {
   filterClips(selectedFilter);
 });
 
-function filterClips(filter) {
-  let filteredClips;
+const debouncedFilterClips = debounce((filter) => {
+  console.log("Filtering clips with filter:", filter);
+  console.log("allClips length before filtering:", allClips.length);
+  
+  let filteredClips = [...allClips];  // Create a new array to avoid modifying allClips
+
   if (filter === "all") {
-    filteredClips = allClips;
-  } else if (filter === "favorites") {
-    filteredClips = allClips.filter((clip) => favorites.has(clip.originalName));
+    filteredClips = filteredClips.filter(clip => !clip.tags.includes("Private"));
+  } else if (filter === "Private") {
+    filteredClips = filteredClips.filter(clip => clip.tags.includes("Private"));
+  } else {
+    filteredClips = filteredClips.filter(clip => 
+      clip.tags.includes(filter) && !clip.tags.includes("Private")
+    );
   }
 
-  renderClips(filteredClips);
+  filteredClips = removeDuplicates(filteredClips);
+  filteredClips.sort((a, b) => b.createdAt - a.createdAt);
+
+  console.log("Filtered clips length:", filteredClips.length);
+
+  currentClipList = filteredClips;
+  renderClips(currentClipList);
+
+  if (currentClip) {
+    updateNavigationButtons();
+  }
+
+  validateClipLists();
+  updateClipCounter(filteredClips.length);
+}, 300);  // 300ms debounce time
+
+function filterClips(filter) {
+  debouncedFilterClips(filter);
+}
+
+// Helper function to remove duplicates
+function removeDuplicates(clips) {
+  console.log("Removing duplicates. Input length:", clips.length);
+  const uniqueClips = clips.filter((clip, index, self) =>
+    index === self.findIndex((t) => t.originalName === clip.originalName)
+  );
+  console.log("After removing duplicates. Output length:", uniqueClips.length);
+  return uniqueClips;
+}
+
+function validateClipLists() {
+  console.log("Validating clip lists");
+  console.log("allClips length:", allClips.length);
+  console.log("currentClipList length:", currentClipList.length);
+  console.log("Rendered clips count:", clipGrid.children.length);
+
+  const allClipsUnique = new Set(allClips.map(clip => clip.originalName)).size === allClips.length;
+  const currentClipListUnique = new Set(currentClipList.map(clip => clip.originalName)).size === currentClipList.length;
+
+  console.log("allClips is unique:", allClipsUnique);
+  console.log("currentClipList is unique:", currentClipListUnique);
+
+  if (!allClipsUnique || !currentClipListUnique) {
+    console.warn("Duplicate clips detected!");
+  }
+}
+
+function updateFilterDropdown() {
+  const filterDropdown = document.getElementById("filter-dropdown");
+  const allTags = new Set(globalTags);
+  
+  filterDropdown.innerHTML = '<option value="all">All Clips</option>';
+  allTags.forEach(tag => {
+    const option = document.createElement("option");
+    option.value = tag;
+    option.textContent = truncateTag(tag, 10);
+    filterDropdown.appendChild(option);
+  });
+
+  // Always add the Private tag option
+  if (!allTags.has("Private")) {
+    const privateOption = document.createElement("option");
+    privateOption.value = "Private";
+    privateOption.textContent = "Private";
+    filterDropdown.appendChild(privateOption);
+  }
 }
