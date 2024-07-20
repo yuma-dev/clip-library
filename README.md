@@ -62,3 +62,5 @@ I am committed to ongoing improvements and optimizations.
 Contributions from the community to enhance code quality, performance, and features are always welcome.
 
 If you encounter any issues or have questions, please file an issue on the [Issues](https://github.com/yuma-dev/clip-library/issues) page.
+
+[VirusTotal Scan](https://www.virustotal.com/gui/file/d3bd966c0047e3a05234036c037fec7ee68a472a818e4f72695fda62dac9fc77?nocache=1) (feel free to do your own as I might forget to do one on an update)
