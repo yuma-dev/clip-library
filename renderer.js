@@ -42,6 +42,8 @@ let currentContextClip;
 let controlsTimeout;
 let isMouseOverControls = false;
 let isRendering = false;
+let deletionTooltip = null;
+let deletionTimeout = null;
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
@@ -51,11 +53,14 @@ settingsModal.innerHTML = `
     <h2>Settings</h2>
     <p>Current clip location: <span id="currentClipLocation"></span></p>
     <button id="changeLocationBtn">Change Location</button>
+    <button id="manageTagsBtn">Manage Tags</button>
     <button id="closeSettingsBtn">Close</button>
+    <p id="app-version"></p>
   </div>
 `;
 
-document.body.appendChild(settingsModal);
+const container = document.querySelector('.cet-container') || document.body;
+container.appendChild(settingsModal);
 
 const closeSettingsBtn = document.getElementById("closeSettingsBtn");
 const currentClipLocationSpan = document.getElementById("currentClipLocation");
@@ -116,6 +121,18 @@ async function loadClips() {
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
     currentClipLocationSpan.textContent = "Error: Unable to load location";
     hideThumbnailGenerationText();
+  }
+}
+
+async function updateVersionDisplay() {
+  try {
+    const version = await ipcRenderer.invoke('get-app-version');
+    const versionElement = document.getElementById('app-version');
+    if (versionElement) {
+      versionElement.textContent = `Version: ${version}`;
+    }
+  } catch (error) {
+    console.error('Failed to get app version:', error);
   }
 }
 
@@ -362,7 +379,7 @@ function setupContextMenu() {
   const contextMenuTags = document.getElementById("context-menu-tags");
   const tagsDropdown = document.getElementById("tags-dropdown");
   const tagSearchInput = document.getElementById("tag-search-input");
-  const tagList = document.getElementById("tag-list");
+  const addTagButton = document.getElementById("add-tag-button");
 
   if (
     !contextMenu ||
@@ -400,27 +417,32 @@ function setupContextMenu() {
     }
   });
 
-  tagSearchInput.addEventListener("click", (e) => {
-    e.stopPropagation();
-  });
-
-  tagsDropdown.addEventListener("click", (e) => {
-    e.stopPropagation();
-  });
-
-  tagSearchInput.addEventListener("input", updateTagList);
-  tagSearchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      const newTag = tagSearchInput.value.trim();
-      if (newTag && !globalTags.includes(newTag)) {
-        addGlobalTag(newTag);
-      }
-      if (newTag && contextMenuClip) {
+  addTagButton.addEventListener("click", () => {
+    const tagSearchInput = document.getElementById("tag-search-input");
+    const newTag = tagSearchInput.value.trim();
+    if (newTag && !globalTags.includes(newTag)) {
+      addGlobalTag(newTag);
+      if (contextMenuClip) {
         toggleClipTag(contextMenuClip, newTag);
       }
       tagSearchInput.value = "";
       updateTagList();
     }
+  });
+
+  tagSearchInput.addEventListener("input", updateTagList);
+  tagSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const firstTag = document.querySelector(".tag-item");
+      if (firstTag) {
+        firstTag.querySelector("input[type='checkbox']").click();
+      }
+    }
+  });
+
+  tagsDropdown.addEventListener("click", (e) => {
+    e.stopPropagation();
   });
 
   contextMenuDelete.addEventListener("click", async () => {
@@ -435,6 +457,151 @@ function setupContextMenu() {
   document.addEventListener("click", () => {
     contextMenu.style.display = "none";
   });
+}
+
+document.getElementById('manageTagsBtn').addEventListener('click', openTagManagement);
+
+function openTagManagement() {
+  console.log("openTagManagement function called");
+  try {
+    const container = document.querySelector('.cet-container') || document.body;
+    
+    const tagManagementModal = document.createElement('div');
+    tagManagementModal.id = 'tagManagementModal';
+    tagManagementModal.className = 'modal';
+    tagManagementModal.innerHTML = `
+      <div class="modal-content">
+        <h2>Manage Tags</h2>
+        <div id="tagList"></div>
+        <button id="closeTagManagementBtn">Close</button>
+      </div>
+    `;
+    container.appendChild(tagManagementModal);
+
+    // Show the modal
+    tagManagementModal.style.display = 'block';
+
+    const tagList = document.getElementById('tagList');
+    if (!tagList) {
+      throw new Error("Tag list element not found");
+    }
+
+    globalTags.forEach(tag => {
+      const tagElement = document.createElement('div');
+      tagElement.className = 'tag-management-item';
+      tagElement.innerHTML = `
+        <input type="text" value="${tag}" data-original="${tag}">
+        <button class="delete-tag">Delete</button>
+      `;
+      tagList.appendChild(tagElement);
+    });
+
+    const closeTagManagementBtn = document.getElementById('closeTagManagementBtn');
+    if (closeTagManagementBtn) {
+      closeTagManagementBtn.addEventListener('click', () => {
+        tagManagementModal.remove();
+      });
+    } else {
+      throw new Error("Close button for tag management not found");
+    }
+
+    tagList.addEventListener('change', async (e) => {
+      if (e.target.tagName === 'INPUT') {
+        const originalTag = e.target.dataset.original;
+        const newTag = e.target.value;
+        await updateTag(originalTag, newTag);
+      }
+    });
+
+    tagList.addEventListener('click', async (e) => {
+      if (e.target.className === 'delete-tag') {
+        const tagInput = e.target.previousElementSibling;
+        const tag = tagInput.dataset.original;
+        await deleteTag(tag);
+        e.target.parentElement.remove();
+      }
+    });
+
+    console.log("Tag management modal opened successfully");
+  } catch (error) {
+    console.error("Error in openTagManagement:", error);
+    alert(`An error occurred while opening tag management: ${error.message}`);
+  }
+}
+
+function updateTagList() {
+  const tagList = document.getElementById("tag-list");
+  const searchTerm = document.getElementById("tag-search-input").value.toLowerCase();
+  
+  let tagsToShow = [...globalTags];
+  
+  // Always include the "Private" tag
+  if (!tagsToShow.includes("Private")) {
+    tagsToShow.push("Private");
+  }
+  
+  tagsToShow = tagsToShow.filter(tag => tag.toLowerCase().includes(searchTerm));
+  
+  // Sort tags by how closely they match the search term, but keep "Private" at the top
+  tagsToShow.sort((a, b) => {
+    if (a === "Private") return -1;
+    if (b === "Private") return 1;
+    const aIndex = a.toLowerCase().indexOf(searchTerm);
+    const bIndex = b.toLowerCase().indexOf(searchTerm);
+    if (aIndex === bIndex) {
+      return a.localeCompare(b);
+    }
+    return aIndex - bIndex;
+  });
+
+  tagList.innerHTML = "";
+  tagsToShow.forEach(tag => {
+    const tagElement = document.createElement("div");
+    tagElement.className = "tag-item";
+    
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = contextMenuClip && contextMenuClip.tags && contextMenuClip.tags.includes(tag);
+    checkbox.onclick = (e) => {
+      e.stopPropagation();
+      if (contextMenuClip) {
+        toggleClipTag(contextMenuClip, tag);
+      }
+    };
+    
+    const tagText = document.createElement("span");
+    tagText.textContent = truncateTag(tag);
+    
+    tagElement.appendChild(checkbox);
+    tagElement.appendChild(tagText);
+    
+    tagElement.onclick = (e) => {
+      e.stopPropagation();
+      checkbox.click();
+    };
+    
+    tagList.appendChild(tagElement);
+  });
+}
+
+async function deleteTag(tag) {
+  const index = globalTags.indexOf(tag);
+  if (index > -1) {
+    globalTags.splice(index, 1);
+    await saveGlobalTags();
+
+    // Remove the tag from all clips
+    allClips.forEach(clip => {
+      const tagIndex = clip.tags.indexOf(tag);
+      if (tagIndex > -1) {
+        clip.tags.splice(tagIndex, 1);
+        updateClipTags(clip);
+        saveClipTags(clip);
+      }
+    });
+
+    updateFilterDropdown();
+  }
 }
 
 let globalTags = [];
@@ -485,8 +652,17 @@ function updateTagList() {
   const searchTerm = document.getElementById("tag-search-input").value.toLowerCase();
   
   let tagsToShow = globalTags.filter(tag => tag.toLowerCase().includes(searchTerm));
-  if (tagsToShow.length > 5) tagsToShow = tagsToShow.slice(0, 10);
   
+  // Sort tags by how closely they match the search term
+  tagsToShow.sort((a, b) => {
+    const aIndex = a.toLowerCase().indexOf(searchTerm);
+    const bIndex = b.toLowerCase().indexOf(searchTerm);
+    if (aIndex === bIndex) {
+      return a.localeCompare(b); // Alphabetical order if match position is the same
+    }
+    return aIndex - bIndex; // Earlier match comes first
+  });
+
   tagList.innerHTML = "";
   tagsToShow.forEach(tag => {
     const tagElement = document.createElement("div");
@@ -505,17 +681,8 @@ function updateTagList() {
     const tagText = document.createElement("span");
     tagText.textContent = truncateTag(tag);
     
-    const deleteButton = document.createElement("button");
-    deleteButton.textContent = "X";
-    deleteButton.className = "delete-tag-button";
-    deleteButton.onclick = (e) => {
-      e.stopPropagation();
-      deleteGlobalTag(tag);
-    };
-    
     tagElement.appendChild(checkbox);
     tagElement.appendChild(tagText);
-    tagElement.appendChild(deleteButton);
     
     tagElement.onclick = (e) => {
       e.stopPropagation();
@@ -533,13 +700,19 @@ function toggleClipTag(clip, tag) {
     clip.tags.splice(index, 1);
   } else {
     clip.tags.push(tag);
-    if (!globalTags.includes(tag)) {
-      addGlobalTag(tag);
-    }
   }
   updateClipTags(clip);
   saveClipTags(clip);
-  updateFilterDropdown(); // Update the dropdown after modifying tags
+  
+  // Special handling for "Private" tag
+  if (tag === "Private") {
+    const currentFilter = document.getElementById("filter-dropdown").value;
+    if (currentFilter === "all" || currentFilter === "Private") {
+      filterClips(currentFilter);
+    }
+  }
+  
+  updateFilterDropdown();
 }
 
 function addTag(clip, tag) {
@@ -659,7 +832,6 @@ function setupTooltips() {
 }
 
 function showContextMenu(e, clip) {
-  currentContextClip = clip;
   e.preventDefault();
   e.stopPropagation();
 
@@ -692,8 +864,38 @@ function showContextMenu(e, clip) {
     
     // Update the tag list for the new clip
     updateTagList();
+    
+    // Add a click event listener to the document to close the context menu
+    document.addEventListener('click', closeContextMenu);
+    
+    // Add an overlay to block clicks outside the context menu
+    const overlay = document.createElement('div');
+    overlay.id = 'context-menu-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.zIndex = '1980'; // Just below the context menu
+    clipGrid.appendChild(overlay);
   } else {
     console.error("Context menu elements not found");
+  }
+}
+
+function closeContextMenu(e) {
+  const contextMenu = document.getElementById("context-menu");
+  const tagsDropdown = document.getElementById("tags-dropdown");
+  const overlay = document.getElementById('context-menu-overlay');
+  
+  if (!contextMenu.contains(e.target)) {
+    contextMenu.style.display = "none";
+    tagsDropdown.style.display = "none";
+    isTagsDropdownOpen = false;
+    document.removeEventListener('click', closeContextMenu);
+    if (overlay) {
+      overlay.remove();
+    }
   }
 }
 
@@ -748,6 +950,29 @@ document.addEventListener("DOMContentLoaded", () => {
     settingsButton.addEventListener("click", openSettingsModal);
   } else {
     console.error("Settings button not found");
+  }
+
+  const changeLocationBtn = document.getElementById("changeLocationBtn");
+  const manageTagsBtn = document.getElementById("manageTagsBtn");
+  const closeSettingsBtn = document.getElementById("closeSettingsBtn");
+
+  if (changeLocationBtn) {
+    changeLocationBtn.addEventListener("click", changeClipLocation);
+  } else {
+    console.error("Change Location button not found");
+  }
+
+  if (manageTagsBtn) {
+    manageTagsBtn.addEventListener("click", openTagManagement);
+    console.log("Manage Tags button listener added");
+  } else {
+    console.error("Manage Tags button not found");
+  }
+
+  if (closeSettingsBtn) {
+    closeSettingsBtn.addEventListener("click", closeSettingsModal);
+  } else {
+    console.error("Close Settings button not found");
   }
 
   const titlebarOptions = {
@@ -879,6 +1104,7 @@ function openSettingsModal() {
   const settingsModal = document.getElementById("settingsModal");
   if (settingsModal) {
     settingsModal.style.display = "block";
+    updateVersionDisplay();
   }
 }
 
@@ -949,21 +1175,56 @@ function createClipElement(clip) {
     const starIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
 
     clipElement.innerHTML = `
-    <div class="clip-item-media-container">
-      <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
-    </div>
-    <div class="tag-container"></div>
-    ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ""}
-    <div class="clip-info">
-      <p class="clip-name">${clip.customName}</p>
-      <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
-    </div>
-  `;
+      <div class="clip-item-media-container">
+        <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
+      </div>
+      <div class="tag-container"></div>
+      ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ""}
+      <div class="clip-info">
+        <p class="clip-name" contenteditable="true">${clip.customName}</p>
+        <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
+      </div>
+    `;
 
     let hoverTimeout;
     let videoElement;
     let playPromise;
     let isVideoPlaying = false;
+
+    const clipNameElement = clipElement.querySelector('.clip-name');
+    clipNameElement.addEventListener('focus', (e) => {
+      e.stopPropagation();
+      handleClipTitleFocus(clipNameElement, clip);
+    });
+    clipNameElement.addEventListener('blur', (e) => {
+      e.stopPropagation();
+      handleClipTitleBlur(clipNameElement, clip);
+    });
+    clipNameElement.addEventListener('keydown', (e) => handleClipTitleKeydown(e, clipNameElement, clip));
+    clipNameElement.addEventListener('click', (e) => e.stopPropagation());
+
+    function handleClipTitleFocus(titleElement, clip) {
+      titleElement.dataset.originalValue = titleElement.textContent;
+    }
+    
+    function handleClipTitleBlur(titleElement, clip) {
+      const newTitle = titleElement.textContent.trim();
+      if (newTitle !== titleElement.dataset.originalValue) {
+        saveTitleChange(clip.originalName, clip.customName, newTitle);
+      }
+    }
+    
+    function handleClipTitleKeydown(e, titleElement, clip) {
+      e.stopPropagation(); // Stop the event from bubbling up
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        titleElement.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        titleElement.textContent = titleElement.dataset.originalValue;
+        titleElement.blur();
+      }
+    }
 
     function cleanupVideoPreview() {
       clearTimeout(hoverTimeout);
@@ -1027,9 +1288,7 @@ function createClipElement(clip) {
     clipElement.addEventListener("mouseenter", handleMouseEnter);
     clipElement.addEventListener("mouseleave", handleMouseLeave);
 
-    clipElement.addEventListener("click", () =>
-      openClip(clip.originalName, clip.customName),
-    );
+    clipElement.addEventListener("click", (e) => handleClipClick(e, clip));
 
     clipElement.addEventListener("mousemove", handleOnMouseMove);
 
@@ -1049,6 +1308,17 @@ function createClipElement(clip) {
   });
 }
 
+function handleClipClick(e, clip) {
+  // Check if the clicked element is the title or its parent (the clip-info div)
+  if (e.target.classList.contains('clip-name') || e.target.classList.contains('clip-info')) {
+    // If it's the title or clip-info, don't open the clip
+    return;
+  }
+
+  // Otherwise, open the clip
+  openClip(clip.originalName, clip.customName);
+}
+
 function formatDuration(seconds) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);
@@ -1058,7 +1328,7 @@ function formatDuration(seconds) {
 const exportButton = document.getElementById("export-button");
 const deleteButton = document.getElementById("delete-button");
 
-deleteButton.addEventListener("click", confirmAndDeleteClip);
+deleteButton.addEventListener("click", () => confirmAndDeleteClip());
 exportButton.addEventListener("click", (e) => {
   if (e.ctrlKey && e.shiftKey) {
     exportAudioWithFileSelection();
@@ -1139,6 +1409,9 @@ async function confirmAndDeleteClip(clipToDelete = null) {
       
       disableVideoThumbnail(clipInfo.originalName);
       
+      // Show deletion tooltip
+      showDeletionTooltip();
+      
       const result = await ipcRenderer.invoke('delete-clip', clipInfo.originalName);
       if (result.success) {
         console.log('Clip deleted successfully');
@@ -1157,9 +1430,44 @@ async function confirmAndDeleteClip(clipToDelete = null) {
       // Revert data changes
       if (allClipsIndex > -1) allClips.splice(allClipsIndex, 0, clipInfo);
       if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 0, clipInfo);
+    } finally {
+      // Hide deletion tooltip
+      hideDeletionTooltip();
     }
 
     updateClipCounter(currentClipList.length);
+  }
+}
+
+function showDeletionTooltip() {
+  if (!deletionTooltip) {
+    deletionTooltip = document.createElement('div');
+    deletionTooltip.className = 'deletion-tooltip';
+    deletionTooltip.textContent = 'Deleting files...';
+    document.body.appendChild(deletionTooltip);
+  }
+  
+  // Force a reflow to ensure the initial state is applied
+  deletionTooltip.offsetHeight;
+  
+  deletionTooltip.classList.add('show');
+  
+  if (deletionTimeout) {
+    clearTimeout(deletionTimeout);
+  }
+  
+  deletionTimeout = setTimeout(() => {
+    hideDeletionTooltip();
+  }, 5000);
+}
+
+function hideDeletionTooltip() {
+  if (deletionTooltip) {
+    deletionTooltip.classList.remove('show');
+  }
+  if (deletionTimeout) {
+    clearTimeout(deletionTimeout);
+    deletionTimeout = null;
   }
 }
 
@@ -1196,32 +1504,30 @@ function disableVideoThumbnail(clipName) {
 }
 
 function toggleFullscreen() {
+  const fullscreenPlayer = document.getElementById('fullscreen-player');
+  
   if (!document.fullscreenElement) {
-    if (videoPlayer.requestFullscreen) {
-      videoPlayer.requestFullscreen();
-    } else if (videoPlayer.mozRequestFullScreen) {
-      // Firefox
-      videoPlayer.mozRequestFullScreen();
-    } else if (videoPlayer.webkitRequestFullscreen) {
-      // Chrome, Safari and Opera
-      videoPlayer.webkitRequestFullscreen();
-    } else if (videoPlayer.msRequestFullscreen) {
-      // IE/Edge
-      videoPlayer.msRequestFullscreen();
+    if (fullscreenPlayer.requestFullscreen) {
+      fullscreenPlayer.requestFullscreen();
+    } else if (fullscreenPlayer.mozRequestFullScreen) {
+      fullscreenPlayer.mozRequestFullScreen();
+    } else if (fullscreenPlayer.webkitRequestFullscreen) {
+      fullscreenPlayer.webkitRequestFullscreen();
+    } else if (fullscreenPlayer.msRequestFullscreen) {
+      fullscreenPlayer.msRequestFullscreen();
     }
+    fullscreenPlayer.classList.add('custom-fullscreen');
   } else {
     if (document.exitFullscreen) {
       document.exitFullscreen();
     } else if (document.mozCancelFullScreen) {
-      // Firefox
       document.mozCancelFullScreen();
     } else if (document.webkitExitFullscreen) {
-      // Chrome, Safari and Opera
       document.webkitExitFullscreen();
     } else if (document.msExitFullscreen) {
-      // IE/Edge
       document.msExitFullscreen();
     }
+    fullscreenPlayer.classList.remove('custom-fullscreen');
   }
 }
 
@@ -2133,11 +2439,6 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
   }
 
   const saveOperation = async () => {
-    if (!originalName) {
-      console.warn("Attempted to save title change, but no original name provided.");
-      return;
-    }
-
     if (newCustomName === oldCustomName) return;
 
     try {
@@ -2160,6 +2461,15 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
         if (clipIndex !== -1) {
           allClips[clipIndex].customName = newCustomName;
         }
+
+        // Update the clip element in the grid
+        const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+        if (clipElement) {
+          const clipNameElement = clipElement.querySelector('.clip-name');
+          if (clipNameElement) {
+            clipNameElement.textContent = newCustomName;
+          }
+        }
       } else {
         throw new Error(result.error);
       }
@@ -2168,7 +2478,14 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
       await showCustomAlert(
         `Failed to save custom name. Please try again later. Error: ${error.message}`
       );
-      clipTitle.value = oldCustomName; // Revert to the original name
+      // Revert to the original name in the grid
+      const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+      if (clipElement) {
+        const clipNameElement = clipElement.querySelector('.clip-name');
+        if (clipNameElement) {
+          clipNameElement.textContent = oldCustomName;
+        }
+      }
     }
   };
 
@@ -2279,7 +2596,7 @@ const debouncedFilterClips = debounce((filter) => {
   console.log("Filtering clips with filter:", filter);
   console.log("allClips length before filtering:", allClips.length);
   
-  let filteredClips = [...allClips];  // Create a new array to avoid modifying allClips
+  let filteredClips = [...allClips];
 
   if (filter === "all") {
     filteredClips = filteredClips.filter(clip => !clip.tags.includes("Private"));

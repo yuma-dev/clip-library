@@ -93,8 +93,11 @@
       <div id="context-menu-tags" class="context-menu-item">
         Manage Tags
         <div id="tags-dropdown" class="tags-dropdown" style="display: none;">
-          <input type="text" id="tag-search-input" placeholder="Search or create tag">
-          <div id="tag-list"></div>
+          <div class="tag-search-container">
+            <input type="text" id="tag-search-input" placeholder="Search tags...">
+            <button id="add-tag-button">+</button>
+          </div>
+          <div id="tag-list" class="tag-list"></div>
         </div>
       </div>
       <div id="context-menu-delete" class="context-menu-item">Delete</div>

@@ -14,7 +14,7 @@ const {
 const { exec } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
-
+const { checkForUpdates } = require('./updater');
 const isDev = !app.isPackaged;
 const path = require("path");
 const chokidar = require("chokidar");
@@ -68,8 +68,14 @@ async function createWindow() {
   mainWindow.loadFile("index.html");
   mainWindow.maximize();
   Menu.setApplicationMenu(null);
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key.toLowerCase() === 'i' && input.control && input.shift) {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+  
   if (isDev) {
-    mainWindow.webContents.openDevTools();
     try {
       require("electron-reloader")(module, {
         debug: true,
@@ -81,7 +87,10 @@ async function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  checkForUpdates();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -172,6 +181,10 @@ function setupFileWatcher(clipLocation) {
   });
 }
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 ipcMain.handle('get-new-clip-info', async (event, fileName) => {
   const filePath = path.join(settings.clipLocation, fileName);
   const stats = await fs.stat(filePath);
@@ -227,7 +240,6 @@ ipcMain.handle("save-volume", async (event, clipName, volume) => {
 
   try {
     await writeFileAtomically(volumeFilePath, volume.toString());
-    await setHiddenAttribute(volumeFilePath);
     console.log(`Volume saved successfully for ${clipName}: ${volume}`);
     return { success: true };
   } catch (error) {
@@ -326,7 +338,6 @@ async function saveCustomNameData(clipName, customName) {
   );
   try {
     await writeFileAtomically(customNameFilePath, customName);
-    await setHiddenAttribute(customNameFilePath);
     console.log(`Custom name saved successfully for ${clipName}`);
   } catch (error) {
     console.error(`Error saving custom name for ${clipName}:`, error);
@@ -342,7 +353,6 @@ async function saveTrimData(clipName, trimData) {
   const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
   try {
     await writeFileAtomically(trimFilePath, JSON.stringify(trimData));
-    setHiddenAttribute(trimFilePath);
     console.log(`Trim data saved successfully for ${clipName}`);
   } catch (error) {
     console.error(`Error saving trim data for ${clipName}:`, error);
@@ -415,19 +425,6 @@ async function writeFileAtomically(filePath, data) {
   }
 }
 
-function setHiddenAttribute(filePath) {
-  if (process.platform === "win32") {
-    try {
-      require("child_process").execSync(`attrib +h "${filePath}"`, {
-        stdio: "ignore",
-      });
-    } catch (error) {
-      console.error(`Failed to set hidden attribute: ${error.message}`);
-    }
-  } else {
-    console.error("setHiddenAttribute is not implemented for this platform");
-  }
-}
 ipcMain.handle("get-clip-location", () => {
   return settings.clipLocation;
 });
@@ -477,27 +474,36 @@ ipcMain.handle(
         event.sender.send("thumbnail-generated", { clipName, thumbnailPath });
       } catch (error) {
         // Thumbnail doesn't exist, generate it
-        await new Promise((resolve, reject) => {
-          ffmpeg(clipPath)
-            .screenshots({
-              count: 1,
-              timemarks: ["00:00:00"],
-              folder: path.dirname(thumbnailPath),
-              filename: path.basename(thumbnailPath),
-              size: "640x360",
-            })
-            .on("end", () => {
-              event.sender.send("thumbnail-generated", {
-                clipName,
-                thumbnailPath,
+        try {
+          await new Promise((resolve, reject) => {
+            ffmpeg(clipPath)
+              .screenshots({
+                count: 1,
+                timemarks: ["00:00:01"], // Changed from 00:00:00 to 00:00:01
+                folder: path.dirname(thumbnailPath),
+                filename: path.basename(thumbnailPath),
+                size: "640x360",
+              })
+              .on("end", () => {
+                event.sender.send("thumbnail-generated", {
+                  clipName,
+                  thumbnailPath,
+                });
+                resolve();
+              })
+              .on("error", (err) => {
+                console.error(`Error generating thumbnail for ${clipName}:`, err);
+                // Send a message to indicate the thumbnail generation failed
+                event.sender.send("thumbnail-generation-failed", {
+                  clipName,
+                  error: err.message,
+                });
+                resolve(); // Resolve promise to continue with next thumbnail
               });
-              resolve();
-            })
-            .on("error", (err) => {
-              console.error(`Error generating thumbnail for ${clipName}:`, err);
-              reject(err);
-            });
-        });
+          });
+        } catch (err) {
+          console.error(`Unexpected error for ${clipName}:`, err);
+        }
       }
 
       // Send progress update
@@ -642,10 +648,12 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volum
         .setDuration(end - start)
         .audioFilters(`volume=${volume}`)
         .outputOptions([
-          '-c:v libx264',
+          '-c:v h264_nvenc',
           '-c:a aac',
+          '-crf 23',
           '-preset medium',
-          '-avoid_negative_ts make_zero'
+          '-avoid_negative_ts make_zero',
+          '-threads 0'
         ])
         .output(outputPath)
         .on("progress", (info) => {
