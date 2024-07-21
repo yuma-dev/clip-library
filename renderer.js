@@ -1931,7 +1931,7 @@ async function openClip(originalName, customName) {
 
   function resetControlsTimeout() {
     showControls();
-    if (!videoPlayer.paused) {
+    if (!videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
       clearTimeout(controlsTimeout);
       controlsTimeout = setTimeout(hideControls, 3000);
     }
@@ -1945,10 +1945,14 @@ async function openClip(originalName, customName) {
   }
 
   videoContainer.addEventListener("mousemove", handleMouseMove);
-  videoContainer.addEventListener("mouseenter", showControls);
+  videoContainer.addEventListener("mouseenter", () => {
+    showControls();
+  });
   videoContainer.addEventListener("mouseleave", () => {
     isMouseOverControls = false;
-    hideControls();
+    if (!videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
+      controlsTimeout = setTimeout(hideControls, 3000);
+    }
   });
 
   videoPlayer.addEventListener('pause', () => {
@@ -1985,9 +1989,12 @@ async function openClip(originalName, customName) {
       showControls();
     });
   
-    element.addEventListener('blur', () => {
-      if (!videoPlayer.paused && !isMouseOverControls) {
-        controlsTimeout = setTimeout(hideControls, 3000);
+    element.addEventListener('blur', (e) => {
+      // Only hide controls if we're not focusing another interactive element
+      if (!e.relatedTarget || !videoControls.contains(e.relatedTarget)) {
+        if (!videoPlayer.paused && !isMouseOverControls) {
+          controlsTimeout = setTimeout(hideControls, 3000);
+        }
       }
     });
   });
@@ -2017,7 +2024,7 @@ function showControls() {
 }
 
 function hideControls() {
-  if (!videoPlayer.paused && !isMouseOverControls) {
+  if (!videoPlayer.paused && !isMouseOverControls && !document.activeElement.closest('#video-controls')) {
     videoControls.classList.remove("visible");
   }
 }
