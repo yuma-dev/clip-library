@@ -3,22 +3,31 @@ const axios = require('axios');
 const semver = require('semver');
 const fs = require('fs');
 const path = require('path');
+const { loadSettings, saveSettings } = require('./settings-manager');
 
 const GITHUB_API_URL = 'https://api.github.com/repos/yuma-dev/clip-library/releases/latest';
 
 async function checkForUpdates() {
   try {
+    const settings = await loadSettings();
     const response = await axios.get(GITHUB_API_URL);
     const latestVersion = response.data.tag_name.replace('v', '');
     const currentVersion = app.getVersion();
 
-    if (semver.gt(latestVersion, currentVersion)) {
-      const { response: buttonIndex } = await dialog.showMessageBox({
+    if (semver.gt(latestVersion, currentVersion) && latestVersion !== settings.ignoredVersion) {
+      const { response: buttonIndex, checkboxChecked } = await dialog.showMessageBox({
         type: 'info',
         title: 'Update Available',
         message: `A new version (${latestVersion}) is available. Would you like to update?`,
-        buttons: ['Yes', 'No']
+        buttons: ['Yes', 'No'],
+        checkboxLabel: 'Don\'t ask me about this version again',
+        checkboxChecked: false
       });
+
+      if (checkboxChecked) {
+        settings.ignoredVersion = latestVersion;
+        await saveSettings(settings);
+      }
 
       if (buttonIndex === 0) {
         const assetUrl = response.data.assets.find(asset => asset.name.endsWith('.exe'))?.browser_download_url;
@@ -29,7 +38,7 @@ async function checkForUpdates() {
         }
       }
     } else {
-      console.log('Application is up to date');
+      console.log('Application is up to date or update ignored');
     }
   } catch (error) {
     console.error('Error checking for updates:', error);
