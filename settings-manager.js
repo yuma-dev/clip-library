@@ -11,7 +11,7 @@ async function loadSettings() {
   } catch (error) {
     if (error.code === 'ENOENT') {
       // File doesn't exist, return default settings
-      return { clipLocation: app.getPath('videos')};
+      return { clipLocation: app.getPath('videos'), enableDiscordRPC: false };
     }
     throw error;
   }

@@ -1,16 +1,6 @@
 if (require("electron-squirrel-startup")) return;
-const {
-  app,
-  BrowserWindow,
-  ipcMain,
-  clipboard,
-  dialog,
-  Menu,
-} = require("electron");
-const {
-  setupTitlebar,
-  attachTitlebarToWindow,
-} = require("custom-electron-titlebar/main");
+const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu } = require("electron");
+const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const { exec } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
@@ -25,8 +15,13 @@ const ffmpeg = require("fluent-ffmpeg");
 const { loadSettings, saveSettings } = require("./settings-manager");
 const readify = require("readify");
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+const DiscordRPC = require('discord-rpc');
+const clientId = '1264368321013219449';
+const IDLE_TIMEOUT = 5 * 60 * 1000;
 
+let idleTimer;
 let ffmpegPath;
+
 if (app.isPackaged) {
   ffmpegPath = path.join(process.resourcesPath, 'ffmpeg-bin', 'ffmpeg.exe');
 } else {
@@ -52,12 +47,23 @@ async function createWindow() {
   settings = await loadSettings();
   setupFileWatcher(settings.clipLocation);
 
+  if (settings.enableDiscordRPC) {
+    initDiscordRPC();
+  }
+
   mainWindow = new BrowserWindow({
     width: 1024,
     height: 768,
     titleBarStyle: "hidden",
+    backgroundColor: '#1e1e1e',
+    autoHideMenuBar: true,
     frame: false,
-    titleBarOverlay: true,
+    titleBarOverlay: {
+      color: '#1e1e1e',
+      symbolColor: '#e0e0e0',
+      height: 30
+    },
+    show: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -85,6 +91,36 @@ async function createWindow() {
       console.log("Error");
     }
   }
+
+  // detect idling
+
+  mainWindow.on('focus', () => {
+    clearTimeout(idleTimer);
+    if (settings.enableDiscordRPC) {
+      mainWindow.webContents.send('check-activity-state');
+    }
+  });
+
+  mainWindow.on('blur', () => {
+    if (settings.enableDiscordRPC) {
+      idleTimer = setTimeout(() => {
+        clearDiscordPresence();
+      }, IDLE_TIMEOUT);
+    }
+  });
+
+  powerMonitor.on('unlock-screen', () => {
+    clearTimeout(idleTimer);
+    if (settings.enableDiscordRPC) {
+      mainWindow.webContents.send('check-activity-state');
+    }
+  });
+
+  powerMonitor.on('lock-screen', () => {
+    if (settings.enableDiscordRPC) {
+      clearDiscordPresence();
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -98,6 +134,76 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+let rpc = null;
+let rpcReady = false;
+
+function initDiscordRPC() {
+  rpc = new DiscordRPC.Client({ transport: 'ipc' });
+  rpc.on('ready', () => {
+    console.log('Discord RPC connected successfully');
+    rpcReady = true;
+    updateDiscordPresence('Browsing clips');
+  });
+  rpc.login({ clientId }).catch(error => {
+    console.error('Failed to initialize Discord RPC:', error);
+  });
+}
+
+function updateDiscordPresence(details, state = null) {
+  if (!rpcReady || !settings.enableDiscordRPC) {
+    console.log('RPC not ready or disabled');
+    return;
+  }
+
+  const activity = {
+    details: String(details),
+    largeImageKey: 'app_logo',
+    largeImageText: 'Clip Library',
+    buttons: [{ label: 'View on GitHub', url: 'https://github.com/yuma-dev/clip-library' }]
+  };
+
+  if (state !== null) {
+    activity.state = String(state);
+  }
+
+  console.log('Updating Discord presence:', activity);
+  rpc.setActivity(activity).catch(error => {
+    console.error('Failed to update Discord presence:', error);
+  });
+}
+
+function clearDiscordPresence() {
+  if (rpcReady) {
+    rpc.clearActivity().catch(console.error);
+  }
+}
+
+ipcMain.handle('update-discord-presence', (event, details, state, startTimestamp) => {
+  clearTimeout(idleTimer);
+  updateDiscordPresence(details, state, startTimestamp);
+});
+
+ipcMain.handle('toggle-discord-rpc', async (event, enable) => {
+  settings.enableDiscordRPC = enable;
+  await saveSettings(settings);
+  if (enable && !rpc) {
+    initDiscordRPC();
+  } else if (!enable && rpc) {
+    clearDiscordPresence();
+    rpc.destroy();
+    rpc = null;
+    rpcReady = false;
+  }
+});
+
+ipcMain.handle('clear-discord-presence', () => {
+  clearDiscordPresence();
+});
+
+ipcMain.handle('get-settings', () => {
+  return settings;
 });
 
 function generateThumbnailPath(clipPath) {
@@ -477,13 +583,9 @@ ipcMain.handle(
         try {
           await new Promise((resolve, reject) => {
             ffmpeg(clipPath)
-              .screenshots({
-                count: 1,
-                timemarks: ["00:00:01"], // Changed from 00:00:00 to 00:00:01
-                folder: path.dirname(thumbnailPath),
-                filename: path.basename(thumbnailPath),
-                size: "640x360",
-              })
+              .outputOptions(['-frames:v 1']) // Capture only the first frame
+              .output(thumbnailPath)
+              .size('640x360')
               .on("end", () => {
                 event.sender.send("thumbnail-generated", {
                   clipName,
@@ -499,7 +601,8 @@ ipcMain.handle(
                   error: err.message,
                 });
                 resolve(); // Resolve promise to continue with next thumbnail
-              });
+              })
+              .run();
           });
         } catch (err) {
           console.error(`Unexpected error for ${clipName}:`, err);

@@ -1,15 +1,17 @@
 /* General styles */
-@font-face {
-  font-family: 'Apple Color Emoji';
-  src: url('assets/fonts/AppleColorEmoji_WindowsCompatible.ttf') format('truetype');
-}
-
 body {
-  font-family: 'Roboto', 'Apple Color Emoji', sans-serif;
+  font-family: 'Roboto', sans-serif;
   margin: 0;
   padding: 20px;
   background-color: #1e1e1e;
   color: #e0e0e0;
+}
+
+body.dragging {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 *:focus {
@@ -442,17 +444,17 @@ body {
 }
 
 .tag {
-  background-color: rgb(42, 42, 42);
   font-weight: 300;
   font-size: 13px;
   text-align: center;
-  border-radius: 3.5px;
   color: rgb(226, 226, 226);
   padding: 2px 7px 3px 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100px;
+  border-radius: 3.5px;
+  background-color: rgb(42, 42, 42);
   box-shadow: 0 0 10px rgb(0, 0, 0);
 }
 
@@ -516,28 +518,6 @@ body {
   width: 80%;
   background-color: #444;
 }
-
-.trimmed-indicator {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background-color: rgba(0, 0, 0, 0.123);
-  color: white;
-  padding: 6px;
-  border-radius: 20%;
-  z-index: 3;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 24px;
-  height: 24px;
-}
-
-.trimmed-indicator svg {
-  width: 16px;
-  height: 16px;
-}
-
 #clip-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1073,3 +1053,48 @@ body {
   color: #666;
 }
 
+
+#loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: #1e1e1e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+  opacity: 1;
+  transition: opacity 1s ease-in-out;
+}
+
+.logo-container {
+  position: relative;
+  margin-bottom: 30px;
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.app-logo-title {
+  width: 252px;
+  height: auto;
+  animation: pulse 2s infinite;
+  filter: drop-shadow(0 0 5px rgb(0, 0, 0));
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
