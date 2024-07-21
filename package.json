@@ -1,7 +1,7 @@
 {
   "name": "clips",
   "displayName": "Clips",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
   "main": "main.js",
@@ -18,6 +18,15 @@
       "*.html",
       "*.css",
       "icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "ffmpeg-bin",
+        "to": "ffmpeg-bin",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": [
@@ -42,6 +51,7 @@
     "axios": "^1.7.2",
     "chokidar": "^3.6.0",
     "custom-electron-titlebar": "^4.2.8",
+    "discord-rpc": "^4.0.1",
     "electron-squirrel-startup": "^1.0.1",
     "fluent-ffmpeg": "^2.1.3",
     "readify": "^10.0.0",

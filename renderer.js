@@ -15,13 +15,17 @@ const loadingOverlay = document.getElementById("loading-overlay");
 const playerOverlay = document.getElementById("player-overlay");
 const videoClickTarget = document.getElementById("video-click-target");
 const MAX_FRAME_RATE = 10;
+const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
 
+let lastActivityTime = Date.now();
 let currentClipList = [];
 let currentClip = null;
 let trimStartTime = 0;
 let trimEndTime = 0;
 let isDragging = null;
 let isDraggingTrim = false;
+let dragStartX = 0;
+let dragThreshold = 5; // pixels
 let mouseUpTime = 0;
 let isPlaying = false;
 let isRenamingActive = false;
@@ -44,6 +48,11 @@ let isMouseOverControls = false;
 let isRendering = false;
 let deletionTooltip = null;
 let deletionTimeout = null;
+let settings;
+let discordPresenceInterval;
+let clipStartTime;
+let elapsedTime = 0;
+let loadingScreen;
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
@@ -54,6 +63,10 @@ settingsModal.innerHTML = `
     <p>Current clip location: <span id="currentClipLocation"></span></p>
     <button id="changeLocationBtn">Change Location</button>
     <button id="manageTagsBtn">Manage Tags</button>
+    <div class="settings-row">
+      <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
+      <input type="checkbox" id="enableDiscordRPC">
+    </div>
     <button id="closeSettingsBtn">Close</button>
     <p id="app-version"></p>
   </div>
@@ -64,6 +77,10 @@ container.appendChild(settingsModal);
 
 const closeSettingsBtn = document.getElementById("closeSettingsBtn");
 const currentClipLocationSpan = document.getElementById("currentClipLocation");
+
+async function fetchSettings() {
+  settings = await ipcRenderer.invoke('get-settings');
+}
 
 async function loadClips() {
   try {
@@ -113,6 +130,7 @@ async function loadClips() {
       },
     );
     console.log("Clips loaded and rendered.");
+    hideLoadingScreen();
 
     // Update the filter dropdown with all tags
     updateFilterDropdown();
@@ -121,6 +139,19 @@ async function loadClips() {
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
     currentClipLocationSpan.textContent = "Error: Unable to load location";
     hideThumbnailGenerationText();
+    hideLoadingScreen();
+  }
+}
+
+function hideLoadingScreen() {
+  if (loadingScreen) {
+    // Add a 2-second delay before starting to hide the loading screen
+    setTimeout(() => {
+      loadingScreen.style.opacity = '0';
+      setTimeout(() => {
+        loadingScreen.style.display = 'none';
+      }, 1000);
+    }, 1000); // 2000 milliseconds = 2 seconds
   }
 }
 
@@ -696,20 +727,50 @@ function updateTagList() {
 function toggleClipTag(clip, tag) {
   if (!clip.tags) clip.tags = [];
   const index = clip.tags.indexOf(tag);
+  const wasPrivate = clip.tags.includes("Private");
+  
   if (index > -1) {
     clip.tags.splice(index, 1);
   } else {
     clip.tags.push(tag);
   }
+  
   updateClipTags(clip);
   saveClipTags(clip);
-  
+
   // Special handling for "Private" tag
   if (tag === "Private") {
     const currentFilter = document.getElementById("filter-dropdown").value;
-    if (currentFilter === "all" || currentFilter === "Private") {
-      filterClips(currentFilter);
+    const clipElement = document.querySelector(`.clip-item[data-original-name="${clip.originalName}"]`);
+    
+    if (clipElement) {
+      if (currentFilter === "all" && clip.tags.includes("Private")) {
+        // Smoothly hide the clip if it's now private and we're showing all clips
+        clipElement.style.transition = "opacity 0.3s, height 0.3s";
+        clipElement.style.opacity = "0";
+        clipElement.style.height = "0";
+        setTimeout(() => {
+          clipElement.style.display = "none";
+        }, 300);
+      } else if (currentFilter === "Private" && !clip.tags.includes("Private")) {
+        // Smoothly hide the clip if it's no longer private and we're showing only private clips
+        clipElement.style.transition = "opacity 0.3s, height 0.3s";
+        clipElement.style.opacity = "0";
+        clipElement.style.height = "0";
+        setTimeout(() => {
+          clipElement.style.display = "none";
+        }, 300);
+      } else if (wasPrivate !== clip.tags.includes("Private")) {
+        // If the private status changed and it should be visible, ensure it's shown
+        clipElement.style.display = "";
+        clipElement.style.opacity = "1";
+        clipElement.style.height = "";
+      }
     }
+
+    // Update the clip counter
+    const visibleClips = document.querySelectorAll('.clip-item[style="display: none;"]').length;
+    updateClipCounter(currentClipList.length - visibleClips);
   }
   
   updateFilterDropdown();
@@ -726,6 +787,40 @@ function removeTag(clip, tag) {
   clip.tags = clip.tags.filter(t => t !== tag);
   updateClipTags(clip);
   saveClipTags(clip);
+}
+
+async function updateTag(originalTag, newTag) {
+  if (originalTag === newTag) return; // No change, skip update
+
+  const index = globalTags.indexOf(originalTag);
+  if (index > -1) {
+    globalTags[index] = newTag;
+    await saveGlobalTags();
+
+    // Update the tag in all clips
+    allClips.forEach(clip => {
+      const tagIndex = clip.tags.indexOf(originalTag);
+      if (tagIndex > -1) {
+        clip.tags[tagIndex] = newTag;
+        updateClipTags(clip);
+        saveClipTags(clip);
+      }
+    });
+
+    // Update the filter dropdown
+    updateFilterDropdown();
+
+    // If the current filter is the original tag, update it to the new tag
+    const filterDropdown = document.getElementById("filter-dropdown");
+    if (filterDropdown.value === originalTag) {
+      filterDropdown.value = newTag;
+      filterClips(newTag);
+    }
+
+    console.log(`Tag "${originalTag}" updated to "${newTag}"`);
+  } else {
+    console.warn(`Tag "${originalTag}" not found in globalTags`);
+  }
 }
 
 function updateClipTags(clip) {
@@ -945,6 +1040,8 @@ function showExportProgress(current, total) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  settings = ipcRenderer.invoke('get-settings');
+  fetchSettings();
   const settingsButton = document.getElementById("settingsButton");
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettingsModal);
@@ -1025,6 +1122,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   setupContextMenu();
   loadGlobalTags();
+
+  const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
+  enableDiscordRPCCheckbox.addEventListener('change', (e) => {
+    toggleDiscordRPC(e.target.checked);
+  });
+
+  updateDiscordPresence('Browsing clips', `Total clips: ${currentClipList.length}`);
+
+  loadingScreen = document.getElementById('loading-screen');
 });
 
 function changeVolume(delta) {
@@ -1100,16 +1206,31 @@ async function changeClipLocation() {
   }
 }
 
-function openSettingsModal() {
+async function openSettingsModal() {
+  await fetchSettings();
   const settingsModal = document.getElementById("settingsModal");
   if (settingsModal) {
     settingsModal.style.display = "block";
     updateVersionDisplay();
+    
+    // Fetch the latest settings
+    settings = await ipcRenderer.invoke('get-settings');
+    
+    // Update the Discord RPC checkbox
+    const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
+    if (enableDiscordRPCCheckbox) {
+      enableDiscordRPCCheckbox.checked = settings.enableDiscordRPC;
+    }
   }
+}
+
+async function updateSettings() {
+  settings = await ipcRenderer.invoke('get-settings');
 }
 
 function closeSettingsModal() {
   settingsModal.style.display = "none";
+  updateSettings(); // Update the local settings object
 }
 
 document
@@ -1179,7 +1300,6 @@ function createClipElement(clip) {
         <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
       </div>
       <div class="tag-container"></div>
-      ${clip.isTrimmed ? `<div class="trimmed-indicator" title="This video has been trimmed">${scissorsIcon}</div>` : ""}
       <div class="clip-info">
         <p class="clip-name" contenteditable="true">${clip.customName}</p>
         <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
@@ -1725,16 +1845,33 @@ videoPlayer.addEventListener("loadedmetadata", updateTimeDisplay);
 videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
 
 async function openClip(originalName, customName) {
+  elapsedTime = 0;
   if (currentCleanup) {
     currentCleanup();
     currentCleanup = null;
   }
 
-  currentClip = { originalName, customName };
   const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
+  const trimData = await ipcRenderer.invoke("get-trim", originalName);
+  const clipTags = await ipcRenderer.invoke("get-clip-tags", originalName);
+  currentClip = { originalName, customName, tags: clipTags};
+
+  let startTime;
+  if (trimData) {
+    startTime = trimData.start;
+    trimEndTime = trimData.end;
+  } else {
+    if (clipInfo.format.duration > 40) {
+      startTime = clipInfo.format.duration / 2;
+    } else {
+      startTime = 0;
+    }
+    trimEndTime = clipInfo.format.duration;
+  }
+  trimStartTime = startTime;
 
   videoPlayer.preload = "auto";
-  videoPlayer.autoplay = false;
+  videoPlayer.autoplay = true;
   videoPlayer.src = `file://${clipInfo.format.filename}`;
 
   clipTitle.value = customName;
@@ -1757,7 +1894,6 @@ async function openClip(originalName, customName) {
   document.addEventListener("keydown", handleKeyPress);
   document.addEventListener("keyup", handleKeyRelease);
 
-  const trimData = await ipcRenderer.invoke("get-trim", originalName);
   if (trimData) {
     trimStartTime = trimData.start;
     trimEndTime = trimData.end;
@@ -1776,7 +1912,10 @@ async function openClip(originalName, customName) {
 
   showLoadingOverlay();
 
-  videoPlayer.addEventListener("loadedmetadata", handleVideoMetadataLoaded);
+  videoPlayer.addEventListener("loadedmetadata", () => {
+    updateTrimControls();
+    videoPlayer.currentTime = startTime;  // Use the calculated startTime
+  });
   videoPlayer.addEventListener("canplay", handleVideoCanPlay);
   videoPlayer.addEventListener("progress", updateLoadingProgress);
   videoPlayer.addEventListener("waiting", showLoadingOverlay);
@@ -1812,8 +1951,16 @@ async function openClip(originalName, customName) {
     hideControls();
   });
 
-  videoPlayer.addEventListener("pause", showControls);
+  videoPlayer.addEventListener('pause', () => {
+    showControls();
+    if (currentClip) {
+      updateDiscordPresenceForClip(currentClip, false);
+    }
+  });
   videoPlayer.addEventListener("play", () => {
+    if (currentClip) {
+      updateDiscordPresenceForClip(currentClip, true);
+    }
     showControls();
     controlsTimeout = setTimeout(hideControls, 3000);
   });
@@ -1831,19 +1978,19 @@ async function openClip(originalName, customName) {
   });
 
   // Add this for all interactive elements within the controls
-const interactiveElements = videoControls.querySelectorAll('button, input, #clip-title');
-interactiveElements.forEach(element => {
-  element.addEventListener('focus', () => {
-    clearTimeout(controlsTimeout);
-    showControls();
-  });
+  const interactiveElements = videoControls.querySelectorAll('button, input, #clip-title');
+  interactiveElements.forEach(element => {
+    element.addEventListener('focus', () => {
+      clearTimeout(controlsTimeout);
+      showControls();
+    });
   
-  element.addEventListener('blur', () => {
-    if (!videoPlayer.paused && !isMouseOverControls) {
-      controlsTimeout = setTimeout(hideControls, 3000);
-    }
+    element.addEventListener('blur', () => {
+      if (!videoPlayer.paused && !isMouseOverControls) {
+        controlsTimeout = setTimeout(hideControls, 3000);
+      }
+    });
   });
-});
 
   updateNavigationButtons();
 
@@ -1851,7 +1998,6 @@ interactiveElements.forEach(element => {
   currentCleanup = () => {
     document.removeEventListener("keydown", handleKeyPress);
     document.removeEventListener("keyup", handleKeyRelease);
-    videoPlayer.removeEventListener("loadedmetadata", handleVideoMetadataLoaded);
     videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
     videoPlayer.removeEventListener("progress", updateLoadingProgress);
     videoPlayer.removeEventListener("waiting", showLoadingOverlay);
@@ -1859,6 +2005,8 @@ interactiveElements.forEach(element => {
     videoPlayer.removeEventListener("seeked", handleVideoSeeked);
     playerOverlay.removeEventListener("click", handleOverlayClick);
   };
+
+  updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, false); // Start paused
 }
 
 const videoControls = document.getElementById("video-controls");
@@ -1876,22 +2024,19 @@ function hideControls() {
 
 // Add this new function to handle overlay clicks
 function handleOverlayClick(e) {
-  if (e.target === playerOverlay) {
+  if (e.target === playerOverlay && !window.justFinishedDragging) {
     closePlayer();
   }
 }
 
-function handleVideoMetadataLoaded() {
-  updateTrimControls();
-  videoPlayer.currentTime = trimStartTime;
-}
-
 function handleVideoSeeked() {
-  // If we've seeked to the trim start time, start playing
-  if (Math.abs(videoPlayer.currentTime - trimStartTime) < 0.1) {
-    videoPlayer.play().catch((error) => {
-      console.error("Error attempting to play the video:", error);
-    });
+  if (currentClip) {
+    elapsedTime = Math.floor(videoPlayer.currentTime);
+    // Check if the clip is private before updating Discord presence
+    console.log('Current clip:', currentClip.tags);
+    if (!currentClip.tags || !currentClip.tags.includes('Private')) {
+      updateDiscordPresenceForClip(currentClip, !videoPlayer.paused);
+    }
   }
 }
 
@@ -1946,7 +2091,7 @@ function clipTitleFocusHandler() {
   isRenamingActive = true;
 
   clipTitle.dataset.originalValue = clipTitle.value;
-
+  updateDiscordPresence('Editing clip title', currentClip.customName);
   console.log(
     "Clip title focused. Original value:",
     clipTitle.dataset.originalValue,
@@ -1973,6 +2118,9 @@ function clipTitleKeydownHandler(e) {
 }
 
 function closePlayer() {
+  if (window.justFinishedDragging) {
+    return; // Don't close the player if we just finished dragging
+  }
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
     saveTitleTimeout = null;
@@ -1990,10 +2138,6 @@ function closePlayer() {
     playerOverlay.style.display = "none";
     fullscreenPlayer.style.display = "none";
     videoPlayer.pause();
-    videoPlayer.removeEventListener(
-      "loadedmetadata",
-      handleVideoMetadataLoaded,
-    );
     videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
     videoPlayer.removeEventListener("progress", updateLoadingProgress);
     videoPlayer.removeEventListener("waiting", showLoadingOverlay);
@@ -2025,6 +2169,9 @@ function closePlayer() {
       currentCleanup = null;
     }
   });
+
+  clearInterval(discordPresenceInterval);
+  updateDiscordPresence('Browsing clips', `Total: ${currentClipList.length}`);
 }
 
 // Make sure this event listener is present on the fullscreenPlayer
@@ -2262,62 +2409,37 @@ videoPlayer.addEventListener("loadedmetadata", () => {
 });
 
 progressBarContainer.addEventListener("mousedown", (e) => {
-  isMouseDown = true;
   const rect = progressBarContainer.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const width = rect.width;
   const clickPercent = x / width;
 
+  dragStartX = e.clientX;
+  
   if (Math.abs(clickPercent - trimStartTime / videoPlayer.duration) < 0.02) {
     isDragging = "start";
-    isDraggingTrim = true;
-  } else if (
-    Math.abs(clickPercent - trimEndTime / videoPlayer.duration) < 0.02
-  ) {
+  } else if (Math.abs(clickPercent - trimEndTime / videoPlayer.duration) < 0.02) {
     isDragging = "end";
-    isDraggingTrim = true;
+  }
+
+  if (isDragging) {
+    isDraggingTrim = false; // Reset drag state
+    document.body.classList.add('dragging'); // Add dragging class
+    document.addEventListener("mousemove", handleTrimDrag);
+    document.addEventListener("mouseup", endTrimDrag);
   } else {
     videoPlayer.currentTime = clickPercent * videoPlayer.duration;
   }
-
-  // Capture mouse moves on the entire document during drag
-  function onMouseMove(e) {
-    lastMousePosition = { x: e.clientX, y: e.clientY };
-    if (isDragging) {
-      const rect = progressBarContainer.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const width = rect.width;
-      const dragPercent = Math.max(0, Math.min(1, x / width));
-      const dragTime = dragPercent * videoPlayer.duration;
-
-      if (isDragging === "start" && dragTime < trimEndTime) {
-        trimStartTime = Math.max(0, dragTime);
-      } else if (isDragging === "end" && dragTime > trimStartTime) {
-        trimEndTime = Math.min(videoPlayer.duration, dragTime);
-      }
-
-      updateTrimControls();
-      videoPlayer.currentTime =
-        isDragging === "start" ? trimStartTime : trimEndTime;
-      saveTrimChanges();
-    }
-  }
-
-  function onMouseUp() {
-    isDragging = null;
-    isDraggingTrim = false;
-    document.removeEventListener("mousemove", onMouseMove);
-    document.removeEventListener("mouseup", onMouseUp);
-  }
-
-  document.addEventListener("mousemove", onMouseMove);
-  document.addEventListener("mouseup", onMouseUp);
 });
 
-document.addEventListener("mousemove", (e) => {
-  lastMousePosition = { x: e.clientX, y: e.clientY };
-
-  if (isDragging) {
+function handleTrimDrag(e) {
+  const dragDistance = Math.abs(e.clientX - dragStartX);
+  
+  if (dragDistance > dragThreshold) {
+    isDraggingTrim = true;
+  }
+  
+  if (isDraggingTrim) {
     const rect = progressBarContainer.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const width = rect.width;
@@ -2331,11 +2453,33 @@ document.addEventListener("mousemove", (e) => {
     }
 
     updateTrimControls();
-    videoPlayer.currentTime =
-      isDragging === "start" ? trimStartTime : trimEndTime;
+    videoPlayer.currentTime = isDragging === "start" ? trimStartTime : trimEndTime;
     saveTrimChanges();
   }
-});
+}
+
+function endTrimDrag(e) {
+  if (!isDraggingTrim) {
+    // It was just a click, not a drag
+    const clickPercent = (dragStartX - progressBarContainer.getBoundingClientRect().left) / progressBarContainer.offsetWidth;
+    videoPlayer.currentTime = clickPercent * videoPlayer.duration;
+  }
+  
+  isDragging = null;
+  isDraggingTrim = false;
+  document.body.classList.remove('dragging');
+  document.removeEventListener("mousemove", handleTrimDrag);
+  document.removeEventListener("mouseup", endTrimDrag);
+
+  // Prevent the event from propagating to the player overlay
+  e.stopPropagation();
+  
+  // Set a flag to indicate we just finished dragging
+  window.justFinishedDragging = true;
+  setTimeout(() => {
+    window.justFinishedDragging = false;
+  }, 100); // Reset the flag after a short delay
+}
 
 // Add mousedown and mouseup event listeners to track mouse button state
 document.addEventListener("mousedown", () => {
@@ -2355,7 +2499,7 @@ setInterval(checkDragState, 100);
 
 // Modify the checkDragState function
 function checkDragState() {
-  if (isDragging && !isMouseDown) {
+  if ((isDragging || isDraggingTrim) && !isMouseDown) {
     const rect = progressBarContainer.getBoundingClientRect();
     if (
       lastMousePosition.x < rect.left ||
@@ -2363,9 +2507,7 @@ function checkDragState() {
       lastMousePosition.y < rect.top ||
       lastMousePosition.y > rect.bottom
     ) {
-      console.log(
-        "Drag state reset due to mouse being outside the progress bar and mouse button not pressed",
-      );
+      console.log("Drag state reset due to mouse being outside the progress bar and mouse button not pressed");
       isDragging = null;
       isDraggingTrim = false;
       updateTrimControls();
@@ -2376,35 +2518,7 @@ function checkDragState() {
 let saveTrimTimeout = null;
 
 async function updateClipDisplay(originalName) {
-  const clipElement = document.querySelector(
-    `.clip-item[data-original-name="${originalName}"]`,
-  );
-  if (!clipElement) return;
-
-  try {
-    const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
-    const trimData = await ipcRenderer.invoke("get-trim", originalName);
-    const isTrimmed = trimData !== null;
-
-    const scissorsIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
-
-    // Remove existing trimmed indicator if it exists
-    const existingIndicator = clipElement.querySelector(".trimmed-indicator");
-    if (existingIndicator) {
-      existingIndicator.remove();
-    }
-
-    // Add new trimmed indicator if the clip is trimmed
-    if (isTrimmed) {
-      const indicatorElement = document.createElement("div");
-      indicatorElement.className = "trimmed-indicator";
-      indicatorElement.title = "This video has been trimmed";
-      indicatorElement.innerHTML = scissorsIcon;
-      clipElement.appendChild(indicatorElement);
-    }
-  } catch (error) {
-    console.error(`Error updating clip display for ${originalName}:`, error);
-  }
+  return
 }
 
 async function saveTrimChanges() {
@@ -2424,6 +2538,7 @@ async function saveTrimChanges() {
       );
       console.log("Trim data saved successfully");
       await updateClipDisplay(currentClip.originalName);
+      updateDiscordPresence('Editing a clip', currentClip.customName);
     } catch (error) {
       console.error("Error saving trim data:", error);
       // Optionally, you can show an error message to the user here
@@ -2622,6 +2737,7 @@ const debouncedFilterClips = debounce((filter) => {
 
   validateClipLists();
   updateClipCounter(filteredClips.length);
+  updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${currentClipList.length}`);
 }, 300);  // 300ms debounce time
 
 function filterClips(filter) {
@@ -2673,5 +2789,87 @@ function updateFilterDropdown() {
     privateOption.value = "Private";
     privateOption.textContent = "Private";
     filterDropdown.appendChild(privateOption);
+  }
+}
+
+
+// Discord Rich Presence
+
+
+function updateDiscordPresenceBasedOnState() {
+  if (currentClip) {
+    updateDiscordPresenceForClip(currentClip, !videoPlayer.paused);
+  } else {
+    const publicClipCount = currentClipList.filter(clip => !clip.tags.includes('Private')).length;
+    updateDiscordPresence('Browsing clips', `Total: ${publicClipCount}`);
+  }
+}
+
+function formatTime(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+function updateDiscordPresence(details, state = null) {
+  if (settings && settings.enableDiscordRPC) {
+    ipcRenderer.invoke('update-discord-presence', details, state);
+  }
+}
+
+async function toggleDiscordRPC(enable) {
+  await ipcRenderer.invoke('toggle-discord-rpc', enable);
+  if (enable) {
+    updateDiscordPresenceBasedOnState();
+  }
+}
+
+document.addEventListener('mousemove', () => {
+  lastActivityTime = Date.now();
+});
+
+document.addEventListener('keydown', () => {
+  lastActivityTime = Date.now();
+});
+
+setInterval(() => {
+  if (Date.now() - lastActivityTime > IDLE_TIMEOUT && !videoPlayer.playing) {
+    ipcRenderer.invoke('clear-discord-presence');
+  }
+}, 60000); // Check every minute
+
+ipcRenderer.on('check-activity-state', () => {
+  if (Date.now() - lastActivityTime <= IDLE_TIMEOUT || videoPlayer.playing) {
+    updateDiscordPresenceBasedOnState();
+  }
+});
+
+function updateDiscordPresenceForClip(clip, isPlaying = true) {
+  if (settings && settings.enableDiscordRPC) {
+    clearInterval(discordPresenceInterval);
+    
+    if (clip.tags && clip.tags.includes('Private')) {
+      console.log('Private clip detected. Clearing presence');
+      updateDiscordPresence('Download Clip Library now!', '');
+    } else {
+      if (isPlaying) {
+        clipStartTime = Date.now() - (elapsedTime * 1000);
+      }
+      
+      const updatePresence = () => {
+        if (isPlaying) {
+          elapsedTime = Math.floor((Date.now() - clipStartTime) / 1000);
+        }
+        const totalDuration = Math.floor(videoPlayer.duration);
+        const timeString = `${formatTime(elapsedTime)}/${formatTime(totalDuration)}`;
+        updateDiscordPresence(`${clip.customName}`, `${timeString}`);
+      };
+
+      updatePresence(); // Initial update
+      
+      if (isPlaying) {
+        discordPresenceInterval = setInterval(updatePresence, 1000); // Update every second
+      }
+    }
   }
 }
