@@ -1623,6 +1623,22 @@ function disableVideoThumbnail(clipName) {
   clipElement.appendChild(deletingIndicator);
 }
 
+document.addEventListener('fullscreenchange', handleFullscreenChange);
+
+function handleFullscreenChange() {
+  const fullscreenPlayer = document.getElementById('fullscreen-player');
+  
+  if (!document.fullscreenElement) {
+    // We've exited fullscreen
+    fullscreenPlayer.classList.remove('custom-fullscreen');
+    
+    // Reset the player's position
+    fullscreenPlayer.style.top = '50%';
+    fullscreenPlayer.style.left = '50%';
+    fullscreenPlayer.style.transform = 'translate(-50%, -50%)';
+  }
+}
+
 function toggleFullscreen() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
   
@@ -2248,6 +2264,10 @@ function handleKeyPress(e) {
         } else {
           exportTrimmedVideo();
         }
+        break;
+      case "f":
+      case "F":
+        toggleFullscreen();
         break;
       case "Delete":
         e.preventDefault();
