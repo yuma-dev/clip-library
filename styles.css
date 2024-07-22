@@ -919,6 +919,10 @@ body.dragging {
   transition: width 0.3s ease, opacity 0.3s ease;
 }
 
+#volume-slider.boosted {
+  accent-color: #ff5722; /* Change color when volume is boosted */
+}
+
 #volume-slider.collapsed {
   width: 0;
   opacity: 0;
@@ -1002,6 +1006,7 @@ body.dragging {
   height: 120%;
   background-color: #008cff;
   border-radius: 25%;
+  transform: translateZ(0);
 }
 
 #player-overlay {

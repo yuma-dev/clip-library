@@ -16,7 +16,17 @@ const playerOverlay = document.getElementById("player-overlay");
 const videoClickTarget = document.getElementById("video-click-target");
 const MAX_FRAME_RATE = 10;
 const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
+const volumeButton = document.getElementById("volume-button");
+const volumeSlider = document.getElementById("volume-slider");
+const volumeContainer = document.getElementById("volume-container");
+const volumeIcons = {
+  normal: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-481q0-83-44-151.5T598-735q-15-7-22-21.5t-2-29.5q6-16 21.5-23t31.5 0q97 43 155 131.5T840-481q0 108-58 196.5T627-153q-16 7-31.5 0T574-176q-5-15 2-29.5t22-21.5q74-34 118-102.5T760-481ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm380-120q0 42-19 79.5T591-339q-10 6-20.5.5T560-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
+  muted: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="m720-424-76 76q-11 11-28 11t-28-11q-11-11-11-28t11-28l76-76-76-76q-11-11-11-28t11-28q11-11 28-11t28 11l76 76 76-76q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76 76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11l-76-76Zm-440 64H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
+  low: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M360-360H240q-17 0-28.5-11.5T200-400v-160q0-17 11.5-28.5T240-600h120l132-132q19-19 43.5-8.5T560-703v446q0 27-24.5 37.5T492-228L360-360Zm380-120q0 42-19 79.5T671-339q-10 6-20.5.5T640-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM480-606l-86 86H280v80h114l86 86v-252ZM380-480Z"/></svg>`,
+  high: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-440h-80q-17 0-28.5-11.5T640-480q0-17 11.5-28.5T680-520h80q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440ZM584-288q10-14 26-16t30 8l64 48q14 10 16 26t-8 30q-10 14-26 16t-30-8l-64-48q-14-10-16-26t8-30Zm120-424-64 48q-14 10-30 8t-26-16q-10-14-8-30t16-26l64-48q14-10 30-8t26 16q10 14 8 30t-16 26ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`
+};
 
+let audioContext, gainNode;
 let lastActivityTime = Date.now();
 let currentClipList = [];
 let currentClip = null;
@@ -1089,20 +1099,19 @@ document.addEventListener("DOMContentLoaded", () => {
     const selectedFilter = e.target.value;
     filterClips(selectedFilter);
   });
-
-  const volumeButton = document.getElementById("volume-button");
-  const volumeSlider = document.getElementById("volume-slider");
-  const volumeContainer = document.getElementById("volume-container");
   
   volumeSlider.addEventListener("input", (e) => {
     const newVolume = parseFloat(e.target.value);
-    videoPlayer.volume = newVolume;
+    if (!audioContext) setupAudioContext();
+    gainNode.gain.setValueAtTime(newVolume, audioContext.currentTime);
     updateVolumeSlider(newVolume);
+    updateVolumeIcon(newVolume);
     
     if (currentClip) {
       debouncedSaveVolume(currentClip.originalName, newVolume);
     }
   });
+
   
   volumeButton.addEventListener("click", () => {
     volumeSlider.classList.toggle("collapsed");
@@ -1133,21 +1142,60 @@ document.addEventListener("DOMContentLoaded", () => {
   loadingScreen = document.getElementById('loading-screen');
 });
 
+function setupAudioContext() {
+  if (audioContext) return; // If already set up, don't create a new context
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  gainNode = audioContext.createGain();
+  const source = audioContext.createMediaElementSource(videoPlayer);
+  source.connect(gainNode);
+  gainNode.connect(audioContext.destination);
+}
+
 function changeVolume(delta) {
-  const newVolume = Math.min(Math.max(videoPlayer.volume + delta, 0), 1);
-  videoPlayer.volume = newVolume;
+  if (!audioContext) setupAudioContext();
+  
+  const currentVolume = gainNode.gain.value;
+  let newVolume = currentVolume + delta;
+  
+  newVolume = Math.round(newVolume * 100) / 100;
+  newVolume = Math.min(Math.max(newVolume, 0), 2);
+  
+  gainNode.gain.setValueAtTime(newVolume, audioContext.currentTime);
   updateVolumeSlider(newVolume);
-  showVolumeContainer();
+  updateVolumeIcon(newVolume);
   
   if (currentClip) {
     debouncedSaveVolume(currentClip.originalName, newVolume);
   }
+  
+  showVolumeContainer();
 }
 
 function updateVolumeSlider(volume) {
   const volumeSlider = document.getElementById("volume-slider");
-  if (volumeSlider) {
-    volumeSlider.value = volume;
+  volumeSlider.value = volume;
+  
+  // Update visual feedback
+  if (volume > 1) {
+    volumeSlider.classList.add('boosted');
+  } else {
+    volumeSlider.classList.remove('boosted');
+  }
+  
+  // Update volume button icon if needed
+  updateVolumeIcon(volume);
+}
+
+function updateVolumeIcon(volume) {
+  const volumeButton = document.getElementById("volume-button");
+  if (volume === 0) {
+    volumeButton.innerHTML = volumeIcons.muted;
+  } else if (volume < 0.5) {
+    volumeButton.innerHTML = volumeIcons.low;
+  } else if (volume <= 1) {
+    volumeButton.innerHTML = volumeIcons.normal; // We'll need to add this icon
+  } else if (volume > 1) {
+    volumeButton.innerHTML = volumeIcons.high;
   }
 }
 
@@ -1175,7 +1223,7 @@ async function loadVolume(clipName) {
     return volume;
   } catch (error) {
     console.error("Error loading volume:", error);
-    return 1; // Default volume
+    return 1; 
   }
 }
 
@@ -1896,12 +1944,14 @@ async function openClip(originalName, customName) {
   try {
     const savedVolume = await loadVolume(originalName);
     console.log(`Loaded volume for ${originalName}: ${savedVolume}`);
-    videoPlayer.volume = savedVolume;
+    setupAudioContext();
+    gainNode.gain.setValueAtTime(savedVolume, audioContext.currentTime);
     updateVolumeSlider(savedVolume);
   } catch (error) {
     console.error('Error loading volume:', error);
-    videoPlayer.volume = 1; // Default to full volume if there's an error
-    updateVolumeSlider(1);
+    setupAudioContext();
+    gainNode.gain.setValueAtTime(1, audioContext.currentTime);
+    updateVolumeSlider(1); // Default to 100%
   }
 
   playerOverlay.style.display = "block";
