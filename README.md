@@ -29,20 +29,20 @@ Clip Library saves edit information separately, preserving your original video f
 
 `Exluding Deletion, this will permanently Delete the actual Video file!`
 
-### ✂️ Quick Trim and Edit
-Trim your clips with precision using the program's built-in video player and editing tools.
+### ✂️ Quick Trim
+Trim your clips quickly using the program's built-in video player.
 
-![Trim Feature](https://github.com/user-attachments/assets/9738caec-8d56-4a1c-b16e-2d39cdd1e2cf)
+![Trim Feature](https://github.com/user-attachments/assets/a5f75f6f-056f-48cb-b418-ce83bf24b074)
 
 ### 🏷️ Tag and Categorize
 Efficiently organize your clips with a flexible tagging system.
 
-![Tagging System](https://github.com/user-attachments/assets/ca740ac9-d208-40c6-8272-36ce5b114cfb)
+![Tagging System](https://github.com/user-attachments/assets/54ca206e-aa62-4715-bb75-fd226b356887)
 
 ### 📤 Easy Export
 Export your edited clips in various formats with just a few clicks.
 
-![Export Options](https://github.com/user-attachments/assets/11b54022-df2c-4bea-882c-4a25539b5491)
+![Export Options](https://github.com/user-attachments/assets/a140fdff-38ee-4f92-a8f0-e5bf84f96075)
 _(the last export saved the video into my clipboard instead of saving as a file, for easy sharing)_
 
 
