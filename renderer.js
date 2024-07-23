@@ -105,6 +105,7 @@ async function loadClips() {
     allClips = await ipcRenderer.invoke("get-clips");
     console.log("Clips received:", allClips.length);
     
+    // Load tags for each clip
     for (let clip of allClips) {
       clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
     }
@@ -125,13 +126,17 @@ async function loadClips() {
     setupClipTitleEditing();
     validateClipLists();
 
+    // Start progressive thumbnail generation
     const clipNames = allClips.map((clip) => clip.originalName);
+
     ipcRenderer.invoke("generate-thumbnails-progressively", clipNames);
 
+    // Listen for thumbnail generation progress
     ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
       updateThumbnailProgress(current, total);
     });
 
+    // Listen for generated thumbnails
     ipcRenderer.on(
       "thumbnail-generated",
       (event, { clipName, thumbnailPath }) => {
@@ -140,6 +145,8 @@ async function loadClips() {
     );
     console.log("Clips loaded and rendered.");
     hideLoadingScreen();
+
+    // Update the filter dropdown with all tags
     updateFilterDropdown();
   } catch (error) {
     console.error("Error loading clips:", error);
@@ -152,12 +159,14 @@ async function loadClips() {
 
 function hideLoadingScreen() {
   if (loadingScreen) {
+    // Add a 2-second delay before starting to hide the loading screen
     setTimeout(() => {
       loadingScreen.style.opacity = '0';
       setTimeout(() => {
         loadingScreen.style.display = 'none';
       }, 1000);
-    }, 1000);
+    }, 1000); // 2000 milliseconds = 2 seconds
+  }
 }
 
 async function updateVersionDisplay() {
@@ -175,14 +184,18 @@ async function updateVersionDisplay() {
 async function addNewClipToLibrary(fileName) {
   const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
   
+  // Check if the clip already exists in allClips
   const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
   
   if (existingClipIndex === -1) {
+    // If it doesn't exist, add it to allClips
     allClips.unshift(newClipInfo);
     const newClipElement = await createClipElement(newClipInfo);
     clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
   } else {
+    // If it exists, update the existing clip info
     allClips[existingClipIndex] = newClipInfo;
+    // Update the existing clip element in the grid
     const existingElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
     if (existingElement) {
       const updatedElement = await createClipElement(newClipInfo);
@@ -291,7 +304,7 @@ async function renderClips(clips) {
   
   isRendering = true;
   console.log("Rendering clips. Input length:", clips.length);
-  clipGrid.innerHTML = "";
+  clipGrid.innerHTML = ""; // Clear the grid
 
   clips = removeDuplicates(clips);
   console.log("Clips to render after removing duplicates:", clips.length);
@@ -393,6 +406,7 @@ function performSearch() {
   }
 }
 
+// Debounce function to limit how often the search is performed
 function debounce(func, delay) {
   let debounceTimer;
   return function () {
@@ -484,6 +498,7 @@ function setupContextMenu() {
     contextMenu.style.display = "none";
   });
 
+  // Close context menu when clicking outside
   document.addEventListener("click", () => {
     contextMenu.style.display = "none";
   });
