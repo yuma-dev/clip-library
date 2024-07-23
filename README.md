@@ -1,3 +1,7 @@
+Here's the updated README with the new feature point added:
+
+---
+
 # Clip Library
 ![Title Image](https://github.com/user-attachments/assets/26aac2d1-d5a8-442d-9831-29941401de52)
 Clip Library is a versatile desktop application designed to manage and enhance your video clip collection. Built to complement OBS Studio and other video capture tools, it offers a user-friendly interface for organizing, editing, and exporting your clips.
@@ -11,9 +15,6 @@ Clip Library was born out of a need for a comprehensive clip management solution
  - Limited support for large clip libraries
  - Intrusive watermarks 
 
-
-
-
 **Clip Library aims to provide the best of both worlds:**
 
 1. Use OBS Studio (or other preferred software) for high-quality clip capture
@@ -22,12 +23,6 @@ Clip Library was born out of a need for a comprehensive clip management solution
 This project allows content creators, gamers, and video enthusiasts to leverage the power of professional capture tools while enjoying streamlined clip management.
 
 ## Features
-
-### 🔄 Reversable Edits
-All edits are non-destructive and fully reversible.
-Clip Library saves edit information separately, preserving your original video files.
-
-`Exluding Deletion, this will permanently Delete the actual Video file!`
 
 ### ✂️ Quick Trim
 Trim your clips quickly using the program's built-in video player.
@@ -45,6 +40,14 @@ Export your edited clips in various formats with just a few clicks.
 ![Export Options](https://github.com/user-attachments/assets/a140fdff-38ee-4f92-a8f0-e5bf84f96075)
 _(the last export saved the video into my clipboard instead of saving as a file, for easy sharing)_
 
+### 🔊 Persistent Clip Settings
+Adjust and save settings for individual clips, including volume, name, and playback speed. These settings are saved for each specific clip, so the next time you open that clip, it will have the same customized settings.
+
+### 🔄 Reversable Edits
+All edits are non-destructive and fully reversible.
+Clip Library saves edit information separately, preserving your original video files.
+
+`Exluding Deletion, this will permanently Delete the actual Video file!`
 
 ## Getting Started
 
