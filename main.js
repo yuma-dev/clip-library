@@ -338,6 +338,45 @@ ipcMain.handle("get-trim", async (event, clipName) => {
   }
 });
 
+ipcMain.handle("save-speed", async (event, clipName, speed) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+  await ensureDirectoryExists(metadataFolder);
+  const speedFilePath = path.join(metadataFolder, `${clipName}.speed`);
+
+  try {
+    await writeFileAtomically(speedFilePath, speed.toString());
+    console.log(`Speed saved successfully for ${clipName}: ${speed}`);
+    return { success: true };
+  } catch (error) {
+    console.error(`Error saving speed for ${clipName}:`, error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("get-speed", async (event, clipName) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+  const speedFilePath = path.join(metadataFolder, `${clipName}.speed`);
+
+  try {
+    const speedData = await fs.readFile(speedFilePath, "utf8");
+    const parsedSpeed = parseFloat(speedData);
+    if (isNaN(parsedSpeed)) {
+      console.warn(`Invalid speed data for ${clipName}, using default`);
+      return 1;
+    }
+    return parsedSpeed;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      console.log(`No speed data found for ${clipName}, using default`);
+      return 1; // Default speed if not set
+    }
+    console.error(`Error reading speed for ${clipName}:`, error);
+    throw error;
+  }
+});
+
 ipcMain.handle("save-volume", async (event, clipName, volume) => {
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");

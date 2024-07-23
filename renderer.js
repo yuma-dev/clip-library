@@ -19,6 +19,10 @@ const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
 const volumeButton = document.getElementById("volume-button");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeContainer = document.getElementById("volume-container");
+const speedButton = document.getElementById("speed-button");
+const speedSlider = document.getElementById("speed-slider");
+const speedContainer = document.getElementById("speed-container");
+const speedText = document.getElementById("speed-text");
 const volumeIcons = {
   normal: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-481q0-83-44-151.5T598-735q-15-7-22-21.5t-2-29.5q6-16 21.5-23t31.5 0q97 43 155 131.5T840-481q0 108-58 196.5T627-153q-16 7-31.5 0T574-176q-5-15 2-29.5t22-21.5q74-34 118-102.5T760-481ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm380-120q0 42-19 79.5T591-339q-10 6-20.5.5T560-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
   muted: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="m720-424-76 76q-11 11-28 11t-28-11q-11-11-11-28t11-28l76-76-76-76q-11-11-11-28t11-28q11-11 28-11t28 11l76 76 76-76q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76 76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11l-76-76Zm-440 64H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
@@ -101,7 +105,6 @@ async function loadClips() {
     allClips = await ipcRenderer.invoke("get-clips");
     console.log("Clips received:", allClips.length);
     
-    // Load tags for each clip
     for (let clip of allClips) {
       clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
     }
@@ -122,17 +125,13 @@ async function loadClips() {
     setupClipTitleEditing();
     validateClipLists();
 
-    // Start progressive thumbnail generation
     const clipNames = allClips.map((clip) => clip.originalName);
-
     ipcRenderer.invoke("generate-thumbnails-progressively", clipNames);
 
-    // Listen for thumbnail generation progress
     ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
       updateThumbnailProgress(current, total);
     });
 
-    // Listen for generated thumbnails
     ipcRenderer.on(
       "thumbnail-generated",
       (event, { clipName, thumbnailPath }) => {
@@ -141,8 +140,6 @@ async function loadClips() {
     );
     console.log("Clips loaded and rendered.");
     hideLoadingScreen();
-
-    // Update the filter dropdown with all tags
     updateFilterDropdown();
   } catch (error) {
     console.error("Error loading clips:", error);
@@ -155,14 +152,12 @@ async function loadClips() {
 
 function hideLoadingScreen() {
   if (loadingScreen) {
-    // Add a 2-second delay before starting to hide the loading screen
     setTimeout(() => {
       loadingScreen.style.opacity = '0';
       setTimeout(() => {
         loadingScreen.style.display = 'none';
       }, 1000);
-    }, 1000); // 2000 milliseconds = 2 seconds
-  }
+    }, 1000);
 }
 
 async function updateVersionDisplay() {
@@ -180,18 +175,14 @@ async function updateVersionDisplay() {
 async function addNewClipToLibrary(fileName) {
   const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
   
-  // Check if the clip already exists in allClips
   const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
   
   if (existingClipIndex === -1) {
-    // If it doesn't exist, add it to allClips
     allClips.unshift(newClipInfo);
     const newClipElement = await createClipElement(newClipInfo);
     clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
   } else {
-    // If it exists, update the existing clip info
     allClips[existingClipIndex] = newClipInfo;
-    // Update the existing clip element in the grid
     const existingElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
     if (existingElement) {
       const updatedElement = await createClipElement(newClipInfo);
@@ -300,7 +291,7 @@ async function renderClips(clips) {
   
   isRendering = true;
   console.log("Rendering clips. Input length:", clips.length);
-  clipGrid.innerHTML = ""; // Clear the grid
+  clipGrid.innerHTML = "";
 
   clips = removeDuplicates(clips);
   console.log("Clips to render after removing duplicates:", clips.length);
@@ -402,7 +393,6 @@ function performSearch() {
   }
 }
 
-// Debounce function to limit how often the search is performed
 function debounce(func, delay) {
   let debounceTimer;
   return function () {
@@ -494,7 +484,6 @@ function setupContextMenu() {
     contextMenu.style.display = "none";
   });
 
-  // Close context menu when clicking outside
   document.addEventListener("click", () => {
     contextMenu.style.display = "none";
   });
@@ -1140,6 +1129,103 @@ document.addEventListener("DOMContentLoaded", () => {
   updateDiscordPresence('Browsing clips', `Total clips: ${currentClipList.length}`);
 
   loadingScreen = document.getElementById('loading-screen');
+});
+
+async function saveSpeed(clipName, speed) {
+  try {
+    await ipcRenderer.invoke("save-speed", clipName, speed);
+  } catch (error) {
+    console.error("Error saving speed:", error);
+  }
+}
+
+async function loadSpeed(clipName) {
+  try {
+    const speed = await ipcRenderer.invoke("get-speed", clipName);
+    console.log(`Loaded speed for ${clipName}: ${speed}`);
+    return speed;
+  } catch (error) {
+    console.error("Error loading speed:", error);
+    return 1;
+  }
+}
+
+function changeSpeed(speed) {
+  videoPlayer.playbackRate = speed;
+  updateSpeedSlider(speed);
+  updateSpeedText(speed);
+  showSpeedContainer();
+  
+  if (currentClip) {
+    debouncedSaveSpeed(currentClip.originalName, speed);
+  }
+}
+
+function updateSpeedSlider(speed) {
+  if (speedSlider) {
+    speedSlider.value = speed;
+  }
+}
+
+function updateSpeedText(speed) {
+  let displaySpeed;
+  if (Number.isInteger(speed)) {
+    displaySpeed = `${speed}x`;
+  } else if (speed * 10 % 1 === 0) {
+    // This condition checks if the speed has only one decimal place
+    displaySpeed = `${speed.toFixed(1)}x`;
+  } else {
+    displaySpeed = `${speed.toFixed(2)}x`;
+  }
+  speedText.textContent = displaySpeed;
+}
+
+function showSpeedContainer() {
+  speedSlider.classList.remove("collapsed");
+  
+  clearTimeout(speedContainer.timeout);
+  speedContainer.timeout = setTimeout(() => {
+    speedSlider.classList.add("collapsed");
+  }, 2000);
+}
+
+function showSpeedContainer() {
+  speedSlider.classList.remove("collapsed");
+  
+  clearTimeout(speedContainer.timeout);
+  speedContainer.timeout = setTimeout(() => {
+    speedSlider.classList.add("collapsed");
+  }, 2000);
+}
+
+const debouncedSaveSpeed = debounce(async (clipName, speed) => {
+  try {
+    await ipcRenderer.invoke("save-speed", clipName, speed);
+    console.log(`Speed saved for ${clipName}: ${speed}`);
+  } catch (error) {
+    console.error('Error saving speed:', error);
+  }
+}, 300);
+
+speedSlider.addEventListener("input", (e) => {
+  const newSpeed = parseFloat(e.target.value);
+  changeSpeed(newSpeed);
+});
+
+speedButton.addEventListener("click", () => {
+  speedSlider.classList.toggle("collapsed");
+  clearTimeout(speedContainer.timeout);
+});
+
+speedContainer.addEventListener("mouseenter", () => {
+  clearTimeout(speedContainer.timeout);
+  speedSlider.classList.remove("collapsed");
+});
+
+speedContainer.addEventListener("mouseleave", () => {
+  speedContainer.timeout = setTimeout(() => {
+    speedSlider.classList.add("collapsed");
+  }, 2000);
 });
 
 function setupAudioContext() {
@@ -1952,6 +2038,19 @@ async function openClip(originalName, customName) {
     setupAudioContext();
     gainNode.gain.setValueAtTime(1, audioContext.currentTime);
     updateVolumeSlider(1); // Default to 100%
+  }
+
+  try {
+    const savedSpeed = await loadSpeed(originalName);
+    console.log(`Loaded speed for ${originalName}: ${savedSpeed}`);
+    videoPlayer.playbackRate = savedSpeed;
+    updateSpeedSlider(savedSpeed);
+    updateSpeedText(savedSpeed);
+  } catch (error) {
+    console.error('Error loading speed:', error);
+    videoPlayer.playbackRate = 1;
+    updateSpeedSlider(1);
+    updateSpeedText(1);
   }
 
   playerOverlay.style.display = "block";

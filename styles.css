@@ -883,6 +883,48 @@ body.dragging {
   border-radius: 4px;
 }
 
+#speed-container {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  bottom: 54px;
+  right: 60px;
+}
+
+#speed-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.3s ease;
+  color: #e0e0e0;
+  font-size: 15px;
+  font-weight: normal;
+}
+
+#speed-button:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+#speed-text {
+  text-align: center;
+}
+
+#speed-slider {
+  width: 100px;
+  transition: width 0.3s ease, opacity 0.3s ease;
+}
+
+#speed-slider.collapsed {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 #volume-container {
   position: absolute;
   display: flex;
