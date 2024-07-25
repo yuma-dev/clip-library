@@ -11,9 +11,6 @@ Clip Library was born out of a need for a comprehensive clip management solution
  - Limited support for large clip libraries
  - Intrusive watermarks 
 
-
-
-
 **Clip Library aims to provide the best of both worlds:**
 
 1. Use OBS Studio (or other preferred software) for high-quality clip capture
@@ -23,28 +20,30 @@ This project allows content creators, gamers, and video enthusiasts to leverage 
 
 ## Features
 
+### ✂️ Quick Trim
+Trim your clips quickly using the program's built-in video player.
+
+![Trim Feature](https://github.com/user-attachments/assets/a5f75f6f-056f-48cb-b418-ce83bf24b074)
+
+### 🏷️ Tag and Categorize
+Efficiently organize your clips with a flexible tagging system.
+
+![Tagging System](https://github.com/user-attachments/assets/54ca206e-aa62-4715-bb75-fd226b356887)
+
+### 📤 Easy Export
+Export your edited clips in various formats with just a few clicks.
+
+![Export Options](https://github.com/user-attachments/assets/a140fdff-38ee-4f92-a8f0-e5bf84f96075)
+_(the last export saved the video into my clipboard instead of saving as a file, for easy sharing)_
+
+### 🔊 Persistent Clip Settings
+Adjust and save settings for individual clips, including volume, name, and playback speed. These settings are saved for each specific clip, so the next time you open that clip, it will have the same customized settings.
+
 ### 🔄 Reversable Edits
 All edits are non-destructive and fully reversible.
 Clip Library saves edit information separately, preserving your original video files.
 
 `Exluding Deletion, this will permanently Delete the actual Video file!`
-
-### ✂️ Quick Trim and Edit
-Trim your clips with precision using the program's built-in video player and editing tools.
-
-![Trim Feature](https://github.com/user-attachments/assets/9738caec-8d56-4a1c-b16e-2d39cdd1e2cf)
-
-### 🏷️ Tag and Categorize
-Efficiently organize your clips with a flexible tagging system.
-
-![Tagging System](https://github.com/user-attachments/assets/ca740ac9-d208-40c6-8272-36ce5b114cfb)
-
-### 📤 Easy Export
-Export your edited clips in various formats with just a few clicks.
-
-![Export Options](https://github.com/user-attachments/assets/11b54022-df2c-4bea-882c-4a25539b5491)
-_(the last export saved the video into my clipboard instead of saving as a file, for easy sharing)_
-
 
 ## Getting Started
 
