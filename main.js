@@ -604,7 +604,6 @@ ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
   }
 });
 
-// Modify the 'generate-thumbnails-progressively' handler
 ipcMain.handle(
   "generate-thumbnails-progressively",
   async (event, clipNames) => {
