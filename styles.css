@@ -150,6 +150,7 @@ body.dragging {
   height: 100%;
   overflow: auto;
   background-color: rgba(0,0,0,0.4);
+  animation: fadeIn 0.3s ease;
 }
 
 .modal-content {
@@ -218,7 +219,6 @@ body.dragging {
   border: none;
   cursor: pointer;
   padding: 8px;
-  margin: 0px 0px 0px auto;
   border-radius: 50%;
   transition: background-color 0.3s ease;
   display: flex;
@@ -254,20 +254,16 @@ body.dragging {
 }
 
 #search-container {
-  margin: 0px auto 0px 0px;
   flex-grow: 1;
-  max-width: 600px;
-  width: 80%;
-  padding: 0 20px;
-  box-sizing: border-box;
+  margin-right: 20px;
 }
 
 #search-input {
   width: 100%;
-  padding: 10px 15px;
+  padding: 11px 15px 10px 15px;
   font-size: 16px;
   border: 1px solid #444;
-  border-radius: 20px;
+  border-radius: 20px 0px 0px 20px;
   background-color: #2a2a2a;
   color: #e0e0e0;
   transition: all 0.3s ease;
@@ -275,8 +271,6 @@ body.dragging {
 
 #search-input:focus {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
-  border-color: #bebebe;
 }
 
 #search-input::placeholder {
@@ -302,8 +296,9 @@ body.dragging {
   padding: 20px;
   border: 1px solid #888;
   width: 300px;
-  border-radius: 8px;
+  border-radius: 10px;
   text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .modal-buttons {
@@ -333,17 +328,17 @@ body.dragging {
   position: fixed; /* Change this from absolute to fixed */
   background-color: #2a2a2a;
   border: 1px solid #444;
-  border-radius: 4px;
-  padding: 5px 0;
+  border-radius: 5px;
   min-width: 150px;
   z-index: 1999; /* Increase this to ensure it's above other elements */
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  animation: fadeIn 0.2s ease;
 }
 
 .context-menu-item {
-  padding: 8px 15px;
+  padding: 10px 15px;
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s ease;
 }
 
 .context-menu-item:hover {
@@ -493,12 +488,13 @@ body.dragging {
 
 /* Style for the filter dropdown */
 #filter-dropdown {
-  margin-left: 10px;
-  padding: 5px 10px;
+  padding: 10px 15px;
   background-color: #2a2a2a;
   color: #e0e0e0;
   border: 1px solid #444;
-  border-radius: 4px;
+  border-radius: 0px 20px 20px 0px;
+  font-size: 16px;
+  margin-right: 20px;
 }
 
 /* Clip grid styles */
@@ -539,6 +535,7 @@ body.dragging {
   overflow: hidden;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
   transform: perspective(1000px);
+  animation: fadeIn 0.5s ease;
   --mouse-x: 0;
   --mouse-y: 0;
 }
@@ -1145,4 +1142,9 @@ body.dragging {
   100% {
     transform: scale(1);
   }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

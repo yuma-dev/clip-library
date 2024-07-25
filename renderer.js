@@ -182,6 +182,7 @@ async function updateVersionDisplay() {
 }
 
 async function addNewClipToLibrary(fileName) {
+  console.log(`Adding new clip to library: ${fileName}`);
   const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
   
   // Check if the clip already exists in allClips
@@ -203,11 +204,13 @@ async function addNewClipToLibrary(fileName) {
     }
   }
   
+  console.log(`Requesting thumbnail generation for: ${fileName}`);
   ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
   updateFilterDropdown();
 }
 
 ipcRenderer.on('new-clip-added', (event, fileName) => {
+  console.log(`New clip added event received for: ${fileName}`);
   addNewClipToLibrary(fileName);
   updateFilterDropdown();
 });
@@ -284,15 +287,29 @@ function updateThumbnailProgress(current, total) {
   }
 }
 
+ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
+  console.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
+});
+
+ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
+  console.log(`Received thumbnail for ${clipName}: ${thumbnailPath}`);
+  updateClipThumbnail(clipName, thumbnailPath);
+});
+
 function updateClipThumbnail(clipName, thumbnailPath) {
   const clipElement = document.querySelector(
     `.clip-item[data-original-name="${clipName}"]`,
   );
   if (clipElement) {
     const imgElement = clipElement.querySelector("img");
-    if (imgElement && imgElement.src.endsWith("loading-thumbnail.gif")) {
+    if (imgElement) {
       imgElement.src = `file://${thumbnailPath}`;
+      console.log(`Thumbnail updated for ${clipName}: ${thumbnailPath}`);
+    } else {
+      console.warn(`Image element not found for clip: ${clipName}`);
     }
+  } else {
+    console.warn(`Clip element not found for: ${clipName}`);
   }
 }
 
@@ -1866,7 +1883,7 @@ async function exportVideo(savePath = null) {
     );
     if (result.success) {
       console.log("Video exported successfully:", result.path);
-      exportButton.textContent = "Export Complete!";
+      exportButton.textContent = "Copied to Clipboard!";
     } else {
       throw new Error(result.error);
     }
@@ -1932,7 +1949,7 @@ async function exportTrimmedVideo() {
         "Trimmed video exported and copied to clipboard:",
         result.path,
       );
-      exportButton.textContent = "Export Complete!";
+      exportButton.textContent = "Copied to clipboard!";
       setTimeout(() => {
         exportButton.textContent = "Export";
         exportButton.disabled = false;
