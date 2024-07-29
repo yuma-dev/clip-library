@@ -1789,21 +1789,40 @@ function disableVideoThumbnail(clipName) {
   clipElement.appendChild(deletingIndicator);
 }
 
-document.addEventListener('fullscreenchange', handleFullscreenChange);
+function handleFullscreenMouseLeave() {
+  if (document.fullscreenElement) {
+    hideControls();
+  }
+}
+
+document.addEventListener('mouseleave', handleFullscreenMouseLeave);
 
 function handleFullscreenChange() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
   
-  if (!document.fullscreenElement) {
-    // We've exited fullscreen
+  if (document.fullscreenElement) {
+    fullscreenPlayer.classList.add('custom-fullscreen');
+    document.addEventListener('mousemove', handleFullscreenMouseMove);
+  } else {
     fullscreenPlayer.classList.remove('custom-fullscreen');
-    
-    // Reset the player's position
+    document.removeEventListener('mousemove', handleFullscreenMouseMove);
     fullscreenPlayer.style.top = '50%';
     fullscreenPlayer.style.left = '50%';
     fullscreenPlayer.style.transform = 'translate(-50%, -50%)';
   }
+  
+  resetControlsTimeout();
 }
+
+function handleFullscreenMouseMove(e) {
+  if (e.clientY >= window.innerHeight - 1) {
+    hideControlsInstantly();
+  } else {
+    resetControlsTimeout();
+  }
+}
+
+document.addEventListener('fullscreenchange', handleFullscreenChange);
 
 function toggleFullscreen() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
@@ -1818,7 +1837,6 @@ function toggleFullscreen() {
     } else if (fullscreenPlayer.msRequestFullscreen) {
       fullscreenPlayer.msRequestFullscreen();
     }
-    fullscreenPlayer.classList.add('custom-fullscreen');
   } else {
     if (document.exitFullscreen) {
       document.exitFullscreen();
@@ -1829,8 +1847,11 @@ function toggleFullscreen() {
     } else if (document.msExitFullscreen) {
       document.msExitFullscreen();
     }
-    fullscreenPlayer.classList.remove('custom-fullscreen');
   }
+  
+  // Reset control visibility
+  showControls();
+  resetControlsTimeout();
 }
 
 document
@@ -1873,12 +1894,14 @@ async function exportVideo(savePath = null) {
 
   try {
     const volume = await loadVolume(currentClip.originalName);
+    const speed = videoPlayer.playbackRate;
     const result = await ipcRenderer.invoke(
       "export-video",
       currentClip.originalName,
       trimStartTime,
       trimEndTime,
       volume,
+      speed,
       savePath
     );
     if (result.success) {
@@ -1904,12 +1927,14 @@ async function exportAudio(savePath = null) {
 
   try {
     const volume = await loadVolume(currentClip.originalName);
+    const speed = videoPlayer.playbackRate;
     const result = await ipcRenderer.invoke(
       "export-audio",
       currentClip.originalName,
       trimStartTime,
       trimEndTime,
       volume,
+      speed,
       savePath
     );
     if (result.success) {
@@ -1937,12 +1962,14 @@ async function exportTrimmedVideo() {
 
   try {
     const volume = await loadVolume(currentClip.originalName);
+    const speed = videoPlayer.playbackRate;
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
       currentClip.originalName,
       trimStartTime,
       trimEndTime,
-      volume
+      volume,
+      speed
     );
     if (result.success) {
       console.log(
@@ -1977,6 +2004,7 @@ async function exportClipFromContextMenu(clip) {
     const start = trimData ? trimData.start : 0;
     const end = trimData ? trimData.end : clipInfo.format.duration;
     const volume = await loadVolume(clip.originalName);
+    const speed = await loadSpeed(clip.originalName);
 
     // Show initial progress
     showExportProgress(0, 100);
@@ -1986,7 +2014,8 @@ async function exportClipFromContextMenu(clip) {
       clip.originalName,
       start,
       end,
-      volume
+      volume,
+      speed
     );
     if (result.success) {
       console.log("Clip exported successfully:", result.path);
@@ -2128,8 +2157,8 @@ async function openClip(originalName, customName) {
 
   function resetControlsTimeout() {
     showControls();
+    clearTimeout(controlsTimeout);
     if (!videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
-      clearTimeout(controlsTimeout);
       controlsTimeout = setTimeout(hideControls, 3000);
     }
   }
@@ -2164,6 +2193,7 @@ async function openClip(originalName, customName) {
     }
     showControls();
     controlsTimeout = setTimeout(hideControls, 3000);
+    resetControlsTimeout();
   });
 
   videoControls.addEventListener("mouseenter", () => {
@@ -2216,12 +2246,13 @@ async function openClip(originalName, customName) {
 const videoControls = document.getElementById("video-controls");
 
 function showControls() {
+  videoControls.style.transition = 'none';
   videoControls.classList.add("visible");
-  clearTimeout(controlsTimeout);
 }
 
 function hideControls() {
   if (!videoPlayer.paused && !isMouseOverControls && !document.activeElement.closest('#video-controls')) {
+    videoControls.style.transition = 'opacity 0.5s';
     videoControls.classList.remove("visible");
   }
 }
@@ -2231,6 +2262,21 @@ function handleOverlayClick(e) {
   if (e.target === playerOverlay && !window.justFinishedDragging) {
     closePlayer();
   }
+}
+
+function handleMouseLeave(e) {
+  // Check if the mouse has truly left the window/document
+  if (e.clientY <= 0 || e.clientX <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+    hideControlsInstantly();
+  }
+}
+
+// Add this event listener to the document
+document.addEventListener('mouseleave', handleMouseLeave);
+
+function hideControlsInstantly() {
+  videoControls.classList.remove("visible");
+  clearTimeout(controlsTimeout);
 }
 
 function handleVideoSeeked() {

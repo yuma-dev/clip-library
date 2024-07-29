@@ -726,6 +726,10 @@ body.dragging {
   background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%);
 }
 
+#video-controls.visible {
+  display: flex !important;
+}
+
 .video-nav-button {
   background: rgba(0, 0, 0, 0.5);
   border-radius: 5px;
@@ -796,10 +800,6 @@ body.dragging {
   display: none;
   padding: 20px;
   box-sizing: border-box;
-}
-
-#video-controls.visible {
-  display: flex; /* Show when the 'visible' class is present */
 }
 
 #video-container:hover #video-controls {

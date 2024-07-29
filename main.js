@@ -774,7 +774,7 @@ ipcMain.handle("open-save-dialog", async (event, type) => {
   return result.canceled ? null : result.filePath;
 });
 
-ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume) => {
+ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
   try {
     const inputPath = path.join(settings.clipLocation, clipName);
     const outputPath = path.join(
@@ -782,12 +782,17 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volum
       `trimmed_${Date.now()}_${clipName}`
     );
 
+    // Adjust duration based on speed
+    const adjustedDuration = (end - start) / speed;
+
     await new Promise((resolve, reject) => {
       let progress = 0;
       ffmpeg(inputPath)
         .setStartTime(start)
-        .setDuration(end - start)
+        .setDuration(adjustedDuration)
         .audioFilters(`volume=${volume}`)
+        .videoFilters(`setpts=${1/speed}*PTS`)
+        .audioFilters(`atempo=${speed}`)
         .outputOptions([
           '-c:v h264_nvenc',
           '-c:a aac',
@@ -822,17 +827,22 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volum
   }
 });
 
-ipcMain.handle("export-video", async (event, clipName, start, end, volume, savePath) => {
+ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
   try {
     const inputPath = path.join(settings.clipLocation, clipName);
     const outputPath = savePath || path.join(os.tmpdir(), `trimmed_${Date.now()}_${clipName}`);
+
+    // Adjust duration based on speed
+    const adjustedDuration = (end - start) / speed;
 
     await new Promise((resolve, reject) => {
       let progress = 0;
       ffmpeg(inputPath)
         .setStartTime(start)
-        .setDuration(end - start)
+        .setDuration(adjustedDuration)
         .audioFilters(`volume=${volume}`)
+        .videoFilters(`setpts=${1/speed}*PTS`)
+        .audioFilters(`atempo=${speed}`)
         .outputOptions([
           '-c:v libx264',
           '-c:a aac',
@@ -850,7 +860,6 @@ ipcMain.handle("export-video", async (event, clipName, start, end, volume, saveP
     });
 
     if (!savePath) {
-      // Copy to clipboard if no save path provided
       if (process.platform === "win32") {
         clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
       } else {
@@ -865,15 +874,18 @@ ipcMain.handle("export-video", async (event, clipName, start, end, volume, saveP
   }
 });
 
-ipcMain.handle("export-audio", async (event, clipName, start, end, volume, savePath) => {
+ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath) => {
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = savePath || path.join(os.tmpdir(), `audio_${Date.now()}_${path.parse(clipName).name}.mp3`);
+
+  // Adjust duration based on speed
+  const adjustedDuration = (end - start) / speed;
 
   await new Promise((resolve, reject) => {
     ffmpeg(inputPath)
       .setStartTime(start)
-      .setDuration(end - start)
-      .audioFilters(`volume=${volume}`)
+      .setDuration(adjustedDuration)
+      .audioFilters(`volume=${volume},atempo=${speed}`)
       .output(outputPath)
       .audioCodec("libmp3lame")
       .on("end", resolve)
@@ -882,7 +894,6 @@ ipcMain.handle("export-audio", async (event, clipName, start, end, volume, saveP
   });
 
   if (!savePath) {
-    // Copy to clipboard if no save path provided
     if (process.platform === "win32") {
       clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
     } else {
