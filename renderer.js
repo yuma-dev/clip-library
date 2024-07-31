@@ -68,6 +68,10 @@ let clipStartTime;
 let elapsedTime = 0;
 let loadingScreen;
 
+ipcRenderer.on('log', (event, { type, message }) => {
+  console[type](`[Main Process] ${message}`);
+});
+
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
 settingsModal.className = "modal";
@@ -292,9 +296,16 @@ ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
 });
 
 ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
-  console.log(`Received thumbnail for ${clipName}: ${thumbnailPath}`);
   updateClipThumbnail(clipName, thumbnailPath);
 });
+
+async function getFfmpegVersion() {
+  try {
+    await ipcRenderer.invoke('get-ffmpeg-version');
+  } catch (error) {
+    console.error('Failed to get FFmpeg version:', error);
+  }
+}
 
 function updateClipThumbnail(clipName, thumbnailPath) {
   const clipElement = document.querySelector(
@@ -304,7 +315,6 @@ function updateClipThumbnail(clipName, thumbnailPath) {
     const imgElement = clipElement.querySelector("img");
     if (imgElement) {
       imgElement.src = `file://${thumbnailPath}`;
-      console.log(`Thumbnail updated for ${clipName}: ${thumbnailPath}`);
     } else {
       console.warn(`Image element not found for clip: ${clipName}`);
     }
@@ -1921,6 +1931,25 @@ async function exportVideo(savePath = null) {
   }
 }
 
+ipcRenderer.on('show-fallback-notice', () => {
+  showFallbackNotice();
+});
+
+function showFallbackNotice() {
+  const notice = document.createElement('div');
+  notice.className = 'fallback-notice';
+  notice.innerHTML = `
+    <p>Your video is being exported using software encoding, which may be slower.</p>
+    <p>For faster exports, consider installing NVIDIA CUDA Runtime and updated graphics drivers.</p>
+    <button id="close-notice">Close</button>
+  `;
+  document.body.appendChild(notice);
+
+  document.getElementById('close-notice').addEventListener('click', () => {
+    notice.remove();
+  });
+}
+
 async function exportAudio(savePath = null) {
   exportButton.disabled = true;
   exportButton.textContent = "Exporting Audio...";
@@ -1954,6 +1983,10 @@ async function exportAudio(savePath = null) {
   }
 }
 
+ipcRenderer.on('ffmpeg-error', (event, message) => {
+  console.error('FFmpeg Error:', message);
+});
+
 async function exportTrimmedVideo() {
   if (!currentClip) return;
 
@@ -1961,8 +1994,13 @@ async function exportTrimmedVideo() {
   exportButton.textContent = "Exporting...";
 
   try {
+    await getFfmpegVersion();
     const volume = await loadVolume(currentClip.originalName);
     const speed = videoPlayer.playbackRate;
+    console.log(`Exporting video: ${currentClip.originalName}`);
+    console.log(`Trim start: ${trimStartTime}, Trim end: ${trimEndTime}`);
+    console.log(`Volume: ${volume}, Speed: ${speed}`);
+
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
       currentClip.originalName,
@@ -1971,11 +2009,9 @@ async function exportTrimmedVideo() {
       volume,
       speed
     );
+
     if (result.success) {
-      console.log(
-        "Trimmed video exported and copied to clipboard:",
-        result.path,
-      );
+      console.log("Trimmed video exported successfully:", result.path);
       exportButton.textContent = "Copied to clipboard!";
       setTimeout(() => {
         exportButton.textContent = "Export";
@@ -1986,7 +2022,9 @@ async function exportTrimmedVideo() {
     }
   } catch (error) {
     console.error("Error exporting video:", error);
+    console.error("Error details:", error.stack);
     exportButton.textContent = "Export Failed";
+    await showCustomAlert(`Export failed: ${error.message}. Please check the console for more details.`);
     setTimeout(() => {
       exportButton.textContent = "Export";
       exportButton.disabled = false;

@@ -1,7 +1,7 @@
 if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu } = require("electron");
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
-const { exec } = require("child_process");
+const { exec, execFile } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
 const { checkForUpdates } = require('./updater');
@@ -11,24 +11,49 @@ const chokidar = require("chokidar");
 const fs = require("fs").promises;
 const os = require("os");
 const crypto = require("crypto");
-const ffmpeg = require("fluent-ffmpeg");
 const { loadSettings, saveSettings } = require("./settings-manager");
 const readify = require("readify");
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const DiscordRPC = require('discord-rpc');
 const clientId = '1264368321013219449';
 const IDLE_TIMEOUT = 5 * 60 * 1000;
-
-let idleTimer;
-let ffmpegPath;
-
-if (app.isPackaged) {
-  ffmpegPath = path.join(process.resourcesPath, 'ffmpeg-bin', 'ffmpeg.exe');
-} else {
-  ffmpegPath = path.join(__dirname, 'ffmpeg-bin', 'ffmpeg.exe');
-}
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
+const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar', 'app.asar.unpacked');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfprobePath(ffprobePath);
+
+execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
+  if (error) {
+    console.error('Error getting ffmpeg version:', error);
+  } else {
+    console.log('FFmpeg version:', stdout);
+  }
+});
+
+function sendLog(window, type, message) {
+  if (window && !window.isDestroyed()) {
+    window.webContents.send('log', { type, message });
+  }
+}
+
+// Log ffmpeg version
+ipcMain.handle('get-ffmpeg-version', async (event) => {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
+      if (error) {
+        sendLog(event.sender.getOwnerBrowserWindow(), 'error', `Error getting ffmpeg version: ${error}`);
+        reject(error);
+      } else {
+        sendLog(event.sender.getOwnerBrowserWindow(), 'info', `FFmpeg version: ${stdout}`);
+        resolve(stdout);
+      }
+    });
+  });
+});
+
+let idleTimer;
 
 const THUMBNAIL_CACHE_DIR = path.join(
   app.getPath("userData"),
@@ -67,6 +92,7 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      enableRemoteModule: true
     },
   });
 
@@ -774,104 +800,95 @@ ipcMain.handle("open-save-dialog", async (event, type) => {
   return result.canceled ? null : result.filePath;
 });
 
-ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
+ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
+  const inputPath = path.join(settings.clipLocation, clipName);
+  const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${clipName}`);
+
   try {
-    const inputPath = path.join(settings.clipLocation, clipName);
-    const outputPath = path.join(
-      os.tmpdir(),
-      `trimmed_${Date.now()}_${clipName}`
-    );
-
-    // Adjust duration based on speed
-    const adjustedDuration = (end - start) / speed;
-
-    await new Promise((resolve, reject) => {
-      let progress = 0;
-      ffmpeg(inputPath)
-        .setStartTime(start)
-        .setDuration(adjustedDuration)
-        .audioFilters(`volume=${volume}`)
-        .videoFilters(`setpts=${1/speed}*PTS`)
-        .audioFilters(`atempo=${speed}`)
-        .outputOptions([
-          '-c:v h264_nvenc',
-          '-c:a aac',
-          '-crf 23',
-          '-preset medium',
-          '-avoid_negative_ts make_zero',
-          '-threads 0'
-        ])
-        .output(outputPath)
-        .on("progress", (info) => {
-          progress = info.percent;
-          event.sender.send("export-progress", progress);
-        })
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
-
-    if (process.platform === "win32") {
-      clipboard.writeBuffer(
-        "FileNameW",
-        Buffer.from(outputPath + "\0", "ucs2")
-      );
-    } else {
-      clipboard.writeText(outputPath);
-    }
-
+    await exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed);
     return { success: true, path: outputPath };
   } catch (error) {
-    console.error("Error in export-trimmed-video:", error);
+    console.error("Error exporting video:", error);
     return { success: false, error: error.message };
   }
 });
 
-ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
+ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
+  const inputPath = path.join(settings.clipLocation, clipName);
+  const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${clipName}`);
+
   try {
-    const inputPath = path.join(settings.clipLocation, clipName);
-    const outputPath = savePath || path.join(os.tmpdir(), `trimmed_${Date.now()}_${clipName}`);
-
-    // Adjust duration based on speed
-    const adjustedDuration = (end - start) / speed;
-
-    await new Promise((resolve, reject) => {
-      let progress = 0;
-      ffmpeg(inputPath)
-        .setStartTime(start)
-        .setDuration(adjustedDuration)
-        .audioFilters(`volume=${volume}`)
-        .videoFilters(`setpts=${1/speed}*PTS`)
-        .audioFilters(`atempo=${speed}`)
-        .outputOptions([
-          '-c:v libx264',
-          '-c:a aac',
-          '-preset medium',
-          '-avoid_negative_ts make_zero'
-        ])
-        .output(outputPath)
-        .on("progress", (info) => {
-          progress = info.percent;
-          event.sender.send("export-progress", progress);
-        })
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
-
-    if (!savePath) {
-      if (process.platform === "win32") {
-        clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
-      } else {
-        clipboard.writeText(outputPath);
-      }
-    }
-
+    await exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed);
     return { success: true, path: outputPath };
   } catch (error) {
-    console.error("Error in export-video:", error);
+    console.error("Error exporting trimmed video:", error);
     return { success: false, error: error.message };
   }
+});
+
+ipcMain.on('ffmpeg-fallback', () => {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.webContents.send('show-fallback-notice');
+  });
+});
+
+function exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed) {
+  return new Promise((resolve, reject) => {
+    const duration = end - start;
+    let usingFallback = false;
+    
+    let command = ffmpeg(inputPath)
+      .setStartTime(start)
+      .setDuration(duration)
+      .audioFilters(`volume=${volume}`)
+      .videoFilters(`setpts=${1/speed}*PTS`)
+      .audioFilters(`atempo=${speed}`);
+
+    command.outputOptions(['-c:v h264_nvenc', '-preset slow', '-crf 23'])
+      .on('start', (commandLine) => {
+        console.log('Spawned FFmpeg with command: ' + commandLine);
+      })
+      .on('progress', (progress) => {
+        ipcMain.emit('ffmpeg-progress', progress.percent);
+      })
+      .on('error', (err, stdout, stderr) => {
+        console.log('Hardware encoding failed, falling back to software encoding');
+        console.log('Error:', err.message);
+        console.log('stdout:', stdout);
+        console.log('stderr:', stderr);
+        
+        usingFallback = true;
+        ipcMain.emit('ffmpeg-fallback');
+
+        ffmpeg(inputPath)
+          .setStartTime(start)
+          .setDuration(duration)
+          .audioFilters(`volume=${volume}`)
+          .videoFilters(`setpts=${1/speed}*PTS`)
+          .audioFilters(`atempo=${speed}`)
+          .outputOptions(['-c:v libx264', '-preset medium', '-crf 23'])
+          .on('progress', (progress) => {
+            ipcMain.emit('ffmpeg-progress', progress.percent);
+          })
+          .on('end', () => resolve(usingFallback))
+          .on('error', (err, stdout, stderr) => {
+            console.error('FFmpeg error:', err.message);
+            console.error('FFmpeg stdout:', stdout);
+            console.error('FFmpeg stderr:', stderr);
+            reject(err);
+          })
+          .save(outputPath);
+      })
+      .on('end', () => resolve(usingFallback))
+      .save(outputPath);
+  });
+}
+
+ipcMain.on('ffmpeg-progress', (percent) => {
+  // Send progress to all renderer processes
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.webContents.send('export-progress', percent);
+  });
 });
 
 ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath) => {
