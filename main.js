@@ -806,6 +806,16 @@ ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed
 
   try {
     await exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed);
+    
+    // Add clipboard functionality here
+    if (!savePath) {
+      if (process.platform === "win32") {
+        clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
+      } else {
+        clipboard.writeText(outputPath);
+      }
+    }
+    
     return { success: true, path: outputPath };
   } catch (error) {
     console.error("Error exporting video:", error);
@@ -819,6 +829,14 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volum
 
   try {
     await exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed);
+    
+    // Add clipboard functionality here
+    if (process.platform === "win32") {
+      clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
+    } else {
+      clipboard.writeText(outputPath);
+    }
+    
     return { success: true, path: outputPath };
   } catch (error) {
     console.error("Error exporting trimmed video:", error);
