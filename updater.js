@@ -13,12 +13,14 @@ async function checkForUpdates() {
     const response = await axios.get(GITHUB_API_URL);
     const latestVersion = response.data.tag_name.replace('v', '');
     const currentVersion = app.getVersion();
+    const changelog = response.data.body || 'No changelog available.';
 
     if (semver.gt(latestVersion, currentVersion) && latestVersion !== settings.ignoredVersion) {
       const { response: buttonIndex, checkboxChecked } = await dialog.showMessageBox({
         type: 'info',
         title: 'Update Available',
         message: `A new version (${latestVersion}) is available. Would you like to update?`,
+        detail: `${changelog}`,
         buttons: ['Yes', 'No'],
         checkboxLabel: 'Don\'t ask me about this version again',
         checkboxChecked: false
