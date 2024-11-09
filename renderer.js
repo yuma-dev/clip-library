@@ -68,6 +68,20 @@ let clipStartTime;
 let elapsedTime = 0;
 let loadingScreen;
 
+const previewElement = document.getElementById('timeline-preview');
+const previewCanvas = document.getElementById('preview-canvas');
+const previewTimestamp = document.getElementById('preview-timestamp');
+const ctx = previewCanvas.getContext('2d');
+
+previewElement.style.display = 'none';
+let previewThrottleTimeout;
+
+// Create a temporary video element for previews
+const tempVideo = document.createElement('video');
+tempVideo.crossOrigin = 'anonymous'; // Add this line
+tempVideo.preload = 'auto';
+tempVideo.muted = true; // Add this line
+
 ipcRenderer.on('log', (event, { type, message }) => {
   console[type](`[Main Process] ${message}`);
 });
@@ -3099,8 +3113,10 @@ function updateDiscordPresenceBasedOnState() {
 
 function formatTime(seconds) {
   const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+  const remainingSeconds = Math.floor(seconds % 60);
+  const milliseconds = Math.floor((seconds % 1) * 100); // Get 2 decimal places
+  
+  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 }
 
 function updateDiscordPresence(details, state = null) {
@@ -3165,3 +3181,82 @@ function updateDiscordPresenceForClip(clip, isPlaying = true) {
     }
   }
 }
+
+// Update preview position and content
+function updatePreview(e) {
+  const rect = progressBarContainer.getBoundingClientRect();
+  const position = (e.clientX - rect.left) / rect.width;
+  const time = videoPlayer.duration * position;
+
+  // Update preview position to follow cursor immediately
+  const previewX = e.clientX - rect.left;
+  previewElement.style.left = `${previewX}px`;
+  previewElement.style.bottom = `${progressBarContainer.offsetHeight + 10}px`;
+  
+  // Update timestamp immediately
+  previewTimestamp.textContent = formatTime(time);
+
+  // Only update if video is loaded
+  if (tempVideo.readyState >= 2) {
+    // Use more efficient time seeking
+    if (Math.abs(tempVideo.currentTime - time) > 0.1) {
+      tempVideo.currentTime = time;
+    }
+  }
+}
+
+// Use a more efficient throttling mechanism
+let lastUpdateTime = 0;
+const UPDATE_INTERVAL = 16; // About 60fps
+
+progressBarContainer.addEventListener('mousemove', (e) => {
+  const now = performance.now();
+  
+  // Show preview and update position immediately
+  previewElement.style.display = 'block';
+  
+  const rect = progressBarContainer.getBoundingClientRect();
+  const previewX = e.clientX - rect.left;
+  previewElement.style.left = `${previewX}px`;
+  
+  // Throttle the heavier preview updates
+  if (now - lastUpdateTime >= UPDATE_INTERVAL) {
+      lastUpdateTime = now;
+      updatePreview(e);
+  }
+});
+
+// Optimize the seeked event handler
+tempVideo.addEventListener('seeked', () => {
+  // Use requestAnimationFrame for smoother canvas updates
+  requestAnimationFrame(() => {
+    if (tempVideo.readyState >= 2) {
+      ctx.drawImage(tempVideo, 0, 0, previewCanvas.width, previewCanvas.height);
+    }
+  });
+});
+
+
+// Add this function after tempVideo creation
+function initializePreviewVideo(videoSource) {
+    tempVideo.src = videoSource;
+    return new Promise((resolve) => {
+        tempVideo.addEventListener('loadedmetadata', () => {
+            tempVideo.width = previewCanvas.width;
+            tempVideo.height = previewCanvas.height;
+            resolve();
+        }, { once: true });
+    });
+}
+
+// Modify the video player's loadedmetadata event handler
+videoPlayer.addEventListener('loadedmetadata', async () => {
+  await initializePreviewVideo(videoPlayer.src);
+  // Hide preview by default when loading a new video
+  previewElement.style.display = 'none';
+});
+
+// Add this after the mousemove event listener for progressBarContainer
+progressBarContainer.addEventListener('mouseleave', () => {
+    previewElement.style.display = 'none';
+});
