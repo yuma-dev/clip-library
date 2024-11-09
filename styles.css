@@ -1170,3 +1170,35 @@ body.dragging {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+#timeline-preview {
+  position: absolute;
+  bottom: 100%;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 1000;
+  pointer-events: none;
+  margin-bottom: 8px;
+}
+
+#preview-canvas {
+  width: 200px;
+  height: 112.5px;
+  display: block;
+  border-radius: 4px;
+  background-color: #000;
+}
+
+#preview-timestamp {
+  position: absolute;
+  bottom: -25px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 2px 8px;
+  background: rgba(30, 30, 30, 0.95);
+  border-radius: 4px;
+  white-space: nowrap;
+}

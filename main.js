@@ -194,7 +194,6 @@ function updateDiscordPresence(details, state = null) {
     activity.state = String(state);
   }
 
-  console.log('Updating Discord presence:', activity);
   rpc.setActivity(activity).catch(error => {
     console.error('Failed to update Discord presence:', error);
   });
