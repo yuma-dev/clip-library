@@ -1202,3 +1202,41 @@ body.dragging {
   border-radius: 4px;
   white-space: nowrap;
 }
+
+.settings-row {
+  margin: 20px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.volume-slider-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-grow: 1;
+}
+
+#previewVolumeSlider {
+  flex-grow: 1;
+  height: 4px;
+  background: #555;
+  border-radius: 2px;
+  outline: none;
+}
+
+#previewVolumeSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #e0e0e0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+#previewVolumeValue {
+  min-width: 40px;
+  text-align: right;
+  color: #e0e0e0;
+}
+

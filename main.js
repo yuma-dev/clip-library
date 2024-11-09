@@ -231,6 +231,18 @@ ipcMain.handle('get-settings', () => {
   return settings;
 });
 
+ipcMain.handle('save-settings', async (event, newSettings) => {
+  try {
+    // Merge the new settings with existing ones
+    settings = { ...settings, ...newSettings };
+    await saveSettings(settings);
+    return { success: true };
+  } catch (error) {
+    console.error('Error saving settings:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 function generateThumbnailPath(clipPath) {
   const hash = crypto.createHash("md5").update(clipPath).digest("hex");
   return path.join(THUMBNAIL_CACHE_DIR, `${hash}.jpg`);
@@ -280,12 +292,17 @@ ipcMain.handle("get-clips", async () => {
           path.join(clipsFolder, file.name),
         );
 
+        // Add check for thumbnail metadata
+        const thumbnailMeta = await getThumbnailMetadata(file.name);
+        const needsThumbnailUpdate = !thumbnailMeta || thumbnailMeta.timepoint !== 'middle';
+
         return {
           originalName: file.name,
           customName: customName,
           createdAt: file.date.getTime(),
           thumbnailPath: thumbnailPath,
           isTrimmed: isTrimmed,
+          needsThumbnailUpdate: needsThumbnailUpdate
         };
       });
 
@@ -681,28 +698,104 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle("generate-thumbnail", async (event, clipName) => {
+// Add this helper function
+async function getThumbnailMetadata(clipName) {
+  const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
+  const thumbnailMetaPath = path.join(metadataFolder, `${clipName}.thumbnail`);
+  
+  try {
+    const data = await fs.readFile(thumbnailMetaPath, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('Error reading thumbnail metadata:', error);
+    return null;
+  }
+}
+
+// Add this helper function
+async function saveThumbnailMetadata(clipName, timepoint) {
+  const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
+  const thumbnailMetaPath = path.join(metadataFolder, `${clipName}.thumbnail`);
+  
+  try {
+    await fs.mkdir(metadataFolder, { recursive: true });
+    await fs.writeFile(thumbnailMetaPath, JSON.stringify({ timepoint }));
+  } catch (error) {
+    console.error('Error saving thumbnail metadata:', error);
+  }
+}
+
+ipcMain.handle("generate-thumbnail", async (event, clipName, forceMiddle = false) => {
   const clipPath = path.join(settings.clipLocation, clipName);
   const thumbnailPath = generateThumbnailPath(clipPath);
+  const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
+  const trimPath = path.join(metadataFolder, `${clipName}.trim`);
 
   try {
-    // Check if cached thumbnail exists
-    await fs.access(thumbnailPath);
-    return thumbnailPath;
-  } catch (error) {
-    console.log(`Generating new thumbnail for ${clipName}`);
-    // If thumbnail doesn't exist, generate it
+    // Get trim data if it exists
+    let startTime = null;
+    try {
+      const trimData = JSON.parse(await fs.readFile(trimPath, 'utf8'));
+      startTime = trimData.start;
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.error('Error reading trim data:', error);
+    }
+
+    // If no trim data or forceMiddle is true, get the video duration to find middle point
+    if (!startTime || forceMiddle) {
+      // Check if we already have a thumbnail from the middle
+      const thumbnailMeta = await getThumbnailMetadata(clipName);
+      if (thumbnailMeta?.timepoint === 'middle' && !forceMiddle) {
+        console.log(`Thumbnail already exists from middle for ${clipName}`);
+        return thumbnailPath;
+      }
+
+      return new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(clipPath, (err, metadata) => {
+          if (err) {
+            console.error('Error getting video duration:', err);
+            reject(err);
+            return;
+          }
+          
+          const duration = metadata.format.duration;
+          startTime = (duration / 2).toFixed(3);
+          
+          // Generate thumbnail at calculated time
+          ffmpeg(clipPath)
+            .screenshots({
+              count: 1,
+              timemarks: [startTime],
+              folder: path.dirname(thumbnailPath),
+              filename: path.basename(thumbnailPath),
+              size: "640x360",
+            })
+            .on("end", async () => {
+              console.log(`Thumbnail generated successfully for ${clipName} at ${startTime}`);
+              await saveThumbnailMetadata(clipName, 'middle');
+              resolve(thumbnailPath);
+            })
+            .on("error", (err) => {
+              console.error(`Error generating thumbnail for ${clipName}:`, err);
+              reject(err);
+            });
+        });
+      });
+    }
+
+    // For trim points, save the actual time
     return new Promise((resolve, reject) => {
       ffmpeg(clipPath)
         .screenshots({
           count: 1,
-          timemarks: ["00:00:00"],
+          timemarks: [startTime],
           folder: path.dirname(thumbnailPath),
           filename: path.basename(thumbnailPath),
           size: "640x360",
         })
-        .on("end", () => {
+        .on("end", async () => {
           console.log(`Thumbnail generated successfully for ${clipName}`);
+          await saveThumbnailMetadata(clipName, startTime);
           resolve(thumbnailPath);
         })
         .on("error", (err) => {
@@ -710,6 +803,9 @@ ipcMain.handle("generate-thumbnail", async (event, clipName) => {
           reject(err);
         });
     });
+  } catch (error) {
+    console.error(`Error in generate-thumbnail for ${clipName}:`, error);
+    throw error;
   }
 });
 

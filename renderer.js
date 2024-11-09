@@ -1,6 +1,7 @@
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
+const fs = require("fs").promises;
 
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
@@ -95,10 +96,27 @@ settingsModal.innerHTML = `
     <p>Current clip location: <span id="currentClipLocation"></span></p>
     <button id="changeLocationBtn">Change Location</button>
     <button id="manageTagsBtn">Manage Tags</button>
+    
     <div class="settings-row">
       <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
       <input type="checkbox" id="enableDiscordRPC">
     </div>
+
+    <div class="settings-row">
+      <label for="previewVolume">Preview Volume:</label>
+      <div class="volume-slider-container">
+        <input 
+          type="range" 
+          id="previewVolumeSlider" 
+          min="0" 
+          max="1" 
+          step="0.01" 
+          value="${settings?.previewVolume ?? 0.1}"
+        >
+        <span id="previewVolumeValue">${Math.round((settings?.previewVolume ?? 0.1) * 100)}%</span>
+      </div>
+    </div>
+
     <button id="closeSettingsBtn">Close</button>
     <p id="app-version"></p>
   </div>
@@ -158,7 +176,7 @@ async function loadClips() {
     ipcRenderer.on(
       "thumbnail-generated",
       (event, { clipName, thumbnailPath }) => {
-        updateClipThumbnail(clipName, thumbnailPath);
+        updateClipThumbnailInGrid(clipName, thumbnailPath);
       },
     );
     console.log("Clips loaded and rendered.");
@@ -310,7 +328,7 @@ ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
 });
 
 ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
-  updateClipThumbnail(clipName, thumbnailPath);
+  updateClipThumbnailInGrid(clipName, thumbnailPath);
 });
 
 async function getFfmpegVersion() {
@@ -318,22 +336,6 @@ async function getFfmpegVersion() {
     await ipcRenderer.invoke('get-ffmpeg-version');
   } catch (error) {
     console.error('Failed to get FFmpeg version:', error);
-  }
-}
-
-function updateClipThumbnail(clipName, thumbnailPath) {
-  const clipElement = document.querySelector(
-    `.clip-item[data-original-name="${clipName}"]`,
-  );
-  if (clipElement) {
-    const imgElement = clipElement.querySelector("img");
-    if (imgElement) {
-      imgElement.src = `file://${thumbnailPath}`;
-    } else {
-      console.warn(`Image element not found for clip: ${clipName}`);
-    }
-  } else {
-    console.warn(`Clip element not found for: ${clipName}`);
   }
 }
 
@@ -1185,6 +1187,38 @@ document.addEventListener("DOMContentLoaded", () => {
   updateDiscordPresence('Browsing clips', `Total clips: ${currentClipList.length}`);
 
   loadingScreen = document.getElementById('loading-screen');
+
+  // Add this after your other settings event listeners
+  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+  const previewVolumeValue = document.getElementById('previewVolumeValue');
+
+  previewVolumeSlider.addEventListener('input', async (e) => {
+    const value = parseFloat(e.target.value);
+    previewVolumeValue.textContent = `${Math.round(value * 100)}%`;
+    
+    // Update settings
+    settings.previewVolume = value;
+    await ipcRenderer.invoke('save-settings', settings);
+  });
+
+  // Update the settings loading code to ensure the slider reflects the saved value
+  async function loadSettings() {
+    settings = await ipcRenderer.invoke('get-settings');
+    
+    // Update existing settings controls
+    const discordRPCCheckbox = document.getElementById('enableDiscordRPC');
+    if (discordRPCCheckbox) {
+      discordRPCCheckbox.checked = settings.enableDiscordRPC;
+    }
+    
+    // Update preview volume slider
+    const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+    const previewVolumeValue = document.getElementById('previewVolumeValue');
+    if (previewVolumeSlider && previewVolumeValue) {
+      previewVolumeSlider.value = settings.previewVolume;
+      previewVolumeValue.textContent = `${Math.round(settings.previewVolume * 100)}%`;
+    }
+  }
 });
 
 async function saveSpeed(clipName, speed) {
@@ -1496,9 +1530,9 @@ function createClipElement(clip) {
       </div>
     `;
 
-    let hoverTimeout;
-    let videoElement;
-    let playPromise;
+    let hoverTimeout = null;
+    let videoElement = null;
+    let playPromise = null;
     let isVideoPlaying = false;
 
     const clipNameElement = clipElement.querySelector('.clip-name');
@@ -1537,11 +1571,12 @@ function createClipElement(clip) {
     }
 
     function cleanupVideoPreview() {
-      clearTimeout(hoverTimeout);
+      if (hoverTimeout) {
+        clearTimeout(hoverTimeout);
+        hoverTimeout = null;
+      }
       if (videoElement) {
         videoElement.pause();
-        videoElement.removeAttribute('src'); // Empty source
-        videoElement.load(); // Reset the video element
         videoElement.remove();
         videoElement = null;
       }
@@ -1554,44 +1589,107 @@ function createClipElement(clip) {
 
     function handleMouseEnter() {
       if (clipElement.classList.contains("video-preview-disabled")) return;
-      cleanupVideoPreview(); // Always cleanup before starting a new preview
-      hoverTimeout = setTimeout(() => {
-        if (!clipElement.matches(':hover')) return; // Exit if mouse is no longer over the element
+      
+      cleanupVideoPreview();
+      
+      hoverTimeout = setTimeout(async () => {
+        try {
+          if (!clipElement.matches(':hover')) return;
 
-        videoElement = document.createElement("video");
-        videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
-        videoElement.muted = true;
-        videoElement.loop = true;
-        videoElement.preload = "metadata";
-        videoElement.style.zIndex = "1";
+          videoElement = document.createElement("video");
+          if (!videoElement) return;
 
-        const mediaContainer = clipElement.querySelector(".clip-item-media-container");
-        const imgElement = mediaContainer.querySelector("img");
-        videoElement.poster = imgElement.src;
+          videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
+          videoElement.muted = false;
+          videoElement.loop = true;
+          videoElement.preload = "metadata";
+          videoElement.style.zIndex = "1";
+          videoElement.style.display = "none"; // Start hidden
+          
+          const previewVolume = settings?.previewVolume ?? 0.1;
+          videoElement.volume = Math.min(Math.max(previewVolume, 0), 1);
 
-        videoElement.addEventListener('loadedmetadata', () => {
-          if (clipElement.matches(':hover')) {
-            imgElement.style.display = "none";
-            videoElement.currentTime = clip.isTrimmed ? window.trimStartTime || 0 : 0;
-            videoElement.play().then(() => {
-              isVideoPlaying = true;
-            }).catch((error) => {
-              if (error.name !== "AbortError") {
-                console.error("Error playing video:", error);
+          const mediaContainer = clipElement.querySelector(".clip-item-media-container");
+          if (!mediaContainer) return;
+
+          const imgElement = mediaContainer.querySelector("img");
+          if (!imgElement) return;
+
+          videoElement.poster = imgElement.src;
+
+          // Append video element immediately but keep it hidden
+          mediaContainer.appendChild(videoElement);
+
+          const metadataLoaded = new Promise((resolve) => {
+            videoElement.addEventListener('loadedmetadata', resolve, { once: true });
+          });
+
+          if (clip.isTrimmed) {
+            try {
+              const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+              await metadataLoaded;
+
+              if (!clipElement.matches(':hover') || !videoElement) {
+                cleanupVideoPreview();
+                return;
               }
-              cleanupVideoPreview();
-            });
-          } else {
-            cleanupVideoPreview();
-          }
-        });
 
-        mediaContainer.appendChild(videoElement);
+              if (trimData) {
+                videoElement.currentTime = parseFloat(trimData.start) || 0;
+              }
+              // Wait for the correct frame to be loaded
+              await new Promise(resolve => {
+                videoElement.addEventListener('seeked', resolve, { once: true });
+              });
+              
+              if (!clipElement.matches(':hover') || !videoElement) {
+                cleanupVideoPreview();
+                return;
+              }
+
+              // Only hide image and show video when everything is ready
+              imgElement.style.display = "none";
+              videoElement.style.display = "block";
+              await videoElement.play();
+            } catch (error) {
+              console.error("Error getting trim data:", error);
+              cleanupVideoPreview();
+              return;
+            }
+          } else {
+            await metadataLoaded;
+
+            if (!clipElement.matches(':hover') || !videoElement) {
+              cleanupVideoPreview();
+              return;
+            }
+
+            // Start playback from middle for clips with no trim data
+            videoElement.currentTime = videoElement.duration / 2;
+            // Wait for the first frame to be loaded
+            await new Promise(resolve => {
+              videoElement.addEventListener('seeked', resolve, { once: true });
+            });
+            
+            if (!clipElement.matches(':hover') || !videoElement) {
+              cleanupVideoPreview();
+              return;
+            }
+
+            // Only hide image and show video when everything is ready
+            imgElement.style.display = "none";
+            videoElement.style.display = "block";
+            await videoElement.play();
+          }
+
+        } catch (error) {
+          console.error("Error in handleMouseEnter:", error);
+          cleanupVideoPreview();
+        }
       }, 100);
     }
 
     function handleMouseLeave() {
-      if (clipElement.classList.contains("video-preview-disabled")) return;
       cleanupVideoPreview();
     }
 
@@ -1613,6 +1711,18 @@ function createClipElement(clip) {
       clipElement.removeEventListener("mouseenter", handleMouseEnter);
       clipElement.removeEventListener("mouseleave", handleMouseLeave);
     };
+
+    const MIDDLE_THUMBNAIL_UPDATE_DATE = '2024-11-09'; // Date when this feature was added
+
+    if (!clip.isTrimmed && (!clip.thumbnailCreatedAt || 
+        new Date(clip.thumbnailCreatedAt) < new Date(MIDDLE_THUMBNAIL_UPDATE_DATE))) {
+      // Old thumbnail or no creation date, needs update
+      await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
+    } else if (clip.thumbnailCreatedAt && clip.trimDataUpdatedAt && 
+        new Date(clip.thumbnailCreatedAt) < new Date(clip.trimDataUpdatedAt)) {
+      // Thumbnail is older than trim data, needs update
+      await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
+    }
 
     resolve(clipElement);
   });
@@ -2122,16 +2232,16 @@ async function openClip(originalName, customName) {
   let startTime;
   if (trimData) {
     startTime = trimData.start;
+    trimStartTime = trimData.start;
     trimEndTime = trimData.end;
   } else {
-    if (clipInfo.format.duration > 40) {
-      startTime = clipInfo.format.duration / 2;
-    } else {
-      startTime = 0;
-    }
+    // Set trim points to full duration
+    trimStartTime = 0;
     trimEndTime = clipInfo.format.duration;
+    
+    // Only adjust playback position, not trim points
+    startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
   }
-  trimStartTime = startTime;
 
   videoPlayer.preload = "auto";
   videoPlayer.autoplay = true;
@@ -2171,14 +2281,6 @@ async function openClip(originalName, customName) {
 
   document.addEventListener("keydown", handleKeyPress);
   document.addEventListener("keyup", handleKeyRelease);
-
-  if (trimData) {
-    trimStartTime = trimData.start;
-    trimEndTime = trimData.end;
-  } else {
-    trimStartTime = 0;
-    trimEndTime = clipInfo.format.duration;
-  }
 
   // Update the clip duration in the allClips array
   const clipIndex = allClips.findIndex(
@@ -2843,13 +2945,41 @@ async function saveTrimChanges() {
         trimEndTime,
       );
       console.log("Trim data saved successfully");
+      
+      // Get the thumbnail path
+      const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", currentClip.originalName);
+      
+      // Get the trim data file path
+      const trimPath = path.join(settings.clipLocation, ".clip_metadata", `${currentClip.originalName}.trim`);
+      
+      try {
+        // Get the timestamp when the thumbnail was last modified
+        const thumbnailStat = await fs.stat(thumbnailPath);
+        const trimStat = await fs.stat(trimPath);
+
+        // Check if trim data is newer than thumbnail
+        if (trimStat.mtime > thumbnailStat.mtime) {
+          console.log(`Regenerating thumbnail for ${currentClip.originalName} due to newer trim data`);
+          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", currentClip.originalName);
+          updateClipThumbnailInGrid(currentClip.originalName, newThumbnailPath);
+        }
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          // Thumbnail doesn't exist, generate it
+          console.log(`Generating new thumbnail for ${currentClip.originalName}`);
+          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", currentClip.originalName);
+          updateClipThumbnailInGrid(currentClip.originalName, newThumbnailPath);
+        } else {
+          throw error;
+        }
+      }
+      
       await updateClipDisplay(currentClip.originalName);
       updateDiscordPresence('Editing a clip', currentClip.customName);
     } catch (error) {
       console.error("Error saving trim data:", error);
-      // Optionally, you can show an error message to the user here
     }
-  }, 500); // 500ms debounce
+  }, 500);
 }
 
 let saveTitleTimeout = null;
@@ -3260,3 +3390,68 @@ videoPlayer.addEventListener('loadedmetadata', async () => {
 progressBarContainer.addEventListener('mouseleave', () => {
     previewElement.style.display = 'none';
 });
+
+async function checkAndUpdateThumbnails() {
+  const clips = await ipcRenderer.invoke("get-clips");
+  
+  for (const clip of clips) {
+    if (clip.isTrimmed) {
+      try {
+        // Get current trim data
+        const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+        if (!trimData) continue;
+
+        // Get the thumbnail path using the IPC handler
+        const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", clip.originalName);
+        
+        // Get the timestamp when the thumbnail was last modified
+        let thumbnailStat;
+        try {
+          thumbnailStat = await fs.stat(thumbnailPath);
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            // Thumbnail doesn't exist, generate it
+            const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
+            updateClipThumbnailInGrid(clip.originalName, newThumbnailPath);
+            continue;
+          }
+          throw error;
+        }
+
+        // Get the timestamp when the trim data was last modified
+        const trimPath = path.join(settings.clipLocation, ".clip_metadata", `${clip.originalName}.trim`);
+        const trimStat = await fs.stat(trimPath);
+
+        // Only regenerate thumbnail if trim data is newer than the thumbnail
+        if (trimStat.mtime > thumbnailStat.mtime) {
+          console.log(`Regenerating thumbnail for ${clip.originalName} due to newer trim data`);
+          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
+          updateClipThumbnailInGrid(clip.originalName, newThumbnailPath);
+        }
+      } catch (error) {
+        console.error(`Error checking/updating thumbnail for ${clip.originalName}:`, error);
+      }
+    }
+  }
+}
+
+// Call this function when the app starts and after any trim operations
+document.addEventListener('DOMContentLoaded', checkAndUpdateThumbnails);
+
+// Add this function to handle thumbnail updates
+function updateClipThumbnailInGrid(clipName, thumbnailPath) {
+  const clipElement = document.querySelector(`[data-original-name="${clipName}"]`);
+  if (clipElement) {
+    const imgElement = clipElement.querySelector('.clip-item-media-container img');
+    if (imgElement) {
+      // Create a new image element
+      const newImg = new Image();
+      newImg.onload = () => {
+        // Add timestamp to force browser to reload the image
+        imgElement.src = `file://${thumbnailPath}?t=${Date.now()}`;
+      };
+      // Also add timestamp to the new image source
+      newImg.src = `file://${thumbnailPath}?t=${Date.now()}`;
+    }
+  }
+}
