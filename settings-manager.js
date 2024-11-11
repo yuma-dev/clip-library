@@ -8,15 +8,14 @@ const DEFAULT_SETTINGS = {
   clipLocation: app.getPath('videos'),
   enableDiscordRPC: false,
   ignoredVersion: null,
-  previewVolume: 0.1 // 10% volume
+  previewVolume: 0.1,
+  thumbnailMigrationCompleted: false
 };
 
 async function loadSettings() {
   try {
-    const data = await fs.readFile(SETTINGS_FILE, 'utf8');
-    const userSettings = JSON.parse(data);
-    // Merge with default settings to ensure all properties exist
-    return { ...DEFAULT_SETTINGS, ...userSettings };
+    const settings = await fs.readFile(SETTINGS_FILE, 'utf8');
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(settings) };
   } catch (error) {
     if (error.code === 'ENOENT') {
       return DEFAULT_SETTINGS;

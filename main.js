@@ -653,36 +653,89 @@ ipcMain.handle(
       const clipName = clipNames[i];
       const clipPath = path.join(settings.clipLocation, clipName);
       const thumbnailPath = generateThumbnailPath(clipPath);
+      const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
+      const trimPath = path.join(metadataFolder, `${clipName}.trim`);
 
       try {
+        // Check if thumbnail exists
         await fs.access(thumbnailPath);
-        // Thumbnail exists, skip generation
+        
+        // If thumbnail exists, just send it
         event.sender.send("thumbnail-generated", { clipName, thumbnailPath });
       } catch (error) {
-        // Thumbnail doesn't exist, generate it
+        // Thumbnail doesn't exist, check for trim data first
         try {
+          let startTime = null;
+          
+          // Try to get trim data
+          try {
+            const trimData = JSON.parse(await fs.readFile(trimPath, 'utf8'));
+            startTime = trimData.start;
+          } catch (trimError) {
+            if (trimError.code !== 'ENOENT') {
+              console.error('Error reading trim data:', trimError);
+            }
+            // No trim data, will use middle point
+          }
+
           await new Promise((resolve, reject) => {
-            ffmpeg(clipPath)
-              .outputOptions(['-frames:v 1']) // Capture only the first frame
-              .output(thumbnailPath)
-              .size('640x360')
-              .on("end", () => {
-                event.sender.send("thumbnail-generated", {
-                  clipName,
-                  thumbnailPath,
+            ffmpeg.ffprobe(clipPath, (err, metadata) => {
+              if (err) {
+                console.error('Error getting video duration:', err);
+                reject(err);
+                return;
+              }
+              
+              // Use trim start time if available, otherwise use middle point
+              const timepoint = startTime !== null ? startTime : 
+                (metadata.format.duration / 2).toFixed(3);
+              
+              ffmpeg(clipPath)
+                .screenshots({
+                  count: 1,
+                  timemarks: [timepoint],
+                  folder: path.dirname(thumbnailPath),
+                  filename: path.basename(thumbnailPath),
+                  size: '640x360'
+                })
+                .on("end", async () => {
+                  await saveThumbnailMetadata(clipName, startTime !== null ? 'trim' : 'middle');
+                  event.sender.send("thumbnail-generated", {
+                    clipName,
+                    thumbnailPath,
+                  });
+                  resolve();
+                })
+                .on("error", async (err) => {
+                  console.error(`Error generating thumbnail for ${clipName}:`, err);
+                  
+                  // Fallback to start of video
+                  ffmpeg(clipPath)
+                    .screenshots({
+                      count: 1,
+                      timemarks: ['0'],
+                      folder: path.dirname(thumbnailPath),
+                      filename: path.basename(thumbnailPath),
+                      size: '640x360'
+                    })
+                    .on("end", async () => {
+                      await saveThumbnailMetadata(clipName, 'start');
+                      event.sender.send("thumbnail-generated", {
+                        clipName,
+                        thumbnailPath,
+                      });
+                      resolve();
+                    })
+                    .on("error", (fallbackErr) => {
+                      console.error(`Fallback thumbnail generation failed for ${clipName}:`, fallbackErr);
+                      event.sender.send("thumbnail-generation-failed", {
+                        clipName,
+                        error: fallbackErr.message,
+                      });
+                      resolve();
+                    });
                 });
-                resolve();
-              })
-              .on("error", (err) => {
-                console.error(`Error generating thumbnail for ${clipName}:`, err);
-                // Send a message to indicate the thumbnail generation failed
-                event.sender.send("thumbnail-generation-failed", {
-                  clipName,
-                  error: err.message,
-                });
-                resolve(); // Resolve promise to continue with next thumbnail
-              })
-              .run();
+            });
           });
         } catch (err) {
           console.error(`Unexpected error for ${clipName}:`, err);
@@ -695,7 +748,7 @@ ipcMain.handle(
         total: clipNames.length,
       });
     }
-  },
+  }
 );
 
 // Add this helper function
@@ -705,9 +758,22 @@ async function getThumbnailMetadata(clipName) {
   
   try {
     const data = await fs.readFile(thumbnailMetaPath, 'utf8');
-    return JSON.parse(data);
+    // Check if the data is empty or whitespace only
+    if (!data || data.trim() === '') {
+      return null;
+    }
+    try {
+      return JSON.parse(data);
+    } catch (parseError) {
+      console.error(`Invalid JSON in thumbnail metadata for ${clipName}:`, parseError);
+      // Delete the invalid metadata file
+      await fs.unlink(thumbnailMetaPath).catch(console.error);
+      return null;
+    }
   } catch (error) {
-    if (error.code !== 'ENOENT') console.error('Error reading thumbnail metadata:', error);
+    if (error.code !== 'ENOENT') {
+      console.error('Error reading thumbnail metadata:', error);
+    }
     return null;
   }
 }
@@ -773,6 +839,7 @@ ipcMain.handle("generate-thumbnail", async (event, clipName, forceMiddle = false
             .on("end", async () => {
               console.log(`Thumbnail generated successfully for ${clipName} at ${startTime}`);
               await saveThumbnailMetadata(clipName, 'middle');
+              event.sender.send("thumbnail-generated", { clipName, thumbnailPath });
               resolve(thumbnailPath);
             })
             .on("error", (err) => {
@@ -796,6 +863,7 @@ ipcMain.handle("generate-thumbnail", async (event, clipName, forceMiddle = false
         .on("end", async () => {
           console.log(`Thumbnail generated successfully for ${clipName}`);
           await saveThumbnailMetadata(clipName, startTime);
+          event.sender.send("thumbnail-generated", { clipName, thumbnailPath });
           resolve(thumbnailPath);
         })
         .on("error", (err) => {

@@ -162,6 +162,31 @@ async function loadClips() {
     setupClipTitleEditing();
     validateClipLists();
 
+    settings = await ipcRenderer.invoke('get-settings');
+    if (!settings.thumbnailMigrationCompleted) {
+      const clipsNeedingUpdate = allClips.filter(clip => {
+        const MIDDLE_THUMBNAIL_UPDATE_DATE = '2024-11-10';
+        return (!clip.isTrimmed && (!clip.thumbnailCreatedAt || 
+            new Date(clip.thumbnailCreatedAt) < new Date(MIDDLE_THUMBNAIL_UPDATE_DATE))) ||
+            (clip.thumbnailCreatedAt && clip.trimDataUpdatedAt && 
+            new Date(clip.thumbnailCreatedAt) < new Date(clip.trimDataUpdatedAt));
+      });
+
+      if (clipsNeedingUpdate.length > 0) {
+        showMigrationMessage(`Updating ${clipsNeedingUpdate.length} thumbnails, this may take a while...`);
+        
+        // Process thumbnail updates
+        for (let clip of clipsNeedingUpdate) {
+          await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
+        }
+        
+        hideMigrationMessage();
+      }
+
+      // Mark migration as completed
+      await ipcRenderer.invoke('save-settings', { ...settings, thumbnailMigrationCompleted: true });
+    }
+
     // Start progressive thumbnail generation
     const clipNames = allClips.map((clip) => clip.originalName);
 
@@ -190,6 +215,33 @@ async function loadClips() {
     currentClipLocationSpan.textContent = "Error: Unable to load location";
     hideThumbnailGenerationText();
     hideLoadingScreen();
+  }
+}
+
+function showMigrationMessage(message) {
+  let migrationElement = document.getElementById("migration-message");
+  if (!migrationElement) {
+    migrationElement = document.createElement("div");
+    migrationElement.id = "migration-message";
+    migrationElement.style.position = "fixed";
+    migrationElement.style.top = "50%";
+    migrationElement.style.left = "50%";
+    migrationElement.style.transform = "translate(-50%, -50%)";
+    migrationElement.style.backgroundColor = "rgba(0, 0, 0, 0.8)";
+    migrationElement.style.color = "white";
+    migrationElement.style.padding = "20px";
+    migrationElement.style.borderRadius = "10px";
+    migrationElement.style.zIndex = "10000";
+    migrationElement.style.textAlign = "center";
+    document.body.appendChild(migrationElement);
+  }
+  migrationElement.textContent = message;
+}
+
+function hideMigrationMessage() {
+  const migrationElement = document.getElementById("migration-message");
+  if (migrationElement) {
+    migrationElement.remove();
   }
 }
 
@@ -240,8 +292,9 @@ async function addNewClipToLibrary(fileName) {
     }
   }
   
+  // Generate thumbnail from the middle of the video
   console.log(`Requesting thumbnail generation for: ${fileName}`);
-  ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
+  await ipcRenderer.invoke('generate-thumbnail', fileName, true); // Added true for forceMiddle
   updateFilterDropdown();
 }
 
@@ -1711,18 +1764,6 @@ function createClipElement(clip) {
       clipElement.removeEventListener("mouseenter", handleMouseEnter);
       clipElement.removeEventListener("mouseleave", handleMouseLeave);
     };
-
-    const MIDDLE_THUMBNAIL_UPDATE_DATE = '2024-11-09'; // Date when this feature was added
-
-    if (!clip.isTrimmed && (!clip.thumbnailCreatedAt || 
-        new Date(clip.thumbnailCreatedAt) < new Date(MIDDLE_THUMBNAIL_UPDATE_DATE))) {
-      // Old thumbnail or no creation date, needs update
-      await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
-    } else if (clip.thumbnailCreatedAt && clip.trimDataUpdatedAt && 
-        new Date(clip.thumbnailCreatedAt) < new Date(clip.trimDataUpdatedAt)) {
-      // Thumbnail is older than trim data, needs update
-      await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
-    }
 
     resolve(clipElement);
   });
@@ -3440,18 +3481,32 @@ document.addEventListener('DOMContentLoaded', checkAndUpdateThumbnails);
 
 // Add this function to handle thumbnail updates
 function updateClipThumbnailInGrid(clipName, thumbnailPath) {
+  console.log(`Updating thumbnail for ${clipName} at ${thumbnailPath}`);
   const clipElement = document.querySelector(`[data-original-name="${clipName}"]`);
-  if (clipElement) {
-    const imgElement = clipElement.querySelector('.clip-item-media-container img');
-    if (imgElement) {
-      // Create a new image element
-      const newImg = new Image();
-      newImg.onload = () => {
-        // Add timestamp to force browser to reload the image
-        imgElement.src = `file://${thumbnailPath}?t=${Date.now()}`;
-      };
-      // Also add timestamp to the new image source
-      newImg.src = `file://${thumbnailPath}?t=${Date.now()}`;
+  if (!clipElement) return;
+
+  const mediaContainer = clipElement.querySelector('.clip-item-media-container');
+  if (!mediaContainer) return;
+
+  // Create a new image element
+  const newImg = new Image();
+  
+  newImg.onload = () => {
+    // Find the existing image
+    const existingImg = mediaContainer.querySelector('img');
+    if (existingImg) {
+      existingImg.src = newImg.src;
     }
-  }
+    
+    // Re-add hover effect handlers
+    clipElement.addEventListener('mouseenter', handleMouseEnter);
+    clipElement.addEventListener('mouseleave', handleMouseLeave);
+    clipElement.addEventListener('mousemove', handleOnMouseMove);
+  };
+
+  newImg.onerror = () => {
+    console.error(`Failed to load thumbnail for ${clipName}`);
+  };
+
+  newImg.src = `file://${thumbnailPath}?t=${Date.now()}`;
 }
