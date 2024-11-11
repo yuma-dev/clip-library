@@ -2342,6 +2342,7 @@ async function openClip(originalName, customName) {
   videoPlayer.addEventListener("waiting", showLoadingOverlay);
   videoPlayer.addEventListener("playing", hideLoadingOverlay);
   videoPlayer.addEventListener("seeked", handleVideoSeeked);
+  videoPlayer.addEventListener("ended", handleVideoEnded);
 
   setupClipTitleEditing();
 
@@ -2390,7 +2391,7 @@ async function openClip(originalName, customName) {
     controlsTimeout = setTimeout(hideControls, 3000);
     resetControlsTimeout();
   });
-
+  
   videoControls.addEventListener("mouseenter", () => {
     isMouseOverControls = true;
     showControls();
@@ -2432,6 +2433,7 @@ async function openClip(originalName, customName) {
     videoPlayer.removeEventListener("waiting", showLoadingOverlay);
     videoPlayer.removeEventListener("playing", hideLoadingOverlay);
     videoPlayer.removeEventListener("seeked", handleVideoSeeked);
+    videoPlayer.removeEventListener("ended", handleVideoEnded);
     playerOverlay.removeEventListener("click", handleOverlayClick);
   };
 
@@ -2483,6 +2485,11 @@ function handleVideoSeeked() {
       updateDiscordPresenceForClip(currentClip, !videoPlayer.paused);
     }
   }
+}
+
+function handleVideoEnded() {
+  videoPlayer.currentTime = trimStartTime;
+  videoPlayer.pause();
 }
 
 function handleVideoCanPlay() {
@@ -2793,6 +2800,10 @@ function setTrimPoint(point) {
 function togglePlayPause() {
   if (!isVideoInFullscreen(videoPlayer)) {
     if (videoPlayer.paused) {
+      // Check if we're at the end and reset to start trim point if needed
+      if (videoPlayer.currentTime >= trimEndTime) {
+        videoPlayer.currentTime = trimStartTime;
+      }
       videoPlayer.play();
       isPlaying = true;
     } else {
