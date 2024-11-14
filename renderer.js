@@ -75,7 +75,11 @@ const previewTimestamp = document.getElementById('preview-timestamp');
 const ctx = previewCanvas.getContext('2d');
 
 previewElement.style.display = 'none';
-let previewThrottleTimeout;
+
+function logStackTrace(message) {
+  console.log(message);
+  console.log(new Error().stack);
+}
 
 // Create a temporary video element for previews
 const tempVideo = document.createElement('video');
@@ -86,6 +90,11 @@ tempVideo.muted = true; // Add this line
 ipcRenderer.on('log', (event, { type, message }) => {
   console[type](`[Main Process] ${message}`);
 });
+
+async function requestThumbnailGeneration(clipName, forceMiddle = false) {
+  logStackTrace(`Requesting thumbnail generation for ${clipName} (forceMiddle: ${forceMiddle})`);
+  await requestThumbnailGeneration(clipName, forceMiddle);
+}
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
@@ -162,35 +171,27 @@ async function loadClips() {
     setupClipTitleEditing();
     validateClipLists();
 
-    settings = await ipcRenderer.invoke('get-settings');
-    if (!settings.thumbnailMigrationCompleted) {
-      const clipsNeedingUpdate = allClips.filter(clip => {
-        const MIDDLE_THUMBNAIL_UPDATE_DATE = '2024-11-10';
-        return (!clip.isTrimmed && (!clip.thumbnailCreatedAt || 
-            new Date(clip.thumbnailCreatedAt) < new Date(MIDDLE_THUMBNAIL_UPDATE_DATE))) ||
-            (clip.thumbnailCreatedAt && clip.trimDataUpdatedAt && 
-            new Date(clip.thumbnailCreatedAt) < new Date(clip.trimDataUpdatedAt));
-      });
-
-      if (clipsNeedingUpdate.length > 0) {
-        showMigrationMessage(`Updating ${clipsNeedingUpdate.length} thumbnails, this may take a while...`);
-        
-        // Process thumbnail updates
-        for (let clip of clipsNeedingUpdate) {
-          await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
-        }
-        
-        hideMigrationMessage();
-      }
-
-      // Mark migration as completed
-      await ipcRenderer.invoke('save-settings', { ...settings, thumbnailMigrationCompleted: true });
-    }
-
     // Start progressive thumbnail generation
     const clipNames = allClips.map((clip) => clip.originalName);
 
-    ipcRenderer.invoke("generate-thumbnails-progressively", clipNames);
+    // Filter clips that actually need thumbnail generation
+    const clipsNeedingThumbnails = allClips.filter(clip => {
+      const needsUpdate = clip.needsThumbnailUpdate;
+      if (needsUpdate) {
+          console.log(`Clip ${clip.originalName} needs thumbnail update because:`, clip.thumbnailUpdateReason);
+      }
+      return needsUpdate;
+    });
+    
+    if (clipsNeedingThumbnails.length > 0) {
+      console.log('Clips needing thumbnails:', clipsNeedingThumbnails.map(c => ({
+          name: c.originalName,
+          reason: c.thumbnailUpdateReason
+      })));
+      console.log(`Generating thumbnails for ${clipsNeedingThumbnails.length} clips`);
+      const clipNames = clipsNeedingThumbnails.map(clip => clip.originalName);
+      ipcRenderer.invoke("generate-thumbnails-progressively", clipNames);
+    }
 
     // Listen for thumbnail generation progress
     ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
@@ -291,10 +292,13 @@ async function addNewClipToLibrary(fileName) {
       existingElement.replaceWith(updatedElement);
     }
   }
+
+  const thumbnailStatus = await ipcRenderer.invoke('check-thumbnail-status', fileName);
+  if (thumbnailStatus.needsUpdate) {
+      console.log(`Requesting thumbnail generation for ${fileName} - Reason: ${thumbnailStatus.reason}`);
+      await requestThumbnailGeneration(fileName, thumbnailStatus.reason === 'needs middle point');
+  }
   
-  // Generate thumbnail from the middle of the video
-  console.log(`Requesting thumbnail generation for: ${fileName}`);
-  await ipcRenderer.invoke('generate-thumbnail', fileName, true); // Added true for forceMiddle
   updateFilterDropdown();
 }
 
@@ -2984,6 +2988,14 @@ async function updateClipDisplay(originalName) {
 async function saveTrimChanges() {
   if (!currentClip) return;
 
+  // Capture necessary data immediately
+  const clipInfo = {
+    originalName: currentClip.originalName,
+    customName: currentClip.customName
+  };
+  const currentTrimStart = trimStartTime;
+  const currentTrimEnd = trimEndTime;
+
   if (saveTrimTimeout) {
     clearTimeout(saveTrimTimeout);
   }
@@ -2992,17 +3004,17 @@ async function saveTrimChanges() {
     try {
       await ipcRenderer.invoke(
         "save-trim",
-        currentClip.originalName,
-        trimStartTime,
-        trimEndTime,
+        clipInfo.originalName,
+        currentTrimStart,
+        currentTrimEnd,
       );
       console.log("Trim data saved successfully");
       
       // Get the thumbnail path
-      const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", currentClip.originalName);
+      const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", clipInfo.originalName);
       
       // Get the trim data file path
-      const trimPath = path.join(settings.clipLocation, ".clip_metadata", `${currentClip.originalName}.trim`);
+      const trimPath = path.join(settings.clipLocation, ".clip_metadata", `${clipInfo.originalName}.trim`);
       
       try {
         // Get the timestamp when the thumbnail was last modified
@@ -3011,23 +3023,23 @@ async function saveTrimChanges() {
 
         // Check if trim data is newer than thumbnail
         if (trimStat.mtime > thumbnailStat.mtime) {
-          console.log(`Regenerating thumbnail for ${currentClip.originalName} due to newer trim data`);
-          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", currentClip.originalName);
-          updateClipThumbnailInGrid(currentClip.originalName, newThumbnailPath);
+          console.log(`Regenerating thumbnail for ${clipInfo.originalName} due to newer trim data`);
+          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", clipInfo.originalName);
+          updateClipThumbnailInGrid(clipInfo.originalName, newThumbnailPath);
         }
       } catch (error) {
         if (error.code === 'ENOENT') {
           // Thumbnail doesn't exist, generate it
-          console.log(`Generating new thumbnail for ${currentClip.originalName}`);
-          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", currentClip.originalName);
-          updateClipThumbnailInGrid(currentClip.originalName, newThumbnailPath);
+          console.log(`Generating new thumbnail for ${clipInfo.originalName}`);
+          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", clipInfo.originalName);
+          updateClipThumbnailInGrid(clipInfo.originalName, newThumbnailPath);
         } else {
           throw error;
         }
       }
       
-      await updateClipDisplay(currentClip.originalName);
-      updateDiscordPresence('Editing a clip', currentClip.customName);
+      await updateClipDisplay(clipInfo.originalName);
+      updateDiscordPresence('Editing a clip', clipInfo.customName);
     } catch (error) {
       console.error("Error saving trim data:", error);
     }
@@ -3443,56 +3455,8 @@ progressBarContainer.addEventListener('mouseleave', () => {
     previewElement.style.display = 'none';
 });
 
-async function checkAndUpdateThumbnails() {
-  const clips = await ipcRenderer.invoke("get-clips");
-  
-  for (const clip of clips) {
-    if (clip.isTrimmed) {
-      try {
-        // Get current trim data
-        const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
-        if (!trimData) continue;
-
-        // Get the thumbnail path using the IPC handler
-        const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", clip.originalName);
-        
-        // Get the timestamp when the thumbnail was last modified
-        let thumbnailStat;
-        try {
-          thumbnailStat = await fs.stat(thumbnailPath);
-        } catch (error) {
-          if (error.code === 'ENOENT') {
-            // Thumbnail doesn't exist, generate it
-            const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
-            updateClipThumbnailInGrid(clip.originalName, newThumbnailPath);
-            continue;
-          }
-          throw error;
-        }
-
-        // Get the timestamp when the trim data was last modified
-        const trimPath = path.join(settings.clipLocation, ".clip_metadata", `${clip.originalName}.trim`);
-        const trimStat = await fs.stat(trimPath);
-
-        // Only regenerate thumbnail if trim data is newer than the thumbnail
-        if (trimStat.mtime > thumbnailStat.mtime) {
-          console.log(`Regenerating thumbnail for ${clip.originalName} due to newer trim data`);
-          const newThumbnailPath = await ipcRenderer.invoke("generate-thumbnail", clip.originalName);
-          updateClipThumbnailInGrid(clip.originalName, newThumbnailPath);
-        }
-      } catch (error) {
-        console.error(`Error checking/updating thumbnail for ${clip.originalName}:`, error);
-      }
-    }
-  }
-}
-
-// Call this function when the app starts and after any trim operations
-document.addEventListener('DOMContentLoaded', checkAndUpdateThumbnails);
-
 // Add this function to handle thumbnail updates
 function updateClipThumbnailInGrid(clipName, thumbnailPath) {
-  console.log(`Updating thumbnail for ${clipName} at ${thumbnailPath}`);
   const clipElement = document.querySelector(`[data-original-name="${clipName}"]`);
   if (!clipElement) return;
 
