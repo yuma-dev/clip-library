@@ -111,7 +111,7 @@ settingsModal.innerHTML = `
     </div>
     <div class="settings-row">
       <label for="previewVolume">Preview Volume:</label>
-      <input type="range" id="previewVolumeSlider" min="0" max="1" step="0.1" value="0.1">
+      <input type="range" id="previewVolumeSlider" min="0" max="1" step="0.01" value="0.1">
       <span id="previewVolumeValue">10%</span>
     </div>
     <button id="closeSettingsBtn">Close</button>
@@ -127,6 +127,11 @@ const currentClipLocationSpan = document.getElementById("currentClipLocation");
 
 async function fetchSettings() {
   settings = await ipcRenderer.invoke('get-settings');
+  // Ensure previewVolume has a default if not set
+  if (settings.previewVolume === undefined) {
+    settings.previewVolume = 0.1;
+    await ipcRenderer.invoke('save-settings', settings);
+  }
 }
 
 async function loadClips() {
@@ -1454,26 +1459,47 @@ async function openSettingsModal() {
     const previewVolumeSlider = document.getElementById('previewVolumeSlider');
     const previewVolumeValue = document.getElementById('previewVolumeValue');
     if (previewVolumeSlider && previewVolumeValue) {
-      previewVolumeSlider.value = settings.previewVolume;
-      previewVolumeValue.textContent = `${Math.round(settings.previewVolume * 100)}%`;
+      // Use the saved value or default to 0.1
+      const savedVolume = settings.previewVolume ?? 0.1;
+      previewVolumeSlider.value = savedVolume;
+      // Display with more decimal places for finer values
+      previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
     }
   }
 }
 
 document.getElementById('previewVolumeSlider').addEventListener('input', async (e) => {
   const value = parseFloat(e.target.value);
+  // Round to 2 decimal places for display
   document.getElementById('previewVolumeValue').textContent = `${Math.round(value * 100)}%`;
   settings.previewVolume = value;
   await ipcRenderer.invoke('save-settings', settings);
+  
+  // Update all currently playing preview videos
+  updateAllPreviewVolumes(value);
 });
 
 async function updateSettings() {
   settings = await ipcRenderer.invoke('get-settings');
 }
 
+function updateAllPreviewVolumes(newVolume) {
+  // Find all video elements inside clip-item elements
+  const previewVideos = document.querySelectorAll('.clip-item video');
+  previewVideos.forEach(video => {
+    video.volume = newVolume;
+  });
+}
+
 function closeSettingsModal() {
   settingsModal.style.display = "none";
   updateSettings(); // Update the local settings object
+  
+  // Update all preview volumes to match the new setting
+  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+  if (previewVolumeSlider) {
+    updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
+  }
 }
 
 document
@@ -1628,12 +1654,15 @@ function createClipElement(clip) {
         startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
       }
     
-      hoverTimeout = setTimeout(() => {
+      hoverTimeout = setTimeout(async () => {
         if (!clipElement.matches(':hover')) return;
+    
+        // Get the current preview volume setting
+        const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? settings?.previewVolume ?? 0.1;
     
         videoElement = document.createElement("video");
         videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
-        videoElement.volume = settings?.previewVolume ?? 0.1;
+        videoElement.volume = currentPreviewVolume;
         videoElement.loop = true;
         videoElement.preload = "metadata";
         videoElement.style.zIndex = "1";
