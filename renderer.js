@@ -29,6 +29,9 @@ const volumeIcons = {
   low: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M360-360H240q-17 0-28.5-11.5T200-400v-160q0-17 11.5-28.5T240-600h120l132-132q19-19 43.5-8.5T560-703v446q0 27-24.5 37.5T492-228L360-360Zm380-120q0 42-19 79.5T671-339q-10 6-20.5.5T640-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM480-606l-86 86H280v80h114l86 86v-252ZM380-480Z"/></svg>`,
   high: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-440h-80q-17 0-28.5-11.5T640-480q0-17 11.5-28.5T680-520h80q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440ZM584-288q10-14 26-16t30 8l64 48q14 10 16 26t-8 30q-10 14-26 16t-30-8l-64-48q-14-10-16-26t8-30Zm120-424-64 48q-14 10-30 8t-26-16q-10-14-8-30t16-26l64-48q14-10 30-8t26 16q10 14 8 30t-16 26ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`
 };
+const QUEUE_BATCH_SIZE = 5; // Process 5 thumbnails at a time
+const PREVIEW_WIDTH = 160;
+const PREVIEW_HEIGHT = 90;
 
 let audioContext, gainNode;
 let lastActivityTime = Date.now();
@@ -67,6 +70,11 @@ let discordPresenceInterval;
 let clipStartTime;
 let elapsedTime = 0;
 let loadingScreen;
+let thumbnailsToGenerate = 0;
+let thumbnailsCompleted = 0;
+let thumbnailQueue = [];
+let isProcessingQueue = false;
+let processingTimeout = null;
 
 const previewElement = document.getElementById('timeline-preview');
 const previewCanvas = document.getElementById('preview-canvas');
@@ -78,9 +86,11 @@ let previewThrottleTimeout;
 
 // Create a temporary video element for previews
 const tempVideo = document.createElement('video');
-tempVideo.crossOrigin = 'anonymous'; // Add this line
+tempVideo.crossOrigin = 'anonymous';
 tempVideo.preload = 'auto';
-tempVideo.muted = true; // Add this line
+tempVideo.muted = true;
+tempVideo.style.display = 'none'; // Hide the temp video
+document.body.appendChild(tempVideo); // Add to DOM
 
 ipcRenderer.on('log', (event, { type, message }) => {
   console[type](`[Main Process] ${message}`);
@@ -98,6 +108,11 @@ settingsModal.innerHTML = `
     <div class="settings-row">
       <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
       <input type="checkbox" id="enableDiscordRPC">
+    </div>
+    <div class="settings-row">
+      <label for="previewVolume">Preview Volume:</label>
+      <input type="range" id="previewVolumeSlider" min="0" max="1" step="0.1" value="0.1">
+      <span id="previewVolumeValue">10%</span>
     </div>
     <button id="closeSettingsBtn">Close</button>
     <p id="app-version"></p>
@@ -119,59 +134,108 @@ async function loadClips() {
     console.log("Loading clips...");
     clipLocation = await ipcRenderer.invoke("get-clip-location");
     currentClipLocationSpan.textContent = clipLocation;
-
     allClips = await ipcRenderer.invoke("get-clips");
     console.log("Clips received:", allClips.length);
     
-    // Load tags for each clip
-    for (let clip of allClips) {
-      clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
+    // Load tags for each clip in smaller batches
+    const TAG_BATCH_SIZE = 50;
+    for (let i = 0; i < allClips.length; i += TAG_BATCH_SIZE) {
+      const batch = allClips.slice(i, i + TAG_BATCH_SIZE);
+      await Promise.all(batch.map(async (clip) => {
+        clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
+      }));
+      
+      // Small delay between tag batches
+      if (i + TAG_BATCH_SIZE < allClips.length) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
     }
 
-    // Remove duplicates based on originalName
     allClips = removeDuplicates(allClips);
-    console.log("Clips after removing duplicates:", allClips.length);
-
     allClips.sort((a, b) => b.createdAt - a.createdAt);
-
-    // Filter out private clips for initial render
     currentClipList = allClips.filter(clip => !clip.tags.includes("Private"));
-
+    
     console.log("Initial currentClipList length:", currentClipList.length);
-
     updateClipCounter(currentClipList.length);
     renderClips(currentClipList);
     setupClipTitleEditing();
     validateClipLists();
+    updateFilterDropdown();
 
-    // Start progressive thumbnail generation
-    const clipNames = allClips.map((clip) => clip.originalName);
-
-    ipcRenderer.invoke("generate-thumbnails-progressively", clipNames);
-
-    // Listen for thumbnail generation progress
-    ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
-      updateThumbnailProgress(current, total);
-    });
-
-    // Listen for generated thumbnails
-    ipcRenderer.on(
-      "thumbnail-generated",
-      (event, { clipName, thumbnailPath }) => {
-        updateClipThumbnail(clipName, thumbnailPath);
-      },
-    );
     console.log("Clips loaded and rendered.");
     hideLoadingScreen();
 
-    // Update the filter dropdown with all tags
-    updateFilterDropdown();
+    // Start thumbnail validation after a short delay
+    setTimeout(() => {
+      startThumbnailValidation();
+    }, 1000);
+
   } catch (error) {
     console.error("Error loading clips:", error);
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
     currentClipLocationSpan.textContent = "Error: Unable to load location";
     hideThumbnailGenerationText();
     hideLoadingScreen();
+  }
+}
+
+async function startThumbnailValidation() {
+  // Clear any existing queue
+  thumbnailQueue = [];
+  
+  // Add clips to queue gradually
+  const addToQueue = (startIndex, batchSize = 20) => {
+    const endIndex = Math.min(startIndex + batchSize, allClips.length);
+    for (let i = startIndex; i < endIndex; i++) {
+      thumbnailQueue.push(allClips[i].originalName);
+    }
+    
+    // Start processing if not already running
+    if (!isProcessingQueue) {
+      processNextBatch();
+    }
+    
+    // Queue next batch of clips
+    if (endIndex < allClips.length) {
+      setTimeout(() => addToQueue(endIndex, batchSize), 100);
+    }
+  };
+
+  // Start adding clips to queue
+  addToQueue(0);
+}
+
+async function processNextBatch() {
+  if (isProcessingQueue || thumbnailQueue.length === 0) {
+    return;
+  }
+
+  isProcessingQueue = true;
+  const currentBatch = thumbnailQueue.splice(0, QUEUE_BATCH_SIZE);
+
+  try {
+    // Process current batch
+    await ipcRenderer.invoke("generate-thumbnails-progressively", currentBatch);
+    
+    // Update progress
+    const remaining = thumbnailQueue.length;
+    if (remaining > 0) {
+      updateThumbnailGenerationText(remaining);
+    }
+
+  } catch (error) {
+    console.error("Error processing thumbnail batch:", error);
+  } finally {
+    isProcessingQueue = false;
+    
+    // Schedule next batch with delay
+    if (thumbnailQueue.length > 0) {
+      processingTimeout = setTimeout(() => {
+        processNextBatch();
+      }, 100); // 100ms delay between batches
+    } else {
+      hideThumbnailGenerationText();
+    }
   }
 }
 
@@ -233,8 +297,8 @@ ipcRenderer.on('new-clip-added', (event, fileName) => {
   updateFilterDropdown();
 });
 
-function showThumbnailGenerationText() {
-  if (!document.getElementById("thumbnail-generation-text")) {
+function showThumbnailGenerationText(totalToGenerate) {
+  if (!document.getElementById("thumbnail-generation-text") && totalToGenerate > 0) {
     const textElement = document.createElement("div");
     textElement.id = "thumbnail-generation-text";
     textElement.style.position = "fixed";
@@ -247,7 +311,7 @@ function showThumbnailGenerationText() {
     textElement.style.borderRadius = "20px";
     textElement.style.zIndex = "10000";
     textElement.style.fontWeight = "normal";
-    textElement.textContent = "Generating thumbnails...";
+    textElement.textContent = `Generating ${totalToGenerate} thumbnails...`;
     document.body.appendChild(textElement);
   }
 }
@@ -259,10 +323,12 @@ function updateClipCounter(count) {
   }
 }
 
-function updateThumbnailGenerationText(current, total) {
+function updateThumbnailGenerationText(remaining) {
   const textElement = document.getElementById("thumbnail-generation-text");
-  if (textElement) {
-    textElement.textContent = `Generating thumbnails... ${current}/${total}`;
+  if (textElement && remaining >= 0) {
+    textElement.textContent = remaining > 0 
+      ? `Generating thumbnails... ${remaining} remaining`
+      : 'Thumbnail generation complete!';
   }
 }
 
@@ -271,39 +337,11 @@ function hideThumbnailGenerationText() {
   if (textElement) {
     textElement.remove();
   }
+  thumbnailsToGenerate = 0;
+  thumbnailsCompleted = 0;
 }
 
-function updateThumbnailProgress(current, total) {
-  let progressElement = document.getElementById("thumbnail-progress");
-  if (!progressElement) {
-    progressElement = document.createElement("div");
-    progressElement.id = "thumbnail-progress";
-    progressElement.style.position = "fixed";
-    progressElement.style.top = "0";
-    progressElement.style.left = "0";
-    progressElement.style.width = "100%";
-    progressElement.style.height = "5px";
-    progressElement.style.backgroundColor = "#4CAF50";
-    progressElement.style.transition = "width 0.3s";
-    progressElement.style.zIndex = "9999";
-    document.body.appendChild(progressElement);
 
-    // Show the text indicator when we start
-    showThumbnailGenerationText();
-  }
-  const percentage = (current / total) * 100;
-  progressElement.style.width = `${percentage}%`;
-
-  // Update the text indicator
-  updateThumbnailGenerationText(current, total);
-
-  if (current === total) {
-    setTimeout(() => {
-      progressElement.remove();
-      hideThumbnailGenerationText();
-    }, 1000);
-  }
-}
 
 ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
   console.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
@@ -1411,8 +1449,23 @@ async function openSettingsModal() {
     if (enableDiscordRPCCheckbox) {
       enableDiscordRPCCheckbox.checked = settings.enableDiscordRPC;
     }
+
+    // Update preview volume slider
+    const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+    const previewVolumeValue = document.getElementById('previewVolumeValue');
+    if (previewVolumeSlider && previewVolumeValue) {
+      previewVolumeSlider.value = settings.previewVolume;
+      previewVolumeValue.textContent = `${Math.round(settings.previewVolume * 100)}%`;
+    }
   }
 }
+
+document.getElementById('previewVolumeSlider').addEventListener('input', async (e) => {
+  const value = parseFloat(e.target.value);
+  document.getElementById('previewVolumeValue').textContent = `${Math.round(value * 100)}%`;
+  settings.previewVolume = value;
+  await ipcRenderer.invoke('save-settings', settings);
+});
 
 async function updateSettings() {
   settings = await ipcRenderer.invoke('get-settings');
@@ -1552,27 +1605,49 @@ function createClipElement(clip) {
       }
     }
 
-    function handleMouseEnter() {
+    async function validateAndUpdateThumbnail(clipName, thumbnailPath) {
+      const result = await ipcRenderer.invoke("validate-thumbnail", clipName, thumbnailPath);
+      if (!result.isValid) {
+        // Request a new thumbnail
+        ipcRenderer.invoke("generate-thumbnails-progressively", [clipName]);
+      }
+      return result.isValid;
+    }
+
+    async function handleMouseEnter() {
       if (clipElement.classList.contains("video-preview-disabled")) return;
       cleanupVideoPreview(); // Always cleanup before starting a new preview
+    
+      const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+      const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
+      
+      let startTime;
+      if (trimData) {
+        startTime = trimData.start;
+      } else {
+        startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
+      }
+    
       hoverTimeout = setTimeout(() => {
-        if (!clipElement.matches(':hover')) return; // Exit if mouse is no longer over the element
-
+        if (!clipElement.matches(':hover')) return;
+    
         videoElement = document.createElement("video");
         videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
-        videoElement.muted = true;
+        videoElement.volume = settings?.previewVolume ?? 0.1;
         videoElement.loop = true;
         videoElement.preload = "metadata";
         videoElement.style.zIndex = "1";
-
+    
         const mediaContainer = clipElement.querySelector(".clip-item-media-container");
         const imgElement = mediaContainer.querySelector("img");
+        
+        // Set the video poster to the current thumbnail
         videoElement.poster = imgElement.src;
-
+    
         videoElement.addEventListener('loadedmetadata', () => {
           if (clipElement.matches(':hover')) {
             imgElement.style.display = "none";
-            videoElement.currentTime = clip.isTrimmed ? window.trimStartTime || 0 : 0;
+            videoElement.currentTime = startTime;
             videoElement.play().then(() => {
               isVideoPlaying = true;
             }).catch((error) => {
@@ -1585,7 +1660,7 @@ function createClipElement(clip) {
             cleanupVideoPreview();
           }
         });
-
+    
         mediaContainer.appendChild(videoElement);
       }, 100);
     }
@@ -1595,6 +1670,7 @@ function createClipElement(clip) {
       cleanupVideoPreview();
     }
 
+    clipElement.handleMouseEnter = handleMouseEnter;
     clipElement.addEventListener("mouseenter", handleMouseEnter);
     clipElement.addEventListener("mouseleave", handleMouseLeave);
 
@@ -2828,7 +2904,12 @@ async function updateClipDisplay(originalName) {
 }
 
 async function saveTrimChanges() {
-  if (!currentClip) return;
+  const clipToUpdate = currentClip ? { ...currentClip } : null;
+  
+  if (!clipToUpdate) {
+    console.log("No clip to save trim data for");
+    return;
+  }
 
   if (saveTrimTimeout) {
     clearTimeout(saveTrimTimeout);
@@ -2836,20 +2917,45 @@ async function saveTrimChanges() {
 
   saveTrimTimeout = setTimeout(async () => {
     try {
+      // Save trim data
       await ipcRenderer.invoke(
         "save-trim",
-        currentClip.originalName,
+        clipToUpdate.originalName,
         trimStartTime,
-        trimEndTime,
+        trimEndTime
       );
       console.log("Trim data saved successfully");
-      await updateClipDisplay(currentClip.originalName);
-      updateDiscordPresence('Editing a clip', currentClip.customName);
+
+      // Regenerate thumbnail at new start point
+      const result = await ipcRenderer.invoke(
+        "regenerate-thumbnail-for-trim",
+        clipToUpdate.originalName,
+        trimStartTime
+      );
+
+      if (result.success) {
+        // Just update the thumbnail image
+        const clipElement = document.querySelector(
+          `.clip-item[data-original-name="${clipToUpdate.originalName}"]`
+        );
+        
+        if (clipElement) {
+          const imgElement = clipElement.querySelector(".clip-item-media-container img");
+          if (imgElement) {
+            // Update the thumbnail source with cache busting
+            imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
+          }
+        }
+      }
+
+      if (currentClip) {
+        updateDiscordPresence('Editing a clip', currentClip.customName);
+      }
     } catch (error) {
       console.error("Error saving trim data:", error);
-      // Optionally, you can show an error message to the user here
+      showCustomAlert(`Error saving trim: ${error.message}`);
     }
-  }, 500); // 500ms debounce
+  }, 500);
 }
 
 let saveTitleTimeout = null;
@@ -3187,21 +3293,22 @@ function updatePreview(e) {
   const rect = progressBarContainer.getBoundingClientRect();
   const position = (e.clientX - rect.left) / rect.width;
   const time = videoPlayer.duration * position;
-
-  // Update preview position to follow cursor immediately
-  const previewX = e.clientX - rect.left;
-  previewElement.style.left = `${previewX}px`;
-  previewElement.style.bottom = `${progressBarContainer.offsetHeight + 10}px`;
   
-  // Update timestamp immediately
+  // Position directly based on cursor location within progress bar
+  const cursorXRelative = e.clientX - rect.left;
+  const previewWidth = previewElement.offsetWidth;
+  
+  previewElement.style.position = 'absolute';
+  previewElement.style.left = `${cursorXRelative - (previewWidth/2)}px`;
+  previewElement.style.bottom = '20px';
+  
+  // Update timestamp
+  const previewTimestamp = document.getElementById('preview-timestamp');
   previewTimestamp.textContent = formatTime(time);
 
-  // Only update if video is loaded
+  // Update video frame if ready
   if (tempVideo.readyState >= 2) {
-    // Use more efficient time seeking
-    if (Math.abs(tempVideo.currentTime - time) > 0.1) {
-      tempVideo.currentTime = time;
-    }
+    tempVideo.currentTime = time;
   }
 }
 
@@ -3212,41 +3319,47 @@ const UPDATE_INTERVAL = 16; // About 60fps
 progressBarContainer.addEventListener('mousemove', (e) => {
   const now = performance.now();
   
-  // Show preview and update position immediately
+  // Just show the preview initially
   previewElement.style.display = 'block';
   
-  const rect = progressBarContainer.getBoundingClientRect();
-  const previewX = e.clientX - rect.left;
-  previewElement.style.left = `${previewX}px`;
-  
-  // Throttle the heavier preview updates
+  // Only update position and content when throttle interval has passed
   if (now - lastUpdateTime >= UPDATE_INTERVAL) {
-      lastUpdateTime = now;
-      updatePreview(e);
+    lastUpdateTime = now;
+    updatePreview(e);
   }
 });
 
 // Optimize the seeked event handler
 tempVideo.addEventListener('seeked', () => {
-  // Use requestAnimationFrame for smoother canvas updates
-  requestAnimationFrame(() => {
-    if (tempVideo.readyState >= 2) {
-      ctx.drawImage(tempVideo, 0, 0, previewCanvas.width, previewCanvas.height);
-    }
-  });
+  const previewCanvas = document.getElementById('preview-canvas');
+  const ctx = previewCanvas?.getContext('2d');
+  if (ctx && tempVideo.readyState >= 2) {
+    ctx.drawImage(tempVideo, 0, 0, previewCanvas.width, previewCanvas.height);
+  }
 });
 
+function cleanupThumbnailProcessing() {
+  thumbnailQueue = [];
+  isProcessingQueue = false;
+  if (processingTimeout) {
+    clearTimeout(processingTimeout);
+    processingTimeout = null;
+  }
+}
 
 // Add this function after tempVideo creation
-function initializePreviewVideo(videoSource) {
+async function initializePreviewVideo(videoSource) {
+  return new Promise((resolve) => {
     tempVideo.src = videoSource;
-    return new Promise((resolve) => {
-        tempVideo.addEventListener('loadedmetadata', () => {
-            tempVideo.width = previewCanvas.width;
-            tempVideo.height = previewCanvas.height;
-            resolve();
-        }, { once: true });
-    });
+    tempVideo.addEventListener('loadedmetadata', () => {
+      const previewCanvas = document.getElementById('preview-canvas');
+      if (previewCanvas) {
+        previewCanvas.width = 160;  // Set fixed preview width
+        previewCanvas.height = 90;  // Set fixed preview height
+      }
+      resolve();
+    }, { once: true });
+  });
 }
 
 // Modify the video player's loadedmetadata event handler
@@ -3258,5 +3371,10 @@ videoPlayer.addEventListener('loadedmetadata', async () => {
 
 // Add this after the mousemove event listener for progressBarContainer
 progressBarContainer.addEventListener('mouseleave', () => {
+  const previewElement = document.getElementById('timeline-preview');
+  if (previewElement) {
     previewElement.style.display = 'none';
+  }
+  // Reset temp video
+  tempVideo.currentTime = 0;
 });
