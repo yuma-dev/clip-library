@@ -14,7 +14,8 @@ async function loadSettings() {
       return { 
         clipLocation: app.getPath('videos'), 
         enableDiscordRPC: false,
-        ignoredVersion: null  // Add this line
+        ignoredVersion: null,  // Add this line
+        previewVolume: 0.1
       };
     }
     throw error;
