@@ -75,6 +75,8 @@ let thumbnailsCompleted = 0;
 let thumbnailQueue = [];
 let isProcessingQueue = false;
 let processingTimeout = null;
+let activePreview = null;
+let previewCleanupTimeout = null;
 
 const previewElement = document.getElementById('timeline-preview');
 const previewCanvas = document.getElementById('preview-canvas');
@@ -1616,18 +1618,28 @@ function createClipElement(clip) {
     }
 
     function cleanupVideoPreview() {
-      clearTimeout(hoverTimeout);
+      // Clear the timeout if it exists
+      if (previewCleanupTimeout) {
+        clearTimeout(previewCleanupTimeout);
+        previewCleanupTimeout = null;
+      }
+    
+      // Reset active preview
+      activePreview = null;
+    
+      // Clean up video element if it exists
       if (videoElement) {
         videoElement.pause();
-        videoElement.removeAttribute('src'); // Empty source
-        videoElement.load(); // Reset the video element
+        videoElement.removeAttribute('src');
+        videoElement.load();
         videoElement.remove();
         videoElement = null;
-      }
-      isVideoPlaying = false;
-      const imgElement = clipElement.querySelector(".clip-item-media-container img");
-      if (imgElement) {
-        imgElement.style.display = "";
+    
+        // Restore thumbnail visibility
+        const imgElement = clipElement.querySelector(".clip-item-media-container img");
+        if (imgElement) {
+          imgElement.style.display = "";
+        }
       }
     }
 
@@ -1642,55 +1654,78 @@ function createClipElement(clip) {
 
     async function handleMouseEnter() {
       if (clipElement.classList.contains("video-preview-disabled")) return;
-      cleanupVideoPreview(); // Always cleanup before starting a new preview
     
-      const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
-      const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
-      
-      let startTime;
-      if (trimData) {
-        startTime = trimData.start;
-      } else {
-        startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
-      }
+      // Clear any existing preview immediately
+      cleanupVideoPreview();
     
-      hoverTimeout = setTimeout(async () => {
-        if (!clipElement.matches(':hover')) return;
+      // Store the current preview context
+      const currentPreviewContext = {};
+      activePreview = currentPreviewContext;
     
-        // Get the current preview volume setting
-        const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? settings?.previewVolume ?? 0.1;
+      // Set a small delay before creating the preview
+      previewCleanupTimeout = setTimeout(async () => {
+        // Check if this preview is still the active one
+        if (activePreview !== currentPreviewContext) return;
     
-        videoElement = document.createElement("video");
-        videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
-        videoElement.volume = currentPreviewVolume;
-        videoElement.loop = true;
-        videoElement.preload = "metadata";
-        videoElement.style.zIndex = "1";
+        try {
+          const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+          const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
+          
+          // Check again if this preview is still active
+          if (activePreview !== currentPreviewContext) return;
     
-        const mediaContainer = clipElement.querySelector(".clip-item-media-container");
-        const imgElement = mediaContainer.querySelector("img");
-        
-        // Set the video poster to the current thumbnail
-        videoElement.poster = imgElement.src;
+          let startTime;
+          if (trimData) {
+            startTime = trimData.start;
+          } else {
+            startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
+          }
     
-        videoElement.addEventListener('loadedmetadata', () => {
-          if (clipElement.matches(':hover')) {
+          // Final check before creating video element
+          if (activePreview !== currentPreviewContext) return;
+    
+          // Get the current preview volume setting
+          const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? settings?.previewVolume ?? 0.1;
+    
+          videoElement = document.createElement("video");
+          videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
+          videoElement.volume = currentPreviewVolume;
+          videoElement.loop = true;
+          videoElement.preload = "metadata";
+          videoElement.style.zIndex = "1";
+    
+          const mediaContainer = clipElement.querySelector(".clip-item-media-container");
+          const imgElement = mediaContainer.querySelector("img");
+          
+          // Set the video poster to the current thumbnail
+          videoElement.poster = imgElement.src;
+    
+          // Store video element in the preview context
+          currentPreviewContext.videoElement = videoElement;
+    
+          // Add loadedmetadata event listener
+          videoElement.addEventListener('loadedmetadata', () => {
+            // Final check before playing
+            if (activePreview !== currentPreviewContext || !clipElement.matches(':hover')) {
+              cleanupVideoPreview();
+              return;
+            }
+    
             imgElement.style.display = "none";
             videoElement.currentTime = startTime;
-            videoElement.play().then(() => {
-              isVideoPlaying = true;
-            }).catch((error) => {
+            videoElement.play().catch((error) => {
               if (error.name !== "AbortError") {
                 console.error("Error playing video:", error);
               }
               cleanupVideoPreview();
             });
-          } else {
-            cleanupVideoPreview();
-          }
-        });
+          });
     
-        mediaContainer.appendChild(videoElement);
+          mediaContainer.appendChild(videoElement);
+        } catch (error) {
+          console.error("Error setting up preview:", error);
+          cleanupVideoPreview();
+        }
       }, 100);
     }
 
