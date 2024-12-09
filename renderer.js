@@ -1,6 +1,7 @@
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
+const logger = require('./logger');
 
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
@@ -140,11 +141,11 @@ async function fetchSettings() {
 
 async function loadClips() {
   try {
-    console.log("Loading clips...");
+    logger.info("Loading clips...");
     clipLocation = await ipcRenderer.invoke("get-clip-location");
     currentClipLocationSpan.textContent = clipLocation;
     allClips = await ipcRenderer.invoke("get-clips");
-    console.log("Clips received:", allClips.length);
+    logger.info("Clips received:", allClips.length);
     
     // Load tags for each clip in smaller batches
     const TAG_BATCH_SIZE = 50;
@@ -164,14 +165,14 @@ async function loadClips() {
     allClips.sort((a, b) => b.createdAt - a.createdAt);
     currentClipList = allClips.filter(clip => !clip.tags.includes("Private"));
     
-    console.log("Initial currentClipList length:", currentClipList.length);
+    logger.info("Initial currentClipList length:", currentClipList.length);
     updateClipCounter(currentClipList.length);
     renderClips(currentClipList);
     setupClipTitleEditing();
     validateClipLists();
     updateFilterDropdown();
 
-    console.log("Clips loaded and rendered.");
+    logger.info("Clips loaded and rendered.");
     hideLoadingScreen();
 
     // Start thumbnail validation after a short delay
@@ -180,7 +181,7 @@ async function loadClips() {
     }, 1000);
 
   } catch (error) {
-    console.error("Error loading clips:", error);
+    logger.error("Error loading clips:", error);
     clipGrid.innerHTML = `<p class="error-message">Error loading clips. Please check your clip location in settings.</p>`;
     currentClipLocationSpan.textContent = "Error: Unable to load location";
     hideThumbnailGenerationText();
@@ -189,7 +190,7 @@ async function loadClips() {
 }
 
 async function startThumbnailValidation() {
-  console.log("Starting thumbnail validation for clips:", allClips.length);
+  logger.info("Starting thumbnail validation for clips:", allClips.length);
   
   try {
     // Request thumbnail validation/generation for all clips
@@ -201,11 +202,11 @@ async function startThumbnailValidation() {
     if (result.needsGeneration > 0) {
       showThumbnailGenerationText(result.needsGeneration);
     } else {
-      console.log("All thumbnails are valid, no generation needed");
+      logger.info("All thumbnails are valid, no generation needed");
       hideThumbnailGenerationText();
     }
   } catch (error) {
-    console.error("Error during thumbnail validation:", error);
+    logger.error("Error during thumbnail validation:", error);
     hideThumbnailGenerationText();
   }
 }
@@ -230,12 +231,12 @@ async function updateVersionDisplay() {
       versionElement.textContent = `Version: ${version}`;
     }
   } catch (error) {
-    console.error('Failed to get app version:', error);
+    logger.error('Failed to get app version:', error);
   }
 }
 
 async function addNewClipToLibrary(fileName) {
-  console.log(`Adding new clip to library: ${fileName}`);
+  logger.info(`Adding new clip to library: ${fileName}`);
   const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
   
   // Check if the clip already exists in allClips
@@ -257,24 +258,23 @@ async function addNewClipToLibrary(fileName) {
     }
   }
   
-  console.log(`Requesting thumbnail generation for: ${fileName}`);
+  logger.info(`Requesting thumbnail generation for: ${fileName}`);
   ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
   updateFilterDropdown();
 }
 
 ipcRenderer.on('new-clip-added', (event, fileName) => {
-  console.log(`New clip added event received for: ${fileName}`);
+  logger.info(`New clip added event received for: ${fileName}`);
   addNewClipToLibrary(fileName);
   updateFilterDropdown();
 });
 
 ipcRenderer.on("thumbnail-validation-start", (event, { total }) => {
-  console.log("Thumbnail validation started with total:", total);
+  logger.info("Thumbnail validation started with total:", total);
   totalThumbnailsToProcess = total;
 });
 
 ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
-  console.log(`Thumbnail progress: ${current}/${total}`);
   processedThumbnails = current;
   updateThumbnailGenerationText(total - current);
 });
@@ -287,7 +287,7 @@ ipcRenderer.on("thumbnail-generation-complete", () => {
 function showThumbnailGenerationText(totalToGenerate) {
   if (totalToGenerate <= 0) return;
   
-  console.log(`Showing generation text for ${totalToGenerate} thumbnails`);
+  logger.info(`Showing generation text for ${totalToGenerate} thumbnails`);
   processedThumbnails = 0;
   totalThumbnailsToProcess = totalToGenerate;
   
@@ -330,7 +330,6 @@ function updateThumbnailGenerationText(remaining) {
   const processed = totalThumbnailsToProcess - remaining;
   const percentage = Math.round((processed / totalThumbnailsToProcess) * 100);
   textElement.textContent = `Generating thumbnails... ${processed}/${totalThumbnailsToProcess} (${percentage}%)`;
-  console.log(`Generation progress: ${processed}/${totalThumbnailsToProcess} (${percentage}%)`);
 }
 
 function hideThumbnailGenerationText() {
@@ -348,7 +347,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
-  console.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
+  logger.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
 });
 
 ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
@@ -359,7 +358,7 @@ async function getFfmpegVersion() {
   try {
     await ipcRenderer.invoke('get-ffmpeg-version');
   } catch (error) {
-    console.error('Failed to get FFmpeg version:', error);
+    logger.error('Failed to get FFmpeg version:', error);
   }
 }
 
@@ -372,25 +371,25 @@ function updateClipThumbnail(clipName, thumbnailPath) {
     if (imgElement) {
       imgElement.src = `file://${thumbnailPath}`;
     } else {
-      console.warn(`Image element not found for clip: ${clipName}`);
+      logger.warn(`Image element not found for clip: ${clipName}`);
     }
   } else {
-    console.warn(`Clip element not found for: ${clipName}`);
+    logger.warn(`Clip element not found for: ${clipName}`);
   }
 }
 
 async function renderClips(clips) {
   if (isRendering) {
-    console.log("Render already in progress, skipping");
+    logger.info("Render already in progress, skipping");
     return;
   }
   
   isRendering = true;
-  console.log("Rendering clips. Input length:", clips.length);
+  logger.info("Rendering clips. Input length:", clips.length);
   clipGrid.innerHTML = ""; // Clear the grid
 
   clips = removeDuplicates(clips);
-  console.log("Clips to render after removing duplicates:", clips.length);
+  logger.info("Clips to render after removing duplicates:", clips.length);
 
   const clipPromises = clips.map(createClipElement);
   const clipElements = await Promise.all(clipPromises);
@@ -412,7 +411,7 @@ async function renderClips(clips) {
     card.addEventListener('mouseleave', handleMouseLeave);
   });
 
-  console.log("Rendered clips count:", clipGrid.children.length);
+  logger.info("Rendered clips count:", clipGrid.children.length);
   isRendering = false;
 }
 
@@ -513,7 +512,7 @@ function setupContextMenu() {
     !contextMenu ||
     !contextMenuExport ||
     !contextMenuDelete) {
-    console.error("One or more context menu elements not found");
+    logger.error("One or more context menu elements not found");
     return;
   }
 
@@ -526,7 +525,7 @@ function setupContextMenu() {
   });
 
   contextMenuExport.addEventListener("click", () => {
-    console.log("Export clicked for clip:", contextMenuClip?.originalName);
+    logger.info("Export clicked for clip:", contextMenuClip?.originalName);
     if (contextMenuClip) {
       exportClipFromContextMenu(contextMenuClip);
     }
@@ -574,7 +573,7 @@ function setupContextMenu() {
   });
 
   contextMenuDelete.addEventListener("click", async () => {
-    console.log("Delete clicked for clip:", contextMenuClip?.originalName);
+    logger.info("Delete clicked for clip:", contextMenuClip?.originalName);
     if (contextMenuClip) {
       await confirmAndDeleteClip(contextMenuClip);
     }
@@ -590,7 +589,7 @@ function setupContextMenu() {
 document.getElementById('manageTagsBtn').addEventListener('click', openTagManagement);
 
 function openTagManagement() {
-  console.log("openTagManagement function called");
+  logger.info("openTagManagement function called");
   try {
     const container = document.querySelector('.cet-container') || document.body;
     
@@ -650,9 +649,9 @@ function openTagManagement() {
       }
     });
 
-    console.log("Tag management modal opened successfully");
+    logger.info("Tag management modal opened successfully");
   } catch (error) {
-    console.error("Error in openTagManagement:", error);
+    logger.error("Error in openTagManagement:", error);
     alert(`An error occurred while opening tag management: ${error.message}`);
   }
 }
@@ -766,7 +765,7 @@ async function loadGlobalTags() {
   try {
     globalTags = await ipcRenderer.invoke("load-global-tags");
   } catch (error) {
-    console.error("Error loading global tags:", error);
+    logger.error("Error loading global tags:", error);
     globalTags = [];
   }
 }
@@ -914,9 +913,9 @@ async function updateTag(originalTag, newTag) {
       filterClips(newTag);
     }
 
-    console.log(`Tag "${originalTag}" updated to "${newTag}"`);
+    logger.info(`Tag "${originalTag}" updated to "${newTag}"`);
   } else {
-    console.warn(`Tag "${originalTag}" not found in globalTags`);
+    logger.warn(`Tag "${originalTag}" not found in globalTags`);
   }
 }
 
@@ -998,7 +997,7 @@ async function saveClipTags(clip) {
   try {
     await ipcRenderer.invoke("save-clip-tags", clip.originalName, clip.tags);
   } catch (error) {
-    console.error("Error saving clip tags:", error);
+    logger.error("Error saving clip tags:", error);
   }
 }
 
@@ -1013,12 +1012,12 @@ function setupTooltips() {
     
     moreTags.addEventListener('mouseenter', () => {
       tooltip.style.display = 'flex';
-      console.log('Tooltip shown');
+      logger.info('Tooltip shown');
     });
     
     moreTags.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
-      console.log('Tooltip hidden');
+      logger.info('Tooltip hidden');
     });
   });
 }
@@ -1052,7 +1051,7 @@ function showContextMenu(e, clip) {
     // Update the contextMenuClip
     contextMenuClip = clip;
 
-    console.log("Context menu shown for clip:", clip.originalName);
+    logger.info("Context menu shown for clip:", clip.originalName);
     
     // Update the tag list for the new clip
     updateTagList();
@@ -1071,7 +1070,7 @@ function showContextMenu(e, clip) {
     overlay.style.zIndex = '1980'; // Just below the context menu
     clipGrid.appendChild(overlay);
   } else {
-    console.error("Context menu elements not found");
+    logger.error("Context menu elements not found");
   }
 }
 
@@ -1161,7 +1160,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettingsModal);
   } else {
-    console.error("Settings button not found");
+    logger.error("Settings button not found");
   }
 
   const changeLocationBtn = document.getElementById("changeLocationBtn");
@@ -1171,20 +1170,20 @@ document.addEventListener("DOMContentLoaded", () => {
   if (changeLocationBtn) {
     changeLocationBtn.addEventListener("click", changeClipLocation);
   } else {
-    console.error("Change Location button not found");
+    logger.error("Change Location button not found");
   }
 
   if (manageTagsBtn) {
     manageTagsBtn.addEventListener("click", openTagManagement);
-    console.log("Manage Tags button listener added");
+    logger.info("Manage Tags button listener added");
   } else {
-    console.error("Manage Tags button not found");
+    logger.error("Manage Tags button not found");
   }
 
   if (closeSettingsBtn) {
     closeSettingsBtn.addEventListener("click", closeSettingsModal);
   } else {
-    console.error("Close Settings button not found");
+    logger.error("Close Settings button not found");
   }
 
   const titlebarOptions = {
@@ -1251,17 +1250,17 @@ async function saveSpeed(clipName, speed) {
   try {
     await ipcRenderer.invoke("save-speed", clipName, speed);
   } catch (error) {
-    console.error("Error saving speed:", error);
+    logger.error("Error saving speed:", error);
   }
 }
 
 async function loadSpeed(clipName) {
   try {
     const speed = await ipcRenderer.invoke("get-speed", clipName);
-    console.log(`Loaded speed for ${clipName}: ${speed}`);
+    logger.info(`Loaded speed for ${clipName}: ${speed}`);
     return speed;
   } catch (error) {
-    console.error("Error loading speed:", error);
+    logger.error("Error loading speed:", error);
     return 1;
   }
 }
@@ -1317,9 +1316,9 @@ function showSpeedContainer() {
 const debouncedSaveSpeed = debounce(async (clipName, speed) => {
   try {
     await ipcRenderer.invoke("save-speed", clipName, speed);
-    console.log(`Speed saved for ${clipName}: ${speed}`);
+    logger.info(`Speed saved for ${clipName}: ${speed}`);
   } catch (error) {
-    console.error('Error saving speed:', error);
+    logger.error('Error saving speed:', error);
   }
 }, 300);
 
@@ -1404,9 +1403,9 @@ function updateVolumeIcon(volume) {
 const debouncedSaveVolume = debounce(async (clipName, volume) => {
   try {
     await ipcRenderer.invoke("save-volume", clipName, volume);
-    console.log(`Volume saved for ${clipName}: ${volume}`);
+    logger.info(`Volume saved for ${clipName}: ${volume}`);
   } catch (error) {
-    console.error('Error saving volume:', error);
+    logger.error('Error saving volume:', error);
   }
 }, 300); // 300ms debounce time
 
@@ -1414,17 +1413,17 @@ async function saveVolume(clipName, volume) {
   try {
     await ipcRenderer.invoke("save-volume", clipName, volume);
   } catch (error) {
-    console.error("Error saving volume:", error);
+    logger.error("Error saving volume:", error);
   }
 }
 
 async function loadVolume(clipName) {
   try {
     const volume = await ipcRenderer.invoke("get-volume", clipName);
-    console.log(`Loaded volume for ${clipName}: ${volume}`);
+    logger.info(`Loaded volume for ${clipName}: ${volume}`);
     return volume;
   } catch (error) {
-    console.error("Error loading volume:", error);
+    logger.error("Error loading volume:", error);
     return 1; 
   }
 }
@@ -1450,7 +1449,7 @@ async function changeClipLocation() {
       currentClipLocationSpan.textContent = newLocation;
       await loadClips(); // Reload clips with the new location
     } catch (error) {
-      console.error("Error changing clip location:", error);
+      logger.error("Error changing clip location:", error);
       await showCustomAlert(`Failed to change clip location: ${error.message}`);
     }
   }
@@ -1721,7 +1720,7 @@ function createClipElement(clip) {
             videoElement.currentTime = startTime;
             videoElement.play().catch((error) => {
               if (error.name !== "AbortError") {
-                console.error("Error playing video:", error);
+                logger.error("Error playing video:", error);
               }
               cleanupVideoPreview();
             });
@@ -1729,7 +1728,7 @@ function createClipElement(clip) {
     
           mediaContainer.appendChild(videoElement);
         } catch (error) {
-          console.error("Error setting up preview:", error);
+          logger.error("Error setting up preview:", error);
           cleanupVideoPreview();
         }
       }, 100);
@@ -1870,12 +1869,12 @@ async function confirmAndDeleteClip(clipToDelete = null) {
       
       const result = await ipcRenderer.invoke('delete-clip', clipInfo.originalName);
       if (result.success) {
-        console.log('Clip deleted successfully');
+        logger.info('Clip deleted successfully');
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
-      console.error('Error deleting clip:', error);
+      logger.error('Error deleting clip:', error);
       await showCustomAlert(`Failed to delete clip: ${error.message}`);
       
       // Revert the UI changes if deletion fails
@@ -2072,13 +2071,13 @@ async function exportVideo(savePath = null) {
       savePath
     );
     if (result.success) {
-      console.log("Video exported successfully:", result.path);
+      logger.info("Video exported successfully:", result.path);
       showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
-    console.error("Error exporting video:", error);
+    logger.error("Error exporting video:", error);
     showCustomAlert("Export failed: " + error.message);
   }
 }
@@ -2116,19 +2115,19 @@ async function exportAudio(savePath = null) {
       savePath
     );
     if (result.success) {
-      console.log("Audio exported successfully:", result.path);
+      logger.info("Audio exported successfully:", result.path);
       showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
-    console.error("Error exporting audio:", error);
+    logger.error("Error exporting audio:", error);
     showCustomAlert("Audio export failed: " + error.message);
   }
 }
 
 ipcRenderer.on('ffmpeg-error', (event, message) => {
-  console.error('FFmpeg Error:', message);
+  logger.error('FFmpeg Error:', message);
 });
 
 async function exportTrimmedVideo() {
@@ -2138,9 +2137,9 @@ async function exportTrimmedVideo() {
     await getFfmpegVersion();
     const volume = await loadVolume(currentClip.originalName);
     const speed = videoPlayer.playbackRate;
-    console.log(`Exporting video: ${currentClip.originalName}`);
-    console.log(`Trim start: ${trimStartTime}, Trim end: ${trimEndTime}`);
-    console.log(`Volume: ${volume}, Speed: ${speed}`);
+    logger.info(`Exporting video: ${currentClip.originalName}`);
+    logger.info(`Trim start: ${trimStartTime}, Trim end: ${trimEndTime}`);
+    logger.info(`Volume: ${volume}, Speed: ${speed}`);
 
     showExportProgress(0, 100); // Show initial progress
 
@@ -2154,14 +2153,14 @@ async function exportTrimmedVideo() {
     );
 
     if (result.success) {
-      console.log("Trimmed video exported successfully:", result.path);
+      logger.info("Trimmed video exported successfully:", result.path);
       showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
-    console.error("Error exporting video:", error);
-    console.error("Error details:", error.stack);
+    logger.error("Error exporting video:", error);
+    logger.error("Error details:", error.stack);
     await showCustomAlert(`Export failed: ${error.message}. Please check the console for more details.`);
   }
 }
@@ -2186,13 +2185,13 @@ async function exportClipFromContextMenu(clip) {
       speed
     );
     if (result.success) {
-      console.log("Clip exported successfully:", result.path);
+      logger.info("Clip exported successfully:", result.path);
       showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
-    console.error("Error exporting clip:", error);
+    logger.error("Error exporting clip:", error);
     await showCustomAlert(`Failed to export clip. Error: ${error.message}`);
   }
 }
@@ -2247,12 +2246,12 @@ async function openClip(originalName, customName) {
   // Load and set the volume before playing the video
   try {
     const savedVolume = await loadVolume(originalName);
-    console.log(`Loaded volume for ${originalName}: ${savedVolume}`);
+    logger.info(`Loaded volume for ${originalName}: ${savedVolume}`);
     setupAudioContext();
     gainNode.gain.setValueAtTime(savedVolume, audioContext.currentTime);
     updateVolumeSlider(savedVolume);
   } catch (error) {
-    console.error('Error loading volume:', error);
+    logger.error('Error loading volume:', error);
     setupAudioContext();
     gainNode.gain.setValueAtTime(1, audioContext.currentTime);
     updateVolumeSlider(1); // Default to 100%
@@ -2260,12 +2259,12 @@ async function openClip(originalName, customName) {
 
   try {
     const savedSpeed = await loadSpeed(originalName);
-    console.log(`Loaded speed for ${originalName}: ${savedSpeed}`);
+    logger.info(`Loaded speed for ${originalName}: ${savedSpeed}`);
     videoPlayer.playbackRate = savedSpeed;
     updateSpeedSlider(savedSpeed);
     updateSpeedText(savedSpeed);
   } catch (error) {
-    console.error('Error loading speed:', error);
+    logger.error('Error loading speed:', error);
     videoPlayer.playbackRate = 1;
     updateSpeedSlider(1);
     updateSpeedText(1);
@@ -2436,7 +2435,7 @@ function handleVideoSeeked() {
   if (currentClip) {
     elapsedTime = Math.floor(videoPlayer.currentTime);
     // Check if the clip is private before updating Discord presence
-    console.log('Current clip:', currentClip.tags);
+    logger.info('Current clip:', currentClip.tags);
     if (!currentClip.tags || !currentClip.tags.includes('Private')) {
       updateDiscordPresenceForClip(currentClip, !videoPlayer.paused);
     }
@@ -2495,7 +2494,7 @@ function clipTitleFocusHandler() {
 
   clipTitle.dataset.originalValue = clipTitle.value;
   updateDiscordPresence('Editing clip title', currentClip.customName);
-  console.log(
+  logger.info(
     "Clip title focused. Original value:",
     clipTitle.dataset.originalValue,
   );
@@ -2730,7 +2729,7 @@ function calculateSkipTime(videoDuration) {
 
 function skipTime(direction) {
   const skipDuration = calculateSkipTime(videoPlayer.duration);
-  console.log(`Video duration: ${videoPlayer.duration.toFixed(2)}s, Skip duration: ${skipDuration.toFixed(2)}s`);
+  logger.info(`Video duration: ${videoPlayer.duration.toFixed(2)}s, Skip duration: ${skipDuration.toFixed(2)}s`);
   
   const newTime = videoPlayer.currentTime + (direction * skipDuration);
   videoPlayer.currentTime = Math.max(0, Math.min(newTime, videoPlayer.duration));
@@ -2914,7 +2913,7 @@ function checkDragState() {
       lastMousePosition.y < rect.top ||
       lastMousePosition.y > rect.bottom
     ) {
-      console.log("Drag state reset due to mouse being outside the progress bar and mouse button not pressed");
+      logger.info("Drag state reset due to mouse being outside the progress bar and mouse button not pressed");
       isDragging = null;
       isDraggingTrim = false;
       updateTrimControls();
@@ -2932,7 +2931,7 @@ async function saveTrimChanges() {
   const clipToUpdate = currentClip ? { ...currentClip } : null;
   
   if (!clipToUpdate) {
-    console.log("No clip to save trim data for");
+    logger.info("No clip to save trim data for");
     return;
   }
 
@@ -2949,7 +2948,7 @@ async function saveTrimChanges() {
         trimStartTime,
         trimEndTime
       );
-      console.log("Trim data saved successfully");
+      logger.info("Trim data saved successfully");
 
       // Regenerate thumbnail at new start point
       const result = await ipcRenderer.invoke(
@@ -2977,7 +2976,7 @@ async function saveTrimChanges() {
         updateDiscordPresence('Editing a clip', currentClip.customName);
       }
     } catch (error) {
-      console.error("Error saving trim data:", error);
+      logger.error("Error saving trim data:", error);
       showCustomAlert(`Error saving trim: ${error.message}`);
     }
   }, 500);
@@ -3001,7 +3000,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
       );
       if (result.success) {
         updateClipNameInLibrary(originalName, newCustomName);
-        console.log(`Title successfully changed to: ${newCustomName}`);
+        logger.info(`Title successfully changed to: ${newCustomName}`);
         
         // Update the currentClip object
         if (currentClip && currentClip.originalName === originalName) {
@@ -3026,7 +3025,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
         throw new Error(result.error);
       }
     } catch (error) {
-      console.error("Error saving custom name:", error);
+      logger.error("Error saving custom name:", error);
       await showCustomAlert(
         `Failed to save custom name. Please try again later. Error: ${error.message}`
       );
@@ -3050,7 +3049,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
 
 function updateClipNameInLibrary(originalName, newCustomName) {
   if (!originalName) {
-    console.warn(
+    logger.warn(
       "Attempted to update clip name in library with undefined originalName",
     );
     return;
@@ -3065,7 +3064,7 @@ function updateClipNameInLibrary(originalName, newCustomName) {
       clipNameElement.textContent = newCustomName;
     }
   } else {
-    console.warn(`Clip element not found for originalName: ${originalName}`);
+    logger.warn(`Clip element not found for originalName: ${originalName}`);
   }
 }
 
@@ -3145,8 +3144,8 @@ filterDropdown.addEventListener("change", () => {
 });
 
 const debouncedFilterClips = debounce((filter) => {
-  console.log("Filtering clips with filter:", filter);
-  console.log("allClips length before filtering:", allClips.length);
+  logger.info("Filtering clips with filter:", filter);
+  logger.info("allClips length before filtering:", allClips.length);
   
   let filteredClips = [...allClips];
 
@@ -3163,7 +3162,7 @@ const debouncedFilterClips = debounce((filter) => {
   filteredClips = removeDuplicates(filteredClips);
   filteredClips.sort((a, b) => b.createdAt - a.createdAt);
 
-  console.log("Filtered clips length:", filteredClips.length);
+  logger.info("Filtered clips length:", filteredClips.length);
 
   currentClipList = filteredClips;
   renderClips(currentClipList);
@@ -3183,28 +3182,28 @@ function filterClips(filter) {
 
 // Helper function to remove duplicates
 function removeDuplicates(clips) {
-  console.log("Removing duplicates. Input length:", clips.length);
+  logger.info("Removing duplicates. Input length:", clips.length);
   const uniqueClips = clips.filter((clip, index, self) =>
     index === self.findIndex((t) => t.originalName === clip.originalName)
   );
-  console.log("After removing duplicates. Output length:", uniqueClips.length);
+  logger.info("After removing duplicates. Output length:", uniqueClips.length);
   return uniqueClips;
 }
 
 function validateClipLists() {
-  console.log("Validating clip lists");
-  console.log("allClips length:", allClips.length);
-  console.log("currentClipList length:", currentClipList.length);
-  console.log("Rendered clips count:", clipGrid.children.length);
+  logger.info("Validating clip lists");
+  logger.info("allClips length:", allClips.length);
+  logger.info("currentClipList length:", currentClipList.length);
+  logger.info("Rendered clips count:", clipGrid.children.length);
 
   const allClipsUnique = new Set(allClips.map(clip => clip.originalName)).size === allClips.length;
   const currentClipListUnique = new Set(currentClipList.map(clip => clip.originalName)).size === currentClipList.length;
 
-  console.log("allClips is unique:", allClipsUnique);
-  console.log("currentClipList is unique:", currentClipListUnique);
+  logger.info("allClips is unique:", allClipsUnique);
+  logger.info("currentClipList is unique:", currentClipListUnique);
 
   if (!allClipsUnique || !currentClipListUnique) {
-    console.warn("Duplicate clips detected!");
+    logger.warn("Duplicate clips detected!");
   }
 }
 
@@ -3288,7 +3287,7 @@ function updateDiscordPresenceForClip(clip, isPlaying = true) {
     clearInterval(discordPresenceInterval);
     
     if (clip.tags && clip.tags.includes('Private')) {
-      console.log('Private clip detected. Clearing presence');
+      logger.info('Private clip detected. Clearing presence');
       updateDiscordPresence('Download Clip Library now!', '');
     } else {
       if (isPlaying) {
