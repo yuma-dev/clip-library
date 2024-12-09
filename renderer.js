@@ -114,8 +114,12 @@ settingsModal.innerHTML = `
     <div class="settings-row">
       <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
       <input type="checkbox" id="enableDiscordRPC">
-      <label for="highQualityExport">Enable High Quality Export:</label>
-      <input type="checkbox" id="highQualityExport">
+      <label for="exportQuality">Export Quality:</label>
+      <select id="exportQuality">
+        <option value="discord">Discord (~10MB)</option>
+        <option value="high">High Quality (~30MB)</option>
+        <option value="lossless">Lossless</option>
+      </select>
     </div>
     <div class="settings-row">
       <label for="previewVolume">Preview Volume:</label>
@@ -1438,41 +1442,36 @@ async function changeClipLocation() {
   }
 }
 
-const highQualityExportCheckbox = document.getElementById('highQualityExport');
-highQualityExportCheckbox.addEventListener('change', async (e) => {
-  settings.highQualityExport = e.target.checked;
+const exportQualitySelect = document.getElementById('exportQuality');
+exportQualitySelect.addEventListener('change', async (e) => {
+  settings.exportQuality = e.target.value;
   await ipcRenderer.invoke('save-settings', settings);
 });
 
 async function openSettingsModal() {
-  await fetchSettings();
+  settings = await ipcRenderer.invoke('get-settings');
   const settingsModal = document.getElementById("settingsModal");
   if (settingsModal) {
     settingsModal.style.display = "block";
     updateVersionDisplay();
     
-    // Fetch the latest settings
-    settings = await ipcRenderer.invoke('get-settings');
-    
-    // Update the Discord RPC checkbox
+    // Update all settings controls
     const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
+    const exportQualitySelect = document.getElementById('exportQuality');
+    const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+    const previewVolumeValue = document.getElementById('previewVolumeValue');
+
     if (enableDiscordRPCCheckbox) {
       enableDiscordRPCCheckbox.checked = settings.enableDiscordRPC;
     }
-
-    const highQualityExportCheckbox = document.getElementById('highQualityExport');
-    if (highQualityExportCheckbox) {
-      highQualityExportCheckbox.checked = settings.highQualityExport;
+    
+    if (exportQualitySelect) {
+      exportQualitySelect.value = settings.exportQuality || 'discord';
     }
 
-    // Update preview volume slider
-    const previewVolumeSlider = document.getElementById('previewVolumeSlider');
-    const previewVolumeValue = document.getElementById('previewVolumeValue');
     if (previewVolumeSlider && previewVolumeValue) {
-      // Use the saved value or default to 0.1
       const savedVolume = settings.previewVolume ?? 0.1;
       previewVolumeSlider.value = savedVolume;
-      // Display with more decimal places for finer values
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
     }
   }
