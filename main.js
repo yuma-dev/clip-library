@@ -1107,17 +1107,19 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
     let totalFrames = 0;
     let processedFrames = 0;
     
-    // Get total frames first
-    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+    ffmpeg.ffprobe(inputPath, async (err, metadata) => {
       if (err) {
         logger.error('Error getting video info:', err);
         return;
       }
       
-      // Calculate total frames based on duration and framerate
       const fps = eval(metadata.streams[0].r_frame_rate);
       totalFrames = Math.ceil(duration * fps);
       
+      // Get current settings
+      const settings = await loadSettings();
+      const highQuality = settings.highQualityExport;
+
       let command = ffmpeg(inputPath)
         .setStartTime(start)
         .setDuration(duration)
@@ -1125,13 +1127,32 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
         .videoFilters(`setpts=${1/speed}*PTS`)
         .audioFilters(`atempo=${speed}`);
 
+      // Set quality based on settings
+      if (highQuality) {
+        command.outputOptions([
+          '-c:v h264_nvenc',
+          '-preset p4', // Medium-high quality preset
+          '-rc vbr',
+          '-cq 20', // Balanced quality
+          '-b:v 8M', // Target bitrate
+          '-maxrate 10M',
+          '-bufsize 10M',
+          '-profile:v high',
+          '-rc-lookahead 32'
+        ]);
+      } else {
+        // Original Discord-friendly settings
+        command.outputOptions([
+          '-c:v h264_nvenc',
+          '-preset slow',
+          '-crf 23'
+        ]);
+      }
+
+      // Add progress reporting options
       command.outputOptions([
-        '-c:v h264_nvenc', 
-        '-preset slow',
-        '-crf 23',
-        // Add progress reporting options
         '-progress pipe:1',
-        '-stats_period 0.1' // Report progress more frequently
+        '-stats_period 0.1'
       ])
       .on('start', (commandLine) => {
         logger.info('Spawned FFmpeg with command: ' + commandLine);
@@ -1152,10 +1173,10 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
         }
       })
       .on('error', (err, stdout, stderr) => {
-        logger.info('Hardware encoding failed, falling back to software encoding');
-        logger.info('Error:', err.message);
-        logger.info('stdout:', stdout);
-        logger.info('stderr:', stderr);
+        logger.warn('Hardware encoding failed, falling back to software encoding');
+        logger.error('Error:', err.message);
+        logger.error('stdout:', stdout);
+        logger.error('stderr:', stderr);
         
         usingFallback = true;
         ipcMain.emit('ffmpeg-fallback');

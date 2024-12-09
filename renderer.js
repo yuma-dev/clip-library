@@ -114,6 +114,8 @@ settingsModal.innerHTML = `
     <div class="settings-row">
       <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
       <input type="checkbox" id="enableDiscordRPC">
+      <label for="highQualityExport">Enable High Quality Export:</label>
+      <input type="checkbox" id="highQualityExport">
     </div>
     <div class="settings-row">
       <label for="previewVolume">Preview Volume:</label>
@@ -1436,6 +1438,12 @@ async function changeClipLocation() {
   }
 }
 
+const highQualityExportCheckbox = document.getElementById('highQualityExport');
+highQualityExportCheckbox.addEventListener('change', async (e) => {
+  settings.highQualityExport = e.target.checked;
+  await ipcRenderer.invoke('save-settings', settings);
+});
+
 async function openSettingsModal() {
   await fetchSettings();
   const settingsModal = document.getElementById("settingsModal");
@@ -1450,6 +1458,11 @@ async function openSettingsModal() {
     const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
     if (enableDiscordRPCCheckbox) {
       enableDiscordRPCCheckbox.checked = settings.enableDiscordRPC;
+    }
+
+    const highQualityExportCheckbox = document.getElementById('highQualityExport');
+    if (highQualityExportCheckbox) {
+      highQualityExportCheckbox.checked = settings.highQualityExport;
     }
 
     // Update preview volume slider
