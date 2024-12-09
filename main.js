@@ -324,11 +324,16 @@ ipcMain.handle('get-app-version', () => {
 ipcMain.handle('get-new-clip-info', async (event, fileName) => {
   const filePath = path.join(settings.clipLocation, fileName);
   const stats = await fs.stat(filePath);
-  return {
+  
+  // Create bare minimum clip info without any trim data
+  const newClipInfo = {
     originalName: fileName,
     customName: path.basename(fileName, path.extname(fileName)),
     createdAt: stats.birthtimeMs || stats.ctimeMs,
+    tags: [] // Initialize with empty tags array
   };
+
+  return newClipInfo;
 });
 
 ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
@@ -380,16 +385,19 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
 });
 
 ipcMain.handle("get-trim", async (event, clipName) => {
+  logger.info(`Getting trim data for: ${clipName}`);
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
   const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
 
   try {
     const trimData = await fs.readFile(trimFilePath, "utf8");
+    logger.info(`Found trim data for ${clipName}:`, trimData);
     return JSON.parse(trimData);
   } catch (error) {
     if (error.code === "ENOENT") {
-      return null; // No trim data exists
+      logger.info(`No trim data found for ${clipName}`);
+      return null;
     }
     logger.error(`Error reading trim data for ${clipName}:`, error);
     throw error;
