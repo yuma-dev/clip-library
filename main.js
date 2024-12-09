@@ -1,6 +1,7 @@
 if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu } = require("electron");
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
+const logger = require('./logger');
 const { exec, execFile } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
@@ -30,9 +31,9 @@ ffmpeg.setFfprobePath(ffprobePath);
 
 execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
   if (error) {
-    console.error('Error getting ffmpeg version:', error);
+    logger.error('Error getting ffmpeg version:', error);
   } else {
-    console.log('FFmpeg version:', stdout);
+    logger.info('FFmpeg version:', stdout);
   }
 });
 
@@ -65,7 +66,7 @@ const THUMBNAIL_CACHE_DIR = path.join(
 );
 
 // Ensure cache directory exists
-fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true }).catch(console.error);
+fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true }).catch(logger.error);
 
 let mainWindow;
 let settings;
@@ -118,7 +119,7 @@ async function createWindow() {
         watchRenderer: true,
       });
     } catch (_) {
-      console.log("Error");
+      logger.info("Error");
     }
   }
 
@@ -172,18 +173,18 @@ let rpcReady = false;
 function initDiscordRPC() {
   rpc = new DiscordRPC.Client({ transport: 'ipc' });
   rpc.on('ready', () => {
-    console.log('Discord RPC connected successfully');
+    logger.info('Discord RPC connected successfully');
     rpcReady = true;
     updateDiscordPresence('Browsing clips');
   });
   rpc.login({ clientId }).catch(error => {
-    console.error('Failed to initialize Discord RPC:', error);
+    logger.error('Failed to initialize Discord RPC:', error);
   });
 }
 
 function updateDiscordPresence(details, state = null) {
   if (!rpcReady || !settings.enableDiscordRPC) {
-    console.log('RPC not ready or disabled');
+    logger.info('RPC not ready or disabled');
     return;
   }
 
@@ -199,13 +200,13 @@ function updateDiscordPresence(details, state = null) {
   }
 
   rpc.setActivity(activity).catch(error => {
-    console.error('Failed to update Discord presence:', error);
+    logger.error('Failed to update Discord presence:', error);
   });
 }
 
 function clearDiscordPresence() {
   if (rpcReady) {
-    rpc.clearActivity().catch(console.error);
+    rpc.clearActivity().catch(logger.error);
   }
 }
 
@@ -269,7 +270,7 @@ ipcMain.handle("get-clips", async () => {
           customName = await fs.readFile(customNamePath, "utf8");
         } catch (error) {
           if (error.code !== "ENOENT")
-            console.error("Error reading custom name:", error);
+            logger.error("Error reading custom name:", error);
           customName = path.basename(file.name, path.extname(file.name));
         }
 
@@ -296,7 +297,7 @@ ipcMain.handle("get-clips", async () => {
     const clipInfos = await Promise.all(clipInfoPromises);
     return clipInfos;
   } catch (error) {
-    console.error("Error reading directory:", error);
+    logger.error("Error reading directory:", error);
     return [];
   }
 });
@@ -335,7 +336,7 @@ ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
     await saveCustomNameData(originalName, customName);
     return { success: true, customName };
   } catch (error) {
-    console.error("Error in save-custom-name handler:", error);
+    logger.error("Error in save-custom-name handler:", error);
     return { success: false, error: error.message };
   }
 });
@@ -373,7 +374,7 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
       });
     });
   } catch (error) {
-    console.error('Error getting clip info:', error);
+    logger.error('Error getting clip info:', error);
     throw error;
   }
 });
@@ -390,7 +391,7 @@ ipcMain.handle("get-trim", async (event, clipName) => {
     if (error.code === "ENOENT") {
       return null; // No trim data exists
     }
-    console.error(`Error reading trim data for ${clipName}:`, error);
+    logger.error(`Error reading trim data for ${clipName}:`, error);
     throw error;
   }
 });
@@ -403,10 +404,10 @@ ipcMain.handle("save-speed", async (event, clipName, speed) => {
 
   try {
     await writeFileAtomically(speedFilePath, speed.toString());
-    console.log(`Speed saved successfully for ${clipName}: ${speed}`);
+    logger.info(`Speed saved successfully for ${clipName}: ${speed}`);
     return { success: true };
   } catch (error) {
-    console.error(`Error saving speed for ${clipName}:`, error);
+    logger.error(`Error saving speed for ${clipName}:`, error);
     return { success: false, error: error.message };
   }
 });
@@ -420,16 +421,16 @@ ipcMain.handle("get-speed", async (event, clipName) => {
     const speedData = await fs.readFile(speedFilePath, "utf8");
     const parsedSpeed = parseFloat(speedData);
     if (isNaN(parsedSpeed)) {
-      console.warn(`Invalid speed data for ${clipName}, using default`);
+      logger.warn(`Invalid speed data for ${clipName}, using default`);
       return 1;
     }
     return parsedSpeed;
   } catch (error) {
     if (error.code === "ENOENT") {
-      console.log(`No speed data found for ${clipName}, using default`);
+      logger.info(`No speed data found for ${clipName}, using default`);
       return 1; // Default speed if not set
     }
-    console.error(`Error reading speed for ${clipName}:`, error);
+    logger.error(`Error reading speed for ${clipName}:`, error);
     throw error;
   }
 });
@@ -442,10 +443,10 @@ ipcMain.handle("save-volume", async (event, clipName, volume) => {
 
   try {
     await writeFileAtomically(volumeFilePath, volume.toString());
-    console.log(`Volume saved successfully for ${clipName}: ${volume}`);
+    logger.info(`Volume saved successfully for ${clipName}: ${volume}`);
     return { success: true };
   } catch (error) {
-    console.error(`Error saving volume for ${clipName}:`, error);
+    logger.error(`Error saving volume for ${clipName}:`, error);
     return { success: false, error: error.message };
   }
 });
@@ -459,16 +460,16 @@ ipcMain.handle("get-volume", async (event, clipName) => {
     const volumeData = await fs.readFile(volumeFilePath, "utf8");
     const parsedVolume = parseFloat(volumeData);
     if (isNaN(parsedVolume)) {
-      console.warn(`Invalid volume data for ${clipName}, using default`);
+      logger.warn(`Invalid volume data for ${clipName}, using default`);
       return 1;
     }
     return parsedVolume;
   } catch (error) {
     if (error.code === "ENOENT") {
-      console.log(`No volume data found for ${clipName}, using default`);
+      logger.info(`No volume data found for ${clipName}, using default`);
       return 1; // Default volume if not set
     }
-    console.error(`Error reading volume for ${clipName}:`, error);
+    logger.error(`Error reading volume for ${clipName}:`, error);
     throw error;
   }
 });
@@ -485,7 +486,7 @@ ipcMain.handle("get-clip-tags", async (event, clipName) => {
     if (error.code === "ENOENT") {
       return []; // No tags file exists
     }
-    console.error("Error reading tags:", error);
+    logger.error("Error reading tags:", error);
     return [];
   }
 });
@@ -499,7 +500,7 @@ ipcMain.handle("save-clip-tags", async (event, clipName, tags) => {
     await fs.writeFile(tagsFilePath, JSON.stringify(tags));
     return { success: true };
   } catch (error) {
-    console.error("Error saving tags:", error);
+    logger.error("Error saving tags:", error);
     return { success: false, error: error.message };
   }
 });
@@ -513,7 +514,7 @@ ipcMain.handle("load-global-tags", async () => {
     if (error.code === "ENOENT") {
       return []; // No tags file exists yet
     }
-    console.error("Error reading global tags:", error);
+    logger.error("Error reading global tags:", error);
     return [];
   }
 });
@@ -524,7 +525,7 @@ ipcMain.handle("save-global-tags", async (event, tags) => {
     await fs.writeFile(tagsFilePath, JSON.stringify(tags));
     return { success: true };
   } catch (error) {
-    console.error("Error saving global tags:", error);
+    logger.error("Error saving global tags:", error);
     return { success: false, error: error.message };
   }
 });
@@ -540,9 +541,9 @@ async function saveCustomNameData(clipName, customName) {
   );
   try {
     await writeFileAtomically(customNameFilePath, customName);
-    console.log(`Custom name saved successfully for ${clipName}`);
+    logger.info(`Custom name saved successfully for ${clipName}`);
   } catch (error) {
-    console.error(`Error saving custom name for ${clipName}:`, error);
+    logger.error(`Error saving custom name for ${clipName}:`, error);
     throw error;
   }
 }
@@ -555,9 +556,9 @@ async function saveTrimData(clipName, trimData) {
   const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
   try {
     await writeFileAtomically(trimFilePath, JSON.stringify(trimData));
-    console.log(`Trim data saved successfully for ${clipName}`);
+    logger.info(`Trim data saved successfully for ${clipName}`);
   } catch (error) {
-    console.error(`Error saving trim data for ${clipName}:`, error);
+    logger.error(`Error saving trim data for ${clipName}:`, error);
     throw error;
   }
 }
@@ -613,7 +614,7 @@ async function writeFileAtomically(filePath, data) {
     await writeFileWithRetry(tempPath, data);
     await fs.rename(tempPath, filePath);
   } catch (error) {
-    console.error(`Error in writeFileAtomically: ${error.message}`);
+    logger.error(`Error in writeFileAtomically: ${error.message}`);
     // If rename fails, try direct write as a fallback
     await writeFileWithRetry(filePath, data);
   } finally {
@@ -622,7 +623,7 @@ async function writeFileAtomically(filePath, data) {
     } catch (error) {
       // Ignore error if temp file doesn't exist
       if (error.code !== "ENOENT")
-        console.error(`Error deleting temp file: ${error.message}`);
+        logger.error(`Error deleting temp file: ${error.message}`);
     }
   }
 }
@@ -683,7 +684,7 @@ async function validateThumbnail(clipName, thumbnailPath) {
     try {
       await fs.access(thumbnailPath);
     } catch (error) {
-      console.log(`${clipName}: No thumbnail file exists`);
+      logger.info(`${clipName}: No thumbnail file exists`);
       return false;
     }
 
@@ -691,7 +692,7 @@ async function validateThumbnail(clipName, thumbnailPath) {
     try {
       const metadata = await getThumbnailMetadata(thumbnailPath);
       if (!metadata) {
-        console.log(`${clipName}: No metadata found`);
+        logger.info(`${clipName}: No metadata found`);
         return false;
       }
 
@@ -699,7 +700,7 @@ async function validateThumbnail(clipName, thumbnailPath) {
       
       if (currentTrimData) {
         const isValid = Math.abs(metadata.startTime - currentTrimData.start) < EPSILON;
-        console.log(`${clipName}: Validating trim data:`, {
+        logger.info(`${clipName}: Validating trim data:`, {
           metadataStartTime: metadata.startTime,
           trimStartTime: currentTrimData.start,
           diff: Math.abs(metadata.startTime - currentTrimData.start),
@@ -712,19 +713,19 @@ async function validateThumbnail(clipName, thumbnailPath) {
         const expectedStartTime = metadata.duration > 40 ? metadata.duration / 2 : 0;
         const isValid = Math.abs(metadata.startTime - expectedStartTime) < 0.1;
         if (!isValid) {
-          console.log(`${clipName}: Start time mismatch - Metadata: ${metadata.startTime}, Expected: ${expectedStartTime}`);
+          logger.info(`${clipName}: Start time mismatch - Metadata: ${metadata.startTime}, Expected: ${expectedStartTime}`);
         }
         return isValid;
       }
 
-      console.log(`${clipName}: Missing duration in metadata`);
+      logger.info(`${clipName}: Missing duration in metadata`);
       return false;
     } catch (error) {
-      console.log(`${clipName}: No metadata file exists`);
+      logger.info(`${clipName}: No metadata file exists`);
       return false;
     }
   } catch (error) {
-    console.error(`Error validating thumbnail for ${clipName}:`, error);
+    logger.error(`Error validating thumbnail for ${clipName}:`, error);
     return false;
   }
 }
@@ -813,7 +814,7 @@ async function processQueue() {
             startTime: (await getThumbnailMetadata(thumbnailPath))?.startTime || 0
           });
         } catch (err) {
-          console.error(`Error processing thumbnail for ${clipName}:`, err);
+          logger.error(`Error processing thumbnail for ${clipName}:`, err);
           event.sender.send("thumbnail-generation-failed", {
             clipName,
             error: err.message
@@ -869,7 +870,7 @@ ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTim
 
     return { success: true, thumbnailPath };
   } catch (error) {
-    console.error('Error regenerating thumbnail:', error);
+    logger.error('Error regenerating thumbnail:', error);
     return { success: false, error: error.message };
   }
 });
@@ -893,7 +894,7 @@ ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => 
         clipsNeedingGeneration.push(clipName);
       }
     } catch (error) {
-      console.error(`Error validating thumbnail for ${clipName}:`, error);
+      logger.error(`Error validating thumbnail for ${clipName}:`, error);
       clipsNeedingGeneration.push(clipName);
     }
   }
@@ -929,7 +930,7 @@ ipcMain.handle("generate-thumbnail", async (event, clipName) => {
     await fs.access(thumbnailPath);
     return thumbnailPath;
   } catch (error) {
-    console.log(`Generating new thumbnail for ${clipName}`);
+    logger.info(`Generating new thumbnail for ${clipName}`);
     // If thumbnail doesn't exist, generate it
     return new Promise((resolve, reject) => {
       ffmpeg(clipPath)
@@ -941,11 +942,11 @@ ipcMain.handle("generate-thumbnail", async (event, clipName) => {
           size: "640x360",
         })
         .on("end", () => {
-          console.log(`Thumbnail generated successfully for ${clipName}`);
+          logger.info(`Thumbnail generated successfully for ${clipName}`);
           resolve(thumbnailPath);
         })
         .on("error", (err) => {
-          console.error(`Error generating thumbnail for ${clipName}:`, err);
+          logger.error(`Error generating thumbnail for ${clipName}:`, err);
           reject(err);
         });
     });
@@ -957,7 +958,7 @@ ipcMain.handle("save-trim", async (event, clipName, start, end) => {
     await saveTrimData(clipName, { start, end });
     return { success: true };
   } catch (error) {
-    console.error("Error in save-trim handler:", error);
+    logger.error("Error in save-trim handler:", error);
     return { success: false, error: error.message };
   }
 });
@@ -989,7 +990,7 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
             `taskkill /F /IM "explorer.exe" /FI "MODULES eq ${path.basename(clipPath)}"`,
           );
         } catch (error) {
-          console.warn("Failed to kill processes:", error);
+          logger.warn("Failed to kill processes:", error);
         }
       }
 
@@ -1014,7 +1015,7 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
         // If the file is busy and we haven't reached max retries, wait and try again
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
       } else {
-        console.error(`Error deleting clip ${clipName}:`, error);
+        logger.error(`Error deleting clip ${clipName}:`, error);
         return { success: false, error: error.message };
       }
     }
@@ -1056,7 +1057,7 @@ ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed
     
     return { success: true, path: outputPath };
   } catch (error) {
-    console.error("Error exporting video:", error);
+    logger.error("Error exporting video:", error);
     return { success: false, error: error.message };
   }
 });
@@ -1077,7 +1078,7 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volum
     
     return { success: true, path: outputPath };
   } catch (error) {
-    console.error("Error exporting trimmed video:", error);
+    logger.error("Error exporting trimmed video:", error);
     return { success: false, error: error.message };
   }
 });
@@ -1101,7 +1102,7 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
     // Get total frames first
     ffmpeg.ffprobe(inputPath, (err, metadata) => {
       if (err) {
-        console.error('Error getting video info:', err);
+        logger.error('Error getting video info:', err);
         return;
       }
       
@@ -1125,7 +1126,7 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
         '-stats_period 0.1' // Report progress more frequently
       ])
       .on('start', (commandLine) => {
-        console.log('Spawned FFmpeg with command: ' + commandLine);
+        logger.info('Spawned FFmpeg with command: ' + commandLine);
       })
       .on('stderr', (stderrLine) => {
         // Parse frame information from stderr
@@ -1143,10 +1144,10 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
         }
       })
       .on('error', (err, stdout, stderr) => {
-        console.log('Hardware encoding failed, falling back to software encoding');
-        console.log('Error:', err.message);
-        console.log('stdout:', stdout);
-        console.log('stderr:', stderr);
+        logger.info('Hardware encoding failed, falling back to software encoding');
+        logger.info('Error:', err.message);
+        logger.info('stdout:', stdout);
+        logger.info('stderr:', stderr);
         
         usingFallback = true;
         ipcMain.emit('ffmpeg-fallback');
@@ -1186,9 +1187,9 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
             resolve(usingFallback);
           })
           .on('error', (err, stdout, stderr) => {
-            console.error('FFmpeg error:', err.message);
-            console.error('FFmpeg stdout:', stdout);
-            console.error('FFmpeg stderr:', stderr);
+            logger.error('FFmpeg error:', err.message);
+            logger.error('FFmpeg stdout:', stdout);
+            logger.error('FFmpeg stderr:', stderr);
             reject(err);
           })
           .save(outputPath);
