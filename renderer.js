@@ -35,6 +35,7 @@ const PREVIEW_WIDTH = 160;
 const PREVIEW_HEIGHT = 90;
 
 let audioContext, gainNode;
+let initialPlaybackTime = 0;
 let lastActivityTime = Date.now();
 let currentClipList = [];
 let currentClip = null;
@@ -247,6 +248,14 @@ async function addNewClipToLibrary(fileName) {
     allClips.unshift(newClipInfo);
     const newClipElement = await createClipElement(newClipInfo);
     clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
+    
+    // Force a clean state for the new clip
+    const clipElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+    if (clipElement) {
+      // Ensure no trim data is associated
+      clipElement.dataset.trimStart = undefined;
+      clipElement.dataset.trimEnd = undefined;
+    }
   } else {
     // If it exists, update the existing clip info
     allClips[existingClipIndex] = newClipInfo;
@@ -262,6 +271,12 @@ async function addNewClipToLibrary(fileName) {
   ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
   updateFilterDropdown();
 }
+
+ipcRenderer.on('new-clip-added', (event, fileName) => {
+  logger.debug(`New clip added event received for: ${fileName}`);
+  logger.debug('Current first clip in allClips:', allClips[0]?.originalName);
+  addNewClipToLibrary(fileName);
+});
 
 ipcRenderer.on('new-clip-added', (event, fileName) => {
   logger.info(`New clip added event received for: ${fileName}`);
@@ -2212,6 +2227,7 @@ videoPlayer.addEventListener("loadedmetadata", updateTimeDisplay);
 videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
 
 async function openClip(originalName, customName) {
+  logger.info(`Opening clip: ${originalName}`);
   elapsedTime = 0;
   if (currentCleanup) {
     currentCleanup();
@@ -2219,23 +2235,27 @@ async function openClip(originalName, customName) {
   }
 
   const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
+  logger.debug(`Retrieved clip info:`, clipInfo);
   const trimData = await ipcRenderer.invoke("get-trim", originalName);
+  logger.debug(`Retrieved trim data for ${originalName}:`, trimData);
   const clipTags = await ipcRenderer.invoke("get-clip-tags", originalName);
   currentClip = { originalName, customName, tags: clipTags};
 
-  let startTime;
+  // Set initial playback position (this doesn't affect trim points)
   if (trimData) {
-    startTime = trimData.start;
+    // If there's trim data, use it for both trim points and playback position
+    trimStartTime = trimData.start;
     trimEndTime = trimData.end;
+    initialPlaybackTime = trimData.start;
   } else {
-    if (clipInfo.format.duration > 40) {
-      startTime = clipInfo.format.duration / 2;
-    } else {
-      startTime = 0;
-    }
+    // If no trim data, set trim points to full video duration
+    trimStartTime = 0;
     trimEndTime = clipInfo.format.duration;
+    // Only the playback position starts in the middle for long videos
+    initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
   }
-  trimStartTime = startTime;
+
+  logger.info(`Final trim values set - start: ${trimStartTime}, end: ${trimEndTime}`);
 
   videoPlayer.preload = "auto";
   videoPlayer.autoplay = true;
@@ -2291,7 +2311,7 @@ async function openClip(originalName, customName) {
     updateTrimControls();
     // Only set currentTime after trim controls are updated
     requestAnimationFrame(() => {
-      videoPlayer.currentTime = trimStartTime;  // Always use trimStartTime
+      videoPlayer.currentTime = initialPlaybackTime;  // Always use initialPlaybackTime
     });
   }, { once: true });
   videoPlayer.addEventListener("canplay", handleVideoCanPlay);
@@ -2446,7 +2466,7 @@ function handleVideoCanPlay() {
   if (isLoading) {
     isLoading = false;
     hideLoadingOverlay();
-    // We don't need to play here anymore, as it will be handled by the 'seeked' event
+    videoPlayer.currentTime = initialPlaybackTime;
   }
 }
 
