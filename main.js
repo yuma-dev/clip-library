@@ -1088,24 +1088,59 @@ ipcMain.on('ffmpeg-fallback', () => {
   });
 });
 
+// In main.js
+
 function exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed) {
   return new Promise((resolve, reject) => {
     const duration = end - start;
     let usingFallback = false;
+    let lastProgressTime = Date.now();
+    let totalFrames = 0;
+    let processedFrames = 0;
     
-    let command = ffmpeg(inputPath)
-      .setStartTime(start)
-      .setDuration(duration)
-      .audioFilters(`volume=${volume}`)
-      .videoFilters(`setpts=${1/speed}*PTS`)
-      .audioFilters(`atempo=${speed}`);
+    // Get total frames first
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) {
+        console.error('Error getting video info:', err);
+        return;
+      }
+      
+      // Calculate total frames based on duration and framerate
+      const fps = eval(metadata.streams[0].r_frame_rate);
+      totalFrames = Math.ceil(duration * fps);
+      
+      let command = ffmpeg(inputPath)
+        .setStartTime(start)
+        .setDuration(duration)
+        .audioFilters(`volume=${volume}`)
+        .videoFilters(`setpts=${1/speed}*PTS`)
+        .audioFilters(`atempo=${speed}`);
 
-    command.outputOptions(['-c:v h264_nvenc', '-preset slow', '-crf 23'])
+      command.outputOptions([
+        '-c:v h264_nvenc', 
+        '-preset slow',
+        '-crf 23',
+        // Add progress reporting options
+        '-progress pipe:1',
+        '-stats_period 0.1' // Report progress more frequently
+      ])
       .on('start', (commandLine) => {
         console.log('Spawned FFmpeg with command: ' + commandLine);
       })
-      .on('progress', (progress) => {
-        ipcMain.emit('ffmpeg-progress', progress.percent);
+      .on('stderr', (stderrLine) => {
+        // Parse frame information from stderr
+        const frameMatch = stderrLine.match(/frame=\s*(\d+)/);
+        if (frameMatch) {
+          processedFrames = parseInt(frameMatch[1]);
+          const progress = Math.min((processedFrames / totalFrames) * 100, 99.9);
+          
+          // Only emit progress if enough time has passed or it's a significant change
+          const now = Date.now();
+          if (now - lastProgressTime >= 100) { // Throttle updates to max 10 per second
+            ipcMain.emit('ffmpeg-progress', progress);
+            lastProgressTime = now;
+          }
+        }
       })
       .on('error', (err, stdout, stderr) => {
         console.log('Hardware encoding failed, falling back to software encoding');
@@ -1116,17 +1151,40 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
         usingFallback = true;
         ipcMain.emit('ffmpeg-fallback');
 
+        // Reset progress tracking for fallback
+        processedFrames = 0;
+        lastProgressTime = Date.now();
+
         ffmpeg(inputPath)
           .setStartTime(start)
           .setDuration(duration)
           .audioFilters(`volume=${volume}`)
           .videoFilters(`setpts=${1/speed}*PTS`)
           .audioFilters(`atempo=${speed}`)
-          .outputOptions(['-c:v libx264', '-preset medium', '-crf 23'])
-          .on('progress', (progress) => {
-            ipcMain.emit('ffmpeg-progress', progress.percent);
+          .outputOptions([
+            '-c:v libx264',
+            '-preset medium',
+            '-crf 23',
+            '-progress pipe:1',
+            '-stats_period 0.1'
+          ])
+          .on('stderr', (stderrLine) => {
+            const frameMatch = stderrLine.match(/frame=\s*(\d+)/);
+            if (frameMatch) {
+              processedFrames = parseInt(frameMatch[1]);
+              const progress = Math.min((processedFrames / totalFrames) * 100, 99.9);
+              
+              const now = Date.now();
+              if (now - lastProgressTime >= 100) {
+                ipcMain.emit('ffmpeg-progress', progress);
+                lastProgressTime = now;
+              }
+            }
           })
-          .on('end', () => resolve(usingFallback))
+          .on('end', () => {
+            ipcMain.emit('ffmpeg-progress', 100);
+            resolve(usingFallback);
+          })
           .on('error', (err, stdout, stderr) => {
             console.error('FFmpeg error:', err.message);
             console.error('FFmpeg stdout:', stdout);
@@ -1135,8 +1193,12 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
           })
           .save(outputPath);
       })
-      .on('end', () => resolve(usingFallback))
+      .on('end', () => {
+        ipcMain.emit('ffmpeg-progress', 100);
+        resolve(usingFallback);
+      })
       .save(outputPath);
+    });
   });
 }
 

@@ -1217,3 +1217,88 @@ body.dragging {
   border-radius: 4px;
   white-space: nowrap;
 }
+
+.export-progress-toast {
+  position: fixed;
+  right: -300px; /* Start off-screen */
+  top: 100px;
+  background-color: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 15px 20px;
+  border-radius: 8px;
+  z-index: 10000;
+  transition: right 0.3s ease-out;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  width: 250px;
+}
+
+.export-progress-toast.show {
+  right: -10px;
+}
+
+.export-progress-bar {
+  width: 100%;
+  height: 4px;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.export-progress-bar-fill {
+  height: 100%;
+  background-color: #4CAF50;
+  width: 0%;
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+.export-status {
+  font-size: 14px;
+  margin-bottom: 5px;
+}
+
+.export-percentage {
+  font-size: 12px;
+  color: #a0a0a0;
+}
+
+.button-tooltip-container {
+  position: relative;
+  display: inline-block;
+}
+
+.tooltip {
+  visibility: hidden;
+  position: absolute;
+  top: 100%; /* Changed from bottom: 100% to top: 100% */
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 5px; /* Changed from margin-bottom to margin-top */
+  padding: 8px;
+  background-color: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+/* Move arrow to top of tooltip */
+.tooltip::after {
+  content: "";
+  position: absolute;
+  bottom: 100%; /* Changed from top: 100% to bottom: 100% */
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: transparent transparent rgba(0, 0, 0, 0.8) transparent; /* Changed border-color order */
+}
+
+.button-tooltip-container:hover .tooltip {
+  visibility: visible;
+  opacity: 1;
+}
