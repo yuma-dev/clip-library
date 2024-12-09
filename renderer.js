@@ -1091,48 +1091,66 @@ function closeContextMenu(e) {
   }
 }
 
+let exportToast = null;
+
 function showExportProgress(current, total) {
-  let progressElement = document.getElementById("export-progress");
-  let textElement = document.getElementById("export-progress-text");
+  const exportpercentage = (current / total) * 100;
+  if (exportpercentage < 0 || exportpercentage > 100) return;
 
-  if (!progressElement) {
-    progressElement = document.createElement("div");
-    progressElement.id = "export-progress";
-    progressElement.style.position = "fixed";
-    progressElement.style.top = "0";
-    progressElement.style.left = "0";
-    progressElement.style.width = "100%";
-    progressElement.style.height = "5px";
-    progressElement.style.backgroundColor = "#4CAF50";
-    progressElement.style.transition = "width 0.3s";
-    progressElement.style.zIndex = "9999";
-    document.body.appendChild(progressElement);
-
-    textElement = document.createElement("div");
-    textElement.id = "export-progress-text";
-    textElement.style.position = "fixed";
-    textElement.style.top = "100px";
-    textElement.style.left = "50%";
-    textElement.style.transform = "translateX(-50%)";
-    textElement.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-    textElement.style.color = "white";
-    textElement.style.padding = "10px 20px";
-    textElement.style.borderRadius = "20px";
-    textElement.style.zIndex = "10000";
-    textElement.style.fontWeight = "normal";
-
-    document.body.appendChild(textElement);
+  if (!exportToast) {
+    // Create toast container
+    exportToast = document.createElement("div");
+    exportToast.className = "export-progress-toast";
+    
+    // Create status text
+    const statusText = document.createElement("div");
+    statusText.className = "export-status";
+    statusText.textContent = "Exporting clip...";
+    
+    // Create percentage text
+    const percentageText = document.createElement("div");
+    percentageText.className = "export-percentage";
+    
+    // Create progress bar
+    const progressBar = document.createElement("div");
+    progressBar.className = "export-progress-bar";
+    
+    const progressBarFill = document.createElement("div");
+    progressBarFill.className = "export-progress-bar-fill";
+    
+    progressBar.appendChild(progressBarFill);
+    
+    // Add elements to toast
+    exportToast.appendChild(statusText);
+    exportToast.appendChild(percentageText);
+    exportToast.appendChild(progressBar);
+    
+    document.body.appendChild(exportToast);
+    
+    // Force reflow before adding show class
+    exportToast.offsetHeight;
+    exportToast.classList.add("show");
   }
 
   const percentage = (current / total) * 100;
-  progressElement.style.width = `${percentage}%`;
-  textElement.textContent = `Exporting clip... ${Math.round(percentage)}%`;
+  const progressBarFill = exportToast.querySelector(".export-progress-bar-fill");
+  const percentageText = exportToast.querySelector(".export-percentage");
+  
+  progressBarFill.style.width = `${percentage}%`;
+  percentageText.textContent = `${Math.round(percentage)}%`;
 
   if (current === total) {
+    // Change status text to "Complete"
+    const statusText = exportToast.querySelector(".export-status");
+    statusText.textContent = "Export complete!";
+    
     setTimeout(() => {
-      progressElement.remove();
-      textElement.remove();
-    }, 1000);
+      exportToast.classList.remove("show");
+      setTimeout(() => {
+        exportToast.remove();
+        exportToast = null;
+      }, 300); // Wait for transition to complete
+    }, 1000); // Show completion for 1 second
   }
 }
 
@@ -2041,9 +2059,6 @@ async function exportAudioToClipboard() {
 }
 
 async function exportVideo(savePath = null) {
-  exportButton.disabled = true;
-  exportButton.textContent = "Exporting...";
-
   try {
     const volume = await loadVolume(currentClip.originalName);
     const speed = videoPlayer.playbackRate;
@@ -2058,18 +2073,13 @@ async function exportVideo(savePath = null) {
     );
     if (result.success) {
       console.log("Video exported successfully:", result.path);
-      exportButton.textContent = "Copied to Clipboard!";
+      showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
     console.error("Error exporting video:", error);
-    exportButton.textContent = "Export Failed";
-  } finally {
-    setTimeout(() => {
-      exportButton.textContent = "Export";
-      exportButton.disabled = false;
-    }, 2000);
+    showCustomAlert("Export failed: " + error.message);
   }
 }
 
@@ -2093,9 +2103,6 @@ function showFallbackNotice() {
 }
 
 async function exportAudio(savePath = null) {
-  exportButton.disabled = true;
-  exportButton.textContent = "Exporting Audio...";
-
   try {
     const volume = await loadVolume(currentClip.originalName);
     const speed = videoPlayer.playbackRate;
@@ -2110,18 +2117,13 @@ async function exportAudio(savePath = null) {
     );
     if (result.success) {
       console.log("Audio exported successfully:", result.path);
-      exportButton.textContent = "Audio Export Complete!";
+      showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
     console.error("Error exporting audio:", error);
-    exportButton.textContent = "Audio Export Failed";
-  } finally {
-    setTimeout(() => {
-      exportButton.textContent = "Export";
-      exportButton.disabled = false;
-    }, 2000);
+    showCustomAlert("Audio export failed: " + error.message);
   }
 }
 
@@ -2132,9 +2134,6 @@ ipcRenderer.on('ffmpeg-error', (event, message) => {
 async function exportTrimmedVideo() {
   if (!currentClip) return;
 
-  exportButton.disabled = true;
-  exportButton.textContent = "Exporting...";
-
   try {
     await getFfmpegVersion();
     const volume = await loadVolume(currentClip.originalName);
@@ -2142,6 +2141,8 @@ async function exportTrimmedVideo() {
     console.log(`Exporting video: ${currentClip.originalName}`);
     console.log(`Trim start: ${trimStartTime}, Trim end: ${trimEndTime}`);
     console.log(`Volume: ${volume}, Speed: ${speed}`);
+
+    showExportProgress(0, 100); // Show initial progress
 
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
@@ -2154,40 +2155,27 @@ async function exportTrimmedVideo() {
 
     if (result.success) {
       console.log("Trimmed video exported successfully:", result.path);
-      exportButton.textContent = "Copied to clipboard!";
-      setTimeout(() => {
-        exportButton.textContent = "Export";
-        exportButton.disabled = false;
-      }, 2000);
+      showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
     console.error("Error exporting video:", error);
     console.error("Error details:", error.stack);
-    exportButton.textContent = "Export Failed";
     await showCustomAlert(`Export failed: ${error.message}. Please check the console for more details.`);
-    setTimeout(() => {
-      exportButton.textContent = "Export";
-      exportButton.disabled = false;
-    }, 2000);
   }
 }
 
 async function exportClipFromContextMenu(clip) {
   try {
-    const clipInfo = await ipcRenderer.invoke(
-      "get-clip-info",
-      clip.originalName,
-    );
+    const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
     const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
     const start = trimData ? trimData.start : 0;
     const end = trimData ? trimData.end : clipInfo.format.duration;
     const volume = await loadVolume(clip.originalName);
     const speed = await loadSpeed(clip.originalName);
 
-    // Show initial progress
-    showExportProgress(0, 100);
+    showExportProgress(0, 100); // Show initial progress
 
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
@@ -2199,10 +2187,7 @@ async function exportClipFromContextMenu(clip) {
     );
     if (result.success) {
       console.log("Clip exported successfully:", result.path);
-      showExportProgress(100, 100); // Show completed progress
-      await showCustomAlert(
-        `Clip exported successfully. Path copied to clipboard.`,
-      );
+      showExportProgress(100, 100); // Show completion
     } else {
       throw new Error(result.error);
     }
@@ -2213,15 +2198,7 @@ async function exportClipFromContextMenu(clip) {
 }
 
 ipcRenderer.on("export-progress", (event, progress) => {
-  if (
-    exportButton.disabled &&
-    exportButton.textContent.startsWith("Exporting")
-  ) {
-    exportButton.textContent = `Exporting... ${Math.round(progress)}%`;
-  } else {
-    // This is a context menu export
-    showExportProgress(progress, 100);
-  }
+  showExportProgress(progress, 100);
 });
 
 const currentTimeDisplay = document.getElementById("current-time");
