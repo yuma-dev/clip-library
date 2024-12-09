@@ -1108,63 +1108,29 @@ function closeContextMenu(e) {
 let exportToast = null;
 
 function showExportProgress(current, total) {
-  const exportpercentage = (current / total) * 100;
-  if (exportpercentage < 0 || exportpercentage > 100) return;
-
-  if (!exportToast) {
-    // Create toast container
-    exportToast = document.createElement("div");
-    exportToast.className = "export-progress-toast";
-    
-    // Create status text
-    const statusText = document.createElement("div");
-    statusText.className = "export-status";
-    statusText.textContent = "Exporting clip...";
-    
-    // Create percentage text
-    const percentageText = document.createElement("div");
-    percentageText.className = "export-percentage";
-    
-    // Create progress bar
-    const progressBar = document.createElement("div");
-    progressBar.className = "export-progress-bar";
-    
-    const progressBarFill = document.createElement("div");
-    progressBarFill.className = "export-progress-bar-fill";
-    
-    progressBar.appendChild(progressBarFill);
-    
-    // Add elements to toast
-    exportToast.appendChild(statusText);
-    exportToast.appendChild(percentageText);
-    exportToast.appendChild(progressBar);
-    
-    document.body.appendChild(exportToast);
-    
-    // Force reflow before adding show class
-    exportToast.offsetHeight;
-    exportToast.classList.add("show");
+  const toast = document.getElementById('export-toast');
+  const progressText = toast.querySelector('.export-progress-text');
+  const title = toast.querySelector('.export-title');
+  const content = toast.querySelector('.export-toast-content');
+  
+  if (!toast.classList.contains('show')) {
+    toast.classList.add('show');
   }
 
-  const percentage = (current / total) * 100;
-  const progressBarFill = exportToast.querySelector(".export-progress-bar-fill");
-  const percentageText = exportToast.querySelector(".export-percentage");
-  
-  progressBarFill.style.width = `${percentage}%`;
-  percentageText.textContent = `${Math.round(percentage)}%`;
+  const percentage = Math.min(Math.round((current / total) * 100), 100);
+  content.style.setProperty('--progress', percentage + '%');
+  progressText.textContent = `${percentage}%`;
 
-  if (current === total) {
-    // Change status text to "Complete"
-    const statusText = exportToast.querySelector(".export-status");
-    statusText.textContent = "Export complete!";
-    
+  if (percentage >= 100) {
+    title.textContent = 'Export complete!';
     setTimeout(() => {
-      exportToast.classList.remove("show");
+      toast.classList.remove('show');
       setTimeout(() => {
-        exportToast.remove();
-        exportToast = null;
-      }, 300); // Wait for transition to complete
-    }, 1000); // Show completion for 1 second
+        title.textContent = 'Exporting...';
+        content.style.setProperty('--progress', '0%');
+        progressText.textContent = '0%';
+      }, 300);
+    }, 1000);
   }
 }
 
