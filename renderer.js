@@ -77,6 +77,8 @@ let isProcessingQueue = false;
 let processingTimeout = null;
 let activePreview = null;
 let previewCleanupTimeout = null;
+let totalThumbnailsToProcess = 0;
+let processedThumbnails = 0;
 
 const previewElement = document.getElementById('timeline-preview');
 const previewCanvas = document.getElementById('preview-canvas');
@@ -187,62 +189,24 @@ async function loadClips() {
 }
 
 async function startThumbnailValidation() {
-  // Clear any existing queue
-  thumbnailQueue = [];
+  console.log("Starting thumbnail validation for clips:", allClips.length);
   
-  // Add clips to queue gradually
-  const addToQueue = (startIndex, batchSize = 20) => {
-    const endIndex = Math.min(startIndex + batchSize, allClips.length);
-    for (let i = startIndex; i < endIndex; i++) {
-      thumbnailQueue.push(allClips[i].originalName);
-    }
-    
-    // Start processing if not already running
-    if (!isProcessingQueue) {
-      processNextBatch();
-    }
-    
-    // Queue next batch of clips
-    if (endIndex < allClips.length) {
-      setTimeout(() => addToQueue(endIndex, batchSize), 100);
-    }
-  };
-
-  // Start adding clips to queue
-  addToQueue(0);
-}
-
-async function processNextBatch() {
-  if (isProcessingQueue || thumbnailQueue.length === 0) {
-    return;
-  }
-
-  isProcessingQueue = true;
-  const currentBatch = thumbnailQueue.splice(0, QUEUE_BATCH_SIZE);
-
   try {
-    // Process current batch
-    await ipcRenderer.invoke("generate-thumbnails-progressively", currentBatch);
+    // Request thumbnail validation/generation for all clips
+    const result = await ipcRenderer.invoke("generate-thumbnails-progressively", 
+      allClips.map(clip => clip.originalName)
+    );
     
-    // Update progress
-    const remaining = thumbnailQueue.length;
-    if (remaining > 0) {
-      updateThumbnailGenerationText(remaining);
-    }
-
-  } catch (error) {
-    console.error("Error processing thumbnail batch:", error);
-  } finally {
-    isProcessingQueue = false;
-    
-    // Schedule next batch with delay
-    if (thumbnailQueue.length > 0) {
-      processingTimeout = setTimeout(() => {
-        processNextBatch();
-      }, 100); // 100ms delay between batches
+    // Only show the generation UI if we actually need to generate thumbnails
+    if (result.needsGeneration > 0) {
+      showThumbnailGenerationText(result.needsGeneration);
     } else {
+      console.log("All thumbnails are valid, no generation needed");
       hideThumbnailGenerationText();
     }
+  } catch (error) {
+    console.error("Error during thumbnail validation:", error);
+    hideThumbnailGenerationText();
   }
 }
 
@@ -304,9 +268,33 @@ ipcRenderer.on('new-clip-added', (event, fileName) => {
   updateFilterDropdown();
 });
 
+ipcRenderer.on("thumbnail-validation-start", (event, { total }) => {
+  console.log("Thumbnail validation started with total:", total);
+  totalThumbnailsToProcess = total;
+});
+
+ipcRenderer.on("thumbnail-progress", (event, { current, total }) => {
+  console.log(`Thumbnail progress: ${current}/${total}`);
+  processedThumbnails = current;
+  updateThumbnailGenerationText(total - current);
+});
+
+ipcRenderer.on("thumbnail-generation-complete", () => {
+  // Just hide the text instead of showing completion message
+  hideThumbnailGenerationText();
+});
+
 function showThumbnailGenerationText(totalToGenerate) {
-  if (!document.getElementById("thumbnail-generation-text") && totalToGenerate > 0) {
-    const textElement = document.createElement("div");
+  if (totalToGenerate <= 0) return;
+  
+  console.log(`Showing generation text for ${totalToGenerate} thumbnails`);
+  processedThumbnails = 0;
+  totalThumbnailsToProcess = totalToGenerate;
+  
+  let textElement = document.getElementById("thumbnail-generation-text");
+  
+  if (!textElement) {
+    textElement = document.createElement("div");
     textElement.id = "thumbnail-generation-text";
     textElement.style.position = "fixed";
     textElement.style.top = "100px";
@@ -318,7 +306,7 @@ function showThumbnailGenerationText(totalToGenerate) {
     textElement.style.borderRadius = "20px";
     textElement.style.zIndex = "10000";
     textElement.style.fontWeight = "normal";
-    textElement.textContent = `Generating ${totalToGenerate} thumbnails...`;
+    textElement.textContent = `Generating thumbnails... 0/${totalToGenerate}`;
     document.body.appendChild(textElement);
   }
 }
@@ -332,11 +320,17 @@ function updateClipCounter(count) {
 
 function updateThumbnailGenerationText(remaining) {
   const textElement = document.getElementById("thumbnail-generation-text");
-  if (textElement && remaining >= 0) {
-    textElement.textContent = remaining > 0 
-      ? `Generating thumbnails... ${remaining} remaining`
-      : 'Thumbnail generation complete!';
+  if (!textElement) return;
+
+  if (remaining <= 0) {
+    hideThumbnailGenerationText();
+    return;
   }
+
+  const processed = totalThumbnailsToProcess - remaining;
+  const percentage = Math.round((processed / totalThumbnailsToProcess) * 100);
+  textElement.textContent = `Generating thumbnails... ${processed}/${totalThumbnailsToProcess} (${percentage}%)`;
+  console.log(`Generation progress: ${processed}/${totalThumbnailsToProcess} (${percentage}%)`);
 }
 
 function hideThumbnailGenerationText() {
@@ -344,11 +338,14 @@ function hideThumbnailGenerationText() {
   if (textElement) {
     textElement.remove();
   }
-  thumbnailsToGenerate = 0;
-  thumbnailsCompleted = 0;
+  // Reset counters
+  processedThumbnails = 0;
+  totalThumbnailsToProcess = 0;
 }
 
-
+window.addEventListener('beforeunload', () => {
+  hideThumbnailGenerationText();
+});
 
 ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
   console.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
@@ -1643,15 +1640,6 @@ function createClipElement(clip) {
       }
     }
 
-    async function validateAndUpdateThumbnail(clipName, thumbnailPath) {
-      const result = await ipcRenderer.invoke("validate-thumbnail", clipName, thumbnailPath);
-      if (!result.isValid) {
-        // Request a new thumbnail
-        ipcRenderer.invoke("generate-thumbnails-progressively", [clipName]);
-      }
-      return result.isValid;
-    }
-
     async function handleMouseEnter() {
       if (clipElement.classList.contains("video-preview-disabled")) return;
     
@@ -2312,14 +2300,6 @@ async function openClip(originalName, customName) {
   document.addEventListener("keydown", handleKeyPress);
   document.addEventListener("keyup", handleKeyRelease);
 
-  if (trimData) {
-    trimStartTime = trimData.start;
-    trimEndTime = trimData.end;
-  } else {
-    trimStartTime = 0;
-    trimEndTime = clipInfo.format.duration;
-  }
-
   // Update the clip duration in the allClips array
   const clipIndex = allClips.findIndex(
     (clip) => clip.originalName === originalName,
@@ -2331,9 +2311,13 @@ async function openClip(originalName, customName) {
   showLoadingOverlay();
 
   videoPlayer.addEventListener("loadedmetadata", () => {
+    // Ensure trim controls are updated before setting currentTime
     updateTrimControls();
-    videoPlayer.currentTime = startTime;  // Use the calculated startTime
-  });
+    // Only set currentTime after trim controls are updated
+    requestAnimationFrame(() => {
+      videoPlayer.currentTime = trimStartTime;  // Always use trimStartTime
+    });
+  }, { once: true });
   videoPlayer.addEventListener("canplay", handleVideoCanPlay);
   videoPlayer.addEventListener("progress", updateLoadingProgress);
   videoPlayer.addEventListener("waiting", showLoadingOverlay);
