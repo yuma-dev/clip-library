@@ -1116,9 +1116,8 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
       const fps = eval(metadata.streams[0].r_frame_rate);
       totalFrames = Math.ceil(duration * fps);
       
-      // Get current settings
       const settings = await loadSettings();
-      const highQuality = settings.highQualityExport;
+      const quality = settings.exportQuality;
 
       let command = ffmpeg(inputPath)
         .setStartTime(start)
@@ -1127,29 +1126,38 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
         .videoFilters(`setpts=${1/speed}*PTS`)
         .audioFilters(`atempo=${speed}`);
 
-      // Set quality based on settings
-      if (highQuality) {
-        command.outputOptions([
-          '-c:v h264_nvenc',
-          '-preset p4', // Medium-high quality preset
-          '-rc vbr',
-          '-cq 20', // Balanced quality
-          '-b:v 8M', // Target bitrate
-          '-maxrate 10M',
-          '-bufsize 10M',
-          '-profile:v high',
-          '-rc-lookahead 32'
-        ]);
-      } else {
-        // Original Discord-friendly settings
-        command.outputOptions([
-          '-c:v h264_nvenc',
-          '-preset slow',
-          '-crf 23'
-        ]);
+      switch (quality) {
+        case 'lossless':
+          command.outputOptions([
+            '-c:v h264_nvenc',
+            '-preset p7',
+            '-rc:v constqp',
+            '-qp 16',
+            '-profile:v high',
+            '-b:a 256k'
+          ]);
+          break;
+        case 'high':
+          command.outputOptions([
+            '-c:v h264_nvenc',
+            '-preset p4',
+            '-rc vbr',
+            '-cq 20',
+            '-b:v 8M',
+            '-maxrate 10M',
+            '-bufsize 10M',
+            '-profile:v high',
+            '-rc-lookahead 32'
+          ]);
+          break;
+        default: // discord
+          command.outputOptions([
+            '-c:v h264_nvenc',
+            '-preset slow',
+            '-crf 23'
+          ]);
       }
 
-      // Add progress reporting options
       command.outputOptions([
         '-progress pipe:1',
         '-stats_period 0.1'

@@ -16,7 +16,7 @@ async function loadSettings() {
         enableDiscordRPC: false,
         ignoredVersion: null,  // Add this line
         previewVolume: 0.1,
-        highQualityExport: false
+        exportQuality: 'discord'
       };
     }
     throw error;
