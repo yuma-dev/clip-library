@@ -1111,20 +1111,18 @@ function closeContextMenu(e) {
   }
 }
 
-let exportToast = null;
+const toast = document.getElementById('export-toast');
+const content = toast.querySelector('.export-toast-content');
+const progressText = toast.querySelector('.export-progress-text');
+const title = toast.querySelector('.export-title');
 
 function showExportProgress(current, total) {
-  const toast = document.getElementById('export-toast');
-  const progressText = toast.querySelector('.export-progress-text');
-  const title = toast.querySelector('.export-title');
-  const content = toast.querySelector('.export-toast-content');
-  
   if (!toast.classList.contains('show')) {
     toast.classList.add('show');
   }
 
   const percentage = Math.min(Math.round((current / total) * 100), 100);
-  content.style.setProperty('--progress', percentage + '%');
+  content.style.setProperty('--progress', `${percentage}%`);
   progressText.textContent = `${percentage}%`;
 
   if (percentage >= 100) {

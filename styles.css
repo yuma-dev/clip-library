@@ -1245,21 +1245,25 @@ body.dragging {
   overflow: hidden;
 }
 
+/* Progress fill effect */
 .export-toast-content::before {
   content: '';
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
+  width: var(--progress, 0%);
   height: 100%;
   background: linear-gradient(
-    to right,
-    rgba(34, 197, 94, 0.4) 0%,
-    rgba(34, 197, 94, 0.4) var(--progress),
-    rgba(34, 197, 94, 0.1) calc(var(--progress) + 20%),
-    transparent calc(var(--progress) + 40%)
+    90deg,
+    rgba(34, 197, 94, 0.8) 0%,
+    rgba(34, 197, 94, 0.6) 80%,
+    rgba(34, 197, 94, 0) 100%
   );
-  transition: all 0.3s ease;
+  transition: width 0.3s ease-out;
+  filter: blur(8px);
+  /* Make the gradient wider than the container to ensure smooth edges */
+  transform: scale(1.2, 1);
+  transform-origin: left;
 }
 
 .export-toast-header {
@@ -1285,12 +1289,16 @@ body.dragging {
   font-weight: 100;
   margin: 0;
   font-size: 14px;
+  /* Add subtle text shadow */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .export-progress-text {
-  color: #9ca3af;
+  color: #e2e2e2;  /* Made slightly brighter */
   font-size: 12px;
   margin: 0;
+  /* Add subtle text shadow */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .button-tooltip-container {
