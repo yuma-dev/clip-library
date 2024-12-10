@@ -139,11 +139,14 @@ const currentClipLocationSpan = document.getElementById("currentClipLocation");
 
 async function fetchSettings() {
   settings = await ipcRenderer.invoke('get-settings');
-  // Ensure previewVolume has a default if not set
-  if (settings.previewVolume === undefined) {
-    settings.previewVolume = 0.1;
-    await ipcRenderer.invoke('save-settings', settings);
-  }
+  logger.info('Fetched settings:', settings);  // Log the fetched settings
+  
+  // Set defaults if not present
+  if (settings.previewVolume === undefined) settings.previewVolume = 0.1;
+  if (settings.exportQuality === undefined) settings.exportQuality = 'discord';
+  await ipcRenderer.invoke('save-settings', settings);
+  logger.info('Settings after defaults:', settings);  // Log after setting defaults
+  return settings;
 }
 
 async function loadClips() {
@@ -1442,28 +1445,62 @@ async function changeClipLocation() {
 
 const exportQualitySelect = document.getElementById('exportQuality');
 exportQualitySelect.addEventListener('change', async (e) => {
-  settings.exportQuality = e.target.value;
-  await ipcRenderer.invoke('save-settings', settings);
+  const newQuality = e.target.value;
+  logger.info('Export quality changed to:', newQuality);
+  
+  try {
+    // Update local settings first
+    settings = {
+      ...settings,
+      exportQuality: newQuality
+    };
+    
+    // Save settings and wait for completion
+    const savedSettings = await ipcRenderer.invoke('save-settings', settings);
+    
+    // Update local settings with the returned saved settings
+    settings = savedSettings;
+    
+    logger.info('Settings saved successfully:', settings);
+  } catch (error) {
+    logger.error('Error saving settings:', error);
+    // Revert the select value if save failed
+    e.target.value = settings.exportQuality;
+    // Revert local settings
+    settings = await fetchSettings();
+  }
 });
 
 async function openSettingsModal() {
-  settings = await ipcRenderer.invoke('get-settings');
+  logger.debug('Opening settings modal. Current settings:', settings);
+  // Fetch fresh settings
+  settings = await fetchSettings();
+  logger.debug('Fresh settings fetched:', settings);
+  
   const settingsModal = document.getElementById("settingsModal");
   if (settingsModal) {
     settingsModal.style.display = "block";
     updateVersionDisplay();
     
-    // Update all settings controls
+    // Get all controls
     const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
     const exportQualitySelect = document.getElementById('exportQuality');
     const previewVolumeSlider = document.getElementById('previewVolumeSlider');
     const previewVolumeValue = document.getElementById('previewVolumeValue');
 
+    logger.debug('Setting controls with values:', {
+      enableDiscordRPC: settings.enableDiscordRPC,
+      exportQuality: settings.exportQuality,
+      previewVolume: settings.previewVolume
+    });
+
+    // Set control values from settings
     if (enableDiscordRPCCheckbox) {
-      enableDiscordRPCCheckbox.checked = settings.enableDiscordRPC;
+      enableDiscordRPCCheckbox.checked = Boolean(settings.enableDiscordRPC);
     }
     
     if (exportQualitySelect) {
+      logger.info('Setting export quality select to:', settings.exportQuality);
       exportQualitySelect.value = settings.exportQuality || 'discord';
     }
 
@@ -1472,6 +1509,11 @@ async function openSettingsModal() {
       previewVolumeSlider.value = savedVolume;
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
     }
+
+    logger.debug('Controls set. Current values:', {
+      exportQualityValue: exportQualitySelect?.value,
+      previewVolumeValue: previewVolumeSlider?.value
+    });
   }
 }
 
@@ -1481,7 +1523,7 @@ document.getElementById('previewVolumeSlider').addEventListener('input', async (
   document.getElementById('previewVolumeValue').textContent = `${Math.round(value * 100)}%`;
   settings.previewVolume = value;
   await ipcRenderer.invoke('save-settings', settings);
-  
+  settings = await fetchSettings();
   // Update all currently playing preview videos
   updateAllPreviewVolumes(value);
 });
