@@ -1322,6 +1322,9 @@ body.dragging {
   z-index: 1000;
   opacity: 0;
   transition: opacity 0.2s;
+  pointer-events: none;
+  background-color: rgba(0, 0, 0, 0.6); 
+  backdrop-filter: blur(4px);
 }
 
 /* Move arrow to top of tooltip */
@@ -1333,7 +1336,7 @@ body.dragging {
   margin-left: -5px;
   border-width: 5px;
   border-style: solid;
-  border-color: transparent transparent rgba(0, 0, 0, 0.8) transparent; /* Changed border-color order */
+  border-color: transparent transparent rgba(0, 0, 0, 0.6) transparent;
 }
 
 .button-tooltip-container:hover .tooltip {
