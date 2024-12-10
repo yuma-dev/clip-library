@@ -1,7 +1,7 @@
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
-
+const logger = require('./logger');
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 
 async function loadSettings() {
@@ -23,8 +23,15 @@ async function loadSettings() {
   }
 }
 
-async function saveSettings(settings) {
-  await fs.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+async function saveSettings(newSettings) {
+  try {
+    const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+    await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
+    return true;
+  } catch (error) {
+    logger.error('Error saving settings:', error);
+    throw error;
+  }
 }
 
 module.exports = { loadSettings, saveSettings };

@@ -883,9 +883,16 @@ ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTim
   }
 });
 
+// In main.js
 ipcMain.handle('save-settings', async (event, newSettings) => {
-  await saveSettings(newSettings);
-  return true;
+  try {
+    await saveSettings(newSettings);
+    settings = newSettings; // Update main process settings
+    return newSettings;
+  } catch (error) {
+    logger.error('Error in save-settings handler:', error);
+    throw error;
+  }
 });
 
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
