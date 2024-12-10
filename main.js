@@ -23,6 +23,9 @@ const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpack
 const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar', 'app.asar.unpacked');
 const CONCURRENT_GENERATIONS = 4; // Maximum concurrent FFmpeg processes
 const thumbnailQueue = [];
+const THUMBNAIL_RETRY_ATTEMPTS = 3;
+const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
+const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
 let activeGenerations = 0;
 let isProcessingQueue = false;
 
@@ -708,12 +711,14 @@ async function validateThumbnail(clipName, thumbnailPath) {
       
       if (currentTrimData) {
         const isValid = Math.abs(metadata.startTime - currentTrimData.start) < EPSILON;
+        /*
         logger.info(`${clipName}: Validating trim data:`, {
           metadataStartTime: metadata.startTime,
           trimStartTime: currentTrimData.start,
           diff: Math.abs(metadata.startTime - currentTrimData.start),
           isValid
         });
+        */
         return isValid;
       }
 
@@ -761,13 +766,16 @@ async function processQueue() {
   isProcessingQueue = true;
   let processedCount = 0;
   const totalToProcess = thumbnailQueue.length;
+  let lastBatchEvent;
 
   try {
     while (thumbnailQueue.length > 0) {
       const batch = thumbnailQueue.slice(0, CONCURRENT_GENERATIONS);
       if (batch.length === 0) break;
 
-      await Promise.all(batch.map(async ({ clipName, event }) => {
+      lastBatchEvent = batch[0].event;
+
+      await Promise.all(batch.map(async ({ clipName, event, attempts = 0 }) => {
         const clipPath = path.join(settings.clipLocation, clipName);
         const thumbnailPath = generateThumbnailPath(clipPath);
 
@@ -775,6 +783,15 @@ async function processQueue() {
           const isValid = await validateThumbnail(clipName, thumbnailPath);
           
           if (!isValid) {
+            if (attempts >= THUMBNAIL_RETRY_ATTEMPTS) {
+              logger.error(`Failed to generate thumbnail for ${clipName} after ${THUMBNAIL_RETRY_ATTEMPTS} attempts`);
+              event.sender.send("thumbnail-generation-failed", {
+                clipName,
+                error: "Maximum retry attempts reached"
+              });
+              return;
+            }
+
             // Get video info first
             const info = await new Promise((resolve, reject) => {
               ffmpeg.ffprobe(clipPath, (err, metadata) => {
@@ -783,12 +800,10 @@ async function processQueue() {
               });
             });
 
-            // Check for trim data AFTER getting video info
             const trimData = await getTrimData(clipName);
             const duration = info.format.duration;
-            // Use trim start time if available, otherwise use middle or start based on duration
             const startTime = trimData ? trimData.start : (duration > 40 ? duration / 2 : 0);
-            
+
             await new Promise((resolve, reject) => {
               ffmpeg(clipPath)
                 .screenshots({
@@ -798,7 +813,14 @@ async function processQueue() {
                   size: '640x360'
                 })
                 .on('end', resolve)
-                .on('error', reject);
+                .on('error', (err) => {
+                  // If generation fails, add back to queue with increased attempt count
+                  if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
+                    thumbnailQueue.push({ clipName, event, attempts: attempts + 1 });
+                    setTimeout(processQueue, THUMBNAIL_RETRY_DELAY);
+                  }
+                  reject(err);
+                });
             });
 
             await saveThumbnailMetadata(thumbnailPath, {
@@ -813,7 +835,8 @@ async function processQueue() {
           
           event.sender.send("thumbnail-progress", {
             current: processedCount,
-            total: totalToProcess
+            total: totalToProcess,
+            clipName
           });
 
           event.sender.send("thumbnail-generated", {
@@ -823,10 +846,13 @@ async function processQueue() {
           });
         } catch (err) {
           logger.error(`Error processing thumbnail for ${clipName}:`, err);
-          event.sender.send("thumbnail-generation-failed", {
-            clipName,
-            error: err.message
-          });
+          // Only send failure notification if we've exhausted retries
+          if (attempts >= THUMBNAIL_RETRY_ATTEMPTS) {
+            event.sender.send("thumbnail-generation-failed", {
+              clipName,
+              error: err.message
+            });
+          }
         } finally {
           activeGenerations--;
         }
@@ -837,11 +863,8 @@ async function processQueue() {
     }
   } finally {
     isProcessingQueue = false;
-    if (thumbnailQueue.length === 0) {
-      const event = batch?.[0]?.event;
-      if (event) {
-        event.sender.send("thumbnail-generation-complete");
-      }
+    if (thumbnailQueue.length === 0 && lastBatchEvent) {
+      lastBatchEvent.sender.send("thumbnail-generation-complete");
     }
   }
 }
@@ -890,7 +913,7 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
     settings = newSettings; // Update main process settings
     return newSettings;
   } catch (error) {
-    logger.error('Error in save-settings handler:', error);
+    logger.error('Error in save-settings handler:', error); 
     throw error;
   }
 });
