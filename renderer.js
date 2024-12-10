@@ -2329,6 +2329,12 @@ async function openClip(originalName, customName) {
     }
   });
 
+  videoPlayer.addEventListener('ended', () => {
+    videoPlayer.pause();
+    isPlaying = false;
+    videoPlayer.currentTime = trimStartTime;
+  });
+
   videoPlayer.addEventListener('pause', () => {
     showControls();
     if (currentClip) {
@@ -2746,6 +2752,11 @@ function setTrimPoint(point) {
 function togglePlayPause() {
   if (!isVideoInFullscreen(videoPlayer)) {
     if (videoPlayer.paused) {
+      // If the video is at the end (current time is at or very close to duration)
+      // ensure we start from the trim start point
+      if (Math.abs(videoPlayer.currentTime - videoPlayer.duration) < 0.1) {
+        videoPlayer.currentTime = trimStartTime;
+      }
       videoPlayer.play();
       isPlaying = true;
     } else {
