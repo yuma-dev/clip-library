@@ -28,6 +28,11 @@ const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
 const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
 let activeGenerations = 0;
 let isProcessingQueue = false;
+let thumbnailGenerationInProgress = false;
+let thumbnailBatchSize = 4;
+let currentBatch = [];
+let totalThumbnailsToGenerate = 0;
+let completedThumbnails = 0;
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
@@ -703,7 +708,6 @@ async function validateThumbnail(clipName, thumbnailPath) {
     try {
       const metadata = await getThumbnailMetadata(thumbnailPath);
       if (!metadata) {
-        logger.info(`${clipName}: No metadata found`);
         return false;
       }
 
@@ -759,21 +763,18 @@ async function getThumbnailMetadata(thumbnailPath) {
 }
 
 async function processQueue() {
-  if (isProcessingQueue || thumbnailQueue.length === 0) {
-    return;
-  }
+  if (isProcessingQueue || thumbnailQueue.length === 0) return;
 
   isProcessingQueue = true;
-  let processedCount = 0;
-  const totalToProcess = thumbnailQueue.length;
-  let lastBatchEvent;
-
+  completedThumbnails = 0;
+  
   try {
     while (thumbnailQueue.length > 0) {
       const batch = thumbnailQueue.slice(0, CONCURRENT_GENERATIONS);
       if (batch.length === 0) break;
 
-      lastBatchEvent = batch[0].event;
+      const currentEvent = batch[0].event;
+      const totalToProcess = batch[0].totalToProcess;
 
       await Promise.all(batch.map(async ({ clipName, event, attempts = 0 }) => {
         const clipPath = path.join(settings.clipLocation, clipName);
@@ -814,10 +815,8 @@ async function processQueue() {
                 })
                 .on('end', resolve)
                 .on('error', (err) => {
-                  // If generation fails, add back to queue with increased attempt count
                   if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
                     thumbnailQueue.push({ clipName, event, attempts: attempts + 1 });
-                    setTimeout(processQueue, THUMBNAIL_RETRY_DELAY);
                   }
                   reject(err);
                 });
@@ -831,30 +830,23 @@ async function processQueue() {
             });
           }
 
-          processedCount++;
+          completedThumbnails++;
           
+          // Send progress update
           event.sender.send("thumbnail-progress", {
-            current: processedCount,
+            current: completedThumbnails,
             total: totalToProcess,
             clipName
           });
 
-          event.sender.send("thumbnail-generated", {
-            clipName,
-            thumbnailPath,
-            startTime: (await getThumbnailMetadata(thumbnailPath))?.startTime || 0
-          });
-        } catch (err) {
-          logger.error(`Error processing thumbnail for ${clipName}:`, err);
-          // Only send failure notification if we've exhausted retries
+        } catch (error) {
+          logger.error(`Error processing thumbnail for ${clipName}:`, error);
           if (attempts >= THUMBNAIL_RETRY_ATTEMPTS) {
             event.sender.send("thumbnail-generation-failed", {
               clipName,
-              error: err.message
+              error: error.message
             });
           }
-        } finally {
-          activeGenerations--;
         }
       }));
 
@@ -863,8 +855,9 @@ async function processQueue() {
     }
   } finally {
     isProcessingQueue = false;
-    if (thumbnailQueue.length === 0 && lastBatchEvent) {
-      lastBatchEvent.sender.send("thumbnail-generation-complete");
+    // Send completion event if queue is empty
+    if (thumbnailQueue.length === 0) {
+      event.sender.send("thumbnail-generation-complete");
     }
   }
 }
@@ -920,7 +913,7 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
 
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
   let clipsNeedingGeneration = [];
-
+  
   // First validate all thumbnails without showing progress
   for (const clipName of clipNames) {
     const clipPath = path.join(settings.clipLocation, clipName);
@@ -939,13 +932,23 @@ ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => 
 
   // Only show progress and send events if we actually need to generate thumbnails
   if (clipsNeedingGeneration.length > 0) {
-    // Send initial progress event
+    totalThumbnailsToProcess = clipsNeedingGeneration.length;
+    completedThumbnails = 0;
+    
+    // Send validation start BEFORE adding to queue
     event.sender.send("thumbnail-validation-start", {
-      total: clipsNeedingGeneration.length
+      total: totalThumbnailsToProcess
     });
 
+    // Clear existing queue
+    thumbnailQueue.length = 0;
+
     // Add only clips that need generation to the queue
-    thumbnailQueue.push(...clipsNeedingGeneration.map(clipName => ({ clipName, event })));
+    thumbnailQueue.push(...clipsNeedingGeneration.map(clipName => ({ 
+      clipName, 
+      event,
+      totalToProcess: totalThumbnailsToProcess
+    })));
     
     if (!isProcessingQueue) {
       processQueue();
