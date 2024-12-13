@@ -237,10 +237,19 @@ async function startThumbnailValidation() {
       ).then((result) => {
         if (result.needsGeneration > 0) {
           showThumbnailGenerationText(result.needsGeneration);
-          
-          // Listen for progress and reset timeout
-          ipcRenderer.on("thumbnail-progress", () => {
+
+          ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
             currentTimeout = createTimeout();
+            if (isGeneratingThumbnails) {
+              updateThumbnailGenerationText(total - current);
+            }
+            
+            // Force a thumbnail refresh for this clip
+            ipcRenderer.invoke("get-thumbnail-path", clipName).then(thumbnailPath => {
+              if (thumbnailPath) {
+                updateClipThumbnail(clipName, thumbnailPath);
+              }
+            });
           });
 
           ipcRenderer.once("thumbnail-generation-complete", () => {
