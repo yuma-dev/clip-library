@@ -485,8 +485,14 @@ function updateClipThumbnail(clipName, thumbnailPath) {
   if (clipElement) {
     const imgElement = clipElement.querySelector("img");
     if (imgElement) {
-      // Add cache busting parameter
-      imgElement.src = `file://${thumbnailPath}?t=${Date.now()}`;
+      // Create a new image element
+      const newImg = new Image();
+      newImg.onload = () => {
+        // Only replace the src after the new image has loaded
+        imgElement.src = newImg.src;
+      };
+      // Add cache busting and random number to ensure unique URL
+      newImg.src = `file://${thumbnailPath}?t=${Date.now()}-${Math.random()}`;
     } else {
       logger.warn(`Image element not found for clip: ${clipName}`);
     }
