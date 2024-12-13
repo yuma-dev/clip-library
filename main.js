@@ -24,14 +24,7 @@ const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar
 const CONCURRENT_GENERATIONS = 4; // Maximum concurrent FFmpeg processes
 const thumbnailQueue = [];
 const THUMBNAIL_RETRY_ATTEMPTS = 3;
-const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
-const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
-let activeGenerations = 0;
 let isProcessingQueue = false;
-let thumbnailGenerationInProgress = false;
-let thumbnailBatchSize = 4;
-let currentBatch = [];
-let totalThumbnailsToGenerate = 0;
 let completedThumbnails = 0;
 
 ffmpeg.setFfmpegPath(ffmpegPath);
@@ -773,7 +766,6 @@ async function processQueue() {
       const batch = thumbnailQueue.slice(0, CONCURRENT_GENERATIONS);
       if (batch.length === 0) break;
 
-      const currentEvent = batch[0].event;
       const totalToProcess = batch[0].totalToProcess;
 
       await Promise.all(batch.map(async ({ clipName, event, attempts = 0 }) => {
@@ -1309,13 +1301,3 @@ ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed
 
   return { success: true, path: outputPath };
 });
-
-// Helper function to get video information
-function getVideoInfo(filePath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) reject(err);
-      else resolve(metadata);
-    });
-  });
-}
