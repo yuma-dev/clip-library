@@ -30,10 +30,6 @@ const volumeIcons = {
   low: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M360-360H240q-17 0-28.5-11.5T200-400v-160q0-17 11.5-28.5T240-600h120l132-132q19-19 43.5-8.5T560-703v446q0 27-24.5 37.5T492-228L360-360Zm380-120q0 42-19 79.5T671-339q-10 6-20.5.5T640-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM480-606l-86 86H280v80h114l86 86v-252ZM380-480Z"/></svg>`,
   high: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-440h-80q-17 0-28.5-11.5T640-480q0-17 11.5-28.5T680-520h80q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440ZM584-288q10-14 26-16t30 8l64 48q14 10 16 26t-8 30q-10 14-26 16t-30-8l-64-48q-14-10-16-26t8-30Zm120-424-64 48q-14 10-30 8t-26-16q-10-14-8-30t16-26l64-48q14-10 30-8t26 16q10 14 8 30t-16 26ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`
 };
-const QUEUE_BATCH_SIZE = 5; // Process 5 thumbnails at a time
-const PREVIEW_WIDTH = 160;
-const PREVIEW_HEIGHT = 90;
-const THUMBNAIL_RETRY_ATTEMPTS = 3;
 const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
 const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
 
@@ -48,9 +44,6 @@ let isDragging = null;
 let isDraggingTrim = false;
 let dragStartX = 0;
 let dragThreshold = 5; // pixels
-let mouseUpTime = 0;
-let isPlaying = false;
-let isRenamingActive = false;
 let lastMousePosition = { x: 0, y: 0 };
 let isMouseDown = false;
 let clipLocation;
@@ -62,9 +55,7 @@ let isTagsDropdownOpen = false;
 let isFrameStepping = false;
 let frameStepDirection = 0;
 let lastFrameStepTime = 0;
-let lastKeyPressed = null;
 let pendingFrameStep = false;
-let currentContextClip;
 let controlsTimeout;
 let isMouseOverControls = false;
 let isRendering = false;
@@ -75,28 +66,19 @@ let discordPresenceInterval;
 let clipStartTime;
 let elapsedTime = 0;
 let loadingScreen;
-let thumbnailsToGenerate = 0;
-let thumbnailsCompleted = 0;
-let thumbnailQueue = [];
-let isProcessingQueue = false;
 let processingTimeout = null;
 let activePreview = null;
 let previewCleanupTimeout = null;
-let totalThumbnailsToProcess = 0;
-let processedThumbnails = 0;
 let isGeneratingThumbnails = false;
 let currentGenerationTotal = 0;
 let completedThumbnails = 0;
 let thumbnailGenerationStartTime = 0;
-let lastProcessedCount = 0;
+let selectedClips = new Set();
+let selectionStartIndex = -1;
 
 const previewElement = document.getElementById('timeline-preview');
-const previewCanvas = document.getElementById('preview-canvas');
-const previewTimestamp = document.getElementById('preview-timestamp');
-const ctx = previewCanvas.getContext('2d');
 
-previewElement.style.display = 'none';
-let previewThrottleTimeout;
+previewElement.style.display = 'none';;
 
 // Create a temporary video element for previews
 const tempVideo = document.createElement('video');
@@ -213,7 +195,6 @@ async function startThumbnailValidation() {
   await new Promise(resolve => setTimeout(resolve, THUMBNAIL_INIT_DELAY));
   
   try {
-    const validationSessionId = Date.now();
     let timeoutId;
     
     const createTimeout = () => {
@@ -864,26 +845,6 @@ function addGlobalTag(tag) {
   }
 }
 
-function deleteGlobalTag(tag) {
-  const index = globalTags.indexOf(tag);
-  if (index > -1) {
-    globalTags.splice(index, 1);
-    saveGlobalTags();
-    updateTagList();
-    updateFilterDropdown();
-    
-    // Remove the tag from all clips
-    allClips.forEach(clip => {
-      const tagIndex = clip.tags.indexOf(tag);
-      if (tagIndex > -1) {
-        clip.tags.splice(tagIndex, 1);
-        updateClipTags(clip);
-        saveClipTags(clip);
-      }
-    });
-  }
-}
-
 async function loadGlobalTags() {
   try {
     globalTags = await ipcRenderer.invoke("load-global-tags");
@@ -993,19 +954,6 @@ function toggleClipTag(clip, tag) {
   }
   
   updateFilterDropdown();
-}
-
-function addTag(clip, tag) {
-  if (!clip.tags) clip.tags = [];
-  clip.tags.push(tag);
-  updateClipTags(clip);
-  saveClipTags(clip);
-}
-
-function removeTag(clip, tag) {
-  clip.tags = clip.tags.filter(t => t !== tag);
-  updateClipTags(clip);
-  saveClipTags(clip);
 }
 
 async function updateTag(originalTag, newTag) {
@@ -1709,9 +1657,6 @@ function createClipElement(clip) {
 
     const relativeTime = getRelativeTimeString(clip.createdAt);
 
-    const scissorsIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
-    const starIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
-
     clipElement.innerHTML = `
       <div class="clip-item-media-container">
         <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
@@ -1723,10 +1668,7 @@ function createClipElement(clip) {
       </div>
     `;
 
-    let hoverTimeout;
     let videoElement;
-    let playPromise;
-    let isVideoPlaying = false;
 
     const clipNameElement = clipElement.querySelector('.clip-name');
     clipNameElement.addEventListener('focus', (e) => {
@@ -1899,6 +1841,18 @@ function handleClipClick(e, clip) {
   // Check if the clicked element is the title or its parent (the clip-info div)
   if (e.target.classList.contains('clip-name') || e.target.classList.contains('clip-info')) {
     // If it's the title or clip-info, don't open the clip
+    return;
+  }
+
+  // Handle multi-select
+  if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    handleClipSelection(e.target.closest('.clip-item'), e);
+    return;
+  }
+
+  // Clear selection if clicking without modifier keys
+  if (selectedClips.size > 0) {
+    clearSelection();
     return;
   }
 
@@ -3232,16 +3186,6 @@ clipTitle.addEventListener("keydown", (e) => {
   }
 });
 
-document
-  .getElementById("clip-grid")
-  .addEventListener("click", async (event) => {
-    const clipItem = event.target.closest(".clip-item");
-    if (clipItem) {
-      const originalName = clipItem.dataset.originalName;
-      const customName = clipItem.querySelector(".clip-name").textContent;
-      currentCleanup = await openClip(originalName, customName);
-    }
-  });
 
 function showCustomAlert(message) {
   return new Promise((resolve) => {
@@ -3510,15 +3454,6 @@ tempVideo.addEventListener('seeked', () => {
   }
 });
 
-function cleanupThumbnailProcessing() {
-  thumbnailQueue = [];
-  isProcessingQueue = false;
-  if (processingTimeout) {
-    clearTimeout(processingTimeout);
-    processingTimeout = null;
-  }
-}
-
 // Add this function after tempVideo creation
 async function initializePreviewVideo(videoSource) {
   return new Promise((resolve) => {
@@ -3550,3 +3485,142 @@ progressBarContainer.addEventListener('mouseleave', () => {
   // Reset temp video
   tempVideo.currentTime = 0;
 });
+
+const selectionActions = document.createElement('div');
+selectionActions.id = 'selection-actions';
+selectionActions.classList.add('hidden');
+selectionActions.innerHTML = `
+  <span id="selection-count"></span>
+  <button id="delete-selected" class="action-button">Delete Selected</button>
+  <button id="clear-selection" class="action-button">Clear Selection</button>
+`;
+document.body.appendChild(selectionActions);
+
+function handleClipSelection(clipItem, event) {
+  const clipItems = Array.from(document.querySelectorAll('.clip-item'));
+  const currentIndex = clipItems.indexOf(clipItem);
+
+  if (event.shiftKey && selectionStartIndex !== -1) {
+    // Range selection
+    clearSelection();
+    const [start, end] = [selectionStartIndex, currentIndex].sort((a, b) => a - b);
+    for (let i = start; i <= end; i++) {
+      const clip = clipItems[i];
+      selectedClips.add(clip.dataset.originalName);
+      clip.classList.add('selected');
+    }
+  } else {
+    // Individual selection
+    selectionStartIndex = currentIndex;
+    const originalName = clipItem.dataset.originalName;
+    
+    if (selectedClips.has(originalName)) {
+      selectedClips.delete(originalName);
+      clipItem.classList.remove('selected');
+    } else {
+      selectedClips.add(originalName);
+      clipItem.classList.add('selected');
+    }
+  }
+
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  const selectionActions = document.getElementById('selection-actions');
+  const selectionCount = document.getElementById('selection-count');
+
+  if (selectedClips.size > 0) {
+    selectionActions.classList.remove('hidden');
+    selectionCount.textContent = `${selectedClips.size} clip${selectedClips.size !== 1 ? 's' : ''} selected`;
+  } else {
+    selectionActions.classList.add('hidden');
+  }
+}
+
+function clearSelection() {
+  document.querySelectorAll('.clip-item.selected').forEach(clip => {
+    clip.classList.remove('selected');
+  });
+  selectedClips.clear();
+  selectionStartIndex = -1;
+  updateSelectionUI();
+}
+
+// Add keyboard handler for Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && selectedClips.size > 0) {
+    clearSelection();
+  }
+});
+
+async function deleteSelectedClips() {
+  if (selectedClips.size === 0) return;
+
+  const isConfirmed = await showCustomConfirm(
+    `Are you sure you want to delete ${selectedClips.size} clip${selectedClips.size !== 1 ? 's' : ''}? This action cannot be undone.`
+  );
+
+  if (!isConfirmed) return;
+
+  const totalClips = selectedClips.size;
+  let completed = 0;
+
+  // Show initial progress
+  showDeletionTooltip();
+
+  try {
+    const clipsToDelete = Array.from(selectedClips);
+    
+    for (const originalName of clipsToDelete) {
+      const clipElement = document.querySelector(
+        `.clip-item[data-original-name="${originalName}"]`
+      );
+
+      if (clipElement) {
+        // Immediately add visual feedback
+        disableVideoThumbnail(originalName);
+
+        try {
+          const result = await ipcRenderer.invoke('delete-clip', originalName);
+          if (!result.success) {
+            throw new Error(result.error);
+          }
+
+          // Remove from data structures
+          const allClipsIndex = allClips.findIndex(clip => clip.originalName === originalName);
+          const currentClipListIndex = currentClipList.findIndex(clip => clip.originalName === originalName);
+          
+          if (allClipsIndex > -1) allClips.splice(allClipsIndex, 1);
+          if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 1);
+
+          // Remove from UI
+          clipElement.remove();
+          
+          completed++;
+          updateDeletionProgress(completed, totalClips);
+          
+        } catch (error) {
+          logger.error(`Error deleting clip ${originalName}:`, error);
+          await showCustomAlert(`Failed to delete clip: ${error.message}`);
+        }
+      }
+    }
+  } finally {
+    clearSelection();
+    updateClipCounter(currentClipList.length);
+    hideDeletionTooltip();
+  }
+}
+
+// Update deletion tooltip to show progress
+function updateDeletionProgress(completed, total) {
+  const deletionTooltip = document.querySelector('.deletion-tooltip');
+  if (deletionTooltip) {
+    deletionTooltip.textContent = `Deleting clips... ${completed}/${total}`;
+  }
+}
+
+// Add event listeners for the action buttons
+document.getElementById('delete-selected')?.addEventListener('click', deleteSelectedClips);
+document.getElementById('clear-selection')?.addEventListener('click', clearSelection);
