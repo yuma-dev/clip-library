@@ -276,7 +276,7 @@ body.dragging {
 
 #search-input {
   width: 100%;
-  padding: 11px 15px 10px 15px;
+  padding: 10px 15px 10px 15px;
   font-size: 16px;
   border: 1px solid #444;
   border-radius: 20px 0px 0px 20px;
@@ -1643,4 +1643,79 @@ body.dragging {
   height: 1px;
   background-color: #444;
   margin: 8px 0;
+}
+
+/* Add these styles to styles.css */
+
+.search-display {
+  width: 100%;
+  padding: 10px 15px 10px 15px;
+  font-size: 16px;
+  border: 1px solid #444;
+  border-radius: 20px 0px 0px 20px;
+  background-color: #2a2a2a;
+  color: #e0e0e0;
+  transition: all 0.3s ease;
+  outline: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-highlight {
+  display: inline-block;
+  padding: 0 8px;
+  margin: 0 2px;
+  border-radius: 12px;
+  background: linear-gradient(45deg, #9333EA, #C084FC);
+  color: white;
+}
+
+.search-display:empty::before {
+  content: 'Search clips...';
+  color: #888;
+}
+
+/* Update the tag suggestions styles in your styles.css */
+
+.tag-suggestions {
+  position: absolute;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: none;
+  z-index: 1000;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+  min-width: 150px;
+  max-width: 250px;
+  backdrop-filter: blur(8px);
+  background-color: rgba(42, 42, 42, 0.95);
+}
+
+.tag-suggestion {
+  padding: 8px 12px;
+  cursor: pointer;
+  color: #e0e0e0;
+  transition: all 0.2s ease;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tag-suggestion:first-child {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+.tag-suggestion:last-child {
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.tag-suggestion:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  padding-left: 16px;
 }
