@@ -3973,9 +3973,8 @@ function setupEnhancedSearch() {
     return;
   }
   
-  searchDisplay.addEventListener('input', (e) => {
+  searchDisplay.addEventListener('input', () => {
     updateSearchDisplay();
-    showTagSuggestions(e.target);
   });
   
   searchDisplay.addEventListener('paste', (e) => {
@@ -3987,96 +3986,11 @@ function setupEnhancedSearch() {
   searchDisplay.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      hideSuggestions();
     }
   });
   
   // Initialize with empty content
   searchDisplay.innerHTML = '';
-
-  // Click outside to hide suggestions
-  document.addEventListener('click', (e) => {
-    if (!searchDisplay.contains(e.target)) {
-      hideSuggestions();
-    }
-  });
-}
-
-function showTagSuggestions(searchDisplay) {
-  const cursorPosition = window.getSelection().getRangeAt(0).startOffset;
-  const text = searchDisplay.innerText;
-  const beforeCursor = text.substring(0, cursorPosition);
-  const match = beforeCursor.match(/@\w*$/);
-
-  if (match) {
-    const searchTerm = match[0].substring(1).toLowerCase();
-    const suggestions = globalTags
-      .filter(tag => tag.toLowerCase().includes(searchTerm))
-      .slice(0, 5); // Limit to 5 suggestions
-
-    if (suggestions.length > 0) {
-      showSuggestionsList(suggestions, searchDisplay);
-    } else {
-      hideSuggestions();
-    }
-  } else {
-    hideSuggestions();
-  }
-}
-
-function showSuggestionsList(suggestions, searchDisplay) {
-  let suggestionBox = document.getElementById('tag-suggestions');
-  if (!suggestionBox) {
-    suggestionBox = document.createElement('div');
-    suggestionBox.id = 'tag-suggestions';
-    suggestionBox.className = 'tag-suggestions';
-    document.body.appendChild(suggestionBox);
-  }
-
-  // Get the cursor position
-  const selection = window.getSelection();
-  const range = selection.getRangeAt(0);
-  const rect = range.getBoundingClientRect();
-  
-  // Position the suggestion box below the cursor
-  suggestionBox.style.top = `${rect.bottom + window.scrollY + 5}px`;
-  suggestionBox.style.left = `${rect.left + window.scrollX}px`;
-
-  suggestionBox.innerHTML = suggestions
-    .map(tag => `<div class="tag-suggestion" data-tag="${tag}">@${tag}</div>`)
-    .join('');
-
-  suggestionBox.style.display = 'block';
-
-  // Add click handlers for suggestions
-  suggestionBox.querySelectorAll('.tag-suggestion').forEach(suggestion => {
-    suggestion.addEventListener('click', () => {
-      const tag = suggestion.dataset.tag;
-      insertTagAtCursor(`@${tag} `, searchDisplay);
-      hideSuggestions();
-    });
-  });
-}
-
-function insertTagAtCursor(tagText, searchDisplay) {
-  const selection = window.getSelection();
-  const range = selection.getRangeAt(0);
-  const beforeCursor = searchDisplay.innerText.substring(0, range.startOffset);
-  const afterCursor = searchDisplay.innerText.substring(range.startOffset);
-  
-  // Remove the partial @tag that was being typed
-  const lastAtSymbol = beforeCursor.lastIndexOf('@');
-  const newText = beforeCursor.substring(0, lastAtSymbol) + tagText + afterCursor;
-  
-  searchDisplay.innerText = newText;
-  updateSearchDisplay();
-}
-
-function hideSuggestions() {
-  const suggestionBox = document.getElementById('tag-suggestions');
-  if (suggestionBox) {
-    suggestionBox.style.display = 'none';
-  }
 }
 
 // Modify your existing document.addEventListener('DOMContentLoaded', ...) 
