@@ -198,10 +198,8 @@ async function startThumbnailValidation() {
     let timeoutId;
     
     const createTimeout = () => {
-      // Clear any existing timeout
       if (timeoutId) clearTimeout(timeoutId);
       
-      // Create new timeout
       return new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
           reject(new Error("Thumbnail generation timeout"));
@@ -211,11 +209,12 @@ async function startThumbnailValidation() {
 
     let currentTimeout = createTimeout();
 
-    // Create a promise for the thumbnail generation process
+    // Add this line to collect pending clips
+    const pendingClips = new Set(allClips.map(clip => clip.originalName));
+
     const generationPromise = new Promise((resolve) => {
-      ipcRenderer.invoke("generate-thumbnails-progressively", 
-        allClips.map(clip => clip.originalName)
-      ).then((result) => {
+      ipcRenderer.invoke("generate-thumbnails-progressively", Array.from(pendingClips))
+      .then((result) => {
         if (result.needsGeneration > 0) {
           showThumbnailGenerationText(result.needsGeneration);
 
@@ -225,7 +224,9 @@ async function startThumbnailValidation() {
               updateThumbnailGenerationText(total - current);
             }
             
-            // Force a thumbnail refresh for this clip
+            // Remove from pending set when processed
+            pendingClips.delete(clipName);
+            
             ipcRenderer.invoke("get-thumbnail-path", clipName).then(thumbnailPath => {
               if (thumbnailPath) {
                 updateClipThumbnail(clipName, thumbnailPath);
@@ -234,12 +235,16 @@ async function startThumbnailValidation() {
           });
 
           ipcRenderer.once("thumbnail-generation-complete", () => {
+            // Check if any clips were missed
+            if (pendingClips.size > 0) {
+              // Process any remaining clips
+              ipcRenderer.invoke("generate-thumbnails-progressively", Array.from(pendingClips));
+            }
             clearTimeout(timeoutId);
             hideThumbnailGenerationText();
             resolve(result);
           });
         } else {
-          logger.info("All thumbnails are valid, no generation needed");
           hideThumbnailGenerationText();
           resolve(result);
         }
@@ -253,7 +258,6 @@ async function startThumbnailValidation() {
     hideThumbnailGenerationText();
     
     setTimeout(() => {
-      logger.info("Retrying thumbnail validation after error");
       startThumbnailValidation();
     }, THUMBNAIL_RETRY_DELAY);
   }
