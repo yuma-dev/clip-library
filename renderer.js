@@ -75,6 +75,7 @@ let completedThumbnails = 0;
 let thumbnailGenerationStartTime = 0;
 let selectedClips = new Set();
 let selectionStartIndex = -1;
+let selectedTags = new Set();
 
 const previewElement = document.getElementById('timeline-preview');
 
@@ -163,7 +164,9 @@ async function loadClips() {
 
     allClips = removeDuplicates(allClips);
     allClips.sort((a, b) => b.createdAt - a.createdAt);
-    currentClipList = allClips.filter(clip => !clip.tags.includes("Private"));
+
+    await loadTagPreferences(); // This will set up selectedTags
+    filterClips(); // This will set currentClipList correctly
     
     logger.info("Initial currentClipList length:", currentClipList.length);
     updateClipCounter(currentClipList.length);
@@ -994,6 +997,26 @@ async function updateTag(originalTag, newTag) {
   }
 }
 
+async function loadTagPreferences() {
+  try {
+    const savedTags = await ipcRenderer.invoke('get-tag-preferences');
+    if (savedTags && savedTags.length > 0) {
+      selectedTags = new Set(savedTags);
+    } else {
+      // Default to all tags visible, including "Untagged"
+      selectedTags = new Set(['Untagged', ...globalTags]);
+    }
+  } catch (error) {
+    logger.error('Error loading tag preferences:', error);
+    // Default to all tags visible, including "Untagged"
+    selectedTags = new Set(['Untagged', ...globalTags]);
+  }
+  
+  updateFilterDropdown();
+  // Immediately apply the filter
+  filterClips();
+}
+
 function updateClipTags(clip) {
   const clipElement = document.querySelector(`.clip-item[data-original-name="${clip.originalName}"]`);
   if (clipElement) {
@@ -1192,7 +1215,7 @@ function showExportProgress(current, total) {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener('DOMContentLoaded', async () => {
   settings = ipcRenderer.invoke('get-settings');
   fetchSettings();
   const settingsButton = document.getElementById("settingsButton");
@@ -1237,11 +1260,6 @@ document.addEventListener("DOMContentLoaded", () => {
   loadClips();
   setupSearch();
 
-  const filterDropdown = document.getElementById("filter-dropdown");
-  filterDropdown.addEventListener("change", (e) => {
-    const selectedFilter = e.target.value;
-    filterClips(selectedFilter);
-  });
   
   volumeSlider.addEventListener("input", (e) => {
     const newVolume = parseFloat(e.target.value);
@@ -1279,6 +1297,11 @@ document.addEventListener("DOMContentLoaded", () => {
   enableDiscordRPCCheckbox.addEventListener('change', (e) => {
     toggleDiscordRPC(e.target.checked);
   });
+
+  // Create and setup the tag filter UI
+  createTagFilterUI();
+  // Load initial tag preferences
+  await loadTagPreferences();
 
   updateDiscordPresence('Browsing clips', `Total clips: ${currentClipList.length}`);
 
@@ -3232,12 +3255,6 @@ function showCustomConfirm(message) {
   });
 }
 
-const filterDropdown = document.getElementById("filter-dropdown");
-
-filterDropdown.addEventListener("change", () => {
-  const selectedFilter = filterDropdown.value;
-  filterClips(selectedFilter);
-});
 
 const debouncedFilterClips = debounce((filter) => {
   logger.info("Filtering clips with filter:", filter);
@@ -3272,8 +3289,25 @@ const debouncedFilterClips = debounce((filter) => {
   updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${currentClipList.length}`);
 }, 300);  // 300ms debounce time
 
-function filterClips(filter) {
-  debouncedFilterClips(filter);
+function filterClips() {
+  if (selectedTags.size === 0) {
+    currentClipList = [];
+  } else {
+    currentClipList = allClips.filter(clip => {
+      if (selectedTags.has('Untagged')) {
+        // Include clips with no tags when "Untagged" is selected
+        if (!clip.tags || clip.tags.length === 0) {
+          return true;
+        }
+      }
+      // Include clips that have at least one selected tag
+      return clip.tags && clip.tags.some(tag => selectedTags.has(tag));
+    });
+  }
+  
+  currentClipList = removeDuplicates(currentClipList);
+  renderClips(currentClipList);
+  updateClipCounter(currentClipList.length);
 }
 
 // Helper function to remove duplicates
@@ -3304,29 +3338,189 @@ function validateClipLists() {
 }
 
 function updateFilterDropdown() {
-  const filterDropdown = document.getElementById("filter-dropdown");
-  const allTags = new Set(globalTags);
+  const tagButton = document.getElementById('tagv2-button');
+  const tagList = document.getElementById('tagv2-list');
+  const tagCount = document.getElementById('tagv2-count');
   
-  filterDropdown.innerHTML = '<option value="all">All Clips</option>';
-  allTags.forEach(tag => {
-    const option = document.createElement("option");
-    option.value = tag;
-    option.textContent = truncateTag(tag, 10);
-    filterDropdown.appendChild(option);
-  });
+  // Clear existing list
+  tagList.innerHTML = '';
+  
+  // Get all unique tags and add "Untagged"
+  const allTags = new Set(['Untagged', ...globalTags]);
+  
+  // Update count
+  tagCount.textContent = `(${selectedTags.size}/${allTags.size})`;
 
-  // Always add the Private tag option
-  if (!allTags.has("Private")) {
-    const privateOption = document.createElement("option");
-    privateOption.value = "Private";
-    privateOption.textContent = "Private";
-    filterDropdown.appendChild(privateOption);
+  // Create and add the "Untagged" option first
+  const untaggedItem = createTagItem('Untagged');
+  tagList.appendChild(untaggedItem);
+  
+  // Add a separator
+  const separator = document.createElement('div');
+  separator.className = 'tagv2-separator';
+  tagList.appendChild(separator);
+  
+  // Add all other tags
+  globalTags.forEach(tag => {
+    const tagItem = createTagItem(tag);
+    tagList.appendChild(tagItem);
+  });
+}
+
+function createTagItem(tag) {
+  const tagItem = document.createElement('div');
+  tagItem.className = `tagv2-item ${selectedTags.has(tag) ? 'selected' : ''}`;
+  
+  const label = document.createElement('span');
+  label.className = 'tagv2-item-label';
+  label.textContent = tag;
+  
+  const indicator = document.createElement('span');
+  indicator.className = 'tagv2-indicator';
+  
+  tagItem.appendChild(label);
+  tagItem.appendChild(indicator);
+  
+  tagItem.addEventListener('click', () => {
+    toggleTagVisibility(tag);
+    tagItem.classList.toggle('selected', selectedTags.has(tag));
+  });
+  
+  return tagItem;
+}
+
+function toggleTagVisibility(tag) {
+  if (selectedTags.has(tag)) {
+    selectedTags.delete(tag);
+  } else {
+    selectedTags.add(tag);
+  }
+  
+  saveTagPreferences();
+  filterClips();
+  // Instead of a full updateFilterDropdown, just update necessary parts
+  updateTagSelectionStates();
+  updateTagCount();
+}
+
+function updateTagSelectionStates() {
+  const tagItems = document.querySelectorAll('.tagv2-item');
+  tagItems.forEach(item => {
+    const label = item.querySelector('.tagv2-item-label').textContent;
+    item.classList.toggle('selected', selectedTags.has(label));
+  });
+}
+
+function updateTagCount() {
+  const tagCount = document.getElementById('tagv2-count');
+  const allTags = new Set(['Untagged', ...globalTags]);
+  tagCount.textContent = `(${selectedTags.size}/${allTags.size})`;
+}
+
+async function saveTagPreferences() {
+  try {
+    await ipcRenderer.invoke('save-tag-preferences', Array.from(selectedTags));
+  } catch (error) {
+    logger.error('Error saving tag preferences:', error);
   }
 }
 
+function createTagFilterUI() {
+  // First remove old filter dropdown if it exists
+  const oldDropdown = document.getElementById('filter-dropdown');
+  if (oldDropdown) {
+    oldDropdown.remove();
+  }
 
-// Discord Rich Presence
+  // Create the new tag filter structure
+  const tagFilter = document.createElement('div');
+  tagFilter.id = 'tagv2-filter';
+  tagFilter.className = 'tagv2-filter';
+  
+  tagFilter.innerHTML = `
+    <button id="tagv2-button" class="tagv2-button">
+      <span>Tags</span>
+      <span id="tagv2-count">(0/0)</span>
+    </button>
+    <div id="tagv2-dropdown" class="tagv2-dropdown">
+      <div class="tagv2-actions">
+        <button id="tagv2-select-all">Select All</button>
+        <button id="tagv2-deselect-all">Deselect All</button>
+      </div>
+      <div id="tagv2-list" class="tagv2-list"></div>
+    </div>
+  `;
 
+  // Find the search container and insert after it
+  const searchContainer = document.getElementById('search-container');
+  if (searchContainer) {
+    // Look for any existing tag filters and remove them
+    const existingFilters = document.querySelectorAll('.tagv2-filter');
+    existingFilters.forEach(filter => filter.remove());
+    
+    searchContainer.after(tagFilter);
+  }
+
+  setupTagFilterEventListeners();
+}
+
+function setupTagFilterEventListeners() {
+  const tagButton = document.getElementById('tagv2-button');
+  const tagDropdown = document.getElementById('tagv2-dropdown');
+  const tagSearch = document.getElementById('tagv2-search');
+  const selectAllBtn = document.getElementById('tagv2-select-all');
+  const deselectAllBtn = document.getElementById('tagv2-deselect-all');
+
+  if (tagButton && tagDropdown) {
+    // Toggle dropdown
+    tagButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      tagDropdown.classList.toggle('show');
+    });
+  }
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tagv2-filter')) {
+      tagDropdown?.classList.remove('show');
+    }
+  });
+
+  if (tagSearch) {
+    // Search functionality
+    tagSearch.addEventListener('input', debounce(() => {
+      const searchTerm = tagSearch.value.toLowerCase();
+      const tagItems = document.querySelectorAll('.tagv2-item');
+      
+      tagItems.forEach(item => {
+        const label = item.querySelector('.tagv2-item-label').textContent.toLowerCase();
+        item.style.display = label.includes(searchTerm) ? '' : 'none';
+      });
+    }, 300));
+  }
+
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // Prevent event from bubbling up
+      selectedTags = new Set(['Untagged', ...globalTags]);
+      saveTagPreferences();
+      updateTagSelectionStates();
+      updateTagCount();
+      filterClips();
+    });
+  }
+  
+  if (deselectAllBtn) {
+    deselectAllBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // Prevent event from bubbling up
+      selectedTags.clear();
+      saveTagPreferences();
+      updateTagSelectionStates();
+      updateTagCount();
+      filterClips();
+    });
+  }
+}
 
 function updateDiscordPresenceBasedOnState() {
   if (currentClip) {
