@@ -573,30 +573,73 @@ function setupSearch() {
 }
 
 function performSearch() {
-  const searchTerm = document.getElementById("search-input").value.trim().toLowerCase();
+  const searchDisplay = document.getElementById('search-display');
+  if (!searchDisplay) return;
 
-  if (searchTerm === "") {
-    currentClipList = allClips.filter(clip => !clip.tags.includes("Private"));
-  } else {
-    const searchWords = searchTerm.split(/\s+/);
-    currentClipList = allClips.filter((clip) =>
-      !clip.tags.includes("Private") &&
-      searchWords.every(
-        (word) =>
+  const searchText = searchDisplay.innerText.trim().toLowerCase();
+  const searchTerms = parseSearchTerms(searchText);
+  
+  // Start with all clips
+  let filteredClips = [...allClips];
+  
+  // Apply search terms if they exist
+  if (searchTerms.tags.length > 0 || searchTerms.text.length > 0) {
+    filteredClips = filteredClips.filter(clip => {
+      // Check tag matches
+      const hasMatchingTags = searchTerms.tags.length === 0 || 
+        searchTerms.tags.every(searchTag => 
+          clip.tags.some(clipTag => 
+            clipTag.toLowerCase().includes(searchTag.toLowerCase().substring(1))
+          )
+        );
+
+      // Check text matches
+      const hasMatchingText = searchTerms.text.length === 0 ||
+        searchTerms.text.every(word =>
           clip.customName.toLowerCase().includes(word) ||
-          clip.originalName.toLowerCase().includes(word),
-      ),
-    );
+          clip.originalName.toLowerCase().includes(word)
+        );
+
+      return hasMatchingTags && hasMatchingText;
+    });
   }
+  
+  // Apply tag filter from dropdown
+  if (selectedTags.size > 0) {
+    filteredClips = filteredClips.filter(clip => {
+      if (selectedTags.has('Untagged')) {
+        if (!clip.tags || clip.tags.length === 0) {
+          return true;
+        }
+      }
+      return clip.tags && clip.tags.some(tag => selectedTags.has(tag));
+    });
+  }
+
   // Remove duplicates
-  currentClipList = currentClipList.filter((clip, index, self) =>
+  currentClipList = filteredClips.filter((clip, index, self) =>
     index === self.findIndex((t) => t.originalName === clip.originalName)
   );
+
+  // Sort by creation date
+  currentClipList.sort((a, b) => b.createdAt - a.createdAt);
+
   renderClips(currentClipList);
+  updateClipCounter(currentClipList.length);
 
   if (currentClip) {
     updateNavigationButtons();
   }
+}
+
+function parseSearchTerms(searchText) {
+  const terms = searchText.split(/\s+/).filter(term => term.length > 0);
+  return {
+    // Get all terms that start with @ (tags)
+    tags: terms.filter(term => term.startsWith('@')),
+    // Get all other terms (regular search)
+    text: terms.filter(term => !term.startsWith('@'))
+  };
 }
 
 // Debounce function to limit how often the search is performed
@@ -3822,3 +3865,233 @@ function updateDeletionProgress(completed, total) {
 // Add event listeners for the action buttons
 document.getElementById('delete-selected')?.addEventListener('click', deleteSelectedClips);
 document.getElementById('clear-selection')?.addEventListener('click', clearSelection);
+
+// Add these helper functions to renderer.js
+
+function styleSearchText(text) {
+  // Split by @mentions while preserving spaces
+  return text.split(/(@\S+)/).map(part => {
+    if (part.startsWith('@')) {
+      return `<span class="tag-highlight">${part}</span>`;
+    }
+    // Preserve spaces
+    return part;
+  }).join('');
+}
+
+function createSearchDisplay() {
+  const searchContainer = document.getElementById('search-container');
+  const searchInput = document.getElementById('search-input');
+  
+  if (!searchContainer || !searchInput) {
+    logger.error('Search container or input not found');
+    return null;
+  }
+  
+  // Create display element if it doesn't exist
+  let searchDisplay = document.getElementById('search-display');
+  if (!searchDisplay) {
+    searchDisplay = document.createElement('div');
+    searchDisplay.id = 'search-display';
+    searchDisplay.contentEditable = true;
+    searchDisplay.className = 'search-display';
+    searchDisplay.setAttribute('role', 'textbox');
+    searchDisplay.setAttribute('aria-label', 'Search input');
+    
+    // Replace input with display
+    searchInput.style.display = 'none';
+    searchContainer.appendChild(searchDisplay);
+  }
+  
+  return searchDisplay;
+}
+
+function updateSearchDisplay() {
+  const searchInput = document.getElementById('search-input');
+  const searchDisplay = document.getElementById('search-display');
+  
+  if (!searchDisplay || !searchInput) return;
+  
+  // Store cursor position if there is a selection
+  let savedSelection = null;
+  if (window.getSelection && window.getSelection().rangeCount > 0) {
+    const selection = window.getSelection();
+    const range = selection.getRangeAt(0);
+    savedSelection = {
+      node: range.startContainer,
+      offset: range.startOffset
+    };
+  }
+  
+  // Update display
+  const text = searchDisplay.innerText;
+  searchDisplay.innerHTML = styleSearchText(text);
+  
+  // Update hidden input value for search functionality
+  searchInput.value = text;
+  
+  // Trigger search
+  performSearch();
+  
+  // Restore cursor position if we had one
+  if (savedSelection) {
+    const selection = window.getSelection();
+    const newRange = document.createRange();
+    
+    // Find the appropriate text node to place the cursor
+    const textNodes = [];
+    const walker = document.createTreeWalker(
+      searchDisplay,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+    
+    let node;
+    while (node = walker.nextNode()) {
+      textNodes.push(node);
+    }
+    
+    if (textNodes.length > 0) {
+      // Place cursor at the end if we can't find the exact position
+      const lastNode = textNodes[textNodes.length - 1];
+      newRange.setStart(lastNode, lastNode.length);
+      newRange.collapse(true);
+      
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+    }
+  }
+}
+
+// Add event listeners for the search display
+function setupEnhancedSearch() {
+  const searchDisplay = createSearchDisplay();
+  
+  if (!searchDisplay) {
+    logger.error('Failed to create search display');
+    return;
+  }
+  
+  searchDisplay.addEventListener('input', (e) => {
+    updateSearchDisplay();
+    showTagSuggestions(e.target);
+  });
+  
+  searchDisplay.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+  
+  searchDisplay.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      hideSuggestions();
+    }
+  });
+  
+  // Initialize with empty content
+  searchDisplay.innerHTML = '';
+
+  // Click outside to hide suggestions
+  document.addEventListener('click', (e) => {
+    if (!searchDisplay.contains(e.target)) {
+      hideSuggestions();
+    }
+  });
+}
+
+function showTagSuggestions(searchDisplay) {
+  const cursorPosition = window.getSelection().getRangeAt(0).startOffset;
+  const text = searchDisplay.innerText;
+  const beforeCursor = text.substring(0, cursorPosition);
+  const match = beforeCursor.match(/@\w*$/);
+
+  if (match) {
+    const searchTerm = match[0].substring(1).toLowerCase();
+    const suggestions = globalTags
+      .filter(tag => tag.toLowerCase().includes(searchTerm))
+      .slice(0, 5); // Limit to 5 suggestions
+
+    if (suggestions.length > 0) {
+      showSuggestionsList(suggestions, searchDisplay);
+    } else {
+      hideSuggestions();
+    }
+  } else {
+    hideSuggestions();
+  }
+}
+
+function showSuggestionsList(suggestions, searchDisplay) {
+  let suggestionBox = document.getElementById('tag-suggestions');
+  if (!suggestionBox) {
+    suggestionBox = document.createElement('div');
+    suggestionBox.id = 'tag-suggestions';
+    suggestionBox.className = 'tag-suggestions';
+    document.body.appendChild(suggestionBox);
+  }
+
+  // Get the cursor position
+  const selection = window.getSelection();
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  
+  // Position the suggestion box below the cursor
+  suggestionBox.style.top = `${rect.bottom + window.scrollY + 5}px`;
+  suggestionBox.style.left = `${rect.left + window.scrollX}px`;
+
+  suggestionBox.innerHTML = suggestions
+    .map(tag => `<div class="tag-suggestion" data-tag="${tag}">@${tag}</div>`)
+    .join('');
+
+  suggestionBox.style.display = 'block';
+
+  // Add click handlers for suggestions
+  suggestionBox.querySelectorAll('.tag-suggestion').forEach(suggestion => {
+    suggestion.addEventListener('click', () => {
+      const tag = suggestion.dataset.tag;
+      insertTagAtCursor(`@${tag} `, searchDisplay);
+      hideSuggestions();
+    });
+  });
+}
+
+function insertTagAtCursor(tagText, searchDisplay) {
+  const selection = window.getSelection();
+  const range = selection.getRangeAt(0);
+  const beforeCursor = searchDisplay.innerText.substring(0, range.startOffset);
+  const afterCursor = searchDisplay.innerText.substring(range.startOffset);
+  
+  // Remove the partial @tag that was being typed
+  const lastAtSymbol = beforeCursor.lastIndexOf('@');
+  const newText = beforeCursor.substring(0, lastAtSymbol) + tagText + afterCursor;
+  
+  searchDisplay.innerText = newText;
+  updateSearchDisplay();
+}
+
+function hideSuggestions() {
+  const suggestionBox = document.getElementById('tag-suggestions');
+  if (suggestionBox) {
+    suggestionBox.style.display = 'none';
+  }
+}
+
+// Modify your existing document.addEventListener('DOMContentLoaded', ...) 
+// to call this after the search container is definitely created
+function initializeEnhancedSearch() {
+  if (document.getElementById('search-container')) {
+    setupEnhancedSearch();
+  } else {
+    logger.warn('Search container not found, waiting for DOM...');
+    // Try again in a short moment
+    setTimeout(initializeEnhancedSearch, 100);
+  }
+}
+
+// Add this to your existing DOMContentLoaded listener
+document.addEventListener('DOMContentLoaded', () => {
+  initializeEnhancedSearch();
+});
