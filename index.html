@@ -39,10 +39,19 @@
       <div id="search-container">
         <input type="text" id="search-input" placeholder="Search clips...">
       </div>
-      <select id="filter-dropdown">
-        <option value="all">All Clips</option>
-        <!-- Other options will be dynamically added -->
-      </select>
+      <div id="tagv2-filter" class="tagv2-filter">
+        <button id="tagv2-button">Tags <span id="tagv2-count">(0/0)</span></button>
+        <div id="tagv2-dropdown" class="tagv2-dropdown">
+          <div class="tagv2-search-container">
+            <input type="text" id="tagv2-search" placeholder="Search tags...">
+          </div>
+          <div class="tagv2-actions">
+            <button id="tagv2-select-all">Select All</button>
+            <button id="tagv2-deselect-all">Deselect All</button>
+          </div>
+          <div id="tagv2-list" class="tagv2-list"></div>
+        </div>
+      </div>
     </div>
     <div id="clip-grid"></div>
       <div id="player-overlay" style="display: none">

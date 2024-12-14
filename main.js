@@ -1301,3 +1301,24 @@ ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed
 
   return { success: true, path: outputPath };
 });
+
+ipcMain.handle('get-tag-preferences', async () => {
+  try {
+    const prefsPath = path.join(app.getPath('userData'), 'tagPreferences.json');
+    const prefs = await fs.readFile(prefsPath, 'utf8');
+    return JSON.parse(prefs);
+  } catch (error) {
+    return null;
+  }
+});
+
+ipcMain.handle('save-tag-preferences', async (event, preferences) => {
+  try {
+    const prefsPath = path.join(app.getPath('userData'), 'tagPreferences.json');
+    await fs.writeFile(prefsPath, JSON.stringify(preferences));
+    return true;
+  } catch (error) {
+    console.error('Error saving tag preferences:', error);
+    return false;
+  }
+});
