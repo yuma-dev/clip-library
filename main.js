@@ -13,6 +13,7 @@ const fs = require("fs").promises;
 const os = require("os");
 const crypto = require("crypto");
 const { loadSettings, saveSettings } = require("./settings-manager");
+const SteelSeriesProcessor = require('./steelseries-processor');
 const readify = require("readify");
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const DiscordRPC = require('discord-rpc');
@@ -1320,5 +1321,37 @@ ipcMain.handle('save-tag-preferences', async (event, preferences) => {
   } catch (error) {
     console.error('Error saving tag preferences:', error);
     return false;
+  }
+});
+
+ipcMain.handle('open-folder-dialog-steelseries', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory'],
+    title: 'Select your SteelSeries Clips Folder'
+  });
+  
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
+  try {
+    const settings = await loadSettings();
+    const clipLocation = settings.clipLocation;
+
+    const processor = new SteelSeriesProcessor(
+      sourcePath,
+      clipLocation,
+      (current, total) => {
+        event.sender.send('steelseries-progress', { current, total });
+      },
+      (message) => {
+        event.sender.send('steelseries-log', { type: 'info', message });
+      }
+    );
+
+    await processor.processFolder();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });

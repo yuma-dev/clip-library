@@ -102,6 +102,7 @@ settingsModal.innerHTML = `
     <p>Current clip location: <span id="currentClipLocation"></span></p>
     <button id="changeLocationBtn">Change Location</button>
     <button id="manageTagsBtn">Manage Tags</button>
+    <button id="importSteelSeriesBtn">Import SteelSeries Clips</button>
     <div class="settings-row">
       <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
       <input type="checkbox" id="enableDiscordRPC">
@@ -1290,6 +1291,58 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     logger.error("Close Settings button not found");
   }
+
+  document.getElementById('importSteelSeriesBtn').addEventListener('click', async () => {
+    try {
+      const importBtn = document.getElementById('importSteelSeriesBtn');
+      importBtn.disabled = true;
+      importBtn.textContent = 'Importing...';
+  
+      const sourcePath = await ipcRenderer.invoke('open-folder-dialog-steelseries');
+      if (!sourcePath) {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import SteelSeries Clips';
+        return;
+      }
+  
+      // Show initial progress
+      showExportProgress(0, 100);
+  
+      // Listen for progress updates
+      const progressHandler = (event, { current, total }) => {
+        showExportProgress(current, total);
+      };
+  
+      const logHandler = (event, { type, message }) => {
+        logger.info(`[SteelSeries] ${message}`);
+      };
+  
+      ipcRenderer.on('steelseries-progress', progressHandler);
+      ipcRenderer.on('steelseries-log', logHandler);
+  
+      const result = await ipcRenderer.invoke('import-steelseries-clips', sourcePath);
+  
+      if (result.success) {
+        await showCustomAlert('Import completed successfully!');
+        // Reload clips to show new imports
+        await loadClips();
+      } else {
+        await showCustomAlert(`Import failed: ${result.error}`);
+      }
+  
+      // Clean up event listeners
+      ipcRenderer.removeListener('steelseries-progress', progressHandler);
+      ipcRenderer.removeListener('steelseries-log', logHandler);
+  
+    } catch (error) {
+      logger.error('Error during SteelSeries import:', error);
+      await showCustomAlert(`Import failed: ${error.message}`);
+    } finally {
+      const importBtn = document.getElementById('importSteelSeriesBtn');
+      importBtn.disabled = false;
+      importBtn.textContent = 'Import SteelSeries Clips';
+    }
+  });
 
   const titlebarOptions = {
     backgroundColor: TitlebarColor.fromHex("#1e1e1e"),
