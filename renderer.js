@@ -11,6 +11,7 @@ const progressBarContainer = document.getElementById("progress-bar-container");
 const progressBar = document.getElementById("progress-bar");
 const trimStart = document.getElementById("trim-start");
 const trimEnd = document.getElementById("trim-end");
+const debugManager = require('./debug.js');
 const playhead = document.getElementById("playhead");
 const loadingOverlay = document.getElementById("loading-overlay");
 const playerOverlay = document.getElementById("player-overlay");
@@ -95,31 +96,111 @@ ipcRenderer.on('log', (event, { type, message }) => {
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
-settingsModal.className = "modal";
+settingsModal.className = "settings-modal";
 settingsModal.innerHTML = `
-  <div class="modal-content">
-    <h2>Settings</h2>
-    <p>Current clip location: <span id="currentClipLocation"></span></p>
-    <button id="changeLocationBtn">Change Location</button>
-    <button id="manageTagsBtn">Manage Tags</button>
-    <button id="importSteelSeriesBtn">Import SteelSeries Clips</button>
-    <div class="settings-row">
-      <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
-      <input type="checkbox" id="enableDiscordRPC">
-      <label for="exportQuality">Export Quality:</label>
-      <select id="exportQuality">
-        <option value="discord">Discord (~10MB)</option>
-        <option value="high">High Quality (~30MB)</option>
-        <option value="lossless">Lossless</option>
-      </select>
+<div class="settings-modal-content">
+    <div class="settings-tabs">
+      <button class="settings-tab active" data-tab="general">General</button>
+      <button class="settings-tab" data-tab="playback">Playback</button>
+      <button class="settings-tab" data-tab="export">Export & Import</button>
+      <button class="settings-tab" data-tab="advanced">Advanced</button>
     </div>
-    <div class="settings-row">
-      <label for="previewVolume">Preview Volume:</label>
-      <input type="range" id="previewVolumeSlider" min="0" max="1" step="0.01" value="0.1">
-      <span id="previewVolumeValue">10%</span>
+
+    <div class="settings-content">
+      <!-- General Settings -->
+      <div class="settings-section active" data-section="general">
+        <div class="settings-group">
+          <h3>Library Location</h3>
+          <div class="settings-row">
+            <label>Clip Library Path</label>
+            <button id="changeLocationBtn" class="settings-btn settings-btn-secondary">Change</button>
+          </div>
+          <div class="current-path" id="currentClipLocation"></div>
+        </div>
+
+        <div class="settings-group">
+          <h3>Tags</h3>
+          <div class="settings-row">
+            <label>Manage Tag Categories</label>
+            <button id="manageTagsBtn" class="settings-btn settings-btn-secondary">Manage</button>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <h3>Integration</h3>
+          <div class="settings-row">
+            <label>Discord Rich Presence</label>
+            <input type="checkbox" id="enableDiscordRPC">
+          </div>
+        </div>
+      </div>
+
+      <!-- Playback Settings -->
+      <div class="settings-section" data-section="playback">
+        <div class="settings-group">
+          <h3>Preview</h3>
+          <div class="settings-row">
+            <label>Preview Volume</label>
+            <input type="range" id="previewVolumeSlider" min="0" max="1" step="0.01" value="0.1">
+            <span id="previewVolumeValue">10%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Export & Import Settings -->
+      <div class="settings-section" data-section="export">
+        <div class="settings-group">
+          <h3>Video Export</h3>
+          <div class="settings-row">
+            <label>Export Quality</label>
+            <select id="exportQuality" class="settings-select">
+              <option value="discord">Discord (~10MB)</option>
+              <option value="high">High Quality (~30MB)</option>
+              <option value="lossless">Lossless</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <h3>Import</h3>
+          <div class="settings-row">
+            <label>Import SteelSeries Clips</label>
+            <button id="importSteelSeriesBtn" class="settings-btn settings-btn-secondary">Import</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Advanced Settings -->
+      <div class="settings-section" data-section="advanced">
+        <div class="settings-group">
+          <h3>Application</h3>
+          <div class="settings-row">
+          <label>Clear Application Cache</label>
+            <button id="clearCacheBtn" class="settings-btn settings-btn-secondary">Clear</button>
+          </div>
+          <div class="settings-row">
+            <label>Reset All Settings</label>
+            <button id="resetSettingsBtn" class="settings-btn settings-btn-secondary">Reset</button>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <h3>Debug</h3>
+          <div class="settings-row">
+            <label>Enable Debug Logging</label>
+            <input type="checkbox" id="enableDebugMode">
+          </div>
+          <div class="settings-row">
+            <label>App Version</label>
+            <div id="debug-app-version">Version: --</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <button id="closeSettingsBtn">Close</button>
-    <p id="app-version"></p>
+
+    <div class="settings-footer">
+      <button id="saveSettingsBtn" class="settings-btn settings-btn-primary">Save Changes</button>
+    </div>
   </div>
 `;
 
@@ -128,6 +209,73 @@ container.appendChild(settingsModal);
 
 const closeSettingsBtn = document.getElementById("closeSettingsBtn");
 const currentClipLocationSpan = document.getElementById("currentClipLocation");
+const debugModeToggle = document.getElementById('enableDebugMode');
+
+function initializeSettingsTabs() {
+  const tabs = document.querySelectorAll('.settings-tab');
+  const sections = document.querySelectorAll('.settings-section');
+
+  
+  if (debugModeToggle) {
+    debugModeToggle.checked = settings.enableDebugMode || false;
+    debugModeToggle.addEventListener('change', async (e) => {
+      settings.enableDebugMode = e.target.checked;
+      if (e.target.checked) {
+        debugManager.enable();
+      } else {
+        debugManager.disable();
+      }
+      await ipcRenderer.invoke('save-settings', settings);
+    });
+  }
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      // Remove active class from all tabs and sections
+      tabs.forEach(t => t.classList.remove('active'));
+      sections.forEach(s => s.classList.remove('active'));
+
+      // Add active class to clicked tab and corresponding section
+      tab.classList.add('active');
+      const targetSection = document.querySelector(`.settings-section[data-section="${tab.dataset.tab}"]`);
+      if (targetSection) {
+        targetSection.classList.add('active');
+      }
+    });
+  });
+}
+
+const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+if (previewVolumeSlider) {
+  previewVolumeSlider.addEventListener('input', (e) => {
+    const value = e.target.value * 100;
+    e.target.style.setProperty('--value', `${value}%`);
+  });
+}
+
+async function handleResetSettings() {
+  const isConfirmed = await showCustomConfirm(
+    'Are you sure you want to reset all settings to their default values? This cannot be undone.'
+  );
+
+  if (isConfirmed) {
+    // Reset to default values
+    settings = {
+      clipLocation: settings.clipLocation, // Preserve clip location
+      enableDiscordRPC: false,
+      previewVolume: 0.1,
+      exportQuality: 'discord',
+      enableDebugMode: false
+    };
+
+    await ipcRenderer.invoke('save-settings', settings);
+    
+    // Refresh the settings UI
+    await openSettingsModal();
+    
+    showCustomAlert('Settings have been reset to default values.');
+  }
+}
 
 async function fetchSettings() {
   settings = await ipcRenderer.invoke('get-settings');
@@ -183,6 +331,12 @@ async function loadClips() {
     setTimeout(() => {
       startThumbnailValidation();
     }, 1000);
+
+    debugManager.updateState({
+      allClips,
+      currentClipList,
+      selectedClips
+    });
 
   } catch (error) {
     logger.error("Error loading clips:", error);
@@ -363,6 +517,12 @@ ipcRenderer.on("thumbnail-validation-start", (event, { total }) => {
   if (total > 0) {
     showThumbnailGenerationText(total);
   }
+
+  debugManager.updateState({
+    isGeneratingThumbnails: true,
+    completedThumbnails: 0,
+    currentGenerationTotal: total
+  });
 });
 
 ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
@@ -370,6 +530,10 @@ ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
     updateThumbnailGenerationText(total - current);
   }
   logger.info(`Thumbnail generation progress: (${current}/${total}) - Processing: ${clipName}`);
+  debugManager.updateState({
+    completedThumbnails: current,
+    currentGenerationTotal: total
+  });
 });
 
 ipcRenderer.on("thumbnail-generation-complete", () => {
@@ -380,6 +544,11 @@ ipcRenderer.on("thumbnail-generation-complete", () => {
     clearTimeout(window.thumbnailGenerationTimeout);
     window.thumbnailGenerationTimeout = null;
   }
+  debugManager.updateState({
+    isGeneratingThumbnails: false,
+    completedThumbnails: 0,
+    currentGenerationTotal: 0
+  });
 });
 
 function showThumbnailGenerationText(totalToGenerate) {
@@ -1661,49 +1830,48 @@ exportQualitySelect.addEventListener('change', async (e) => {
 });
 
 async function openSettingsModal() {
-  logger.debug('Opening settings modal. Current settings:', settings);
+  const settingsModal = document.getElementById("settingsModal");
+  if (!settingsModal) return;
+
   // Fetch fresh settings
   settings = await fetchSettings();
-  logger.debug('Fresh settings fetched:', settings);
   
-  const settingsModal = document.getElementById("settingsModal");
-  if (settingsModal) {
-    settingsModal.style.display = "block";
-    updateVersionDisplay();
-    
-    // Get all controls
-    const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
-    const exportQualitySelect = document.getElementById('exportQuality');
-    const previewVolumeSlider = document.getElementById('previewVolumeSlider');
-    const previewVolumeValue = document.getElementById('previewVolumeValue');
+  // Show the modal
+  settingsModal.style.display = "block";
+  
+  // Update version display
+  updateVersionDisplay();
+  
+  // Set control values
+  const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
+  const exportQualitySelect = document.getElementById('exportQuality');
+  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+  const previewVolumeValue = document.getElementById('previewVolumeValue');
+  const currentClipLocationSpan = document.getElementById('currentClipLocation');
 
-    logger.debug('Setting controls with values:', {
-      enableDiscordRPC: settings.enableDiscordRPC,
-      exportQuality: settings.exportQuality,
-      previewVolume: settings.previewVolume
-    });
+  const version = await ipcRenderer.invoke('get-app-version');
+  document.getElementById('debug-app-version').textContent = `Version: ${version}`;
 
-    // Set control values from settings
-    if (enableDiscordRPCCheckbox) {
-      enableDiscordRPCCheckbox.checked = Boolean(settings.enableDiscordRPC);
-    }
-    
-    if (exportQualitySelect) {
-      logger.info('Setting export quality select to:', settings.exportQuality);
-      exportQualitySelect.value = settings.exportQuality || 'discord';
-    }
-
-    if (previewVolumeSlider && previewVolumeValue) {
-      const savedVolume = settings.previewVolume ?? 0.1;
-      previewVolumeSlider.value = savedVolume;
-      previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
-    }
-
-    logger.debug('Controls set. Current values:', {
-      exportQualityValue: exportQualitySelect?.value,
-      previewVolumeValue: previewVolumeSlider?.value
-    });
+  if (enableDiscordRPCCheckbox) {
+    enableDiscordRPCCheckbox.checked = Boolean(settings.enableDiscordRPC);
   }
+  
+  if (exportQualitySelect) {
+    exportQualitySelect.value = settings.exportQuality || 'discord';
+  }
+
+  if (previewVolumeSlider && previewVolumeValue) {
+    const savedVolume = settings.previewVolume ?? 0.1;
+    previewVolumeSlider.value = savedVolume;
+    previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
+  }
+
+  if (currentClipLocationSpan) {
+    currentClipLocationSpan.textContent = settings.clipLocation || 'Not set';
+  }
+
+  // Initialize tabs
+  initializeSettingsTabs();
 }
 
 document.getElementById('previewVolumeSlider').addEventListener('input', async (e) => {
@@ -1729,11 +1897,21 @@ function updateAllPreviewVolumes(newVolume) {
   });
 }
 
+document.getElementById('closeSettingsBtn2')?.addEventListener('click', closeSettingsModal);
+document.getElementById('saveSettingsBtn')?.addEventListener('click', async () => {
+  // Save settings here if needed
+  await updateSettings();
+  closeSettingsModal();
+});
+
 function closeSettingsModal() {
-  settingsModal.style.display = "none";
-  updateSettings(); // Update the local settings object
+  const settingsModal = document.getElementById("settingsModal");
+  if (!settingsModal) return;
   
-  // Update all preview volumes to match the new setting
+  settingsModal.style.display = "none";
+  updateSettings();
+  
+  // Update preview volumes
   const previewVolumeSlider = document.getElementById('previewVolumeSlider');
   if (previewVolumeSlider) {
     updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
@@ -2631,6 +2809,11 @@ async function openClip(originalName, customName) {
     playerOverlay.removeEventListener("click", handleOverlayClick);
   };
 
+  debugManager.updateState({
+    currentClip: { originalName, customName },
+    gainNode // if you have this available
+  });
+
   updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, false); // Start paused
 }
 
@@ -3423,6 +3606,11 @@ function filterClips() {
   currentClipList = removeDuplicates(currentClipList);
   renderClips(currentClipList);
   updateClipCounter(currentClipList.length);
+
+  debugManager.updateState({
+    currentClipList,
+    allClips
+  });
 }
 
 // Helper function to remove duplicates
@@ -3835,6 +4023,10 @@ function handleClipSelection(clipItem, event) {
       clipItem.classList.add('selected');
     }
   }
+
+  debugManager.updateState({
+    selectedClips
+  });
 
   updateSelectionUI();
 }
