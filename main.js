@@ -1355,12 +1355,3 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
     return { success: false, error: error.message };
   }
 });
-
-ipcMain.handle('get-memory-usage', () => {
-  const processMemory = process.memoryUsage();
-  return {
-    heapUsed: processMemory.heapUsed,
-    heapTotal: processMemory.heapTotal,
-    processMemory: processMemory.rss // Resident Set Size - actual memory used by the process
-  };
-});
