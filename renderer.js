@@ -292,37 +292,56 @@ async function updateVersionDisplay() {
 }
 
 async function addNewClipToLibrary(fileName) {
-  const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
-  
-  // Check if the clip already exists in allClips
-  const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
-  
-  if (existingClipIndex === -1) {
-    // If it doesn't exist, add it to allClips
-    allClips.unshift(newClipInfo);
-    const newClipElement = await createClipElement(newClipInfo);
-    clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
+  try {
+    const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
     
-    // Force a clean state for the new clip
-    const clipElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
-    if (clipElement) {
-      // Ensure no trim data is associated
-      clipElement.dataset.trimStart = undefined;
-      clipElement.dataset.trimEnd = undefined;
+    // Check if the clip already exists in allClips
+    const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
+    
+    if (existingClipIndex === -1) {
+      // If it doesn't exist, add it to allClips
+      allClips.unshift(newClipInfo);
+      
+      // Create clip element with a loading thumbnail first
+      const newClipElement = await createClipElement({
+        ...newClipInfo,
+        thumbnailPath: "assets/loading-thumbnail.gif"
+      });
+      
+      clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
+      
+      // Force a clean state for the new clip
+      const clipElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+      if (clipElement) {
+        clipElement.dataset.trimStart = undefined;
+        clipElement.dataset.trimEnd = undefined;
+      }
+
+      // Generate thumbnail in the background without waiting
+      // This prevents the timeout from blocking the clip addition
+      setTimeout(async () => {
+        try {
+          await ipcRenderer.invoke("generate-thumbnails-progressively", [fileName]);
+        } catch (error) {
+          logger.error("Error in background thumbnail generation:", error);
+        }
+      }, 1000); // Give a slight delay to ensure file is fully written
+
+    } else {
+      // If it exists, update the existing clip info
+      allClips[existingClipIndex] = newClipInfo;
+      const existingElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+      if (existingElement) {
+        const updatedElement = await createClipElement(newClipInfo);
+        existingElement.replaceWith(updatedElement);
+      }
     }
-  } else {
-    // If it exists, update the existing clip info
-    allClips[existingClipIndex] = newClipInfo;
-    // Update the existing clip element in the grid
-    const existingElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
-    if (existingElement) {
-      const updatedElement = await createClipElement(newClipInfo);
-      existingElement.replaceWith(updatedElement);
-    }
+    
+    updateFilterDropdown();
+
+  } catch (error) {
+    logger.error("Error adding new clip to library:", error);
   }
-  
-  ipcRenderer.invoke('generate-thumbnails-progressively', [fileName]);
-  updateFilterDropdown();
 }
 
 ipcRenderer.on('new-clip-added', (event, fileName) => {
