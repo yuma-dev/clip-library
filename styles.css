@@ -1794,6 +1794,7 @@ body.dragging {
   transition: all 0.3s ease;
   position: relative;
   font-size: 15px;
+  z-index: 1;
 }
 
 .settings-tab:hover {
@@ -1814,8 +1815,31 @@ body.dragging {
   height: 2px;
   background: linear-gradient(90deg, #9333EA, #C084FC);
   border-radius: 2px;
-  box-shadow: 0 0 10px rgba(147, 51, 234, 0.5);
+  box-shadow: 
+    0 0 15px rgba(158, 84, 226, 0.6),    /* Increased size and opacity */
+    0 0 30px rgba(157, 80, 230, 0.4),    /* Increased middle glow */
+    0 -40px 60px rgba(163, 95, 226, 0.3); /* Much larger upward glow */
 }
+
+.settings-tab.active::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 30px;
+  height: 30px;
+  background: radial-gradient(
+    circle,
+    rgba(202, 168, 236, 0.4) 0%,
+    rgba(177, 116, 233, 0.2) 50%,
+    transparent 90%
+  );
+  border-radius: 50%;
+  filter: blur(15px);                  /* Increased blur */
+  z-index: -1;
+}
+
 
 /* Tab Content */
 .settings-tab-content {
