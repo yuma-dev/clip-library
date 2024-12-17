@@ -832,9 +832,14 @@ function setupContextMenu() {
   tagSearchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      const firstTag = document.querySelector(".tag-item");
-      if (firstTag) {
-        firstTag.querySelector("input[type='checkbox']").click();
+      const newTag = tagSearchInput.value.trim();
+      if (newTag && !globalTags.includes(newTag)) {
+        addGlobalTag(newTag);
+        if (contextMenuClip) {
+          toggleClipTag(contextMenuClip, newTag);
+        }
+        tagSearchInput.value = "";
+        updateTagList();
       }
     }
   });
@@ -1003,8 +1008,15 @@ function addNewTag() {
   if (newTagName && !globalTags.includes(newTagName)) {
     globalTags.push(newTagName);
     saveGlobalTags();
+    
+    // Automatically enable the new tag
+    selectedTags.add(newTagName);
+    saveTagPreferences();
+    
     searchInput.value = '';
     renderTagList(globalTags);
+    updateFilterDropdown();
+    filterClips();
   }
 }
 
@@ -1107,7 +1119,13 @@ function addGlobalTag(tag) {
   if (!globalTags.includes(tag)) {
     globalTags.push(tag);
     saveGlobalTags();
-    updateFilterDropdown(); // Update the dropdown after adding a new tag
+    
+    // Automatically enable the new tag
+    selectedTags.add(tag);
+    saveTagPreferences();
+    
+    updateFilterDropdown();
+    filterClips(); // Re-filter to show clips with the new tag
   }
 }
 
@@ -1520,10 +1538,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
   
-      // Show initial progress
       showExportProgress(0, 100);
   
-      // Listen for progress updates
       const progressHandler = (event, { current, total }) => {
         showExportProgress(current, total);
       };
@@ -1538,14 +1554,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       const result = await ipcRenderer.invoke('import-steelseries-clips', sourcePath);
   
       if (result.success) {
+        // Add "Imported" to selectedTags if not already present
+        if (!selectedTags.has("Imported")) {
+          selectedTags.add("Imported");
+          await saveTagPreferences();
+        }
+  
         await showCustomAlert('Import completed successfully!');
         // Reload clips to show new imports
         await loadClips();
+        updateFilterDropdown(); // Update the dropdown with new tag
       } else {
         await showCustomAlert(`Import failed: ${result.error}`);
       }
   
-      // Clean up event listeners
       ipcRenderer.removeListener('steelseries-progress', progressHandler);
       ipcRenderer.removeListener('steelseries-log', logHandler);
   

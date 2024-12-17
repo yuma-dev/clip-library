@@ -242,14 +242,37 @@ class SteelSeriesProcessor {
         }
     }
 
+    async isFileReady(filePath) {
+        try {
+            // Try to open the file for writing - if it's locked, it's probably still being written
+            const fileHandle = await fs.open(filePath, 'r+');
+            await fileHandle.close();
+            
+            // Check if file size is stable (hasn't changed in 1 second)
+            const size1 = (await fs.stat(filePath)).size;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const size2 = (await fs.stat(filePath)).size;
+            
+            return size1 === size2;
+        } catch (error) {
+            return false;
+        }
+    }
+
     async processFile(inputFile) {
         try {
             if (!await this.shouldProcessFile(inputFile)) {
                 this.log(`Skipping ${path.basename(inputFile)} (already processed)`);
                 return;
-            }
-
-            this.log(`Processing ${path.basename(inputFile)}`);
+              }
+          
+              // Check if file is ready before processing
+              if (!await this.isFileReady(inputFile)) {
+                this.log(`File ${path.basename(inputFile)} is still being written, skipping...`);
+                return;
+              }
+          
+              this.log(`Processing ${path.basename(inputFile)}`);
 
             // Debug: First print all metadata
             this.log('Analyzing metadata for:', inputFile);
@@ -265,6 +288,7 @@ class SteelSeriesProcessor {
             const outputFile = path.join(this.exportFolder, fileName);
             const nameFile = path.join(this.metadataFolder, `${fileName}.customname`);
             const trimFile = path.join(this.metadataFolder, `${fileName}.trim`);
+            const tagsFile = path.join(this.metadataFolder, `${fileName}.tags`);
 
             const trimData = {
                 start: Math.round(metadata.clip_start_point * 10) / 10,
@@ -275,9 +299,13 @@ class SteelSeriesProcessor {
                 // Save metadata files
                 await fs.writeFile(nameFile, metadata.name, 'utf8');
                 await this.copyFileTimestamps(inputFile, nameFile);
-
+    
                 await fs.writeFile(trimFile, JSON.stringify(trimData, null, 2), 'utf8');
                 await this.copyFileTimestamps(inputFile, trimFile);
+    
+                // Add the "Imported" tag
+                await fs.writeFile(tagsFile, JSON.stringify(["Imported"]), 'utf8');
+                await this.copyFileTimestamps(inputFile, tagsFile);
 
                 this.log(`Processed ${fileName}`);
                 this.log(`Name: ${metadata.name}`);
@@ -288,7 +316,7 @@ class SteelSeriesProcessor {
             }
         } catch (err) {
             this.log(`Error processing ${inputFile}: ${err.message}`);
-            throw err;
+            return false;
         }
     }
 
