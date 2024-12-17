@@ -4118,35 +4118,91 @@ selectionActions.innerHTML = `
 `;
 document.body.appendChild(selectionActions);
 
+let lastSelectedClip = null;
+
 function handleClipSelection(clipItem, event) {
-  const clipItems = Array.from(document.querySelectorAll('.clip-item'));
+  // Get all visible clip items
+  const clipItems = Array.from(document.querySelectorAll('.clip-item:not([style*="display: none"])'));
   const currentIndex = clipItems.indexOf(clipItem);
 
-  if (event.shiftKey && selectionStartIndex !== -1) {
-    // Range selection
-    clearSelection();
-    const [start, end] = [selectionStartIndex, currentIndex].sort((a, b) => a - b);
-    for (let i = start; i <= end; i++) {
-      const clip = clipItems[i];
-      selectedClips.add(clip.dataset.originalName);
-      clip.classList.add('selected');
+  if (event.shiftKey && lastSelectedClip) {
+    // Get index of last selected clip
+    const lastSelectedIndex = clipItems.indexOf(lastSelectedClip);
+    
+    if (currentIndex >= 0 && lastSelectedIndex >= 0) {
+      // Clear existing selection
+      clearSelection(false); // Don't reset lastSelectedClip
+      
+      // Select all clips between last selected and current
+      const [start, end] = [lastSelectedIndex, currentIndex].sort((a, b) => a - b);
+      
+      for (let i = start; i <= end; i++) {
+        if (i >= 0 && i < clipItems.length) {
+          const clip = clipItems[i];
+          if (isClipSelectable(clip)) {
+            selectedClips.add(clip.dataset.originalName);
+            clip.classList.add('selected');
+          }
+        }
+      }
     }
   } else {
-    // Individual selection
-    selectionStartIndex = currentIndex;
-    const originalName = clipItem.dataset.originalName;
-    
-    if (selectedClips.has(originalName)) {
-      selectedClips.delete(originalName);
-      clipItem.classList.remove('selected');
-    } else {
-      selectedClips.add(originalName);
-      clipItem.classList.add('selected');
+    // Single selection with Ctrl/Cmd
+    if (currentIndex >= 0) {
+      const originalName = clipItem.dataset.originalName;
+      
+      if (!event.ctrlKey && !event.metaKey) {
+        // Clear other selections if not using Ctrl/Cmd
+        clearSelection(false);
+      }
+      
+      if (selectedClips.has(originalName) && (event.ctrlKey || event.metaKey)) {
+        // Deselect if already selected and using Ctrl/Cmd
+        selectedClips.delete(originalName);
+        clipItem.classList.remove('selected');
+        
+        // Update lastSelectedClip to the previous selected clip if exists
+        const selectedElements = Array.from(document.querySelectorAll('.clip-item.selected'));
+        lastSelectedClip = selectedElements[selectedElements.length - 1] || null;
+      } else {
+        // Select the clip
+        selectedClips.add(originalName);
+        clipItem.classList.add('selected');
+        lastSelectedClip = clipItem;
+      }
     }
   }
 
   updateSelectionUI();
 }
+
+// Modified clear selection to optionally preserve lastSelectedClip
+function clearSelection(resetLastSelected = true) {
+  document.querySelectorAll('.clip-item.selected').forEach(clip => {
+    clip.classList.remove('selected');
+  });
+  selectedClips.clear();
+  if (resetLastSelected) {
+    lastSelectedClip = null;
+  }
+  updateSelectionUI();
+}
+
+// Helper function to check if a clip is selectable
+function isClipSelectable(clip) {
+  return clip && 
+         clip.dataset && 
+         clip.dataset.originalName && 
+         !clip.classList.contains('deleting') && 
+         !clip.classList.contains('video-preview-disabled');
+}
+
+// Add this to your document event listeners
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    clearSelection(true); // Reset lastSelectedClip when using Escape
+  }
+});
 
 function updateSelectionUI() {
   const selectionActions = document.getElementById('selection-actions');
