@@ -95,31 +95,128 @@ ipcRenderer.on('log', (event, { type, message }) => {
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
-settingsModal.className = "modal";
+settingsModal.className = "settings-modal";
 settingsModal.innerHTML = `
-  <div class="modal-content">
-    <h2>Settings</h2>
-    <p>Current clip location: <span id="currentClipLocation"></span></p>
-    <button id="changeLocationBtn">Change Location</button>
-    <button id="manageTagsBtn">Manage Tags</button>
-    <button id="importSteelSeriesBtn">Import SteelSeries Clips</button>
-    <div class="settings-row">
-      <label for="enableDiscordRPC">Enable Discord Rich Presence:</label>
-      <input type="checkbox" id="enableDiscordRPC">
-      <label for="exportQuality">Export Quality:</label>
-      <select id="exportQuality">
-        <option value="discord">Discord (~10MB)</option>
-        <option value="high">High Quality (~30MB)</option>
-        <option value="lossless">Lossless</option>
-      </select>
+<div class="settings-modal-content">
+    <div class="settings-header">
+      <h2>Settings</h2>
     </div>
-    <div class="settings-row">
-      <label for="previewVolume">Preview Volume:</label>
-      <input type="range" id="previewVolumeSlider" min="0" max="1" step="0.01" value="0.1">
-      <span id="previewVolumeValue">10%</span>
+
+    <div class="settings-tabs">
+      <div class="settings-tab active" data-tab="general">General</div>
+      <div class="settings-tab" data-tab="exportImport">Export/Import</div>
+      <div class="settings-tab" data-tab="about">About</div>
     </div>
-    <button id="closeSettingsBtn">Close</button>
-    <p id="app-version"></p>
+
+    <div class="settings-tab-content active" data-tab="general">
+      <div class="settings-group">
+        <h3 class="settings-group-title">Clip Library Location</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Current Location</div>
+            <div class="settings-item-description" id="currentClipLocation">Loading...</div>
+          </div>
+          <div class="settings-control">
+            <button id="changeLocationBtn" class="settings-button settings-button-primary">Change Location</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-group-title">Playback</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Preview Volume</div>
+            <div class="settings-item-description">Set the default volume for clip previews</div>
+          </div>
+          <div class="settings-control">
+            <input type="range" id="previewVolumeSlider" class="settings-range" min="0" max="1" step="0.01" value="0.1">
+            <span id="previewVolumeValue">10%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-group-title">Integration</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Discord Rich Presence</div>
+            <div class="settings-item-description">Show your current activity in Discord</div>
+          </div>
+          <div class="settings-control">
+            <label class="settings-switch">
+              <input type="checkbox" id="enableDiscordRPC">
+              <span class="settings-switch-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-group-title">Tag Management</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Manage Tags</div>
+            <div class="settings-item-description">Edit and organize your clip tags</div>
+          </div>
+          <div class="settings-control">
+            <button id="manageTagsBtn" class="settings-button settings-button-secondary">Manage Tags</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-tab-content" data-tab="exportImport">
+      <div class="settings-group">
+        <h3 class="settings-group-title">Export Settings</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Export Quality</div>
+            <div class="settings-item-description">Choose the default quality for exported clips</div>
+          </div>
+          <div class="settings-control">
+            <select id="exportQuality" class="settings-select">
+              <option value="discord">Discord (~10MB)</option>
+              <option value="high">High Quality (~30MB)</option>
+              <option value="lossless">Lossless</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-group-title">Import Options</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Import from SteelSeries</div>
+            <div class="settings-item-description">Select your SteelSeries Moments folder</div>
+          </div>
+          <div class="settings-control">
+            <button id="importSteelSeriesBtn" class="settings-button settings-button-primary">Import Clips</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-tab-content" data-tab="about">
+      <div class="settings-group">
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Clip Library</div>
+            <div class="settings-item-description">A modern, fast, and efficient way to manage your clip collection.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-version">
+        <p>Version: <span id="app-version">Loading...</span></p>
+      </div>
+    </div>
+    <div class="settings-footer">
+      <button id="closeSettingsBtn" class="settings-save-button">
+        Save Settings
+      </button>
+    </div>
   </div>
 `;
 
@@ -762,9 +859,24 @@ function setupContextMenu() {
 
 document.getElementById('manageTagsBtn').addEventListener('click', openTagManagement);
 
+let isTagManagementOpen = false;
+
 function openTagManagement() {
   logger.info("openTagManagement function called");
+  
+  // Prevent multiple modals from opening
+  if (isTagManagementOpen) {
+    logger.info("Tag management modal is already open");
+    return;
+  }
+  
   try {
+    // Remove any existing tag management modals first
+    const existingModal = document.getElementById('tagManagementModal');
+    if (existingModal) {
+      existingModal.remove();
+    }
+    
     const container = document.querySelector('.cet-container') || document.body;
     
     const tagManagementModal = document.createElement('div');
@@ -781,6 +893,7 @@ function openTagManagement() {
 
     // Show the modal
     tagManagementModal.style.display = 'block';
+    isTagManagementOpen = true;
 
     const tagList = document.getElementById('tagList');
     if (!tagList) {
@@ -797,14 +910,34 @@ function openTagManagement() {
       tagList.appendChild(tagElement);
     });
 
+    function closeModal() {
+      tagManagementModal.remove();
+      isTagManagementOpen = false;
+    }
+
+    // Close button handler
     const closeTagManagementBtn = document.getElementById('closeTagManagementBtn');
     if (closeTagManagementBtn) {
-      closeTagManagementBtn.addEventListener('click', () => {
-        tagManagementModal.remove();
-      });
+      closeTagManagementBtn.addEventListener('click', closeModal);
     } else {
       throw new Error("Close button for tag management not found");
     }
+
+    // Click outside modal to close
+    tagManagementModal.addEventListener('click', (e) => {
+      if (e.target === tagManagementModal) {
+        closeModal();
+      }
+    });
+
+    // Escape key to close
+    const escapeHandler = (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+        document.removeEventListener('keydown', escapeHandler);
+      }
+    };
+    document.addEventListener('keydown', escapeHandler);
 
     tagList.addEventListener('change', async (e) => {
       if (e.target.tagName === 'INPUT') {
@@ -827,6 +960,7 @@ function openTagManagement() {
   } catch (error) {
     logger.error("Error in openTagManagement:", error);
     alert(`An error occurred while opening tag management: ${error.message}`);
+    isTagManagementOpen = false;
   }
 }
 
@@ -1660,19 +1794,105 @@ exportQualitySelect.addEventListener('change', async (e) => {
   }
 });
 
+function initializeSettingsModal() {
+  const settingsModal = document.getElementById('settingsModal');
+  const tabs = document.querySelectorAll('.settings-tab');
+  const tabContents = document.querySelectorAll('.settings-tab-content');
+
+  // Tab switching
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetTab = tab.dataset.tab;
+      
+      // Update active states
+      tabs.forEach(t => t.classList.remove('active'));
+      tabContents.forEach(c => c.classList.remove('active'));
+      
+      tab.classList.add('active');
+      document.querySelector(`.settings-tab-content[data-tab="${targetTab}"]`).classList.add('active');
+    });
+  });
+
+  // Preview volume slider
+  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+  const previewVolumeValue = document.getElementById('previewVolumeValue');
+
+  previewVolumeSlider.addEventListener('input', (e) => {
+    const value = Math.round(e.target.value * 100);
+    previewVolumeValue.textContent = `${value}%`;
+    updateAllPreviewVolumes(e.target.value);
+  });
+
+  // Settings controls event handlers
+  document.getElementById('closeSettingsBtn').addEventListener('click', closeSettingsModal);
+  document.getElementById('changeLocationBtn').addEventListener('click', changeClipLocation);
+  document.getElementById('manageTagsBtn').addEventListener('click', () => {
+    closeSettingsModal();
+    openTagManagement();
+  });
+
+  // Export quality change handler
+  document.getElementById('exportQuality').addEventListener('change', async (e) => {
+    const newQuality = e.target.value;
+    logger.info('Export quality changed to:', newQuality);
+    
+    try {
+      settings = {
+        ...settings,
+        exportQuality: newQuality
+      };
+      
+      const savedSettings = await ipcRenderer.invoke('save-settings', settings);
+      settings = savedSettings;
+      
+      logger.info('Settings saved successfully:', settings);
+    } catch (error) {
+      logger.error('Error saving settings:', error);
+      e.target.value = settings.exportQuality;
+      settings = await fetchSettings();
+    }
+  });
+
+  // Discord RPC toggle handler
+  const discordRPCToggle = document.getElementById('enableDiscordRPC');
+  discordRPCToggle.addEventListener('change', async (e) => {
+    const isEnabled = e.target.checked;
+    try {
+      await toggleDiscordRPC(isEnabled);
+      settings = {
+        ...settings,
+        enableDiscordRPC: isEnabled
+      };
+      await ipcRenderer.invoke('save-settings', settings);
+    } catch (error) {
+      logger.error('Error toggling Discord RPC:', error);
+      e.target.checked = !isEnabled;
+    }
+  });
+}
+
 async function openSettingsModal() {
   logger.debug('Opening settings modal. Current settings:', settings);
+  
   // Fetch fresh settings
   settings = await fetchSettings();
   logger.debug('Fresh settings fetched:', settings);
   
-  const settingsModal = document.getElementById("settingsModal");
+  const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
-    settingsModal.style.display = "block";
+    settingsModal.style.display = 'block';
+    
+    // Update version display
     updateVersionDisplay();
     
-    // Get all controls
-    const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
+    // Update clip location
+    const currentClipLocation = document.getElementById('currentClipLocation');
+    if (currentClipLocation) {
+      currentClipLocation.textContent = clipLocation || 'Not set';
+    }
+    
+    // Set control values from settings
+    const enableDiscordRPCToggle = document.getElementById('enableDiscordRPC');
     const exportQualitySelect = document.getElementById('exportQuality');
     const previewVolumeSlider = document.getElementById('previewVolumeSlider');
     const previewVolumeValue = document.getElementById('previewVolumeValue');
@@ -1683,13 +1903,11 @@ async function openSettingsModal() {
       previewVolume: settings.previewVolume
     });
 
-    // Set control values from settings
-    if (enableDiscordRPCCheckbox) {
-      enableDiscordRPCCheckbox.checked = Boolean(settings.enableDiscordRPC);
+    if (enableDiscordRPCToggle) {
+      enableDiscordRPCToggle.checked = Boolean(settings.enableDiscordRPC);
     }
     
     if (exportQualitySelect) {
-      logger.info('Setting export quality select to:', settings.exportQuality);
       exportQualitySelect.value = settings.exportQuality || 'discord';
     }
 
@@ -1699,10 +1917,32 @@ async function openSettingsModal() {
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
     }
 
-    logger.debug('Controls set. Current values:', {
-      exportQualityValue: exportQualitySelect?.value,
-      previewVolumeValue: previewVolumeSlider?.value
-    });
+    // Set initial active tab
+    const defaultTab = document.querySelector('.settings-tab[data-tab="general"]');
+    if (defaultTab) {
+      defaultTab.click();
+    }
+  }
+}
+
+function closeSettingsModal() {
+  const settingsModal = document.getElementById('settingsModal');
+  if (settingsModal) {
+    // Add fade-out animation
+    settingsModal.style.opacity = '0';
+    setTimeout(() => {
+      settingsModal.style.display = 'none';
+      settingsModal.style.opacity = '1';
+    }, 300);
+  }
+  
+  // Save settings state
+  updateSettings();
+  
+  // Update preview volumes
+  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
+  if (previewVolumeSlider) {
+    updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
   }
 }
 
@@ -1727,17 +1967,6 @@ function updateAllPreviewVolumes(newVolume) {
   previewVideos.forEach(video => {
     video.volume = newVolume;
   });
-}
-
-function closeSettingsModal() {
-  settingsModal.style.display = "none";
-  updateSettings(); // Update the local settings object
-  
-  // Update all preview volumes to match the new setting
-  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
-  if (previewVolumeSlider) {
-    updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
-  }
 }
 
 document
@@ -4080,4 +4309,32 @@ function initializeEnhancedSearch() {
 // Add this to your existing DOMContentLoaded listener
 document.addEventListener('DOMContentLoaded', () => {
   initializeEnhancedSearch();
+  initializeSettingsModal();
+  
+  // Add global click handler for modal backdrop
+  const settingsModal = document.getElementById('settingsModal');
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) {
+      closeSettingsModal();
+    }
+  });
+  
+  // Add escape key handler
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && settingsModal.style.display === 'block') {
+      closeSettingsModal();
+    }
+  });
 });
+
+async function updateVersionDisplay() {
+  try {
+    const version = await ipcRenderer.invoke('get-app-version');
+    const versionElement = document.getElementById('app-version');
+    if (versionElement) {
+      versionElement.textContent = version;
+    }
+  } catch (error) {
+    logger.error('Failed to get app version:', error);
+  }
+}

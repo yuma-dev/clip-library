@@ -1719,3 +1719,321 @@ body.dragging {
   background-color: rgba(255, 255, 255, 0.1);
   padding-left: 16px;
 }
+
+.settings-modal {
+  display: none;
+  position: fixed;
+  z-index: 2000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  animation: fadeIn 0.3s ease;
+}
+
+.settings-modal-content {
+  background: rgba(42, 42, 42, 0.8);
+  backdrop-filter: blur(10px);
+  margin: 5% auto;
+  padding: 0;
+  width: 90%;
+  max-width: 800px;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37), 0 0 20px rgb(193 193 193 / 8%);
+  border: 1px solid rgb(121 121 121 / 20%);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Settings Header - Simplified without close button */
+.settings-header {
+  padding: 20px 30px;
+  border-bottom: 1px solid rgb(169 169 169 / 20%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.settings-header h2 {
+  margin: 0;
+  color: #e0e0e0;
+  font-size: 24px;
+  font-weight: 500;
+  text-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
+}
+
+/* Tabs Navigation - Updated with purple accents */
+.settings-tabs {
+  display: flex;
+  padding: 0 30px;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgb(143 143 143 / 20%);
+}
+
+.settings-tab {
+  padding: 15px 24px;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  font-size: 15px;
+}
+
+.settings-tab:hover {
+  color: #e0e0e0;
+  text-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
+}
+
+.settings-tab.active {
+  color: #e0e0e0;
+}
+
+.settings-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, #9333EA, #C084FC);
+  border-radius: 2px;
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.5);
+}
+
+/* Tab Content */
+.settings-tab-content {
+  display: none;
+  padding: 30px;
+}
+
+.settings-tab-content.active {
+  display: block;
+  animation: fadeIn 0.3s ease;
+}
+
+/* Settings Groups */
+.settings-group {
+  margin-bottom: 30px;
+}
+
+.settings-group-title {
+  color: #e0e0e0;
+  font-size: 16px;
+  font-weight: 500;
+  margin-bottom: 15px;
+}
+
+/* Settings Items */
+.settings-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  border: 1px solid rgba(147, 51, 234, 0.1);
+  transition: all 0.3s ease;
+}
+
+.settings-item:hover {
+  border-color: rgba(147, 51, 234, 0.3);
+  box-shadow: 0 0 15px rgba(147, 51, 234, 0.1);
+}
+
+.settings-item-info {
+  flex-grow: 1;
+}
+
+.settings-item-title {
+  color: #e0e0e0;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.settings-item-description {
+  color: #888;
+  font-size: 13px;
+}
+
+/* Controls */
+.settings-control {
+  margin-left: 20px;
+}
+
+/* Buttons */
+.settings-button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.settings-button-primary {
+  background: linear-gradient(90deg, #9333EA, #C084FC);
+  color: white;
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+.settings-button-primary:hover {
+  background: linear-gradient(90deg, #8324DB, #B975ED);
+  box-shadow: 0 0 15px rgba(147, 51, 234, 0.5);
+  transform: translateY(-1px);
+}
+
+.settings-button-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+}
+
+.settings-button-secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Switch Toggle */
+.settings-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.settings-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.1);
+  transition: .4s;
+  border-radius: 34px;
+}
+
+.settings-switch-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked + .settings-switch-slider {
+  background: linear-gradient(90deg, #9333EA, #C084FC);
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
+}
+
+input:checked + .settings-switch-slider:before {
+  transform: translateX(20px);
+}
+
+/* Select Dropdown */
+.settings-select {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(147, 51, 234, 0.2);
+  border-radius: 6px;
+  color: #e0e0e0;
+  padding: 8px 12px;
+  font-size: 14px;
+  min-width: 150px;
+  transition: all 0.3s ease;
+}
+
+.settings-select:hover {
+  border-color: rgba(147, 51, 234, 0.4);
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.2);
+}
+
+.settings-select:focus {
+  border-color: rgba(147, 51, 234, 0.6);
+  box-shadow: 0 0 15px rgba(147, 51, 234, 0.3);
+  outline: none;
+}
+
+.settings-select option {
+  background-color: #2a2a2a;
+  color: #e0e0e0;
+}
+
+/* Version Info */
+.settings-version {
+  color: #888;
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Range Slider */
+.settings-range {
+  -webkit-appearance: none;
+  width: 200px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+}
+
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, #9333EA, #C084FC);
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.settings-range::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 15px rgba(147, 51, 234, 0.5);
+}
+
+/* Footer */
+.settings-footer {
+  padding: 20px 30px;
+  border-top: 1px solid rgb(151 151 151 / 20%);
+  display: flex;
+  justify-content: right;
+  gap: 10px;
+}
+
+.settings-save-button {
+  background: linear-gradient(90deg, #2bad54, #25952e);
+  color: white;
+  padding: 12px 30px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 15px rgb(51 234 74 / 30%);
+}
+
+.settings-save-button:hover {
+  background: linear-gradient(90deg, #2bad54, #25952e);
+  box-shadow: 0 0 15px rgba(54, 255, 80, 0.521);
+  transform: translateY(-1px);
+}
