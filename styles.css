@@ -1833,13 +1833,13 @@ body.dragging {
   padding: 15px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 8px;
-  border: 1px solid rgba(147, 51, 234, 0.1);
+  border: 1px solid rgb(247 247 247 / 10%);
   transition: all 0.3s ease;
 }
 
 .settings-item:hover {
-  border-color: rgba(147, 51, 234, 0.3);
-  box-shadow: 0 0 15px rgba(147, 51, 234, 0.1);
+  border-color: rgba(197, 197, 197, 0.3);
+  box-shadow: 0 0 15px rgba(109, 109, 109, 0.1);
 }
 
 .settings-item-info {
@@ -1873,15 +1873,13 @@ body.dragging {
 }
 
 .settings-button-primary {
-  background: linear-gradient(90deg, #9333EA, #C084FC);
-  color: white;
-  box-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
   transition: all 0.3s ease;
 }
 
 .settings-button-primary:hover {
-  background: linear-gradient(90deg, #8324DB, #B975ED);
-  box-shadow: 0 0 15px rgba(147, 51, 234, 0.5);
+  background: rgba(255, 255, 255, 0.15);
   transform: translateY(-1px);
 }
 
@@ -1944,7 +1942,7 @@ input:checked + .settings-switch-slider:before {
 /* Select Dropdown */
 .settings-select {
   background: rgba(0, 0, 0, 0.2);
-  border: 1px solid rgba(147, 51, 234, 0.2);
+  border: 1px solid rgba(179, 179, 179, 0.2);
   border-radius: 6px;
   color: #e0e0e0;
   padding: 8px 12px;
@@ -1954,8 +1952,8 @@ input:checked + .settings-switch-slider:before {
 }
 
 .settings-select:hover {
-  border-color: rgba(147, 51, 234, 0.4);
-  box-shadow: 0 0 10px rgba(147, 51, 234, 0.2);
+  border-color: rgba(175, 175, 175, 0.4);
+  box-shadow: 0 0 10px rgba(100, 100, 100, 0.2);
 }
 
 .settings-select:focus {
