@@ -862,106 +862,168 @@ document.getElementById('manageTagsBtn').addEventListener('click', openTagManage
 let isTagManagementOpen = false;
 
 function openTagManagement() {
-  logger.info("openTagManagement function called");
-  
-  // Prevent multiple modals from opening
   if (isTagManagementOpen) {
     logger.info("Tag management modal is already open");
     return;
   }
-  
-  try {
-    // Remove any existing tag management modals first
-    const existingModal = document.getElementById('tagManagementModal');
-    if (existingModal) {
-      existingModal.remove();
-    }
-    
-    const container = document.querySelector('.cet-container') || document.body;
-    
-    const tagManagementModal = document.createElement('div');
-    tagManagementModal.id = 'tagManagementModal';
-    tagManagementModal.className = 'modal';
-    tagManagementModal.innerHTML = `
-      <div class="modal-content">
-        <h2>Manage Tags</h2>
-        <div id="tagList"></div>
-        <button id="closeTagManagementBtn">Close</button>
-      </div>
-    `;
-    container.appendChild(tagManagementModal);
 
-    // Show the modal
-    tagManagementModal.style.display = 'block';
-    isTagManagementOpen = true;
-
-    const tagList = document.getElementById('tagList');
-    if (!tagList) {
-      throw new Error("Tag list element not found");
-    }
-
-    globalTags.forEach(tag => {
-      const tagElement = document.createElement('div');
-      tagElement.className = 'tag-management-item';
-      tagElement.innerHTML = `
-        <input type="text" value="${tag}" data-original="${tag}">
-        <button class="delete-tag">Delete</button>
-      `;
-      tagList.appendChild(tagElement);
-    });
-
-    function closeModal() {
-      tagManagementModal.remove();
-      isTagManagementOpen = false;
-    }
-
-    // Close button handler
-    const closeTagManagementBtn = document.getElementById('closeTagManagementBtn');
-    if (closeTagManagementBtn) {
-      closeTagManagementBtn.addEventListener('click', closeModal);
-    } else {
-      throw new Error("Close button for tag management not found");
-    }
-
-    // Click outside modal to close
-    tagManagementModal.addEventListener('click', (e) => {
-      if (e.target === tagManagementModal) {
-        closeModal();
-      }
-    });
-
-    // Escape key to close
-    const escapeHandler = (e) => {
-      if (e.key === 'Escape') {
-        closeModal();
-        document.removeEventListener('keydown', escapeHandler);
-      }
-    };
-    document.addEventListener('keydown', escapeHandler);
-
-    tagList.addEventListener('change', async (e) => {
-      if (e.target.tagName === 'INPUT') {
-        const originalTag = e.target.dataset.original;
-        const newTag = e.target.value;
-        await updateTag(originalTag, newTag);
-      }
-    });
-
-    tagList.addEventListener('click', async (e) => {
-      if (e.target.className === 'delete-tag') {
-        const tagInput = e.target.previousElementSibling;
-        const tag = tagInput.dataset.original;
-        await deleteTag(tag);
-        e.target.parentElement.remove();
-      }
-    });
-
-    logger.info("Tag management modal opened successfully");
-  } catch (error) {
-    logger.error("Error in openTagManagement:", error);
-    alert(`An error occurred while opening tag management: ${error.message}`);
-    isTagManagementOpen = false;
+  const existingModal = document.getElementById('tagManagementModal');
+  if (existingModal) {
+    existingModal.remove();
   }
+
+  const container = document.querySelector('.cet-container') || document.body;
+  const modal = document.createElement('div');
+  modal.id = 'tagManagementModal';
+  modal.className = 'tagManagement-modal';
+
+  modal.innerHTML = `
+    <div class="tagManagement-content">
+      <div class="tagManagement-header">
+        <h2 class="tagManagement-title">Tag Management</h2>
+      </div>
+      
+      <div class="tagManagement-search">
+        <input type="text" 
+               class="tagManagement-searchInput" 
+               placeholder="Search tags..."
+               id="tagManagementSearch">
+      </div>
+
+      <div class="tagManagement-list" id="tagManagementList">
+        ${globalTags.length === 0 ? 
+          '<div class="tagManagement-noTags">No tags created yet. Add your first tag below!</div>' : 
+          ''}
+      </div>
+
+      <div class="tagManagement-footer">
+        <button class="tagManagement-addBtn" id="tagManagementAddBtn">
+          Add New Tag
+        </button>
+        <button class="tagManagement-closeBtn" id="tagManagementCloseBtn">
+          Close
+        </button>
+      </div>
+    </div>
+  `;
+
+  container.appendChild(modal);
+  modal.style.display = 'block';
+  isTagManagementOpen = true;
+
+  // Render initial tags
+  renderTagList(globalTags);
+
+  // Setup event listeners
+  const searchInput = document.getElementById('tagManagementSearch');
+  const closeBtn = document.getElementById('tagManagementCloseBtn');
+  const addBtn = document.getElementById('tagManagementAddBtn');
+
+  searchInput.addEventListener('input', (e) => {
+    const searchTerm = e.target.value.toLowerCase();
+    const filteredTags = globalTags.filter(tag => 
+      tag.toLowerCase().includes(searchTerm)
+    );
+    renderTagList(filteredTags);
+  });
+
+  addBtn.addEventListener('click', () => {
+    addNewTag();
+  });
+
+  closeBtn.addEventListener('click', closeTagManagement);
+
+  // Close on click outside
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      closeTagManagement();
+    }
+  });
+
+  // Close on Escape key
+  document.addEventListener('keydown', handleEscapeKey);
+}
+
+function renderTagList(tags) {
+  const listElement = document.getElementById('tagManagementList');
+  if (!listElement) return;
+
+  listElement.innerHTML = tags.length === 0 ? 
+    '<div class="tagManagement-noTags">No tags found</div>' :
+    tags.map(tag => `
+      <div class="tagManagement-item" data-tag="${tag}">
+        <input type="text" 
+               class="tagManagement-input" 
+               value="${tag}" 
+               data-original="${tag}">
+        <button class="tagManagement-deleteBtn">Delete</button>
+      </div>
+    `).join('');
+
+  // Add event listeners for input changes and delete buttons
+  document.querySelectorAll('.tagManagement-input').forEach(input => {
+    input.addEventListener('change', handleTagRename);
+  });
+
+  document.querySelectorAll('.tagManagement-deleteBtn').forEach(btn => {
+    btn.addEventListener('click', handleTagDelete);
+  });
+}
+
+function handleTagRename(e) {
+  const input = e.target;
+  const originalTag = input.dataset.original;
+  const newTag = input.value.trim();
+
+  if (newTag && newTag !== originalTag) {
+    updateTag(originalTag, newTag);
+  }
+}
+
+function handleTagDelete(e) {
+  const item = e.target.closest('.tagManagement-item');
+  const tag = item.dataset.tag;
+
+  if (tag) {
+    deleteTag(tag);
+    item.remove();
+
+    // Show no tags message if no tags left
+    const listElement = document.getElementById('tagManagementList');
+    if (listElement.children.length === 0) {
+      listElement.innerHTML = '<div class="tagManagement-noTags">No tags found</div>';
+    }
+  }
+}
+
+function addNewTag() {
+  const searchInput = document.getElementById('tagManagementSearch');
+  const newTagName = searchInput.value.trim();
+
+  if (newTagName && !globalTags.includes(newTagName)) {
+    globalTags.push(newTagName);
+    saveGlobalTags();
+    searchInput.value = '';
+    renderTagList(globalTags);
+  }
+}
+
+function handleEscapeKey(e) {
+  if (e.key === 'Escape' && isTagManagementOpen) {
+    closeTagManagement();
+  }
+}
+
+function closeTagManagement() {
+  const modal = document.getElementById('tagManagementModal');
+  if (modal) {
+    modal.style.opacity = '0';
+    setTimeout(() => {
+      modal.remove();
+      document.removeEventListener('keydown', handleEscapeKey);
+    }, 300);
+  }
+  isTagManagementOpen = false;
 }
 
 function updateTagList() {
