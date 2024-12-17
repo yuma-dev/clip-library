@@ -98,10 +98,6 @@ settingsModal.id = "settingsModal";
 settingsModal.className = "settings-modal";
 settingsModal.innerHTML = `
 <div class="settings-modal-content">
-    <div class="settings-header">
-      <h2>Settings</h2>
-    </div>
-
     <div class="settings-tabs">
       <div class="settings-tab active" data-tab="general">General</div>
       <div class="settings-tab" data-tab="exportImport">Export/Import</div>
@@ -4397,11 +4393,6 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Add global click handler for modal backdrop
   const settingsModal = document.getElementById('settingsModal');
-  settingsModal.addEventListener('click', (e) => {
-    if (e.target === settingsModal) {
-      closeSettingsModal();
-    }
-  });
   
   // Add escape key handler
   document.addEventListener('keydown', (e) => {
