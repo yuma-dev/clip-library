@@ -27,11 +27,18 @@
       "target": [
         "nsis"
       ],
-      "icon": "icon.ico"
+      "icon": "icon.ico",
+      "appId": "com.yuma-dev.clips"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Clips",
+      "uninstallDisplayName": "Clips",
+      "artifactName": "Clips Setup ${version}.${ext}",
+      "deleteAppDataOnUninstall": false
     }
   },
   "keywords": [],

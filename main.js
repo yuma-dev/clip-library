@@ -1,5 +1,6 @@
 if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu } = require("electron");
+app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./logger');
 const { exec, execFile } = require("child_process");
