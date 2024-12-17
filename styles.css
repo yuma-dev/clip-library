@@ -1017,6 +1017,20 @@ body.dragging {
 
 #export-button {
   background-color: #4CAF50;
+  animation: exportGlow 4s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(76, 175, 80, 0.4);
+}
+
+@keyframes exportGlow {
+  0% {
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.4);
+  }
 }
 
 #delete-button {
@@ -1081,9 +1095,10 @@ body.dragging {
   top: -10%;
   width: 5px;
   height: 120%;
-  background-color: #008cff;
   border-radius: 25%;
   transform: translateZ(0);
+  background: linear-gradient(to top, #9333EA, #C084FC) no-repeat;
+  box-shadow: 0 0 15px rgb(255 255 255 / 46%);
 }
 
 #player-overlay {
