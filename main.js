@@ -1338,6 +1338,28 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
     const settings = await loadSettings();
     const clipLocation = settings.clipLocation;
 
+    // Add "Imported" to global tags if it doesn't exist
+    let globalTags = [];
+    try {
+      const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
+      try {
+        const tagsData = await fs.readFile(tagsFilePath, "utf8");
+        globalTags = JSON.parse(tagsData);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+        // File doesn't exist yet, use empty array
+      }
+
+      if (!globalTags.includes("Imported")) {
+        globalTags.push("Imported");
+        await fs.writeFile(tagsFilePath, JSON.stringify(globalTags));
+      }
+    } catch (error) {
+      logger.error("Error managing global tags:", error);
+    }
+
     const processor = new SteelSeriesProcessor(
       sourcePath,
       clipLocation,
