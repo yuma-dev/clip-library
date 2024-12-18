@@ -1,55 +1,62 @@
-const { app, dialog, shell } = require('electron');
+const { app } = require('electron');
 const axios = require('axios');
 const semver = require('semver');
 const fs = require('fs');
 const path = require('path');
-const { loadSettings, saveSettings } = require('./settings-manager');
+const { shell } = require('electron');
+const logger = require('./logger');
 
 const GITHUB_API_URL = 'https://api.github.com/repos/yuma-dev/clip-library/releases/latest';
 
-async function checkForUpdates() {
+async function checkForUpdates(mainWindow) {
   try {
-    const settings = await loadSettings();
+    logger.info('Checking for updates...');
     const response = await axios.get(GITHUB_API_URL);
     const latestVersion = response.data.tag_name.replace('v', '');
     const currentVersion = app.getVersion();
-    const changelog = response.data.body || 'No changelog available.';
 
-    if (semver.gt(latestVersion, currentVersion) && latestVersion !== settings.ignoredVersion) {
-      const { response: buttonIndex, checkboxChecked } = await dialog.showMessageBox({
-        type: 'info',
-        title: 'Update Available',
-        message: `A new version (${latestVersion}) is available. Would you like to update?`,
-        detail: `${changelog}`,
-        buttons: ['Yes', 'No'],
-        checkboxLabel: 'Don\'t ask me about this version again',
-        checkboxChecked: false
+    logger.info(`Current version: ${currentVersion}`);
+    logger.info(`Latest version: ${latestVersion}`);
+
+    if (semver.gt(latestVersion, currentVersion)) {
+      logger.info('Update available, showing notification');
+      
+      // Wait for window to be ready
+      if (!mainWindow.isVisible()) {
+        logger.info('Waiting for window to be visible...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // Send message to renderer to show notification
+      mainWindow.webContents.send('show-update-notification', {
+        currentVersion,
+        latestVersion
       });
 
-      if (checkboxChecked) {
-        settings.ignoredVersion = latestVersion;
-        await saveSettings(settings);
-      }
-
-      if (buttonIndex === 0) {
+      // Add IPC handler for the update
+      mainWindow.webContents.ipc.handle('start-update', async () => {
+        logger.info('Starting update download process');
         const assetUrl = response.data.assets.find(asset => asset.name.endsWith('.exe'))?.browser_download_url;
         if (assetUrl) {
+          logger.info(`Found update asset URL: ${assetUrl}`);
           await downloadUpdate(assetUrl);
         } else {
-          throw new Error('No suitable download asset found');
+          const error = 'No suitable download asset found';
+          logger.error(error);
+          throw new Error(error);
         }
-      }
+      });
     } else {
-      console.log('Application is up to date or update ignored');
+      logger.info('Application is up to date');
     }
   } catch (error) {
-    console.error('Error checking for updates:', error);
-    dialog.showErrorBox('Update Check Failed', 'Failed to check for updates. Please try again later.');
+    logger.error('Error checking for updates:', error);
   }
 }
 
 async function downloadUpdate(url) {
   try {
+    logger.info('Starting update download...');
     const response = await axios({
       url,
       method: 'GET',
@@ -57,8 +64,9 @@ async function downloadUpdate(url) {
     });
 
     const tempPath = path.join(app.getPath('temp'), 'clip-library-update.exe');
+    logger.info(`Writing update to temporary path: ${tempPath}`);
+    
     const writer = fs.createWriteStream(tempPath);
-
     response.data.pipe(writer);
 
     await new Promise((resolve, reject) => {
@@ -66,12 +74,28 @@ async function downloadUpdate(url) {
       writer.on('error', reject);
     });
 
+    logger.info('Update downloaded successfully, launching installer');
     await shell.openPath(tempPath);
+    logger.info('Quitting application for update');
     app.quit();
   } catch (error) {
-    console.error('Error downloading update:', error);
-    dialog.showErrorBox('Update Error', 'Failed to download the update. Please try again later.');
+    logger.error('Error downloading update:', error);
   }
 }
+
+// Clean up any existing settings related to ignored versions
+const { loadSettings, saveSettings } = require('./settings-manager');
+(async () => {
+  try {
+    const settings = await loadSettings();
+    if (settings.ignoredVersion) {
+      logger.info('Cleaning up ignored version from settings');
+      delete settings.ignoredVersion;
+      await saveSettings(settings);
+    }
+  } catch (error) {
+    logger.error('Error cleaning up settings:', error);
+  }
+})();
 
 module.exports = { checkForUpdates };
