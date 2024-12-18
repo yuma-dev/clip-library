@@ -4469,3 +4469,47 @@ async function updateVersionDisplay() {
     logger.error('Failed to get app version:', error);
   }
 }
+
+// Add this near the other ipcRenderer listeners
+ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersion }) => {
+  logger.info(`Renderer received update notification: ${currentVersion} -> ${latestVersion}`);
+  
+  if (!document.querySelector('.update-notification')) {
+    const notification = document.createElement('div');
+    notification.className = 'update-notification';
+    notification.innerHTML = `
+      <div class="update-notification-content">
+        <span class="update-text">Update available (${latestVersion})</span>
+        <button class="update-close" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    `;
+    document.body.appendChild(notification);
+    
+    // Show notification with slight delay
+    setTimeout(() => {
+      notification.classList.add('show');
+      logger.info('Update notification shown');
+    }, 100);
+
+    // Add event listeners
+    notification.querySelector('.update-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      notification.classList.remove('show');
+      setTimeout(() => notification.remove(), 300);
+      logger.info('Update notification dismissed');
+    });
+
+    notification.querySelector('.update-notification-content').addEventListener('click', async (e) => {
+      if (e.target.closest('.update-close')) return;
+      notification.classList.remove('show');
+      setTimeout(() => notification.remove(), 300);
+      logger.info('Update notification clicked, starting update...');
+      ipcRenderer.invoke('start-update');
+    });
+  }
+});

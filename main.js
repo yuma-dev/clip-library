@@ -159,7 +159,11 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  checkForUpdates();
+  
+  // Wait a bit for the window to be fully ready before checking updates
+  setTimeout(() => {
+    checkForUpdates(mainWindow);
+  }, 5000);
 });
 
 app.on("window-all-closed", () => {
