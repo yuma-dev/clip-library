@@ -1167,22 +1167,139 @@ body.dragging {
   transition: opacity 1s ease-in-out;
 }
 
-.logo-container {
-  position: relative;
-  margin-bottom: 30px;
-}
-
 .loading-content {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  transform: scale(1.5);
+}
+
+.logo-container {
+  position: relative;
+  margin-bottom: 30px;
+  width: 300px;
+  height: 300px;
+  display: flex;
+  justify-content: center;
   align-items: center;
 }
 
 .app-logo-title {
   width: 252px;
   height: auto;
-  animation: pulse 2s infinite;
-  filter: drop-shadow(0 0 5px rgb(0, 0, 0));
+  position: relative;
+  z-index: 2;
+  animation: mainAnimation 4s infinite;
+  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.5));
+}
+
+@keyframes mainAnimation {
+  0%, 100% {
+    transform: scale(1) translateY(0);
+    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.5));
+  }
+  50% {
+    transform: scale(1.05) translateY(-5px);
+    filter: drop-shadow(0 0 15px rgba(147, 51, 234, 0.4));
+  }
+}
+
+/* Background dots pattern */
+.particle-field {
+  position: absolute;
+  top: -100%;
+  left: -100%;
+  width: 300%;
+  height: 300%;
+  pointer-events: none;
+  z-index: 1;
+  background-image: 
+    radial-gradient(circle at center, rgba(147, 51, 234, 0.1) 0%, rgba(147, 51, 234, 0.1) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+  background-position: center;
+  mask-image: radial-gradient(circle at center, 
+    black 0%, 
+    black 30%, 
+    transparent 70%
+  );
+  -webkit-mask-image: radial-gradient(circle at center, 
+    black 0%, 
+    black 30%, 
+    transparent 70%
+  );
+  animation: dotPulse 4s infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+}
+
+/* Animated glow overlay */
+.logo-container::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(
+    circle at center,
+    rgba(147, 51, 234, 0.15) 0%,
+    rgba(147, 51, 234, 0.1) 25%,
+    transparent 70%
+  );
+  transform: translate(-50%, -50%);
+  animation: glowPulse 4s infinite;
+  z-index: 1;
+  pointer-events: none;
+}
+
+@keyframes glowPulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+}
+
+/* Secondary glow for dots enhancement */
+.logo-container::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(
+    circle at center,
+    rgba(147, 51, 234, 0.1) 0%,
+    rgba(147, 51, 234, 0.05) 40%,
+    transparent 70%
+  );
+  transform: translate(-50%, -50%);
+  animation: backgroundGlow 4s infinite;
+  z-index: 0;
+}
+
+@keyframes backgroundGlow {
+  0%, 100% {
+    opacity: 0.1;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
 }
 
 @keyframes pulse {
