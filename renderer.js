@@ -4513,3 +4513,56 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
     });
   }
 });
+
+window.loadingScreenTest = {
+  show: () => {
+    const loadingScreen = document.getElementById('loading-screen');
+    if (!loadingScreen) {
+      // Create the loading screen if it doesn't exist
+      const newLoadingScreen = document.createElement('div');
+      newLoadingScreen.id = 'loading-screen';
+      newLoadingScreen.innerHTML = `
+        <div class="loading-content">
+          <div class="logo-container">
+            <img src="assets/title.png" alt="App Logo and Title" class="app-logo-title">
+          </div>
+        </div>
+      `;
+      document.body.appendChild(newLoadingScreen);
+      
+      // Force a reflow to ensure the animation starts
+      newLoadingScreen.offsetHeight;
+      
+    } else {
+      loadingScreen.style.display = 'flex';
+      loadingScreen.style.opacity = '1';
+    }
+  },
+  
+  hide: () => {
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) {
+      loadingScreen.style.opacity = '0';
+      setTimeout(() => {
+        loadingScreen.style.display = 'none';
+      }, 1000);
+    }
+  },
+  
+  toggle: () => {
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen && (loadingScreen.style.display === 'none' || loadingScreen.style.opacity === '0')) {
+      window.loadingScreenTest.show();
+    } else {
+      window.loadingScreenTest.hide();
+    }
+  }
+};
+
+// Optional: Add keyboard shortcut for quick testing
+document.addEventListener('keydown', (e) => {
+  // Ctrl/Cmd + Shift + L to toggle loading screen
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+    window.loadingScreenTest.toggle();
+  }
+});
