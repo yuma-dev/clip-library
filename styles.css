@@ -1204,6 +1204,57 @@ body.dragging {
   }
 }
 
+@keyframes fadeOutScale {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.2);
+    filter: blur(10px);
+  }
+}
+
+@keyframes contentLiftOff {
+  0% {
+    opacity: 1;
+    transform: scale(1.5);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+    filter: blur(5px);
+  }
+}
+
+@keyframes particleDissipate {
+  0% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* Add transition classes */
+#loading-screen.fade-out {
+  animation: fadeOutScale 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  pointer-events: none;
+}
+
+#loading-screen.fade-out .loading-content {
+  animation: contentLiftOff 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+#loading-screen.fade-out .particle-field {
+  animation: particleDissipate 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
 /* Background dots pattern */
 .particle-field {
   position: absolute;

@@ -362,13 +362,13 @@ async function startThumbnailValidation() {
 
 function hideLoadingScreen() {
   if (loadingScreen) {
-    // Add a 2-second delay before starting to hide the loading screen
+    // Add the fade-out class to trigger the animations
+    loadingScreen.classList.add('fade-out');
+    
+    // Remove the element after the animation completes
     setTimeout(() => {
-      loadingScreen.style.opacity = '0';
-      setTimeout(() => {
-        loadingScreen.style.display = 'none';
-      }, 1000);
-    }, 1000); // 2000 milliseconds = 2 seconds
+      loadingScreen.style.display = 'none';
+    }, 1000); // Match this with the animation duration (1s)
   }
 }
 
