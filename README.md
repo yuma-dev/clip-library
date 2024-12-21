@@ -52,14 +52,4 @@ Clip Library saves edit information separately, preserving your original video f
 3. Launch Clip Library and set your clip folder location in the settings.
 4. Start managing your clip collection!
 
-## Disclaimer: AI-Assisted Development
-
-Clip Library has been developed with the heavy assistance of AI technologies. 
-While this approach has allowed for rapid development and implementation of complex features, it may result in code that is occasionally inconsistent or could be optimized further.
-I acknowledge that this method is not ideal for production software, but it has enabled me to quickly create a functional tool that addresses a real need.
-I am committed to ongoing improvements and optimizations.
-Contributions from the community to enhance code quality, performance, and features are always welcome.
-
-If you encounter any issues or have questions, please file an issue on the [Issues](https://github.com/yuma-dev/clip-library/issues) page.
-
 [VirusTotal Scan](https://www.virustotal.com/gui/file/d3bd966c0047e3a05234036c037fec7ee68a472a818e4f72695fda62dac9fc77?nocache=1) (feel free to do your own as I might forget to do one on an update)
