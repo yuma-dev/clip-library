@@ -2108,19 +2108,41 @@ function createClipElement(clip) {
       clip.originalName,
     );
 
-    // If thumbnailPath is null, use the loading gif
+    // If thumbnailPath is null, we'll show the shimmer
     if (thumbnailPath === null) {
-      thumbnailPath = "assets/loading-thumbnail.gif";
+      thumbnailPath = "assets/loading-thumbnail.gif"; // Keep this for backwards compatibility
     } else {
       thumbnailPath = `file://${thumbnailPath}`;
     }
 
     const relativeTime = getRelativeTimeString(clip.createdAt);
 
+    // Create media container with shimmer effect
+    const mediaContainer = document.createElement("div");
+    mediaContainer.className = "clip-item-media-container";
+
+    // Create image element
+    const imgElement = document.createElement("img");
+    imgElement.src = thumbnailPath;
+    imgElement.alt = clip.customName;
+    imgElement.onerror = () => {
+      imgElement.src = 'assets/fallback-image.jpg';
+    };
+
+    // Create shimmer wrapper
+    const shimmerWrapper = document.createElement("div");
+    shimmerWrapper.className = "shimmer-wrapper";
+    const shimmerElement = document.createElement("div");
+    shimmerElement.className = "shimmer";
+    shimmerWrapper.appendChild(shimmerElement);
+
+    // Add elements to media container
+    mediaContainer.appendChild(imgElement);
+    mediaContainer.appendChild(shimmerWrapper);
+
+    // Create the rest of the clip element structure
     clipElement.innerHTML = `
-      <div class="clip-item-media-container">
-        <img src="${thumbnailPath}" alt="${clip.customName}" onerror="this.src='assets/fallback-image.jpg'" />
-      </div>
+      ${mediaContainer.outerHTML}
       <div class="tag-container"></div>
       <div class="clip-info">
         <p class="clip-name" contenteditable="true">${clip.customName}</p>
