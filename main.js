@@ -26,6 +26,7 @@ const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar
 const CONCURRENT_GENERATIONS = 4; // Maximum concurrent FFmpeg processes
 const thumbnailQueue = [];
 const THUMBNAIL_RETRY_ATTEMPTS = 3;
+const FAST_PATH_THRESHOLD = 12;
 let isProcessingQueue = false;
 let completedThumbnails = 0;
 
@@ -912,7 +913,7 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
   let clipsNeedingGeneration = [];
   
-  // First validate all thumbnails without showing progress
+  // First, quickly check which clips need thumbnails
   for (const clipName of clipNames) {
     const clipPath = path.join(settings.clipLocation, clipName);
     const thumbnailPath = generateThumbnailPath(clipPath);
@@ -928,20 +929,112 @@ ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => 
     }
   }
 
-  // Only show progress and send events if we actually need to generate thumbnails
-  if (clipsNeedingGeneration.length > 0) {
+  // If we have a small number of clips needing generation, use fast path
+  if (clipsNeedingGeneration.length > 0 && clipsNeedingGeneration.length <= FAST_PATH_THRESHOLD) {
+    logger.info(`Using fast path for ${clipsNeedingGeneration.length} clips`);
+    
+    // Send initial validation event
+    event.sender.send("thumbnail-validation-start", {
+      total: clipsNeedingGeneration.length
+    });
+    
+    // Process clips immediately in parallel
+    const generationPromises = clipsNeedingGeneration.map(async (clipName, index) => {
+      try {
+        const clipPath = path.join(settings.clipLocation, clipName);
+        const thumbnailPath = generateThumbnailPath(clipPath);
+        
+        // Get video info
+        const info = await new Promise((resolve, reject) => {
+          ffmpeg.ffprobe(clipPath, (err, metadata) => {
+            if (err) reject(err);
+            else resolve(metadata);
+          });
+        });
+
+        const trimData = await getTrimData(clipName);
+        const duration = info.format.duration;
+        const startTime = trimData ? trimData.start : (duration > 40 ? duration / 2 : 0);
+
+        // Generate thumbnail
+        await new Promise((resolve, reject) => {
+          ffmpeg(clipPath)
+            .screenshots({
+              timestamps: [startTime],
+              filename: path.basename(thumbnailPath),
+              folder: path.dirname(thumbnailPath),
+              size: '640x360'
+            })
+            .on('end', resolve)
+            .on('error', reject);
+        });
+
+        // Save metadata
+        await saveThumbnailMetadata(thumbnailPath, {
+          startTime,
+          duration,
+          clipName,
+          timestamp: Date.now()
+        });
+
+        // Send progress event
+        event.sender.send("thumbnail-progress", {
+          current: index + 1,
+          total: clipsNeedingGeneration.length,
+          clipName
+        });
+
+        // Send the specific thumbnail generated event
+        event.sender.send("thumbnail-generated", {
+          clipName,
+          thumbnailPath
+        });
+
+      } catch (error) {
+        logger.error(`Error in fast path generation for ${clipName}:`, error);
+        event.sender.send("thumbnail-generation-failed", {
+          clipName,
+          error: error.message
+        });
+        // Add to regular queue as fallback
+        thumbnailQueue.push({ 
+          clipName, 
+          event,
+          totalToProcess: clipsNeedingGeneration.length 
+        });
+      }
+    });
+
+    try {
+      // Wait for all fast path generations to complete
+      await Promise.all(generationPromises);
+
+      // Send completion event if no clips were added to fallback queue
+      if (thumbnailQueue.length === 0) {
+        event.sender.send("thumbnail-generation-complete");
+      } else {
+        // Process remaining clips through regular queue
+        if (!isProcessingQueue) {
+          processQueue();
+        }
+      }
+    } catch (error) {
+      logger.error('Error in fast path processing:', error);
+      // Fall back to regular queue processing
+      if (!isProcessingQueue) {
+        processQueue();
+      }
+    }
+  } else if (clipsNeedingGeneration.length > FAST_PATH_THRESHOLD) {
+    // Use regular progressive generation for larger sets
     totalThumbnailsToProcess = clipsNeedingGeneration.length;
     completedThumbnails = 0;
     
-    // Send validation start BEFORE adding to queue
     event.sender.send("thumbnail-validation-start", {
       total: totalThumbnailsToProcess
     });
 
-    // Clear existing queue
     thumbnailQueue.length = 0;
-
-    // Add only clips that need generation to the queue
     thumbnailQueue.push(...clipsNeedingGeneration.map(clipName => ({ 
       clipName, 
       event,
@@ -955,7 +1048,8 @@ ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => 
   
   return { 
     needsGeneration: clipsNeedingGeneration.length, 
-    total: clipNames.length 
+    total: clipNames.length,
+    usedFastPath: clipsNeedingGeneration.length <= FAST_PATH_THRESHOLD
   };
 });
 
