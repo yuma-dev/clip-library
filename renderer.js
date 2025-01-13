@@ -3816,14 +3816,24 @@ function filterClips() {
     currentClipList = [];
   } else {
     currentClipList = allClips.filter(clip => {
+      // Handle untagged clips
       if (selectedTags.has('Untagged')) {
-        // Include clips with no tags when "Untagged" is selected
         if (!clip.tags || clip.tags.length === 0) {
           return true;
         }
       }
-      // Include clips that have at least one selected tag
-      return clip.tags && clip.tags.some(tag => selectedTags.has(tag));
+
+      if (!clip.tags || clip.tags.length === 0) {
+        return false;
+      }
+
+      if (isInTemporaryMode) {
+        // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
+        return clip.tags.some(tag => temporaryTagSelections.has(tag));
+      } else {
+        // In normal mode, clips must have ALL their tags selected to be shown
+        return clip.tags.every(tag => selectedTags.has(tag));
+      }
     });
   }
   
@@ -3903,7 +3913,6 @@ function createTagItem(tag) {
   tagItem.appendChild(label);
   tagItem.appendChild(indicator);
   
-  // Handle click events
   // Separate click handlers for indicator and general tag area
   indicator.addEventListener('click', (e) => {
     e.stopPropagation(); // Prevent the click from triggering the tag click
@@ -3941,15 +3950,16 @@ function handleRegularClickTag(tag, tagItem) {
   if (isInTemporaryMode) {
     // If in temporary mode, regular click exits it
     exitTemporaryMode();
+  } 
+  
+  // Toggle the tag selection
+  if (savedTagSelections.has(tag)) {
+    savedTagSelections.delete(tag);
   } else {
-    // Normal toggle behavior
-    if (savedTagSelections.has(tag)) {
-      savedTagSelections.delete(tag);
-    } else {
-      savedTagSelections.add(tag);
-    }
-    saveTagPreferences();
+    savedTagSelections.add(tag);
   }
+  selectedTags = new Set(savedTagSelections);
+  saveTagPreferences();
   
   updateTagSelectionUI();
   filterClips();
