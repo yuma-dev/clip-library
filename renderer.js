@@ -2810,33 +2810,68 @@ async function openClip(originalName, customName) {
   }
 
   initializeVolumeControls();
+  loadingOverlay.style.display = "none";
 
-  const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
-  logger.debug(`Retrieved clip info:`, clipInfo);
-  const trimData = await ipcRenderer.invoke("get-trim", originalName);
-  logger.debug(`Retrieved trim data for ${originalName}:`, trimData);
-  const clipTags = await ipcRenderer.invoke("get-clip-tags", originalName);
-  currentClip = { originalName, customName, tags: clipTags};
+  // Create or get thumbnail overlay
+  let thumbnailOverlay = document.getElementById('thumbnail-overlay');
+  if (!thumbnailOverlay) {
+    thumbnailOverlay = document.createElement('img');
+    thumbnailOverlay.id = 'thumbnail-overlay';
+    thumbnailOverlay.style.position = 'absolute';
+    thumbnailOverlay.style.top = '0';
+    thumbnailOverlay.style.left = '0';
+    thumbnailOverlay.style.width = '100%';
+    thumbnailOverlay.style.height = '100%';
+    thumbnailOverlay.style.objectFit = 'contain';
+    videoPlayer.parentElement.appendChild(thumbnailOverlay);
+  }
 
-  // Set initial playback position (this doesn't affect trim points)
+  // Hide video and show thumbnail
+  videoPlayer.style.opacity = '0';
+  const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", originalName);
+  if (thumbnailPath) {
+    thumbnailOverlay.src = `file://${thumbnailPath}`;
+    thumbnailOverlay.style.display = 'block';
+  }
+
+  // Load all data
+  let clipInfo, trimData, clipTags;
+  try {
+    [clipInfo, trimData, clipTags] = await Promise.all([
+      ipcRenderer.invoke("get-clip-info", originalName),
+      ipcRenderer.invoke("get-trim", originalName),
+      ipcRenderer.invoke("get-clip-tags", originalName)
+    ]);
+  } catch (error) {
+    logger.error("Error loading clip data:", error);
+    return;
+  }
+  
+  currentClip = { originalName, customName, tags: clipTags };
+
   if (trimData) {
-    // If there's trim data, use it for both trim points and playback position
     trimStartTime = trimData.start;
     trimEndTime = trimData.end;
     initialPlaybackTime = trimData.start;
   } else {
-    // If no trim data, set trim points to full video duration
     trimStartTime = 0;
     trimEndTime = clipInfo.format.duration;
-    // Only the playback position starts in the middle for long videos
     initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
   }
 
-  logger.info(`Final trim values set - start: ${trimStartTime}, end: ${trimEndTime}`);
+  // Show video and start playing when ready at correct time
+  videoPlayer.addEventListener('seeked', () => {
+    videoPlayer.style.opacity = '1';
+    thumbnailOverlay.style.display = 'none';
+    videoPlayer.play();
+  }, { once: true });
 
-  videoPlayer.preload = "auto";
-  videoPlayer.autoplay = true;
   videoPlayer.src = `file://${clipInfo.format.filename}`;
+  videoPlayer.currentTime = initialPlaybackTime;
+  
+  updateTrimControls();
+  
+  logger.info(`Final trim values set - start: ${trimStartTime}, end: ${trimEndTime}`);
 
   clipTitle.value = customName;
 
