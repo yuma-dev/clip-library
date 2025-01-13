@@ -76,6 +76,15 @@ let thumbnailGenerationStartTime = 0;
 let selectedClips = new Set();
 let selectionStartIndex = -1;
 let selectedTags = new Set();
+let volumeStartTime = 0;
+let volumeEndTime = 0;
+let volumeLevel = 0; // Volume level for the range
+let isVolumeDragging = null;
+let volumeStartElement = null;
+let volumeEndElement = null;
+let volumeRegionElement = null;
+let volumeDragControl = null;
+let isVolumeControlsVisible = false;
 
 const previewElement = document.getElementById('timeline-preview');
 
@@ -2756,6 +2765,8 @@ async function openClip(originalName, customName) {
     currentCleanup = null;
   }
 
+  initializeVolumeControls();
+
   const clipInfo = await ipcRenderer.invoke("get-clip-info", originalName);
   logger.debug(`Retrieved clip info:`, clipInfo);
   const trimData = await ipcRenderer.invoke("get-trim", originalName);
@@ -2835,6 +2846,7 @@ async function openClip(originalName, customName) {
     requestAnimationFrame(() => {
       videoPlayer.currentTime = initialPlaybackTime;  // Always use initialPlaybackTime
     });
+    loadVolumeData();
   }, { once: true });
   videoPlayer.addEventListener("canplay", handleVideoCanPlay);
   videoPlayer.addEventListener("progress", updateLoadingProgress);
@@ -4055,6 +4067,15 @@ let lastUpdateTime = 0;
 const UPDATE_INTERVAL = 16; // About 60fps
 
 progressBarContainer.addEventListener('mousemove', (e) => {
+  // Add this check - if we're hovering over volume controls, don't show preview
+  if (e.target.classList.contains('volume-start') || 
+      e.target.classList.contains('volume-end') || 
+      e.target.classList.contains('volume-region') ||
+      e.target.classList.contains('volume-drag-control') ||
+      e.target.parentElement?.classList.contains('volume-drag-control')) {
+    return;
+  }
+  
   const now = performance.now();
   
   // Just show the preview initially
@@ -4564,5 +4585,223 @@ document.addEventListener('keydown', (e) => {
   // Ctrl/Cmd + Shift + L to toggle loading screen
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
     window.loadingScreenTest.toggle();
+  }
+});
+
+function initializeVolumeControls() {
+  // Create elements if they don't exist
+  if (!volumeStartElement) {
+    volumeStartElement = document.createElement('div');
+    volumeStartElement.className = 'volume-start';
+  }
+  
+  if (!volumeEndElement) {
+    volumeEndElement = document.createElement('div');
+    volumeEndElement.className = 'volume-end';
+  }
+  
+  if (!volumeRegionElement) {
+    volumeRegionElement = document.createElement('div');
+    volumeRegionElement.className = 'volume-region';
+  }
+
+  if (!volumeDragControl) {
+    volumeDragControl = document.createElement('div');
+    volumeDragControl.className = 'volume-drag-control';
+    const volumeInput = document.createElement('input');
+    volumeInput.type = 'range';
+    volumeInput.min = '0';
+    volumeInput.max = '1';
+    volumeInput.step = '0.1';
+    volumeInput.value = '0';
+    volumeDragControl.appendChild(volumeInput);
+  }
+  
+  const progressBarContainer = document.getElementById('progress-bar-container');
+  if (!progressBarContainer.contains(volumeStartElement)) {
+    progressBarContainer.appendChild(volumeStartElement);
+    progressBarContainer.appendChild(volumeEndElement);
+    progressBarContainer.appendChild(volumeRegionElement);
+    progressBarContainer.appendChild(volumeDragControl);
+  }
+
+  hideVolumeControls();
+  setupVolumeControlListeners();
+}
+
+function setupVolumeControlListeners() {
+  volumeStartElement.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    isVolumeDragging = 'start';
+    showVolumeDragControl();
+    document.addEventListener('mousemove', handleVolumeDrag);
+    document.addEventListener('mouseup', endVolumeDrag);
+  });
+
+  volumeEndElement.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    isVolumeDragging = 'end';
+    showVolumeDragControl();
+    document.addEventListener('mousemove', handleVolumeDrag);
+    document.addEventListener('mouseup', endVolumeDrag);
+  });
+
+  // Prevent video preview when hovering over volume controls
+  volumeStartElement.addEventListener('mouseenter', (e) => e.stopPropagation());
+  volumeEndElement.addEventListener('mouseenter', (e) => e.stopPropagation());
+  volumeRegionElement.addEventListener('mouseenter', (e) => e.stopPropagation());
+  volumeDragControl.addEventListener('mouseenter', (e) => e.stopPropagation());
+
+  const volumeInput = volumeDragControl.querySelector('input');
+  volumeInput.addEventListener('input', (e) => {
+    e.stopPropagation();
+    volumeLevel = parseFloat(e.target.value);
+    saveVolumeData();
+  });
+}
+
+function showVolumeDragControl(e) {
+  const rect = progressBarContainer.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  volumeDragControl.style.display = 'flex';
+  volumeDragControl.style.left = `${x}px`;
+  volumeDragControl.querySelector('input').value = volumeLevel;
+}
+
+function hideVolumeDragControl() {
+  volumeDragControl.style.display = 'none';
+}
+
+function handleVolumeDrag(e) {
+  if (!isVolumeDragging) return;
+
+  const progressBarContainer = document.getElementById('progress-bar-container');
+  const rect = progressBarContainer.getBoundingClientRect();
+  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+  const timePosition = (x / rect.width) * videoPlayer.duration;
+
+  if (isVolumeDragging === 'start') {
+    volumeStartTime = Math.min(timePosition, volumeEndTime);
+  } else if (isVolumeDragging === 'end') {
+    volumeEndTime = Math.max(timePosition, volumeStartTime);
+  }
+  
+  volumeDragControl.style.left = `${x}px`;
+  updateVolumeControlsPosition();
+  saveVolumeData();
+}
+
+function endVolumeDrag() {
+  isVolumeDragging = null;
+  hideVolumeDragControl();
+  document.removeEventListener('mousemove', handleVolumeDrag);
+  document.removeEventListener('mouseup', endVolumeDrag);
+}
+
+function updateVolumeControlsPosition() {
+  if (!videoPlayer.duration) return;
+
+  const startPercent = (volumeStartTime / videoPlayer.duration) * 100;
+  const endPercent = (volumeEndTime / videoPlayer.duration) * 100;
+  const middlePercent = (startPercent + endPercent) / 2;
+
+  volumeStartElement.style.left = `${startPercent}%`;
+  volumeEndElement.style.left = `${endPercent}%`;
+  volumeRegionElement.style.left = `${startPercent}%`;
+  volumeRegionElement.style.width = `${endPercent - startPercent}%`;
+
+  // Position volume control in the middle
+  volumeDragControl.style.left = `${middlePercent}%`;
+  volumeDragControl.style.display = isVolumeControlsVisible ? 'flex' : 'none';
+}
+
+async function loadVolumeData() {
+  if (!currentClip) return;
+  
+  try {
+    const volumeData = await ipcRenderer.invoke('get-volume-range', currentClip.originalName);
+    if (volumeData) {
+      volumeStartTime = volumeData.start;
+      volumeEndTime = volumeData.end;
+      volumeLevel = volumeData.level;
+      showVolumeControls();
+    } else {
+      hideVolumeControls();
+    }
+  } catch (error) {
+    logger.error('Error loading volume data:', error);
+  }
+}
+
+async function saveVolumeData() {
+  if (!currentClip || !isVolumeControlsVisible) return;
+  
+  try {
+    const volumeData = {
+      start: volumeStartTime,
+      end: volumeEndTime,
+      level: volumeLevel
+    };
+    
+    await ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData);
+  } catch (error) {
+    logger.error('Error saving volume data:', error);
+  }
+}
+
+function showVolumeControls() {
+  isVolumeControlsVisible = true;
+  volumeStartElement.style.display = 'block';
+  volumeEndElement.style.display = 'block';
+  volumeRegionElement.style.display = 'block';
+  updateVolumeControlsPosition();
+}
+
+function hideVolumeControls() {
+  isVolumeControlsVisible = false;
+  volumeStartTime = 0;
+  volumeEndTime = 0;
+  volumeLevel = 0;
+  volumeStartElement.style.display = 'none';
+  volumeEndElement.style.display = 'none';
+  volumeRegionElement.style.display = 'none';
+  hideVolumeDragControl();
+  saveVolumeData();
+}
+
+function toggleVolumeControls() {
+  if (!videoPlayer.duration) return;
+
+  if (!isVolumeControlsVisible) {
+    if (volumeStartTime === 0 && volumeEndTime === 0) {
+      volumeStartTime = videoPlayer.duration / 3;
+      volumeEndTime = (videoPlayer.duration / 3) * 2;
+      volumeLevel = 0;
+    }
+    showVolumeControls();
+  } else {
+    hideVolumeControls();
+  }
+}
+
+// Add this to your video timeupdate event listener
+videoPlayer.addEventListener('timeupdate', () => {
+  if (!audioContext || !gainNode || !isVolumeControlsVisible) return;
+  
+  const currentVolume = volumeSlider.value;
+  if (videoPlayer.currentTime >= volumeStartTime && videoPlayer.currentTime <= volumeEndTime) {
+    gainNode.gain.setValueAtTime(volumeLevel * currentVolume, audioContext.currentTime);
+  } else {
+    gainNode.gain.setValueAtTime(currentVolume, audioContext.currentTime);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  const isClipTitleFocused = document.activeElement === clipTitle;
+  const isSearching = document.activeElement === document.getElementById("search-input");
+  
+  if (!isClipTitleFocused && !isSearching && (e.key === 'v' || e.key === 'V')) {
+    e.preventDefault();
+    toggleVolumeControls();
   }
 });
