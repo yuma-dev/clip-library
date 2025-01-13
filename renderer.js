@@ -837,12 +837,16 @@ function setupContextMenu() {
   tagSearchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      const newTag = tagSearchInput.value.trim();
-      if (newTag && !globalTags.includes(newTag)) {
-        addGlobalTag(newTag);
-        if (contextMenuClip) {
-          toggleClipTag(contextMenuClip, newTag);
-        }
+      const searchTerm = tagSearchInput.value.trim().toLowerCase();
+      
+      // Find the closest matching tag
+      const matchingTag = globalTags.find(tag => 
+        tag.toLowerCase() === searchTerm ||
+        tag.toLowerCase().startsWith(searchTerm)
+      );
+      
+      if (matchingTag && contextMenuClip) {
+        toggleClipTag(contextMenuClip, matchingTag);
         tagSearchInput.value = "";
         updateTagList();
       }
@@ -4876,10 +4880,11 @@ videoPlayer.addEventListener('timeupdate', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  const isClipTitleFocused = document.activeElement === clipTitle;
-  const isSearching = document.activeElement === document.getElementById("search-input");
-  
-  if (!isClipTitleFocused && !isSearching && (e.key === 'v' || e.key === 'V')) {
+  const isInputFocused = document.activeElement.tagName === 'INPUT' || 
+                        document.activeElement.tagName === 'TEXTAREA' ||
+                        document.activeElement.isContentEditable;
+                        
+  if (!isInputFocused && (e.key === 'v' || e.key === 'V')) {
     e.preventDefault();
     toggleVolumeControls();
   }
