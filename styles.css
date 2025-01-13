@@ -1788,6 +1788,23 @@ body.dragging {
   user-select: none;
 }
 
+.tagv2-item.temp-selected {
+  background: linear-gradient(
+    90deg,
+    rgba(147, 51, 234, 0.2),
+    rgba(192, 132, 252, 0.15)
+  );
+  border: 1px solid rgba(147, 51, 234, 0.5);
+  box-shadow: 
+    0 0 15px rgba(147, 51, 234, 0.2),
+    inset 0 0 20px rgba(147, 51, 234, 0.1);
+}
+
+.tagv2-item.temp-selected .tagv2-indicator {
+  background: linear-gradient(180deg, #9333EA, #C084FC);
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.4);
+}
+
 .tagv2-item:hover {
   background-color: #333333;
 }
@@ -1816,11 +1833,71 @@ body.dragging {
   height: 16px;
   border-radius: 2px;
   background-color: transparent;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.tagv2-item:not(.selected):hover .tagv2-indicator {
+  background-color: rgba(147, 51, 234, 0.3);
+  transform: scale(1.1);
+  box-shadow: 0 0 8px rgba(147, 51, 234, 0.2);
 }
 
 .tagv2-item.selected .tagv2-indicator {
   background-color: #e0e0e0;
+}
+
+.tagv2-indicator:hover {
+  transform: scale(1.2);
+  background-color: rgba(147, 51, 234, 0.8) !important;
+  box-shadow: 0 0 12px rgba(147, 51, 234, 0.3);
+  cursor: pointer;
+}
+
+.tagv2-indicator::after {
+  content: "Only show this tag";
+  position: fixed; /* Change to fixed positioning */
+  left: auto; /* Reset left positioning */
+  right: 20px; /* Position from right edge of window */
+  top: 50%;
+  transform: translateY(-50%) scale(0.8);
+  background: #1e1e1e;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: white;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  z-index: 1010; /* Increased to ensure it's above dropdown */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(147, 51, 234, 0.3);
+}
+
+.tagv2-item:hover .tagv2-indicator {
+  animation: indicatorPulse 1.5s infinite;
+}
+
+.tagv2-indicator:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) scale(1);
+}
+
+@keyframes indicatorPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.4);
+  }
+  70% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 6px rgba(147, 51, 234, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0);
+  }
 }
 
 .tagv2-show-hide {

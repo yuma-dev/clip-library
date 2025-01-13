@@ -85,6 +85,9 @@ let volumeEndElement = null;
 let volumeRegionElement = null;
 let volumeDragControl = null;
 let isVolumeControlsVisible = false;
+let savedTagSelections = new Set(); // Permanent selections that are saved
+let temporaryTagSelections = new Set(); // Temporary (Ctrl+click) selections
+let isInTemporaryMode = false; // Whether we're in temporary selection mode
 
 const previewElement = document.getElementById('timeline-preview');
 
@@ -1287,19 +1290,19 @@ async function loadTagPreferences() {
   try {
     const savedTags = await ipcRenderer.invoke('get-tag-preferences');
     if (savedTags && savedTags.length > 0) {
-      selectedTags = new Set(savedTags);
+      savedTagSelections = new Set(savedTags);
     } else {
       // Default to all tags visible, including "Untagged"
-      selectedTags = new Set(['Untagged', ...globalTags]);
+      savedTagSelections = new Set(['Untagged', ...globalTags]);
     }
+    selectedTags = new Set(savedTagSelections); // Initialize global selectedTags
   } catch (error) {
     logger.error('Error loading tag preferences:', error);
-    // Default to all tags visible, including "Untagged"
-    selectedTags = new Set(['Untagged', ...globalTags]);
+    savedTagSelections = new Set(['Untagged', ...globalTags]);
+    selectedTags = new Set(savedTagSelections);
   }
   
   updateFilterDropdown();
-  // Immediately apply the filter
   filterClips();
 }
 
@@ -3888,7 +3891,7 @@ function updateFilterDropdown() {
 
 function createTagItem(tag) {
   const tagItem = document.createElement('div');
-  tagItem.className = `tagv2-item ${selectedTags.has(tag) ? 'selected' : ''}`;
+  tagItem.className = `tagv2-item ${savedTagSelections.has(tag) ? 'selected' : ''}`;
   
   const label = document.createElement('span');
   label.className = 'tagv2-item-label';
@@ -3900,25 +3903,89 @@ function createTagItem(tag) {
   tagItem.appendChild(label);
   tagItem.appendChild(indicator);
   
-  tagItem.addEventListener('click', () => {
-    toggleTagVisibility(tag);
-    tagItem.classList.toggle('selected', selectedTags.has(tag));
+  // Handle click events
+  // Separate click handlers for indicator and general tag area
+  indicator.addEventListener('click', (e) => {
+    e.stopPropagation(); // Prevent the click from triggering the tag click
+    handleCtrlClickTag(tag, tagItem); // Reuse the ctrl+click logic for single tag focus
+  });
+
+  tagItem.addEventListener('click', (e) => {
+    // Only handle clicks on the tag area, not the indicator
+    if (!e.target.classList.contains('tagv2-indicator')) {
+      if (e.ctrlKey || e.metaKey) {
+        handleCtrlClickTag(tag, tagItem);
+      } else {
+        handleRegularClickTag(tag, tagItem);
+      }
+    }
   });
   
   return tagItem;
 }
 
-function toggleTagVisibility(tag) {
-  if (selectedTags.has(tag)) {
-    selectedTags.delete(tag);
+function handleCtrlClickTag(tag, tagItem) {
+  if (!isInTemporaryMode || !temporaryTagSelections.has(tag)) {
+    // Enter temporary mode or add to temporary selections
+    enterTemporaryMode(tag);
   } else {
-    selectedTags.add(tag);
+    // If ctrl-clicking a temporary selected tag, revert to saved selections
+    exitTemporaryMode();
   }
   
-  saveTagPreferences();
+  updateTagSelectionUI();
   filterClips();
-  // Instead of a full updateFilterDropdown, just update necessary parts
-  updateTagSelectionStates();
+}
+
+function handleRegularClickTag(tag, tagItem) {
+  if (isInTemporaryMode) {
+    // If in temporary mode, regular click exits it
+    exitTemporaryMode();
+  } else {
+    // Normal toggle behavior
+    if (savedTagSelections.has(tag)) {
+      savedTagSelections.delete(tag);
+    } else {
+      savedTagSelections.add(tag);
+    }
+    saveTagPreferences();
+  }
+  
+  updateTagSelectionUI();
+  filterClips();
+}
+
+function enterTemporaryMode(tag) {
+  isInTemporaryMode = true;
+  temporaryTagSelections.clear();
+  temporaryTagSelections.add(tag);
+  selectedTags = temporaryTagSelections; // Update the global selectedTags
+}
+
+function exitTemporaryMode() {
+  isInTemporaryMode = false;
+  temporaryTagSelections.clear();
+  selectedTags = new Set(savedTagSelections); // Restore saved selections
+}
+
+function updateTagSelectionUI() {
+  const tagItems = document.querySelectorAll('.tagv2-item');
+  tagItems.forEach(item => {
+    const label = item.querySelector('.tagv2-item-label').textContent;
+    const isSelected = isInTemporaryMode ? 
+      temporaryTagSelections.has(label) : 
+      savedTagSelections.has(label);
+    
+    item.classList.toggle('selected', isSelected);
+    
+    // Add visual indicator for temporary mode
+    if (isInTemporaryMode && temporaryTagSelections.has(label)) {
+      item.classList.add('temp-selected');
+    } else {
+      item.classList.remove('temp-selected');
+    }
+  });
+  
   updateTagCount();
 }
 
@@ -4021,7 +4088,9 @@ function setupTagFilterEventListeners() {
   if (selectAllBtn) {
     selectAllBtn.addEventListener('click', (e) => {
       e.stopPropagation(); // Prevent event from bubbling up
-      selectedTags = new Set(['Untagged', ...globalTags]);
+      exitTemporaryMode();
+      savedTagSelections = new Set(['Untagged', ...globalTags]);
+      selectedTags = new Set(savedTagSelections);
       saveTagPreferences();
       updateTagSelectionStates();
       updateTagCount();
@@ -4032,6 +4101,8 @@ function setupTagFilterEventListeners() {
   if (deselectAllBtn) {
     deselectAllBtn.addEventListener('click', (e) => {
       e.stopPropagation(); // Prevent event from bubbling up
+      exitTemporaryMode();
+      savedTagSelections.clear();
       selectedTags.clear();
       saveTagPreferences();
       updateTagSelectionStates();
@@ -4305,6 +4376,14 @@ function isClipSelectable(clip) {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     clearSelection(true); // Reset lastSelectedClip when using Escape
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isInTemporaryMode) {
+    exitTemporaryMode();
+    updateTagSelectionUI();
+    filterClips();
   }
 });
 
