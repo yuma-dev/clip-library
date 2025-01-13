@@ -2108,37 +2108,59 @@ function createClipElement(clip) {
       clip.originalName,
     );
 
-    // If thumbnailPath is null, we'll show the shimmer
-    if (thumbnailPath === null) {
-      thumbnailPath = "assets/loading-thumbnail.gif"; // Keep this for backwards compatibility
-    } else {
-      thumbnailPath = `file://${thumbnailPath}`;
-    }
-
     const relativeTime = getRelativeTimeString(clip.createdAt);
 
-    // Create media container with shimmer effect
+    // Create media container
     const mediaContainer = document.createElement("div");
     mediaContainer.className = "clip-item-media-container";
 
     // Create image element
     const imgElement = document.createElement("img");
-    imgElement.src = thumbnailPath;
+    
+    // Only create shimmer if we don't have a thumbnail
+    if (thumbnailPath === null) {
+      // Add loading class to container
+      mediaContainer.classList.add('is-loading');
+      
+      // Create shimmer elements only for loading items
+      const shimmerWrapper = document.createElement("div");
+      shimmerWrapper.className = "shimmer-wrapper";
+      const shimmerElement = document.createElement("div");
+      shimmerElement.className = "shimmer";
+      shimmerWrapper.appendChild(shimmerElement);
+      mediaContainer.appendChild(shimmerWrapper);
+
+      // Set src to loading thumbnail
+      imgElement.src = "assets/loading-thumbnail.gif";
+      
+      // When the real thumbnail loads
+      imgElement.addEventListener('load', () => {
+        if (!imgElement.src.includes('loading-thumbnail.gif')) {
+          // Remove shimmer elements completely from DOM
+          const shimmerWrapper = mediaContainer.querySelector('.shimmer-wrapper');
+          if (shimmerWrapper) {
+            shimmerWrapper.remove();
+          }
+          mediaContainer.classList.remove('is-loading');
+        }
+      });
+    } else {
+      // We have a thumbnail, just set it directly
+      imgElement.src = `file://${thumbnailPath}`;
+    }
+
     imgElement.alt = clip.customName;
     imgElement.onerror = () => {
       imgElement.src = 'assets/fallback-image.jpg';
+      // Remove shimmer if there's an error
+      mediaContainer.classList.remove('is-loading');
+      const shimmerWrapper = mediaContainer.querySelector('.shimmer-wrapper');
+      if (shimmerWrapper) {
+        shimmerWrapper.remove();
+      }
     };
 
-    // Create shimmer wrapper
-    const shimmerWrapper = document.createElement("div");
-    shimmerWrapper.className = "shimmer-wrapper";
-    const shimmerElement = document.createElement("div");
-    shimmerElement.className = "shimmer";
-    shimmerWrapper.appendChild(shimmerElement);
-
-    // Add elements to media container
     mediaContainer.appendChild(imgElement);
-    mediaContainer.appendChild(shimmerWrapper);
 
     // Create the rest of the clip element structure
     clipElement.innerHTML = `

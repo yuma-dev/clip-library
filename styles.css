@@ -448,7 +448,8 @@ body.dragging {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: opacity 0.3s ease;
+  z-index: 1;
+  position: relative;
 }
 
 .clip-item-media-container img[src*="loading-thumbnail"] {
@@ -469,20 +470,21 @@ body.dragging {
 }
 
 .shimmer-wrapper {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  background: #2a2a2a;
-  overflow: hidden;
-}
-
-.shimmer {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  animation: shimmer 2s infinite linear;
+  background: #2a2a2a;
+}
+
+/* Only apply the shimmer animation to elements that actually need it */
+.is-loading .shimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   background: linear-gradient(
     90deg,
     transparent 0%,
@@ -490,10 +492,10 @@ body.dragging {
     rgba(255, 255, 255, 0.08) 60%,
     transparent 100%
   );
-  transform: skewX(-20deg);
+  animation: shimmerAnimation 2s infinite linear;
 }
 
-@keyframes shimmer {
+@keyframes shimmerAnimation {
   0% {
     transform: translateX(-200%) skewX(-20deg);
   }
