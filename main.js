@@ -1130,7 +1130,22 @@ ipcMain.on('ffmpeg-fallback', () => {
 
 // In main.js
 
-function exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed) {
+async function exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed) {
+  // Load volume range data if it exists
+  const clipName = path.basename(inputPath);
+  const metadataFolder = path.join(path.dirname(inputPath), '.clip_metadata');
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+  
+  let volumeData = null;
+  try {
+    const volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
+    volumeData = JSON.parse(volumeDataRaw);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.error('Error reading volume range data:', error);
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const duration = end - start;
     let usingFallback = false;
@@ -1153,9 +1168,27 @@ function exportVideoWithFallback(inputPath, outputPath, start, end, volume, spee
       let command = ffmpeg(inputPath)
         .setStartTime(start)
         .setDuration(duration)
-        .audioFilters(`volume=${volume}`)
         .videoFilters(`setpts=${1/speed}*PTS`)
         .audioFilters(`atempo=${speed}`);
+
+      // Apply volume filter
+      if (volumeData) {
+        // Convert absolute timestamps to relative timestamps based on trim
+        const relativeStart = Math.max(0, volumeData.start - start);
+        const relativeEnd = Math.min(duration, volumeData.end - start);
+        
+        if (relativeStart < duration && relativeEnd > 0) {
+          // Complex volume filter for the specified range
+          command.audioFilters([
+            `volume=${volume}`,
+            `volume=${volumeData.level}:enable='between(t,${relativeStart},${relativeEnd})'`
+          ]);
+        } else {
+          command.audioFilters(`volume=${volume}`);
+        }
+      } else {
+        command.audioFilters(`volume=${volume}`);
+      }
 
       switch (quality) {
         case 'lossless':
@@ -1380,5 +1413,38 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-volume-range', async (event, clipName, volumeData) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, '.clip_metadata');
+  await ensureDirectoryExists(metadataFolder);
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+
+  try {
+    await writeFileAtomically(volumeRangeFilePath, JSON.stringify(volumeData));
+    logger.info(`Volume range data saved successfully for ${clipName}`);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error saving volume range for ${clipName}:`, error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-volume-range', async (event, clipName) => {
+  const clipsFolder = settings.clipLocation;
+  const metadataFolder = path.join(clipsFolder, '.clip_metadata');
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+
+  try {
+    const volumeData = await fs.readFile(volumeRangeFilePath, 'utf8');
+    return JSON.parse(volumeData);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return null; // No volume range data exists
+    }
+    logger.error(`Error reading volume range for ${clipName}:`, error);
+    throw error;
   }
 });

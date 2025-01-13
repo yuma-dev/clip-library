@@ -2623,3 +2623,52 @@ input:checked + .settings-switch-slider::before {
 .update-close:hover {
   opacity: 1;
 }
+
+.volume-start,
+.volume-end {
+  position: absolute;
+  top: -20px;
+  width: 4px;
+  height: 12px;
+  background-color: #fff;
+  cursor: ew-resize;
+  opacity: 0.8;
+  z-index: 3;
+}
+
+.volume-start:hover,
+.volume-end:hover {
+  opacity: 1;
+}
+
+.volume-region {
+  position: absolute;
+  top: -20px;
+  height: 12px;
+  background-color: rgba(255, 255, 255, 0.2);
+  pointer-events: none;
+}
+
+.volume-drag-control {
+  position: absolute;
+  top: -50px;  /* 20px above the volume bars */
+  width: 100px;
+  height: 20px;  /* Match height of volume bars */
+  border-radius: 5px;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: none;
+  align-items: center;
+  padding: 0 8px;
+  transform: translateX(-50%);
+  justify-content: center;
+}
+
+.volume-drag-control input[type="range"] {
+  width: 80px;
+  accent-color: #fff;
+}
+
+.volume-drag-control input[type="range"] {
+  width: 100%;
+  height: 4px;
+}
