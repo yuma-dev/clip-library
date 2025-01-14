@@ -2841,7 +2841,7 @@ async function openClip(originalName, customName) {
     thumbnailOverlay.style.display = 'block';
   }
 
-  // Load all data
+  // Load all data first before setting up video
   let clipInfo, trimData, clipTags;
   try {
     [clipInfo, trimData, clipTags] = await Promise.all([
@@ -2853,9 +2853,10 @@ async function openClip(originalName, customName) {
     logger.error("Error loading clip data:", error);
     return;
   }
-  
+
   currentClip = { originalName, customName, tags: clipTags };
 
+  // Set up trim points before video loads
   if (trimData) {
     trimStartTime = trimData.start;
     trimEndTime = trimData.end;
@@ -2866,18 +2867,30 @@ async function openClip(originalName, customName) {
     initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
   }
 
-  // Show video and start playing when ready at correct time
+  // Create a promise to handle video loading
+  const videoLoadPromise = new Promise((resolve) => {
+    const loadHandler = () => {
+      updateTrimControls();
+      videoPlayer.currentTime = initialPlaybackTime;
+      videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      resolve();
+    };
+    videoPlayer.addEventListener('loadedmetadata', loadHandler);
+  });
+
+  // Set video source
+  videoPlayer.src = `file://${clipInfo.format.filename}`;
+
+  // Wait for video to load
+  await videoLoadPromise;
+
+  // Show video and play when ready
   videoPlayer.addEventListener('seeked', () => {
     videoPlayer.style.opacity = '1';
     thumbnailOverlay.style.display = 'none';
     videoPlayer.play();
   }, { once: true });
 
-  videoPlayer.src = `file://${clipInfo.format.filename}`;
-  videoPlayer.currentTime = initialPlaybackTime;
-  
-  updateTrimControls();
-  
   logger.info(`Final trim values set - start: ${trimStartTime}, end: ${trimEndTime}`);
 
   clipTitle.value = customName;
