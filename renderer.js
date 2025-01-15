@@ -2884,6 +2884,8 @@ async function openClip(originalName, customName) {
   // Wait for video to load
   await videoLoadPromise;
 
+  await loadVolumeData();
+
   // Show video and play when ready
   videoPlayer.addEventListener('seeked', () => {
     videoPlayer.style.opacity = '1';
@@ -2938,14 +2940,9 @@ async function openClip(originalName, customName) {
 
   showLoadingOverlay();
 
-  videoPlayer.addEventListener("loadedmetadata", () => {
-    // Ensure trim controls are updated before setting currentTime
+  videoPlayer.addEventListener("loadedmetadata", async () => {
     updateTrimControls();
-    // Only set currentTime after trim controls are updated
-    requestAnimationFrame(() => {
-      videoPlayer.currentTime = initialPlaybackTime;  // Always use initialPlaybackTime
-    });
-    loadVolumeData();
+    videoPlayer.currentTime = initialPlaybackTime;
   }, { once: true });
   videoPlayer.addEventListener("canplay", handleVideoCanPlay);
   videoPlayer.addEventListener("progress", updateLoadingProgress);
@@ -4814,47 +4811,70 @@ function initializeVolumeControls() {
   setupVolumeControlListeners();
 }
 
+const debouncedSaveVolumeLevel = debounce(async () => {
+  if (!currentClip || !isVolumeControlsVisible) return;
+  
+  const volumeData = {
+    start: volumeStartTime,
+    end: volumeEndTime,
+    level: volumeLevel || 0
+  };
+  
+  try {
+    await ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData);
+    logger.info('Volume data saved with new level:', volumeData);
+  } catch (error) {
+    logger.error('Error saving volume data:', error);
+  }
+}, 300);
+
 function setupVolumeControlListeners() {
-  volumeStartElement.addEventListener('mousedown', (e) => {
+  // Clean up existing listeners first
+  volumeStartElement.removeEventListener('mousedown', handleVolumeStartDrag);
+  volumeEndElement.removeEventListener('mousedown', handleVolumeEndDrag);
+  document.removeEventListener('mousemove', handleVolumeDrag);
+  document.removeEventListener('mouseup', endVolumeDrag);
+
+  function handleVolumeStartDrag(e) {
+    if (e.button !== 0) return; // Only handle left mouse button
     e.stopPropagation();
     isVolumeDragging = 'start';
-    showVolumeDragControl();
+    showVolumeDragControl(e);
     document.addEventListener('mousemove', handleVolumeDrag);
     document.addEventListener('mouseup', endVolumeDrag);
-  });
+  }
 
-  volumeEndElement.addEventListener('mousedown', (e) => {
+  function handleVolumeEndDrag(e) {
+    if (e.button !== 0) return; // Only handle left mouse button
     e.stopPropagation();
     isVolumeDragging = 'end';
-    showVolumeDragControl();
+    showVolumeDragControl(e);
     document.addEventListener('mousemove', handleVolumeDrag);
     document.addEventListener('mouseup', endVolumeDrag);
-  });
+  }
 
-  // Prevent video preview when hovering over volume controls
-  volumeStartElement.addEventListener('mouseenter', (e) => e.stopPropagation());
-  volumeEndElement.addEventListener('mouseenter', (e) => e.stopPropagation());
-  volumeRegionElement.addEventListener('mouseenter', (e) => e.stopPropagation());
-  volumeDragControl.addEventListener('mouseenter', (e) => e.stopPropagation());
-
-  const volumeInput = volumeDragControl.querySelector('input');
-  volumeInput.addEventListener('input', (e) => {
+  volumeDragControl.querySelector('input').addEventListener('input', (e) => {
     e.stopPropagation();
     volumeLevel = parseFloat(e.target.value);
-    saveVolumeData();
+    debouncedSaveVolumeLevel();
   });
-}
 
-function showVolumeDragControl(e) {
-  const rect = progressBarContainer.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  volumeDragControl.style.display = 'flex';
-  volumeDragControl.style.left = `${x}px`;
-  volumeDragControl.querySelector('input').value = volumeLevel;
-}
+  volumeDragControl.querySelector('input').addEventListener('change', (e) => {
+    e.stopPropagation();
+    volumeLevel = parseFloat(e.target.value);
+    // Force an immediate save
+    debouncedSaveVolumeLevel.flush?.() || debouncedSaveVolumeLevel();
+  });
 
-function hideVolumeDragControl() {
-  volumeDragControl.style.display = 'none';
+  volumeStartElement.addEventListener('mousedown', handleVolumeStartDrag);
+  volumeEndElement.addEventListener('mousedown', handleVolumeEndDrag);
+
+  // Force cleanup if window loses focus
+  window.addEventListener('blur', () => {
+    if (isVolumeDragging) {
+      endVolumeDrag();
+    }
+  });
 }
 
 function handleVolumeDrag(e) {
@@ -4866,22 +4886,66 @@ function handleVolumeDrag(e) {
   const timePosition = (x / rect.width) * videoPlayer.duration;
 
   if (isVolumeDragging === 'start') {
-    volumeStartTime = Math.min(timePosition, volumeEndTime);
+    volumeStartTime = Math.min(timePosition, volumeEndTime - 0.1);
   } else if (isVolumeDragging === 'end') {
-    volumeEndTime = Math.max(timePosition, volumeStartTime);
+    volumeEndTime = Math.max(timePosition, volumeStartTime + 0.1);
   }
   
-  volumeDragControl.style.left = `${x}px`;
   updateVolumeControlsPosition();
   saveVolumeData();
+  
+  // Make sure drag control stays visible
+  volumeDragControl.style.display = 'flex';
+  const volumeInput = volumeDragControl.querySelector('input');
+  if (volumeInput) {
+    volumeInput.style.display = 'block';
+  }
+}
+
+function showVolumeDragControl(e) {
+  const rect = progressBarContainer.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  volumeDragControl.style.display = 'flex';
+  volumeDragControl.style.left = `${x}px`;
+  
+  // Ensure the input value is set and visible
+  const volumeInput = volumeDragControl.querySelector('input');
+  if (volumeInput) {
+    volumeInput.value = volumeLevel;
+    volumeInput.style.display = 'block';
+  }
+}
+
+function hideVolumeDragControl() {
+  volumeDragControl.style.display = 'none';
 }
 
 function endVolumeDrag() {
+  if (!isVolumeDragging) return;
+  
+  // Cleanup all drag-related state
   isVolumeDragging = null;
   hideVolumeDragControl();
   document.removeEventListener('mousemove', handleVolumeDrag);
   document.removeEventListener('mouseup', endVolumeDrag);
+  
+  // Force an immediate save
+  if (currentClip) {
+    const volumeData = {
+      start: volumeStartTime,
+      end: volumeEndTime,
+      level: volumeLevel
+    };
+    ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData)
+      .catch(error => logger.error('Error saving volume data:', error));
+  }
 }
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isVolumeDragging) {
+    endVolumeDrag();
+  }
+});
 
 function updateVolumeControlsPosition() {
   if (!videoPlayer.duration) return;
@@ -4901,37 +4965,57 @@ function updateVolumeControlsPosition() {
 }
 
 async function loadVolumeData() {
-  if (!currentClip) return;
+  if (!currentClip) {
+    logger.warn('Attempted to load volume data without current clip');
+    return;
+  }
   
   try {
     const volumeData = await ipcRenderer.invoke('get-volume-range', currentClip.originalName);
-    if (volumeData) {
+    logger.info('Volume data loaded:', volumeData);
+
+    if (volumeData && volumeData.start !== undefined && volumeData.end !== undefined) {
       volumeStartTime = volumeData.start;
       volumeEndTime = volumeData.end;
-      volumeLevel = volumeData.level;
+      volumeLevel = volumeData.level || 0;
+      isVolumeControlsVisible = true;
       showVolumeControls();
+      updateVolumeControlsPosition();
+      logger.info('Volume controls restored with data:', {
+        start: volumeStartTime,
+        end: volumeEndTime,
+        level: volumeLevel
+      });
     } else {
+      logger.info('No valid volume data found for:', currentClip.originalName);
       hideVolumeControls();
     }
   } catch (error) {
     logger.error('Error loading volume data:', error);
+    hideVolumeControls();
   }
 }
 
-async function saveVolumeData() {
+const debouncedSaveVolumeData = debounce(async () => {
   if (!currentClip || !isVolumeControlsVisible) return;
   
+  const volumeData = {
+    start: volumeStartTime,
+    end: volumeEndTime,
+    level: volumeLevel || 0
+  };
+  
   try {
-    const volumeData = {
-      start: volumeStartTime,
-      end: volumeEndTime,
-      level: volumeLevel
-    };
-    
+    logger.info('Saving volume data:', volumeData);
     await ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData);
+    logger.info('Volume data saved successfully');
   } catch (error) {
     logger.error('Error saving volume data:', error);
   }
+}, 300); // 300ms debounce time
+
+function saveVolumeData() {
+  debouncedSaveVolumeData();
 }
 
 function showVolumeControls() {
@@ -4951,7 +5035,12 @@ function hideVolumeControls() {
   volumeEndElement.style.display = 'none';
   volumeRegionElement.style.display = 'none';
   hideVolumeDragControl();
-  saveVolumeData();
+  
+  // Remove volume data from storage when hiding controls
+  if (currentClip) {
+    ipcRenderer.invoke('save-volume-range', currentClip.originalName, null)
+      .catch(error => logger.error('Error removing volume data:', error));
+  }
 }
 
 function toggleVolumeControls() {
