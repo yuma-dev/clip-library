@@ -4880,6 +4880,8 @@ function setupVolumeControlListeners() {
 function handleVolumeDrag(e) {
   if (!isVolumeDragging) return;
 
+  document.body.classList.add('dragging');
+
   const progressBarContainer = document.getElementById('progress-bar-container');
   const rect = progressBarContainer.getBoundingClientRect();
   const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
@@ -4890,25 +4892,39 @@ function handleVolumeDrag(e) {
   } else if (isVolumeDragging === 'end') {
     volumeEndTime = Math.max(timePosition, volumeStartTime + 0.1);
   }
-  
+
+  // Keep volume control visible and centered during drag
   updateVolumeControlsPosition();
-  saveVolumeData();
-  
-  // Make sure drag control stays visible
   volumeDragControl.style.display = 'flex';
+  
+  // Ensure volume input stays visible
   const volumeInput = volumeDragControl.querySelector('input');
   if (volumeInput) {
     volumeInput.style.display = 'block';
   }
+
+  debouncedSaveVolumeData();
 }
 
 function showVolumeDragControl(e) {
+  if (!isVolumeControlsVisible) return;
+
   const rect = progressBarContainer.getBoundingClientRect();
-  const x = e.clientX - rect.left;
   volumeDragControl.style.display = 'flex';
-  volumeDragControl.style.left = `${x}px`;
-  
-  // Ensure the input value is set and visible
+
+  // If dragging, use event position
+  if (e) {
+    const x = e.clientX - rect.left;
+    volumeDragControl.style.left = `${x}px`;
+  } else {
+    // Otherwise position in middle of volume range
+    const startPercent = (volumeStartTime / videoPlayer.duration) * 100;
+    const endPercent = (volumeEndTime / videoPlayer.duration) * 100;
+    const middlePercent = (startPercent + endPercent) / 2;
+    volumeDragControl.style.left = `${middlePercent}%`;
+  }
+
+  // Ensure input is visible and set to current level
   const volumeInput = volumeDragControl.querySelector('input');
   if (volumeInput) {
     volumeInput.value = volumeLevel;
@@ -4922,14 +4938,10 @@ function hideVolumeDragControl() {
 
 function endVolumeDrag() {
   if (!isVolumeDragging) return;
+
+  document.body.classList.remove('dragging');
   
-  // Cleanup all drag-related state
-  isVolumeDragging = null;
-  hideVolumeDragControl();
-  document.removeEventListener('mousemove', handleVolumeDrag);
-  document.removeEventListener('mouseup', endVolumeDrag);
-  
-  // Force an immediate save
+  // Save the final position
   if (currentClip) {
     const volumeData = {
       start: volumeStartTime,
@@ -4938,6 +4950,20 @@ function endVolumeDrag() {
     };
     ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData)
       .catch(error => logger.error('Error saving volume data:', error));
+  }
+
+  // Reset drag state but keep controls visible
+  isVolumeDragging = null;
+  document.removeEventListener('mousemove', handleVolumeDrag);
+  document.removeEventListener('mouseup', endVolumeDrag);
+
+  // Don't hide the volume drag control, just update its position
+  updateVolumeControlsPosition();
+  
+  // Make sure the input stays visible
+  const volumeInput = volumeDragControl.querySelector('input');
+  if (volumeInput) {
+    volumeInput.style.display = 'block';
   }
 }
 
@@ -4948,20 +4974,22 @@ document.addEventListener('keydown', (e) => {
 });
 
 function updateVolumeControlsPosition() {
-  if (!videoPlayer.duration) return;
+  if (!videoPlayer.duration || !isVolumeControlsVisible) return;
 
   const startPercent = (volumeStartTime / videoPlayer.duration) * 100;
   const endPercent = (volumeEndTime / videoPlayer.duration) * 100;
-  const middlePercent = (startPercent + endPercent) / 2;
 
   volumeStartElement.style.left = `${startPercent}%`;
   volumeEndElement.style.left = `${endPercent}%`;
   volumeRegionElement.style.left = `${startPercent}%`;
   volumeRegionElement.style.width = `${endPercent - startPercent}%`;
 
-  // Position volume control in the middle
-  volumeDragControl.style.left = `${middlePercent}%`;
-  volumeDragControl.style.display = isVolumeControlsVisible ? 'flex' : 'none';
+  // Update volume drag control position
+  if (volumeDragControl) {
+    const middlePercent = (startPercent + endPercent) / 2;
+    volumeDragControl.style.left = `${middlePercent}%`;
+    volumeDragControl.style.display = 'flex';
+  }
 }
 
 async function loadVolumeData() {
@@ -5024,6 +5052,7 @@ function showVolumeControls() {
   volumeEndElement.style.display = 'block';
   volumeRegionElement.style.display = 'block';
   updateVolumeControlsPosition();
+  showVolumeDragControl();
 }
 
 function hideVolumeControls() {
