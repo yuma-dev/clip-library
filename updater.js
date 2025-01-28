@@ -8,8 +8,13 @@ const logger = require('./logger');
 
 const GITHUB_API_URL = 'https://api.github.com/repos/yuma-dev/clip-library/releases/latest';
 
-async function checkForUpdates(mainWindow) {
+async function checkForUpdates(mainWindow) { // Ensure mainWindow is properly passed
   try {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      logger.warn('Main window not available, skipping update check');
+      return;
+    }
+
     logger.info('Checking for updates...');
     const response = await axios.get(GITHUB_API_URL);
     const latestVersion = response.data.tag_name.replace('v', '');
@@ -23,14 +28,15 @@ async function checkForUpdates(mainWindow) {
       
       // Wait for window to be ready
       if (!mainWindow.isVisible()) {
-        logger.info('Waiting for window to be visible...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        logger.warn('Main window not visible!');
+        return
       }
 
       // Send message to renderer to show notification
       mainWindow.webContents.send('show-update-notification', {
         currentVersion,
-        latestVersion
+        latestVersion,
+        changelog: response.data.body
       });
 
       // Add IPC handler for the update
@@ -39,7 +45,7 @@ async function checkForUpdates(mainWindow) {
         const assetUrl = response.data.assets.find(asset => asset.name.endsWith('.exe'))?.browser_download_url;
         if (assetUrl) {
           logger.info(`Found update asset URL: ${assetUrl}`);
-          await downloadUpdate(assetUrl);
+          await downloadUpdate(assetUrl, mainWindow); // Add mainWindow as second argument
         } else {
           const error = 'No suitable download asset found';
           logger.error(error);
@@ -54,13 +60,23 @@ async function checkForUpdates(mainWindow) {
   }
 }
 
-async function downloadUpdate(url) {
+async function downloadUpdate(url, mainWindow) {
   try {
     logger.info('Starting update download...');
     const response = await axios({
       url,
       method: 'GET',
       responseType: 'stream'
+    });
+
+    const totalLength = response.headers['content-length'];
+    let downloadedLength = 0;
+    
+    response.data.on('data', (chunk) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      downloadedLength += chunk.length;
+      const progress = Math.round((downloadedLength / totalLength) * 100);
+      mainWindow.webContents.send('download-progress', progress);
     });
 
     const tempPath = path.join(app.getPath('temp'), 'clip-library-update.exe');
@@ -82,20 +98,5 @@ async function downloadUpdate(url) {
     logger.error('Error downloading update:', error);
   }
 }
-
-// Clean up any existing settings related to ignored versions
-const { loadSettings, saveSettings } = require('./settings-manager');
-(async () => {
-  try {
-    const settings = await loadSettings();
-    if (settings.ignoredVersion) {
-      logger.info('Cleaning up ignored version from settings');
-      delete settings.ignoredVersion;
-      await saveSettings(settings);
-    }
-  } catch (error) {
-    logger.error('Error cleaning up settings:', error);
-  }
-})();
 
 module.exports = { checkForUpdates };

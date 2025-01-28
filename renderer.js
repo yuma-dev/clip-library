@@ -4674,9 +4674,9 @@ async function updateVersionDisplay() {
 }
 
 // Add this near the other ipcRenderer listeners
-ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersion }) => {
+ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersion, changelog }) => {
+
   logger.info(`Renderer received update notification: ${currentVersion} -> ${latestVersion}`);
-  
   if (!document.querySelector('.update-notification')) {
     const notification = document.createElement('div');
     notification.className = 'update-notification';
@@ -4684,13 +4684,25 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
       <div class="update-notification-content">
         <span class="update-text">Update available (${latestVersion})</span>
         <button class="update-close" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
         </button>
       </div>
+      <div class="changelog-container">
+        <div class="changelog"></div>
+      </div>
     `;
+
+    // Parse and sanitize markdown
+    const changelogContainer = notification.querySelector('.changelog');
+    if (changelog) {
+      const parsed = marked.parse(changelog);
+      changelogContainer.innerHTML = DOMPurify.sanitize(parsed);
+    } else {
+      changelogContainer.textContent = 'No release notes available';
+    }
     document.body.appendChild(notification);
     
     // Show notification with slight delay
@@ -4709,10 +4721,24 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
 
     notification.querySelector('.update-notification-content').addEventListener('click', async (e) => {
       if (e.target.closest('.update-close')) return;
-      notification.classList.remove('show');
-      setTimeout(() => notification.remove(), 300);
-      logger.info('Update notification clicked, starting update...');
-      ipcRenderer.invoke('start-update');
+      
+      // Add progress bar
+      const progressBar = document.createElement('div');
+      progressBar.className = 'download-progress';
+      progressBar.innerHTML = '<div class="progress-fill"></div>';
+      e.currentTarget.appendChild(progressBar);
+      e.currentTarget.classList.add('downloading');
+      
+      // Listen for progress updates
+      ipcRenderer.on('download-progress', (_, progress) => {
+        progressBar.querySelector('.progress-fill').style.width = `${progress}%`;
+      });
+    
+      // Start update
+      await ipcRenderer.invoke('start-update');
+      
+      // Cleanup
+      ipcRenderer.removeAllListeners('download-progress');
     });
   }
 });
