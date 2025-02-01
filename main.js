@@ -248,6 +248,7 @@ function generateThumbnailPath(clipPath) {
   const hash = crypto.createHash("md5").update(clipPath).digest("hex");
   return path.join(THUMBNAIL_CACHE_DIR, `${hash}.jpg`);
 }
+
 ipcMain.handle("get-clips", async () => {
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");

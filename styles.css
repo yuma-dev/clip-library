@@ -870,10 +870,18 @@ body.dragging * {
 }
 
 #video-player {
-
   width: 100%;
   height: 100%;
-  object-fit: contain; /* This ensures the video maintains its aspect ratio */
+  object-fit: contain;
+  /* Add these new properties */
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+  contain: strict;
+}
+
+#video-container:-moz-window-inactive {
+  opacity: 1 !important;
 }
 
 #video-controls {
