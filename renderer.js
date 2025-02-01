@@ -2841,6 +2841,13 @@ async function openClip(originalName, customName) {
     thumbnailOverlay.style.display = 'block';
   }
 
+  // Add cleanup for previous video element
+  if(videoPlayer.src) {
+    videoPlayer.pause();
+    videoPlayer.removeAttribute('src');
+    videoPlayer.load();
+  }
+
   // Load all data first before setting up video
   let clipInfo, trimData, clipTags;
   try {
@@ -3104,6 +3111,10 @@ function handleVideoCanPlay() {
     hideLoadingOverlay();
     videoPlayer.currentTime = initialPlaybackTime;
   }
+  // Ensure thumbnail hides when video becomes playable
+  videoPlayer.style.opacity = '1';
+  thumbnailOverlay.style.display = 'none';
+  videoPlayer.removeEventListener('canplay', handleVideoCanPlay);
 }
 
 function updateLoadingProgress() {
