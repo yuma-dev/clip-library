@@ -3865,12 +3865,11 @@ function filterClips() {
 
 // Helper function to remove duplicates
 function removeDuplicates(clips) {
-  logger.info("Removing duplicates. Input length:", clips.length);
-  const uniqueClips = clips.filter((clip, index, self) =>
-    index === self.findIndex((t) => t.originalName === clip.originalName)
-  );
-  logger.info("After removing duplicates. Output length:", uniqueClips.length);
-  return uniqueClips;
+  const seen = new Map();
+  return clips.filter(clip => {
+    const key = clip.originalName;
+    return !seen.has(key) && seen.set(key, true);
+  });
 }
 
 function validateClipLists() {
