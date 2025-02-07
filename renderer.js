@@ -1482,7 +1482,7 @@ const content = toast.querySelector('.export-toast-content');
 const progressText = toast.querySelector('.export-progress-text');
 const title = toast.querySelector('.export-title');
 
-function showExportProgress(current, total) {
+function showExportProgress(current, total, isClipboardExport = false) {
   if (!toast.classList.contains('show')) {
     toast.classList.add('show');
   }
@@ -1492,7 +1492,12 @@ function showExportProgress(current, total) {
   progressText.textContent = `${percentage}%`;
 
   if (percentage >= 100) {
-    title.textContent = 'Export complete!';
+    if (isClipboardExport) {
+      title.textContent = 'Copied to clipboard!';
+    } else {
+      title.textContent = 'Export complete!';
+    }
+
     setTimeout(() => {
       toast.classList.remove('show');
       setTimeout(() => {
@@ -1500,7 +1505,7 @@ function showExportProgress(current, total) {
         content.style.setProperty('--progress', '0%');
         progressText.textContent = '0%';
       }, 300);
-    }, 1000);
+    }, 3000);
   }
 }
 
@@ -2669,7 +2674,7 @@ async function exportVideo(savePath = null) {
     );
     if (result.success) {
       logger.info("Video exported successfully:", result.path);
-      showExportProgress(100, 100); // Show completion
+      showExportProgress(100, 100, !savePath); // Pass true for clipboard export when no savePath
     } else {
       throw new Error(result.error);
     }
@@ -2713,7 +2718,7 @@ async function exportAudio(savePath = null) {
     );
     if (result.success) {
       logger.info("Audio exported successfully:", result.path);
-      showExportProgress(100, 100); // Show completion
+      showExportProgress(100, 100, !savePath); // Pass true for clipboard export when no savePath
     } else {
       throw new Error(result.error);
     }
@@ -2738,7 +2743,7 @@ async function exportTrimmedVideo() {
     logger.info(`Trim start: ${trimStartTime}, Trim end: ${trimEndTime}`);
     logger.info(`Volume: ${volume}, Speed: ${speed}`);
 
-    showExportProgress(0, 100); // Show initial progress
+    showExportProgress(0, 100, true); // Show initial progress
 
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
@@ -2751,7 +2756,7 @@ async function exportTrimmedVideo() {
 
     if (result.success) {
       logger.info("Trimmed video exported successfully:", result.path);
-      showExportProgress(100, 100); // Show completion
+      showExportProgress(100, 100, true); // Always clipboard export for trimmed video
     } else {
       throw new Error(result.error);
     }
@@ -2783,7 +2788,7 @@ async function exportClipFromContextMenu(clip) {
     );
     if (result.success) {
       logger.info("Clip exported successfully:", result.path);
-      showExportProgress(100, 100); // Show completion
+      showExportProgress(100, 100, true); // Always clipboard export for context menu
     } else {
       throw new Error(result.error);
     }
