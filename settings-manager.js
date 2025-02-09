@@ -17,7 +17,7 @@ async function loadSettings() {
   try {
     const data = await fs.readFile(SETTINGS_FILE, 'utf8');
     
-    // Parse the settings, but don't immediately assume empty file means invalid
+    // Parse the settings
     let settings;
     try {
       settings = JSON.parse(data);
@@ -41,18 +41,31 @@ async function loadSettings() {
       return { ...DEFAULT_SETTINGS };
     }
     
-    // Merge with defaults, but preserve all existing valid settings
+    // Merge with defaults, but be more careful about what we consider "invalid"
     const mergedSettings = { ...DEFAULT_SETTINGS };
+    let needsSave = false;
     
-    // Only override defaults with valid values
-    for (const [key, value] of Object.entries(settings)) {
-      if (value !== null && value !== undefined) {
-        mergedSettings[key] = value;
+    // Only override defaults with valid values, and track if we actually need to save
+    for (const [key, defaultValue] of Object.entries(DEFAULT_SETTINGS)) {
+      // If the setting exists and is of the same type as the default
+      if (key in settings && typeof settings[key] === typeof defaultValue) {
+        // For numbers, check if it's a valid number and within reasonable bounds
+        if (typeof defaultValue === 'number') {
+          if (!isNaN(settings[key]) && isFinite(settings[key])) {
+            mergedSettings[key] = settings[key];
+            continue;
+          }
+        } else {
+          mergedSettings[key] = settings[key];
+          continue;
+        }
       }
+      // If we get here, the setting was invalid or missing
+      needsSave = true;
     }
     
-    // If the merged settings differ from what's in the file, save the corrected version
-    if (JSON.stringify(mergedSettings) !== JSON.stringify(settings)) {
+    // Only save if we actually had to fix something
+    if (needsSave) {
       logger.info('Updating settings file with merged settings');
       await saveSettings(mergedSettings);
     }
