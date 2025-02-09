@@ -2879,33 +2879,61 @@ async function openClip(originalName, customName) {
     initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
   }
 
-  // Create a promise to handle video loading
+  // Create a promise to handle video loading and seeking
   const videoLoadPromise = new Promise((resolve) => {
+    let isMetadataLoaded = false;
+    let isSeeked = false;
+
+    const checkComplete = () => {
+      if (isMetadataLoaded && isSeeked) {
+        resolve();
+      }
+    };
+
     const loadHandler = () => {
+      isMetadataLoaded = true;
       updateTrimControls();
       videoPlayer.currentTime = initialPlaybackTime;
       videoPlayer.removeEventListener('loadedmetadata', loadHandler);
-      resolve();
+      checkComplete();
     };
+
+    const seekHandler = () => {
+      isSeeked = true;
+      videoPlayer.removeEventListener('seeked', seekHandler);
+      checkComplete();
+    };
+
     videoPlayer.addEventListener('loadedmetadata', loadHandler);
+    videoPlayer.addEventListener('seeked', seekHandler);
   });
 
   // Set video source
   videoPlayer.src = `file://${clipInfo.format.filename}`;
 
-  // Wait for video to load
+  // Wait for video to fully load and seek
   await videoLoadPromise;
 
   await loadVolumeData();
 
   // Show video and play when ready
-  videoPlayer.addEventListener('seeked', () => {
-    videoPlayer.style.opacity = '1';
-    thumbnailOverlay.style.display = 'none';
-    videoPlayer.play();
-  }, { once: true });
+  const playPromise = new Promise((resolve) => {
+    const playHandler = () => {
+      videoPlayer.style.opacity = '1';
+      thumbnailOverlay.style.display = 'none';
+      videoPlayer.removeEventListener('playing', playHandler);
+      resolve();
+    };
+    videoPlayer.addEventListener('playing', playHandler);
+    videoPlayer.play().catch(error => {
+      if (error.name !== "AbortError") {
+        logger.error("Error playing video:", error);
+      }
+    });
+  });
 
-  logger.info(`Final trim values set - start: ${trimStartTime}, end: ${trimEndTime}`);
+  // Rest of your existing openClip code...
+  // ... existing code ...
 
   clipTitle.value = customName;
 
