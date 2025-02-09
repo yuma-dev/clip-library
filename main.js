@@ -77,6 +77,10 @@ let settings;
 
 setupTitlebar();
 
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+
 async function createWindow() {
   settings = await loadSettings();
   setupFileWatcher(settings.clipLocation);
@@ -101,6 +105,7 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      spellcheck: false,
       enableRemoteModule: true
     },
   });
