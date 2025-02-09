@@ -272,6 +272,17 @@ ipcMain.handle("get-clips", async () => {
         ),
       )
       .map(async (file) => {
+        const fullPath = path.join(clipsFolder, file.name);
+        
+        // Check if file exists before processing
+        try {
+          await fs.access(fullPath);
+        } catch (error) {
+          // File doesn't exist, skip it
+          logger.info(`Skipping non-existent file: ${file.name}`);
+          return null;
+        }
+
         const customNamePath = path.join(
           metadataFolder,
           `${file.name}.customname`,
@@ -295,9 +306,7 @@ ipcMain.handle("get-clips", async () => {
           // If trim file doesn't exist, isTrimmed remains false
         }
 
-        const thumbnailPath = generateThumbnailPath(
-          path.join(clipsFolder, file.name),
-        );
+        const thumbnailPath = generateThumbnailPath(fullPath);
 
         return {
           originalName: file.name,
@@ -308,7 +317,7 @@ ipcMain.handle("get-clips", async () => {
         };
       });
 
-    const clipInfos = await Promise.all(clipInfoPromises);
+    const clipInfos = (await Promise.all(clipInfoPromises)).filter(Boolean); // Remove null entries
     return clipInfos;
   } catch (error) {
     logger.error("Error reading directory:", error);
@@ -317,18 +326,40 @@ ipcMain.handle("get-clips", async () => {
 });
 
 function setupFileWatcher(clipLocation) {
+  if (!clipLocation) {
+    logger.warn('No clip location provided for file watcher');
+    return;
+  }
+
+  // Clean up any existing watcher
+  if (global.fileWatcher) {
+    global.fileWatcher.close();
+  }
+
   const watcher = chokidar.watch(clipLocation, {
     ignored: /(^|[\/\\])\../, // ignore dotfiles
-    persistent: true
+    persistent: true,
+    ignoreInitial: true,  // Don't fire events for existing files
+    awaitWriteFinish: {   // Wait for file to be fully written
+      stabilityThreshold: 2000,
+      pollInterval: 100
+    }
   });
 
   watcher.on('add', (filePath) => {
     const ext = path.extname(filePath).toLowerCase();
     if (['.mp4', '.avi', '.mov'].includes(ext)) {
       const fileName = path.basename(filePath);
-      mainWindow.webContents.send('new-clip-added', fileName);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('new-clip-added', fileName);
+      }
     }
   });
+
+  // Store watcher reference for cleanup
+  global.fileWatcher = watcher;
+
+  logger.info(`File watcher set up for: ${clipLocation}`);
 }
 
 ipcMain.handle('get-app-version', () => {
@@ -1519,7 +1550,6 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
 ipcMain.handle('save-volume-range', async (event, clipName, volumeData) => {
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, '.clip_metadata');
-  await ensureDirectoryExists(metadataFolder);
   const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
 
   try {

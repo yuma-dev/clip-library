@@ -2,6 +2,7 @@ const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
 const logger = require('./logger');
+const fs = require('fs').promises;
 
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
@@ -398,6 +399,15 @@ async function updateVersionDisplay() {
 
 async function addNewClipToLibrary(fileName) {
   try {
+    // First check if the file exists
+    const clipPath = path.join(settings.clipLocation, fileName);
+    try {
+      await fs.access(clipPath);
+    } catch (error) {
+      logger.info(`File no longer exists, skipping: ${fileName}`);
+      return;
+    }
+
     const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
     
     // Check if the clip already exists in allClips
@@ -423,7 +433,6 @@ async function addNewClipToLibrary(fileName) {
       }
 
       // Generate thumbnail in the background without waiting
-      // This prevents the timeout from blocking the clip addition
       setTimeout(async () => {
         try {
           await ipcRenderer.invoke("generate-thumbnails-progressively", [fileName]);
@@ -445,16 +454,27 @@ async function addNewClipToLibrary(fileName) {
     updateFilterDropdown();
 
   } catch (error) {
-    logger.error("Error adding new clip to library:", error);
+    // Only log as info if it's a file not found error, otherwise log as error
+    if (error.code === 'ENOENT') {
+      logger.info(`Skipping non-existent file: ${fileName}`);
+    } else {
+      logger.error("Error adding new clip to library:", error);
+    }
   }
 }
 
-ipcRenderer.on('new-clip-added', (event, fileName) => {
-  addNewClipToLibrary(fileName);
-});
-
-ipcRenderer.on('new-clip-added', (event, fileName) => {
-  addNewClipToLibrary(fileName);
+ipcRenderer.on('new-clip-added', async (event, fileName) => {
+  // Wait for settings to be loaded if they haven't been yet
+  if (!settings) {
+    try {
+      settings = await ipcRenderer.invoke('get-settings');
+    } catch (error) {
+      logger.error('Failed to load settings:', error);
+      return;
+    }
+  }
+  
+  await addNewClipToLibrary(fileName);
   updateFilterDropdown();
 });
 
