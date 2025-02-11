@@ -820,15 +820,6 @@ async function processQueue() {
           const isValid = await validateThumbnail(clipName, thumbnailPath);
           
           if (!isValid) {
-            if (attempts >= THUMBNAIL_RETRY_ATTEMPTS) {
-              logger.error(`Failed to generate thumbnail for ${clipName} after ${THUMBNAIL_RETRY_ATTEMPTS} attempts`);
-              event.sender.send("thumbnail-generation-failed", {
-                clipName,
-                error: "Maximum retry attempts reached"
-              });
-              return;
-            }
-
             // Get video info first
             const info = await new Promise((resolve, reject) => {
               ffmpeg.ffprobe(clipPath, (err, metadata) => {
@@ -850,12 +841,7 @@ async function processQueue() {
                   size: '640x360'
                 })
                 .on('end', resolve)
-                .on('error', (err) => {
-                  if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
-                    thumbnailQueue.push({ clipName, event, attempts: attempts + 1 });
-                  }
-                  reject(err);
-                });
+                .on('error', reject);
             });
 
             await saveThumbnailMetadata(thumbnailPath, {
@@ -868,7 +854,6 @@ async function processQueue() {
 
           completedThumbnails++;
           
-          // Send progress update
           event.sender.send("thumbnail-progress", {
             current: completedThumbnails,
             total: totalToProcess,
@@ -876,12 +861,9 @@ async function processQueue() {
           });
 
         } catch (error) {
-          logger.error(`Error processing thumbnail for ${clipName}:`, error);
-          if (attempts >= THUMBNAIL_RETRY_ATTEMPTS) {
-            event.sender.send("thumbnail-generation-failed", {
-              clipName,
-              error: error.message
-            });
+          logger.error("Error processing thumbnail for", clipName, error);
+          if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
+            thumbnailQueue.push({ clipName, event, attempts: attempts + 1 });
           }
         }
       }));
@@ -891,9 +873,16 @@ async function processQueue() {
     }
   } finally {
     isProcessingQueue = false;
-    // Send completion event if queue is empty
+    
+    // Only send completion event if queue is actually empty
     if (thumbnailQueue.length === 0) {
-      event.sender.send("thumbnail-generation-complete");
+      const event = batch?.[0]?.event;
+      if (event) {
+        event.sender.send("thumbnail-generation-complete");
+      }
+    } else if (!isProcessingQueue) {
+      // If there are still items in queue, restart processing
+      processQueue();
     }
   }
 }
@@ -947,147 +936,172 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
   }
 });
 
-ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
-  let clipsNeedingGeneration = [];
+async function handleInitialThumbnails(clipNames, event) {
+  const initialClips = clipNames.slice(0, 12);
   
-  // First, quickly check which clips need thumbnails
-  for (const clipName of clipNames) {
-    const clipPath = path.join(settings.clipLocation, clipName);
-    const thumbnailPath = generateThumbnailPath(clipPath);
-    
-    try {
-      const isValid = await validateThumbnail(clipName, thumbnailPath);
-      if (!isValid) {
-        clipsNeedingGeneration.push(clipName);
+  // Quick parallel check for existence
+  const missingThumbnails = await Promise.all(
+    initialClips.map(async clipName => {
+      const clipPath = path.join(settings.clipLocation, clipName);
+      const thumbnailPath = generateThumbnailPath(clipPath);
+      try {
+        await fs.access(thumbnailPath);
+        return null;
+      } catch {
+        return clipName;
       }
-    } catch (error) {
-      logger.error(`Error validating thumbnail for ${clipName}:`, error);
-      clipsNeedingGeneration.push(clipName);
-    }
+    })
+  );
+
+  // Filter out nulls
+  const clipsNeedingGeneration = missingThumbnails.filter(Boolean);
+
+  if (clipsNeedingGeneration.length > 0) {
+    logger.info(`Fast-tracking thumbnail generation for ${clipsNeedingGeneration.length} initial clips`);
+    
+    // Get correct timestamps first
+    const clipData = await Promise.all(
+      clipsNeedingGeneration.map(async clipName => {
+        const clipPath = path.join(settings.clipLocation, clipName);
+        try {
+          // Check trim data first
+          const trimData = await getTrimData(clipName);
+          if (trimData) {
+            return { clipName, startTime: trimData.start };
+          }
+
+          // If no trim data, get duration
+          const info = await new Promise((resolve, reject) => {
+            ffmpeg.ffprobe(clipPath, (err, metadata) => {
+              if (err) reject(err);
+              else resolve(metadata);
+            });
+          });
+          
+          const duration = info.format.duration;
+          return { 
+            clipName, 
+            startTime: duration > 40 ? duration / 2 : 0,
+            duration 
+          };
+        } catch (error) {
+          logger.error(`Error getting data for ${clipName}:`, error);
+          return null;
+        }
+      })
+    );
+
+    // Filter out failed clips
+    const validClipData = clipData.filter(Boolean);
+
+    // Generate all in parallel with correct timestamps
+    await Promise.all(
+      validClipData.map(async ({ clipName, startTime, duration }, index) => {
+        const clipPath = path.join(settings.clipLocation, clipName);
+        const thumbnailPath = generateThumbnailPath(clipPath);
+
+        try {
+          await new Promise((resolve, reject) => {
+            ffmpeg(clipPath)
+              .screenshots({
+                timestamps: [startTime],
+                filename: path.basename(thumbnailPath),
+                folder: path.dirname(thumbnailPath),
+                size: '640x360'
+              })
+              .on('end', resolve)
+              .on('error', reject);
+          });
+
+          // Save metadata
+          await saveThumbnailMetadata(thumbnailPath, {
+            startTime,
+            duration,
+            clipName,
+            timestamp: Date.now()
+          });
+
+          // Only send the thumbnail generated event, no progress events
+          event.sender.send("thumbnail-generated", {
+            clipName,
+            thumbnailPath
+          });
+
+        } catch (error) {
+          logger.error(`Error generating thumbnail for ${clipName}:`, error);
+          event.sender.send("thumbnail-generation-failed", {
+            clipName,
+            error: error.message
+          });
+        }
+      })
+    );
   }
 
-  // If we have a small number of clips needing generation, use fast path
-  if (clipsNeedingGeneration.length > 0 && clipsNeedingGeneration.length <= FAST_PATH_THRESHOLD) {
-    logger.info(`Using fast path for ${clipsNeedingGeneration.length} clips`);
+  return {
+    processed: clipsNeedingGeneration.length,
+    processedClips: new Set(clipsNeedingGeneration)
+  };
+}
+
+ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
+  try {
+    // Handle initial clips first (silently)
+    const { processed, processedClips } = await handleInitialThumbnails(clipNames, event);
     
-    // Send initial validation event
-    event.sender.send("thumbnail-validation-start", {
-      total: clipsNeedingGeneration.length
-    });
-    
-    // Process clips immediately in parallel
-    const generationPromises = clipsNeedingGeneration.map(async (clipName, index) => {
-      try {
+    // Process remaining clips if any
+    if (clipNames.length > 12) {
+      const remainingClips = clipNames.slice(12).filter(clipName => !processedClips.has(clipName));
+      let clipsNeedingGeneration = [];
+      
+      // Validate remaining clips
+      for (const clipName of remainingClips) {
         const clipPath = path.join(settings.clipLocation, clipName);
         const thumbnailPath = generateThumbnailPath(clipPath);
         
-        // Get video info
-        const info = await new Promise((resolve, reject) => {
-          ffmpeg.ffprobe(clipPath, (err, metadata) => {
-            if (err) reject(err);
-            else resolve(metadata);
-          });
+        try {
+          const isValid = await validateThumbnail(clipName, thumbnailPath);
+          if (!isValid) {
+            clipsNeedingGeneration.push(clipName);
+          }
+        } catch (error) {
+          logger.error(`Error validating thumbnail for ${clipName}:`, error);
+          clipsNeedingGeneration.push(clipName);
+        }
+      }
+
+      // Only show progress and start queue if there are clips to process
+      if (clipsNeedingGeneration.length > 0) {
+        event.sender.send("thumbnail-validation-start", {
+          total: clipsNeedingGeneration.length
         });
 
-        const trimData = await getTrimData(clipName);
-        const duration = info.format.duration;
-        const startTime = trimData ? trimData.start : (duration > 40 ? duration / 2 : 0);
-
-        // Generate thumbnail
-        await new Promise((resolve, reject) => {
-          ffmpeg(clipPath)
-            .screenshots({
-              timestamps: [startTime],
-              filename: path.basename(thumbnailPath),
-              folder: path.dirname(thumbnailPath),
-              size: '640x360'
-            })
-            .on('end', resolve)
-            .on('error', reject);
-        });
-
-        // Save metadata
-        await saveThumbnailMetadata(thumbnailPath, {
-          startTime,
-          duration,
-          clipName,
-          timestamp: Date.now()
-        });
-
-        // Send progress event
-        event.sender.send("thumbnail-progress", {
-          current: index + 1,
-          total: clipsNeedingGeneration.length,
-          clipName
-        });
-
-        // Send the specific thumbnail generated event
-        event.sender.send("thumbnail-generated", {
-          clipName,
-          thumbnailPath
-        });
-
-      } catch (error) {
-        logger.error(`Error in fast path generation for ${clipName}:`, error);
-        event.sender.send("thumbnail-generation-failed", {
-          clipName,
-          error: error.message
-        });
-        // Add to regular queue as fallback
-        thumbnailQueue.push({ 
+        thumbnailQueue.length = 0;
+        thumbnailQueue.push(...clipsNeedingGeneration.map(clipName => ({ 
           clipName, 
           event,
-          totalToProcess: clipsNeedingGeneration.length 
-        });
-      }
-    });
-
-    try {
-      // Wait for all fast path generations to complete
-      await Promise.all(generationPromises);
-
-      // Send completion event if no clips were added to fallback queue
-      if (thumbnailQueue.length === 0) {
-        event.sender.send("thumbnail-generation-complete");
-      } else {
-        // Process remaining clips through regular queue
+          totalToProcess: clipsNeedingGeneration.length
+        })));
+        
         if (!isProcessingQueue) {
           processQueue();
         }
       }
-    } catch (error) {
-      logger.error('Error in fast path processing:', error);
-      // Fall back to regular queue processing
-      if (!isProcessingQueue) {
-        processQueue();
-      }
+      // Note: No else clause here - we don't send completion for no-op cases
+    } else if (processed > 0) {
+      // Only send completion if we actually processed initial clips
+      event.sender.send("thumbnail-generation-complete");
     }
-  } else if (clipsNeedingGeneration.length > FAST_PATH_THRESHOLD) {
-    // Use regular progressive generation for larger sets
-    totalThumbnailsToProcess = clipsNeedingGeneration.length;
-    completedThumbnails = 0;
     
-    event.sender.send("thumbnail-validation-start", {
-      total: totalThumbnailsToProcess
-    });
-
-    thumbnailQueue.length = 0;
-    thumbnailQueue.push(...clipsNeedingGeneration.map(clipName => ({ 
-      clipName, 
-      event,
-      totalToProcess: totalThumbnailsToProcess
-    })));
-    
-    if (!isProcessingQueue) {
-      processQueue();
-    }
+    return { 
+      needsGeneration: processed + (thumbnailQueue.length || 0), 
+      total: clipNames.length,
+      initialProcessed: processed
+    };
+  } catch (error) {
+    logger.error('Error in thumbnail generation:', error);
+    throw error;
   }
-  
-  return { 
-    needsGeneration: clipsNeedingGeneration.length, 
-    total: clipNames.length,
-    usedFastPath: clipsNeedingGeneration.length <= FAST_PATH_THRESHOLD
-  };
 });
 
 

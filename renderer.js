@@ -508,7 +508,7 @@ ipcRenderer.on("thumbnail-generation-complete", () => {
 });
 
 function showThumbnailGenerationText(totalToGenerate) {
-  if (totalToGenerate <= 0) return;
+  if (totalToGenerate <= 12) return;
   
   // Reset all state variables
   isGeneratingThumbnails = true;
