@@ -1213,13 +1213,17 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
   };
 });
 
-ipcMain.handle("open-save-dialog", async (event, type) => {
+ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => {
+  const extension = type === "audio" ? ".mp3" : ".mp4";
+  const defaultName = (customName || clipName || "clip") + extension;
+  
   const options = {
+    defaultPath: defaultName,
     filters: type === "audio" 
       ? [{ name: "Audio Files", extensions: ["mp3"] }]
       : [{ name: "Video Files", extensions: ["mp4"] }],
   };
-  const result = await dialog.showSaveDialog(options);
+  const result = await dialog.showSaveDialog(mainWindow, options);
   return result.canceled ? null : result.filePath;
 });
 

@@ -2660,7 +2660,7 @@ function isVideoInFullscreen(videoElement) {
 
 async function exportVideoWithFileSelection() {
   if (!currentClip) return;
-  const savePath = await ipcRenderer.invoke("open-save-dialog", "video");
+  const savePath = await ipcRenderer.invoke("open-save-dialog", "video", currentClip.originalName, currentClip.customName);
   if (savePath) {
     await exportVideo(savePath);
   }
@@ -2668,7 +2668,7 @@ async function exportVideoWithFileSelection() {
 
 async function exportAudioWithFileSelection() {
   if (!currentClip) return;
-  const savePath = await ipcRenderer.invoke("open-save-dialog", "audio");
+  const savePath = await ipcRenderer.invoke("open-save-dialog", "audio", currentClip.originalName, currentClip.customName);
   if (savePath) {
     await exportAudio(savePath);
   }
