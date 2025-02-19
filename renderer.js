@@ -2841,6 +2841,11 @@ async function openClip(originalName, customName) {
     currentCleanup = null;
   }
 
+  // Remove last-opened class from any previously highlighted clip
+  document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
+    clip.classList.remove('last-opened');
+  });
+
   initializeVolumeControls();
   loadingOverlay.style.display = "none";
 
@@ -3279,9 +3284,32 @@ function closePlayer() {
       clipTitleElement.value = "";
     }
 
-    // Update the clip's display in the grid if we have the original name
+    // Remove last-opened class from any previously highlighted clip
+    document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
+      clip.classList.remove('last-opened');
+    });
+
+    // Update the clip's display in the grid and highlight it
     if (originalName) {
       updateClipDisplay(originalName);
+      const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+      if (clipElement) {
+        logger.info('Found clip element to scroll to:', {
+          originalName,
+          elementExists: !!clipElement,
+          elementPosition: clipElement.getBoundingClientRect()
+        });
+
+        // Add highlight class
+        clipElement.classList.add('last-opened');
+        
+        // Small delay to ensure DOM updates have processed
+        setTimeout(() => {
+          smoothScrollToElement(clipElement);
+        }, 50);
+      } else {
+        logger.warn('Clip element not found for scrolling:', originalName);
+      }
     }
 
     // Reset current clip
@@ -5198,3 +5226,26 @@ document.addEventListener('keydown', (e) => {
     toggleVolumeControls();
   }
 });
+
+function smoothScrollToElement(element) {
+  if (!element) {
+    logger.warn('smoothScrollToElement called with no element');
+    return;
+  }
+
+  logger.info('Attempting to scroll to element:', {
+    elementExists: !!element,
+    elementRect: element.getBoundingClientRect(),
+    currentScroll: window.pageYOffset,
+    windowHeight: window.innerHeight
+  });
+
+  // Try both approaches - first the native scrollIntoView
+  try {
+    element.scrollIntoView({ behavior: "smooth", block: "end", inline: "nearest" });
+    logger.info('Used native scrollIntoView');
+    return;
+  } catch (error) {
+    logger.error('Native scrollIntoView failed, falling back to custom implementation:', error);
+  }
+}
