@@ -422,11 +422,72 @@ async function addNewClipToLibrary(fileName) {
         ...newClipInfo,
         thumbnailPath: "assets/loading-thumbnail.gif"
       });
+
+      // Find or create the appropriate time group
+      const timeGroup = getTimeGroup(newClipInfo.createdAt);
+      let groupElement = document.querySelector(`.clip-group[data-group-name="${timeGroup}"]`);
       
-      clipGrid.insertBefore(newClipElement, clipGrid.firstChild);
+      if (!groupElement) {
+        // Create new group if it doesn't exist
+        groupElement = document.createElement('div');
+        groupElement.className = 'clip-group';
+        groupElement.dataset.groupName = timeGroup;
+        
+        // Create group header
+        const header = document.createElement('div');
+        header.className = 'clip-group-header';
+        header.innerHTML = `
+          <h2 class="clip-group-title">
+            ${timeGroup}
+            <span class="clip-group-count">1 clip</span>
+          </h2>
+          <div class="clip-group-divider"></div>
+        `;
+
+        // Add click handler for collapse/expand
+        const collapsedState = loadCollapsedState();
+        if (collapsedState[timeGroup]) {
+          groupElement.classList.add('collapsed');
+        }
+        
+        header.addEventListener('click', () => {
+          groupElement.classList.toggle('collapsed');
+          const newState = loadCollapsedState();
+          newState[timeGroup] = groupElement.classList.contains('collapsed');
+          saveCollapsedState(newState);
+        });
+
+        // Create group content
+        const content = document.createElement('div');
+        content.className = 'clip-group-content';
+        
+        groupElement.appendChild(header);
+        groupElement.appendChild(content);
+
+        // Insert the group in the correct position
+        const groups = Array.from(document.querySelectorAll('.clip-group'));
+        const insertIndex = groups.findIndex(g => 
+          getGroupOrder(g.dataset.groupName) > getGroupOrder(timeGroup)
+        );
+
+        if (insertIndex === -1) {
+          clipGrid.appendChild(groupElement);
+        } else {
+          clipGrid.insertBefore(groupElement, groups[insertIndex]);
+        }
+      } else {
+        // Update clip count in existing group
+        const countElement = groupElement.querySelector('.clip-group-count');
+        const currentCount = parseInt(countElement.textContent);
+        countElement.textContent = `${currentCount + 1} clip${currentCount + 1 !== 1 ? 's' : ''}`;
+      }
+
+      // Add the new clip to the group content
+      const content = groupElement.querySelector('.clip-group-content');
+      content.insertBefore(newClipElement, content.firstChild);
       
       // Force a clean state for the new clip
-      const clipElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+      const clipElement = newClipElement;
       if (clipElement) {
         clipElement.dataset.trimStart = undefined;
         clipElement.dataset.trimEnd = undefined;
@@ -444,7 +505,7 @@ async function addNewClipToLibrary(fileName) {
     } else {
       // If it exists, update the existing clip info
       allClips[existingClipIndex] = newClipInfo;
-      const existingElement = clipGrid.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+      const existingElement = document.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
       if (existingElement) {
         const updatedElement = await createClipElement(newClipInfo);
         existingElement.replaceWith(updatedElement);
@@ -634,6 +695,61 @@ function updateClipThumbnail(clipName, thumbnailPath) {
   }
 }
 
+function getTimeGroup(timestamp) {
+  const now = new Date();
+  const date = new Date(timestamp);
+  const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays <= 7) return 'This Week';
+  if (diffDays <= 30) return 'This Month';
+  
+  if (date.getFullYear() === now.getFullYear()) {
+    return 'This Year';
+  }
+  
+  // Return the specific year for any past year
+  return date.getFullYear().toString();
+}
+
+function getGroupOrder(groupName) {
+  // Handle special groups first
+  const specialGroups = {
+    'Today': 0,
+    'Yesterday': 1,
+    'This Week': 2,
+    'This Month': 3,
+    'This Year': 4
+  };
+
+  if (groupName in specialGroups) {
+    return specialGroups[groupName];
+  }
+
+  // For year groups, make them ordered after special groups
+  const year = parseInt(groupName);
+  if (!isNaN(year)) {
+    // Start years at 100 to ensure they come after special groups
+    // Subtract from a future year (e.g., 3000) to make recent years come first
+    return 100 + (3000 - year);
+  }
+
+  return 999; // Fallback for any unexpected group names
+}
+
+function loadCollapsedState() {
+  try {
+    return JSON.parse(localStorage.getItem('clipGroupsCollapsed')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCollapsedState(state) {
+  localStorage.setItem('clipGroupsCollapsed', JSON.stringify(state));
+}
+
 async function renderClips(clips) {
   if (isRendering) {
     logger.info("Render already in progress, skipping");
@@ -642,32 +758,89 @@ async function renderClips(clips) {
   
   isRendering = true;
   logger.info("Rendering clips. Input length:", clips.length);
-  clipGrid.innerHTML = ""; // Clear the grid
+  
+  const clipGrid = document.getElementById('clip-grid');
+  clipGrid.innerHTML = '';
 
+  if (!clips || clips.length === 0) {
+    clipGrid.innerHTML = '<div class="error-message">No clips found</div>';
+    isRendering = false;
+    return;
+  }
+
+  // Remove duplicates
   clips = removeDuplicates(clips);
   logger.info("Clips to render after removing duplicates:", clips.length);
 
-  const clipPromises = clips.map(createClipElement);
-  const clipElements = await Promise.all(clipPromises);
-
-  clipElements.forEach((clipElement) => {
-    clipGrid.appendChild(clipElement);
-    const clip = clips.find(c => c.originalName === clipElement.dataset.originalName);
-    if (clip) {
-      updateClipTags(clip);
-    }
+  // Group clips by time period
+  const groups = {};
+  clips.forEach(clip => {
+    const group = getTimeGroup(clip.createdAt);
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(clip);
   });
+
+  // Get collapsed state
+  const collapsedState = loadCollapsedState();
+
+  // Sort groups by time (most recent first)
+  const sortedGroups = Object.entries(groups).sort((a, b) => 
+    getGroupOrder(a[0]) - getGroupOrder(b[0])
+  );
+
+  // Create and append groups
+  for (const [groupName, groupClips] of sortedGroups) {
+    const groupElement = document.createElement('div');
+    groupElement.className = `clip-group ${collapsedState[groupName] ? 'collapsed' : ''}`;
+    
+    // Create group header
+    const header = document.createElement('div');
+    header.className = 'clip-group-header';
+    header.innerHTML = `
+      <h2 class="clip-group-title">
+        ${groupName}
+        <span class="clip-group-count">${groupClips.length} clip${groupClips.length !== 1 ? 's' : ''}</span>
+      </h2>
+      <div class="clip-group-divider"></div>
+    `;
+
+    // Add click handler for collapse/expand
+    header.addEventListener('click', () => {
+      groupElement.classList.toggle('collapsed');
+      collapsedState[groupName] = groupElement.classList.contains('collapsed');
+      saveCollapsedState(collapsedState);
+    });
+
+    // Create group content
+    const content = document.createElement('div');
+    content.className = 'clip-group-content';
+
+    // Create clip elements
+    const clipElements = await Promise.all(groupClips.map(createClipElement));
+    clipElements.forEach(clipElement => {
+      content.appendChild(clipElement);
+      const clip = groupClips.find(c => c.originalName === clipElement.dataset.originalName);
+      if (clip) {
+        updateClipTags(clip);
+      }
+    });
+
+    groupElement.appendChild(header);
+    groupElement.appendChild(content);
+    clipGrid.appendChild(groupElement);
+  }
 
   setupTooltips();
   currentClipList = clips;
   addHoverEffect();
 
+  // Add mouse enter/leave handlers
   document.querySelectorAll('.clip-item').forEach(card => {
     card.addEventListener('mouseenter', handleMouseEnter);
     card.addEventListener('mouseleave', handleMouseLeave);
   });
 
-  logger.info("Rendered clips count:", clipGrid.children.length);
+  logger.info("Rendered clips count:", clips.length);
   isRendering = false;
 }
 
@@ -2468,6 +2641,8 @@ async function confirmAndDeleteClip(clipToDelete = null) {
     // Immediately remove the clip from UI
     const clipElement = document.querySelector(`.clip-item[data-original-name="${clipInfo.originalName}"]`);
     if (clipElement) {
+      // Update group before removing the clip
+      updateGroupAfterDeletion(clipElement);
       clipElement.remove();
     }
 
@@ -2501,7 +2676,53 @@ async function confirmAndDeleteClip(clipToDelete = null) {
       
       // Revert the UI changes if deletion fails
       if (clipElement && clipElement.parentNode === null) {
-        clipGrid.appendChild(clipElement);
+        // Find or recreate the appropriate group
+        const timeGroup = getTimeGroup(clipInfo.createdAt);
+        let groupElement = document.querySelector(`.clip-group[data-group-name="${timeGroup}"]`);
+        
+        if (!groupElement) {
+          // Recreate the group if it was removed
+          groupElement = document.createElement('div');
+          groupElement.className = 'clip-group';
+          groupElement.dataset.groupName = timeGroup;
+          
+          const header = document.createElement('div');
+          header.className = 'clip-group-header';
+          header.innerHTML = `
+            <h2 class="clip-group-title">
+              ${timeGroup}
+              <span class="clip-group-count">1 clip</span>
+            </h2>
+            <div class="clip-group-divider"></div>
+          `;
+          
+          const content = document.createElement('div');
+          content.className = 'clip-group-content';
+          
+          groupElement.appendChild(header);
+          groupElement.appendChild(content);
+          
+          // Insert the group in the correct position
+          const groups = Array.from(document.querySelectorAll('.clip-group'));
+          const insertIndex = groups.findIndex(g => 
+            getGroupOrder(g.dataset.groupName) > getGroupOrder(timeGroup)
+          );
+
+          if (insertIndex === -1) {
+            clipGrid.appendChild(groupElement);
+          } else {
+            clipGrid.insertBefore(groupElement, groups[insertIndex]);
+          }
+        }
+        
+        // Add the clip back to the group
+        const content = groupElement.querySelector('.clip-group-content');
+        content.appendChild(clipElement);
+        
+        // Update the group count
+        const countElement = groupElement.querySelector('.clip-group-count');
+        const currentCount = content.querySelectorAll('.clip-item').length;
+        countElement.textContent = `${currentCount} clip${currentCount !== 1 ? 's' : ''}`;
       }
       
       // Revert data changes
@@ -4550,6 +4771,9 @@ async function deleteSelectedClips() {
       );
 
       if (clipElement) {
+        // Update group before removing the clip
+        updateGroupAfterDeletion(clipElement);
+        
         // Immediately add visual feedback
         disableVideoThumbnail(originalName);
 
@@ -5247,5 +5471,25 @@ function smoothScrollToElement(element) {
     return;
   } catch (error) {
     logger.error('Native scrollIntoView failed, falling back to custom implementation:', error);
+  }
+}
+
+// Add this helper function after getGroupOrder
+function updateGroupAfterDeletion(clipElement) {
+  const groupElement = clipElement.closest('.clip-group');
+  if (!groupElement) return;
+
+  const content = groupElement.querySelector('.clip-group-content');
+  const remainingClips = content.querySelectorAll('.clip-item').length - 1; // -1 because the clip is not yet removed
+
+  if (remainingClips === 0) {
+    // If this was the last clip, remove the entire group
+    groupElement.remove();
+  } else {
+    // Update the clip count
+    const countElement = groupElement.querySelector('.clip-group-count');
+    if (countElement) {
+      countElement.textContent = `${remainingClips} clip${remainingClips !== 1 ? 's' : ''}`;
+    }
   }
 }
