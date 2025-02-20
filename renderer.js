@@ -5493,3 +5493,35 @@ function updateGroupAfterDeletion(clipElement) {
     }
   }
 }
+
+let previousCollapsedState = null;
+
+function expandAllGroups() {
+  if (!previousCollapsedState) {
+    // Store current state before expanding
+    previousCollapsedState = {};
+    document.querySelectorAll('.clip-group').forEach(group => {
+      const groupName = group.dataset.groupName;
+      previousCollapsedState[groupName] = group.classList.contains('collapsed');
+    });
+  }
+  
+  document.querySelectorAll('.clip-group').forEach(group => {
+    group.classList.remove('collapsed');
+  });
+}
+
+function restoreGroupStates() {
+  if (previousCollapsedState) {
+    document.querySelectorAll('.clip-group').forEach(group => {
+      const groupName = group.dataset.groupName;
+      if (previousCollapsedState[groupName]) {
+        group.classList.add('collapsed');
+      }
+    });
+    
+    // Save the restored state to localStorage
+    saveCollapsedState(previousCollapsedState);
+    previousCollapsedState = null;
+  }
+}
