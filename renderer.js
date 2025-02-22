@@ -425,9 +425,24 @@ async function addNewClipToLibrary(fileName) {
 
       // Find or create the appropriate time group
       const timeGroup = getTimeGroup(newClipInfo.createdAt);
-      let groupElement = document.querySelector(`.clip-group[data-group-name="${timeGroup}"]`);
       
-      if (!groupElement) {
+      // First try to find an existing group by looking at the header text content
+      let groupElement = Array.from(document.querySelectorAll('.clip-group'))
+        .find(group => {
+          const headerText = group.querySelector('.clip-group-header h2.clip-group-title')?.textContent.trim();
+          return headerText?.startsWith(timeGroup);
+        });
+      let content;
+      
+      if (groupElement) {
+        // Use existing group
+        content = groupElement.querySelector('.clip-group-content');
+        
+        // Update clip count
+        const countElement = groupElement.querySelector('.clip-group-count');
+        const currentCount = parseInt(countElement.textContent);
+        countElement.textContent = `${currentCount + 1} clip${currentCount + 1 !== 1 ? 's' : ''}`;
+      } else {
         // Create new group if it doesn't exist
         groupElement = document.createElement('div');
         groupElement.className = 'clip-group';
@@ -458,7 +473,7 @@ async function addNewClipToLibrary(fileName) {
         });
 
         // Create group content
-        const content = document.createElement('div');
+        content = document.createElement('div');
         content.className = 'clip-group-content';
         
         groupElement.appendChild(header);
@@ -475,15 +490,9 @@ async function addNewClipToLibrary(fileName) {
         } else {
           clipGrid.insertBefore(groupElement, groups[insertIndex]);
         }
-      } else {
-        // Update clip count in existing group
-        const countElement = groupElement.querySelector('.clip-group-count');
-        const currentCount = parseInt(countElement.textContent);
-        countElement.textContent = `${currentCount + 1} clip${currentCount + 1 !== 1 ? 's' : ''}`;
       }
 
-      // Add the new clip to the group content
-      const content = groupElement.querySelector('.clip-group-content');
+      // Add the new clip to the group content at the beginning
       content.insertBefore(newClipElement, content.firstChild);
       
       // Force a clean state for the new clip
