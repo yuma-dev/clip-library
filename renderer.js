@@ -801,6 +801,8 @@ async function renderClips(clips) {
   for (const [groupName, groupClips] of sortedGroups) {
     const groupElement = document.createElement('div');
     groupElement.className = `clip-group ${collapsedState[groupName] ? 'collapsed' : ''}`;
+    groupElement.dataset.loaded = collapsedState[groupName] ? 'false' : 'true';
+    groupElement.dataset.groupName = groupName;
     
     // Create group header
     const header = document.createElement('div');
@@ -813,24 +815,143 @@ async function renderClips(clips) {
       <div class="clip-group-divider"></div>
     `;
 
-    // Add click handler for collapse/expand
-    header.addEventListener('click', () => {
-      groupElement.classList.toggle('collapsed');
-      collapsedState[groupName] = groupElement.classList.contains('collapsed');
-      saveCollapsedState(collapsedState);
-    });
-
     // Create group content
     const content = document.createElement('div');
     content.className = 'clip-group-content';
+    
+    // Only create clip elements if the group is not collapsed
+    if (!collapsedState[groupName]) {
+      // Create clip elements
+      const clipElements = await Promise.all(groupClips.map(createClipElement));
+      clipElements.forEach(clipElement => {
+        content.appendChild(clipElement);
+        const clip = groupClips.find(c => c.originalName === clipElement.dataset.originalName);
+        if (clip) {
+          updateClipTags(clip);
+        }
+      });
+    } else {
+      // Store the clip data for lazy loading
+      groupElement.dataset.clips = JSON.stringify(groupClips.map(clip => ({
+        originalName: clip.originalName,
+        customName: clip.customName,
+        createdAt: clip.createdAt,
+        tags: clip.tags || []
+      })));
+    }
 
-    // Create clip elements
-    const clipElements = await Promise.all(groupClips.map(createClipElement));
-    clipElements.forEach(clipElement => {
-      content.appendChild(clipElement);
-      const clip = groupClips.find(c => c.originalName === clipElement.dataset.originalName);
-      if (clip) {
-        updateClipTags(clip);
+    // Add click handler for collapse/expand with lazy loading
+    header.addEventListener('click', async () => {
+      const isCollapsed = groupElement.classList.contains('collapsed');
+      
+      // Toggle collapsed state
+      groupElement.classList.toggle('collapsed');
+      collapsedState[groupName] = !isCollapsed;
+      saveCollapsedState(collapsedState);
+      
+      // If we're expanding and the content isn't loaded yet, load it now
+      if (isCollapsed && groupElement.dataset.loaded === 'false') {
+        try {
+          let groupClips;
+          
+          // Get the clips data from the dataset
+          if (groupElement.dataset.clips) {
+            groupClips = JSON.parse(groupElement.dataset.clips);
+          } else {
+            // Fallback to find clips in the current list if data not stored
+            groupClips = currentClipList.filter(
+              clip => getTimeGroup(clip.createdAt) === groupName
+            );
+          }
+          
+          // Show a loading indicator if there are many clips
+          if (groupClips.length > 50) {
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.className = 'loading-indicator';
+            loadingIndicator.innerHTML = `
+              <div class="loading-spinner"></div>
+              <div style="margin-top: 10px;">Loading ${groupClips.length} clips...</div>
+            `;
+            content.appendChild(loadingIndicator);
+          }
+          
+          // Create clip elements in batches to avoid UI freezing
+          const batchSize = 20;
+          for (let i = 0; i < groupClips.length; i += batchSize) {
+            const batch = groupClips.slice(i, i + batchSize);
+            
+            // Add a small delay between batches to allow UI to update
+            if (i > 0) {
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            
+            const clipElements = await Promise.all(batch.map(createClipElement));
+            
+            // Remove loading indicator if it exists
+            if (i === 0 && groupClips.length > 50) {
+              content.innerHTML = '';
+            }
+            
+            clipElements.forEach(clipElement => {
+              content.appendChild(clipElement);
+              const clip = groupClips.find(c => c.originalName === clipElement.dataset.originalName);
+              if (clip) {
+                updateClipTags(clip);
+              }
+            });
+          }
+          
+          // Mark as loaded
+          groupElement.dataset.loaded = 'true';
+          
+          // Remove stored clip data to free memory
+          delete groupElement.dataset.clips;
+          
+          // Add event listeners to the newly created clip elements
+          content.querySelectorAll('.clip-item').forEach(card => {
+            card.addEventListener('mouseenter', handleMouseEnter);
+            card.addEventListener('mouseleave', handleMouseLeave);
+          });
+          
+          setupTooltips();
+        } catch (error) {
+          logger.error("Error loading clips for group:", error);
+          content.innerHTML = '<div class="error-message">Error loading clips</div>';
+        }
+      } else if (!isCollapsed && groupElement.dataset.loaded === 'true') {
+        // If we're collapsing, optionally cleanup resources
+        // This could be enabled for very large groups to free more memory
+        // when collapsed, but would require reloading clips when expanded again
+        
+        // Uncomment the following code to enable cleanup on collapse
+        /*
+        if (groupClips.length > 100) {
+          // Cleanup existing elements
+          const clipElements = content.querySelectorAll('.clip-item');
+          clipElements.forEach(el => {
+            if (typeof el.cleanup === 'function') {
+              el.cleanup();
+            }
+          });
+          
+          // Clear the content
+          content.innerHTML = '';
+          
+          // Store the clip data again for future loading
+          const groupClips = currentClipList.filter(
+            clip => getTimeGroup(clip.createdAt) === groupName
+          );
+          groupElement.dataset.clips = JSON.stringify(groupClips.map(clip => ({
+            originalName: clip.originalName,
+            customName: clip.customName,
+            createdAt: clip.createdAt,
+            tags: clip.tags || []
+          })));
+          
+          // Mark as not loaded
+          groupElement.dataset.loaded = 'false';
+        }
+        */
       }
     });
 
@@ -1416,39 +1537,37 @@ function toggleClipTag(clip, tag) {
   updateClipTags(clip);
   saveClipTags(clip);
 
-  // Special handling for "Private" tag
-  if (tag === "Private") {
-    const currentFilter = document.getElementById("filter-dropdown").value;
-    const clipElement = document.querySelector(`.clip-item[data-original-name="${clip.originalName}"]`);
-    
-    if (clipElement) {
-      if (currentFilter === "all" && clip.tags.includes("Private")) {
-        // Smoothly hide the clip if it's now private and we're showing all clips
-        clipElement.style.transition = "opacity 0.3s, height 0.3s";
-        clipElement.style.opacity = "0";
-        clipElement.style.height = "0";
-        setTimeout(() => {
-          clipElement.style.display = "none";
-        }, 300);
-      } else if (currentFilter === "Private" && !clip.tags.includes("Private")) {
-        // Smoothly hide the clip if it's no longer private and we're showing only private clips
-        clipElement.style.transition = "opacity 0.3s, height 0.3s";
-        clipElement.style.opacity = "0";
-        clipElement.style.height = "0";
-        setTimeout(() => {
-          clipElement.style.display = "none";
-        }, 300);
-      } else if (wasPrivate !== clip.tags.includes("Private")) {
-        // If the private status changed and it should be visible, ensure it's shown
-        clipElement.style.display = "";
-        clipElement.style.opacity = "1";
-        clipElement.style.height = "";
+  // If we're in a filtered view and this tag change would affect visibility,
+  // re-filter and re-render the entire view
+  if (selectedTags.size > 0) {
+    // Check if this clip would be filtered out based on current tag selection
+    const shouldBeVisible = () => {
+      // Handle untagged clips
+      if (selectedTags.has('Untagged')) {
+        if (!clip.tags || clip.tags.length === 0) {
+          return true;
+        }
       }
-    }
 
-    // Update the clip counter
-    const visibleClips = document.querySelectorAll('.clip-item[style="display: none;"]').length;
-    updateClipCounter(currentClipList.length - visibleClips);
+      if (!clip.tags || clip.tags.length === 0) {
+        return false;
+      }
+
+      if (isInTemporaryMode) {
+        // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
+        return clip.tags.some(tag => temporaryTagSelections.has(tag));
+      } else {
+        // In normal mode, clips must have ALL their tags selected to be shown
+        return clip.tags.every(tag => selectedTags.has(tag));
+      }
+    };
+
+    // If tag change would affect visibility, re-filter everything
+    const nowVisible = shouldBeVisible();
+    if (nowVisible === false) {
+      // Clip should be hidden - re-filter everything to maintain group structure
+      filterClips();
+    }
   }
   
   updateFilterDropdown();
