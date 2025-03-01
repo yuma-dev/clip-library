@@ -3178,6 +3178,7 @@ input:checked + .settings-switch-slider::before {
   pointer-events: none;
   margin-top: -20px;
   height: 0;
+  overflow: hidden;
 }
 
 .clip-group-header:hover .clip-group-title::before {
@@ -3224,4 +3225,36 @@ input:checked + .settings-switch-slider::before {
   .clip-group-content {
     grid-template-columns: 1fr;
   }
+}
+
+/* Loading indicator for lazy-loaded clip groups */
+.loading-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  color: #a0a0a0;
+  font-size: 14px;
+  width: 100%;
+  grid-column: 1 / -1; /* Span all columns */
+}
+
+.loading-indicator .loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(147, 51, 234, 0.1);
+  border-top: 3px solid rgba(147, 51, 234, 0.7);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Add an explicit height and overflow rule to ensure collapsed groups truly hide content */
+.clip-group.collapsed .clip-group-content {
+  opacity: 0;
+  transform: translateY(-10px);
+  pointer-events: none;
+  margin-top: -20px;
+  height: 0;
+  overflow: hidden;
 }
