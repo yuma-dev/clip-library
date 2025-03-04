@@ -825,10 +825,7 @@ async function renderClips(clips) {
       const clipElements = await Promise.all(groupClips.map(createClipElement));
       clipElements.forEach(clipElement => {
         content.appendChild(clipElement);
-        const clip = groupClips.find(c => c.originalName === clipElement.dataset.originalName);
-        if (clip) {
-          updateClipTags(clip);
-        }
+        // Remove updateClipTags call since tags are now added directly in createClipElement
       });
     } else {
       // Store the clip data for lazy loading
@@ -894,10 +891,7 @@ async function renderClips(clips) {
             
             clipElements.forEach(clipElement => {
               content.appendChild(clipElement);
-              const clip = groupClips.find(c => c.originalName === clipElement.dataset.originalName);
-              if (clip) {
-                updateClipTags(clip);
-              }
+              // Remove updateClipTags call since tags are now added directly in createClipElement
             });
           }
           
@@ -1718,16 +1712,26 @@ function setupTooltips() {
   document.querySelectorAll('.more-tags').forEach(moreTags => {
     const tooltip = moreTags.querySelector('.tags-tooltip');
     
-    moreTags.addEventListener('mouseenter', () => {
-      tooltip.style.display = 'flex';
-      logger.info('Tooltip shown');
+    moreTags.addEventListener('mouseenter', (e) => {
+      showTooltip(e, tooltip);
     });
     
     moreTags.addEventListener('mouseleave', () => {
-      tooltip.style.display = 'none';
-      logger.info('Tooltip hidden');
+      hideTooltip(tooltip);
     });
   });
+}
+
+// Add a new function to set up tooltips specifically for a single clip element
+function setupTagTooltips(clipElement) {
+  const moreTags = clipElement.querySelector('.more-tags');
+  if (moreTags) {
+    const tooltip = moreTags.querySelector('.tags-tooltip');
+    if (tooltip) {
+      moreTags.addEventListener('mouseenter', (e) => showTooltip(e, tooltip));
+      moreTags.addEventListener('mouseleave', () => hideTooltip(tooltip));
+    }
+  }
 }
 
 function showContextMenu(e, clip) {
@@ -2495,15 +2499,54 @@ function createClipElement(clip) {
 
     mediaContainer.appendChild(imgElement);
 
-    // Create the rest of the clip element structure
+    // Create tag container and add tags directly during clip element creation
+    const tagContainer = document.createElement("div");
+    tagContainer.className = "tag-container";
+    
+    // Add tags to the container if they exist
+    if (clip.tags && clip.tags.length > 0) {
+      const visibleTags = clip.tags.slice(0, 3);  // Show only first 3 tags
+      visibleTags.forEach(tag => {
+        const tagElement = document.createElement("span");
+        tagElement.className = "tag";
+        tagElement.textContent = truncateTag(tag);
+        tagElement.title = tag; // Show full tag on hover
+        tagContainer.appendChild(tagElement);
+      });
+      
+      if (clip.tags.length > 3) {
+        const moreTagsElement = document.createElement("span");
+        moreTagsElement.className = "tag more-tags";
+        moreTagsElement.textContent = `+${clip.tags.length - 3}`;
+        
+        // Create a tooltip element
+        const tooltip = document.createElement("div");
+        tooltip.className = "tags-tooltip";
+        
+        // Add remaining tags to the tooltip
+        clip.tags.slice(3).forEach(tag => {
+          const tooltipTag = document.createElement("span");
+          tooltipTag.className = "tooltip-tag";
+          tooltipTag.textContent = tag;
+          tooltip.appendChild(tooltipTag);
+        });
+        
+        moreTagsElement.appendChild(tooltip);
+        tagContainer.appendChild(moreTagsElement);
+      }
+    }
+
+    // Create the clip element structure
     clipElement.innerHTML = `
       ${mediaContainer.outerHTML}
-      <div class="tag-container"></div>
       <div class="clip-info">
         <p class="clip-name" contenteditable="true">${clip.customName}</p>
         <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
       </div>
     `;
+
+    // Insert the tag container after mediaContainer
+    clipElement.insertBefore(tagContainer, clipElement.querySelector('.clip-info'));
 
     let videoElement;
 
@@ -2518,6 +2561,9 @@ function createClipElement(clip) {
     });
     clipNameElement.addEventListener('keydown', (e) => handleClipTitleKeydown(e, clipNameElement, clip));
     clipNameElement.addEventListener('click', (e) => e.stopPropagation());
+
+    // Setup tooltip events for tags if needed
+    setupTagTooltips(clipElement);
 
     function handleClipTitleFocus(titleElement, clip) {
       titleElement.dataset.originalValue = titleElement.textContent;
@@ -2616,7 +2662,7 @@ function createClipElement(clip) {
           // Set the video poster to the current thumbnail
           videoElement.poster = imgElement.src;
     
-          // Store video element in the preview context
+          // Store video element in the preview
           currentPreviewContext.videoElement = videoElement;
     
           // Add loadedmetadata event listener
