@@ -4536,8 +4536,8 @@ function createTagFilterUI() {
     </button>
     <div id="tagv2-dropdown" class="tagv2-dropdown">
       <div class="tagv2-actions">
-        <button id="tagv2-select-all">Select All</button>
-        <button id="tagv2-deselect-all">Deselect All</button>
+        <button id="tagv2-select-all">Show All</button>
+        <button id="tagv2-deselect-all">Hide All</button>
       </div>
       <div id="tagv2-list" class="tagv2-list"></div>
     </div>
