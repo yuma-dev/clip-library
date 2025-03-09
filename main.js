@@ -288,8 +288,10 @@ ipcMain.handle("get-clips", async () => {
           `${file.name}.customname`,
         );
         const trimPath = path.join(metadataFolder, `${file.name}.trim`);
+        const datePath = path.join(metadataFolder, `${file.name}.date`);
         let customName;
         let isTrimmed = false;
+        let createdAt = file.date.getTime();
 
         try {
           customName = await fs.readFile(customNamePath, "utf8");
@@ -306,12 +308,28 @@ ipcMain.handle("get-clips", async () => {
           // If trim file doesn't exist, isTrimmed remains false
         }
 
+        // Try to read recording timestamp from metadata
+        try {
+          const dateStr = await fs.readFile(datePath, "utf8");
+          // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
+          const recordingDate = new Date(dateStr);
+          if (!isNaN(recordingDate.getTime())) {
+            createdAt = recordingDate.getTime();
+            logger.info(`Using recording timestamp for ${file.name}: ${dateStr}`);
+          }
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            logger.error("Error reading date metadata:", error);
+          }
+          // If date file doesn't exist or is invalid, keep using the file system date
+        }
+
         const thumbnailPath = generateThumbnailPath(fullPath);
 
         return {
           originalName: file.name,
           customName: customName,
-          createdAt: file.date.getTime(),
+          createdAt: createdAt,
           thumbnailPath: thumbnailPath,
           isTrimmed: isTrimmed,
         };
@@ -368,13 +386,34 @@ ipcMain.handle('get-app-version', () => {
 
 ipcMain.handle('get-new-clip-info', async (event, fileName) => {
   const filePath = path.join(settings.clipLocation, fileName);
+  const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
+  const datePath = path.join(metadataFolder, `${fileName}.date`);
   const stats = await fs.stat(filePath);
+  
+  // Default to file system time
+  let createdAt = stats.birthtimeMs || stats.ctimeMs;
+
+  // Try to read recording timestamp from metadata if available
+  try {
+    const dateStr = await fs.readFile(datePath, "utf8");
+    // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
+    const recordingDate = new Date(dateStr);
+    if (!isNaN(recordingDate.getTime())) {
+      createdAt = recordingDate.getTime();
+      logger.info(`Using recording timestamp for new clip ${fileName}: ${dateStr}`);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.error("Error reading date metadata for new clip:", error);
+    }
+    // If date file doesn't exist or is invalid, keep using the file system time
+  }
   
   // Create bare minimum clip info without any trim data
   const newClipInfo = {
     originalName: fileName,
     customName: path.basename(fileName, path.extname(fileName)),
-    createdAt: stats.birthtimeMs || stats.ctimeMs,
+    createdAt: createdAt,
     tags: [] // Initialize with empty tags array
   };
 

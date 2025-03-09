@@ -103,7 +103,8 @@ class SteelSeriesProcessor {
                         resolve({
                             name: metadata.name,
                             clip_start_point: metadata.clip_start_point,
-                            clip_end_point: metadata.clip_end_point
+                            clip_end_point: metadata.clip_end_point,
+                            recording_timestamp: metadata.recording_timestamp
                         });
                     } catch (parseErr) {
                         console.error('Error parsing combined metadata:', parseErr);
@@ -289,6 +290,7 @@ class SteelSeriesProcessor {
             const nameFile = path.join(this.metadataFolder, `${fileName}.customname`);
             const trimFile = path.join(this.metadataFolder, `${fileName}.trim`);
             const tagsFile = path.join(this.metadataFolder, `${fileName}.tags`);
+            const dateFile = path.join(this.metadataFolder, `${fileName}.date`);
 
             const trimData = {
                 start: Math.round(metadata.clip_start_point * 10) / 10,
@@ -306,6 +308,13 @@ class SteelSeriesProcessor {
                 // Add the "Imported" tag
                 await fs.writeFile(tagsFile, JSON.stringify(["Imported"]), 'utf8');
                 await this.copyFileTimestamps(inputFile, tagsFile);
+
+                // Save recording timestamp if available
+                if (metadata.recording_timestamp) {
+                    await fs.writeFile(dateFile, metadata.recording_timestamp, 'utf8');
+                    await this.copyFileTimestamps(inputFile, dateFile);
+                    this.log(`Timestamp: ${metadata.recording_timestamp}`);
+                }
 
                 this.log(`Processed ${fileName}`);
                 this.log(`Name: ${metadata.name}`);
