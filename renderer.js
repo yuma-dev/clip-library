@@ -373,16 +373,10 @@ async function startThumbnailValidation() {
   }
 }
 
+// Function modified to be a no-op since loading screen is now managed by main process
 function hideLoadingScreen() {
-  if (loadingScreen) {
-    // Add the fade-out class to trigger the animations
-    loadingScreen.classList.add('fade-out');
-    
-    // Remove the element after the animation completes
-    setTimeout(() => {
-      loadingScreen.style.display = 'none';
-    }, 1000); // Match this with the animation duration (1s)
-  }
+  // No longer needed as the splash window is handled by main process
+  // Kept for compatibility with existing code
 }
 
 async function updateVersionDisplay() {

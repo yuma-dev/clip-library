@@ -73,6 +73,7 @@ const THUMBNAIL_CACHE_DIR = path.join(
 fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true }).catch(logger.error);
 
 let mainWindow;
+let splashWindow;
 let settings;
 
 setupTitlebar();
@@ -112,7 +113,27 @@ async function createWindow() {
 
   attachTitlebarToWindow(mainWindow);
   mainWindow.loadFile("index.html");
-  mainWindow.maximize();
+  
+  // Only maximize and show main window when it's fully loaded
+  mainWindow.webContents.once('did-finish-load', async () => {
+    setTimeout(async () => {
+      // Fade out splash window before destroying it
+      await fadeOutSplashScreen();
+      
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.destroy();
+      }
+      
+      mainWindow.maximize();
+      mainWindow.show();
+      
+      // Wait a bit for the window to be fully ready before checking updates
+      setTimeout(() => {
+        checkForUpdates(mainWindow);
+      }, 5000);
+    }, 1000); // Short delay to ensure smooth transition
+  });
+  
   Menu.setApplicationMenu(null);
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key.toLowerCase() === 'i' && input.control && input.shift) {
@@ -163,13 +184,67 @@ async function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  createWindow();
+function createSplashWindow() {
+  // Create a splash window with screen dimensions
+  const { width, height } = require('electron').screen.getPrimaryDisplay().workAreaSize;
   
-  // Wait a bit for the window to be fully ready before checking updates
-  setTimeout(() => {
-    checkForUpdates(mainWindow);
-  }, 5000);
+  splashWindow = new BrowserWindow({
+    width: width,
+    height: height,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    },
+    center: true,
+    resizable: false,
+    show: false,
+    maximizable: true
+  });
+  
+  splashWindow.loadFile('splash.html');
+  
+  // Show the splash window once it's ready and maximize it
+  splashWindow.once('ready-to-show', () => {
+    splashWindow.maximize();
+    splashWindow.show();
+  });
+  
+  // Prevent closing splash window by user
+  splashWindow.on('close', (event) => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      event.preventDefault();
+    }
+  });
+}
+
+function fadeOutSplashScreen() {
+  return new Promise((resolve) => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      // Execute script in splash window to trigger fade animation
+      splashWindow.webContents.executeJavaScript(`
+        document.getElementById('splash-screen').classList.add('fade-out');
+        setTimeout(() => {
+          window.close();
+        }, 800); // Animation duration
+      `);
+      
+      // Add a listener for the close event
+      splashWindow.once('close', () => {
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
+}
+
+app.whenReady().then(() => {
+  createSplashWindow();
+  createWindow();
 });
 
 app.on("window-all-closed", () => {
