@@ -163,13 +163,19 @@ async function createWindow() {
   });
 }
 
+async function checkForUpdatesInBackground(mainWindow) {
+  try {
+    await checkForUpdates(mainWindow);
+  } catch (error) {
+    logger.error('Background update check failed:', error);
+  }
+}
+
 app.whenReady().then(() => {
   createWindow();
   
-  // Wait a bit for the window to be fully ready before checking updates
-  setTimeout(() => {
-    checkForUpdates(mainWindow);
-  }, 5000);
+  // Start the update check in the background without waiting for it
+  checkForUpdatesInBackground(mainWindow);
 });
 
 app.on("window-all-closed", () => {

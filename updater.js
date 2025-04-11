@@ -8,7 +8,7 @@ const logger = require('./logger');
 
 const GITHUB_API_URL = 'https://api.github.com/repos/yuma-dev/clip-library/releases/latest';
 
-async function checkForUpdates(mainWindow) { // Ensure mainWindow is properly passed
+async function checkForUpdates(mainWindow) {
   try {
     if (!mainWindow || mainWindow.isDestroyed()) {
       logger.warn('Main window not available, skipping update check');
@@ -16,7 +16,7 @@ async function checkForUpdates(mainWindow) { // Ensure mainWindow is properly pa
     }
 
     logger.info('Checking for updates...');
-    const response = await axios.get(GITHUB_API_URL);
+    const response = await axios.get(GITHUB_API_URL, { timeout: 5000 }); // Add a timeout to avoid waiting too long
     const latestVersion = response.data.tag_name.replace('v', '');
     const currentVersion = app.getVersion();
 
@@ -26,26 +26,23 @@ async function checkForUpdates(mainWindow) { // Ensure mainWindow is properly pa
     if (semver.gt(latestVersion, currentVersion)) {
       logger.info('Update available, showing notification');
       
-      // Wait for window to be ready
       if (!mainWindow.isVisible()) {
         logger.warn('Main window not visible!');
-        return
+        return;
       }
 
-      // Send message to renderer to show notification
       mainWindow.webContents.send('show-update-notification', {
         currentVersion,
         latestVersion,
         changelog: response.data.body
       });
 
-      // Add IPC handler for the update
       mainWindow.webContents.ipc.handle('start-update', async () => {
         logger.info('Starting update download process');
         const assetUrl = response.data.assets.find(asset => asset.name.endsWith('.exe'))?.browser_download_url;
         if (assetUrl) {
           logger.info(`Found update asset URL: ${assetUrl}`);
-          await downloadUpdate(assetUrl, mainWindow); // Add mainWindow as second argument
+          await downloadUpdate(assetUrl, mainWindow);
         } else {
           const error = 'No suitable download asset found';
           logger.error(error);
@@ -56,7 +53,11 @@ async function checkForUpdates(mainWindow) { // Ensure mainWindow is properly pa
       logger.info('Application is up to date');
     }
   } catch (error) {
-    logger.error('Error checking for updates:', error);
+    if (error.code === 'ECONNABORTED' || error.code === 'ENETUNREACH') {
+      logger.warn('No internet connection, skipping update check');
+    } else {
+      logger.error('Error checking for updates:', error);
+    }
   }
 }
 
