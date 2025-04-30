@@ -90,6 +90,11 @@ let savedTagSelections = new Set(); // Permanent selections that are saved
 let temporaryTagSelections = new Set(); // Temporary (Ctrl+click) selections
 let isInTemporaryMode = false; // Whether we're in temporary selection mode
 
+// Variables for watch session tracking
+let currentSessionStartTime = null;
+let currentSessionActiveDuration = 0;
+let lastPlayTimestamp = null;
+
 const previewElement = document.getElementById('timeline-preview');
 
 previewElement.style.display = 'none';;
@@ -3231,6 +3236,10 @@ videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
 async function openClip(originalName, customName) {
   logger.info(`Opening clip: ${originalName}`);
   elapsedTime = 0;
+
+  // Log the previous session if one was active
+  await logCurrentWatchSession();
+
   if (currentCleanup) {
     currentCleanup();
     currentCleanup = null;
@@ -3352,10 +3361,8 @@ async function openClip(originalName, customName) {
     });
   });
 
-  // Rest of your existing openClip code...
-  // ... existing code ...
-
-  clipTitle.value = customName;
+  clipTitle.value = customName || path.basename(originalName, path.extname(originalName));
+  clipTitle.dataset.originalName = originalName;
 
   // Load and set the volume before playing the video
   try {
@@ -3454,11 +3461,23 @@ async function openClip(originalName, customName) {
     if (currentClip) {
       updateDiscordPresenceForClip(currentClip, false);
     }
+    // Update active duration when paused
+    if (lastPlayTimestamp) {
+      currentSessionActiveDuration += Date.now() - lastPlayTimestamp;
+      lastPlayTimestamp = null;
+    }
   });
   videoPlayer.addEventListener("play", () => {
     if (currentClip) {
       updateDiscordPresenceForClip(currentClip, true);
     }
+    // Start tracking active time
+    lastPlayTimestamp = Date.now();
+    // Set session start time if it hasn't been set yet for this session
+    if (!currentSessionStartTime) {
+      currentSessionStartTime = Date.now();
+    }
+
     showControls();
     controlsTimeout = setTimeout(hideControls, 3000);
     resetControlsTimeout();
@@ -3643,6 +3662,10 @@ function closePlayer() {
   if (window.justFinishedDragging) {
     return; // Don't close the player if we just finished dragging
   }
+
+  // Log the session before closing
+  logCurrentWatchSession(); // Use await if it becomes async later
+
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
     saveTitleTimeout = null;
@@ -5667,3 +5690,37 @@ function updateGroupAfterDeletion(clipElement) {
     }
   }
 }
+
+async function logCurrentWatchSession() {
+  if (!currentSessionStartTime) {
+    return; // No active session to log
+  }
+
+  // If the video was playing when the session ended, add the last active interval
+  if (lastPlayTimestamp) {
+    currentSessionActiveDuration += Date.now() - lastPlayTimestamp;
+    lastPlayTimestamp = null; // Ensure it's reset
+  }
+
+  const durationSeconds = Math.round(currentSessionActiveDuration / 1000);
+
+  // Only log if duration is meaningful (e.g., > 1 second)
+  if (durationSeconds > 1 && currentClip) {
+    try {
+      await ipcRenderer.invoke('log-watch-session', {
+        originalName: currentClip.originalName,
+        customName: clipTitle.value, // Use current title value
+        durationSeconds: durationSeconds,
+      });
+    } catch (error) {
+      logger.error('Failed to log watch session:', error);
+    }
+  }
+
+  // Reset session state
+  currentSessionStartTime = null;
+  currentSessionActiveDuration = 0;
+  lastPlayTimestamp = null;
+}
+
+document.addEventListener('fullscreenchange', handleFullscreenChange);

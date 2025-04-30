@@ -16,6 +16,7 @@ const crypto = require("crypto");
 const { loadSettings, saveSettings } = require("./settings-manager");
 const SteelSeriesProcessor = require('./steelseries-processor');
 const readify = require("readify");
+const { logActivity } = require('./activity-tracker');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const DiscordRPC = require('discord-rpc');
 const clientId = '1264368321013219449';
@@ -429,6 +430,8 @@ ipcMain.handle('get-new-clip-info', async (event, fileName) => {
 ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
   try {
     await saveCustomNameData(originalName, customName);
+    // Log the rename activity
+    logActivity('rename', { originalName, newCustomName: customName });
     return { success: true, customName };
   } catch (error) {
     logger.error("Error in save-custom-name handler:", error);
@@ -503,6 +506,8 @@ ipcMain.handle("save-speed", async (event, clipName, speed) => {
   try {
     await writeFileAtomically(speedFilePath, speed.toString());
     logger.info(`Speed saved successfully for ${clipName}: ${speed}`);
+    // Log speed change
+    logActivity('speed_change', { clipName, speed });
     return { success: true };
   } catch (error) {
     logger.error(`Error saving speed for ${clipName}:`, error);
@@ -542,6 +547,8 @@ ipcMain.handle("save-volume", async (event, clipName, volume) => {
   try {
     await writeFileAtomically(volumeFilePath, volume.toString());
     logger.info(`Volume saved successfully for ${clipName}: ${volume}`);
+    // Log volume change
+    logActivity('volume_change', { clipName, volume });
     return { success: true };
   } catch (error) {
     logger.error(`Error saving volume for ${clipName}:`, error);
@@ -596,6 +603,8 @@ ipcMain.handle("save-clip-tags", async (event, clipName, tags) => {
 
   try {
     await fs.writeFile(tagsFilePath, JSON.stringify(tags));
+    // Log clip tags update
+    logActivity('tags_update_clip', { clipName, tags });
     return { success: true };
   } catch (error) {
     logger.error("Error saving tags:", error);
@@ -621,6 +630,8 @@ ipcMain.handle("save-global-tags", async (event, tags) => {
   const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
   try {
     await fs.writeFile(tagsFilePath, JSON.stringify(tags));
+    // Log global tags update
+    logActivity('tags_update_global', { tags });
     return { success: true };
   } catch (error) {
     logger.error("Error saving global tags:", error);
@@ -655,21 +666,11 @@ async function saveTrimData(clipName, trimData) {
   try {
     await writeFileAtomically(trimFilePath, JSON.stringify(trimData));
     logger.info(`Trim data saved successfully for ${clipName}`);
+    // Log trim activity
+    logActivity('trim', { clipName, start: trimData.start, end: trimData.end });
   } catch (error) {
     logger.error(`Error saving trim data for ${clipName}:`, error);
     throw error;
-  }
-}
-
-async function ensureDirectoryExists(dirPath) {
-  try {
-    await fs.access(dirPath);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      await fs.mkdir(dirPath, { recursive: true });
-    } else {
-      throw error;
-    }
   }
 }
 
@@ -1238,6 +1239,8 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
         }
       }
 
+      // Log deletion activity
+      logActivity('delete', { clipName });
       return { success: true };
     } catch (error) {
       if (error.code === "EBUSY" && retry < maxRetries - 1) {
@@ -1288,6 +1291,16 @@ ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed
       }
     }
     
+    // Log export activity
+    logActivity('export', {
+      clipName,
+      format: 'video',
+      destination: savePath ? 'file' : 'clipboard',
+      start,
+      end,
+      volume,
+      speed
+    });
     return { success: true, path: outputPath };
   } catch (error) {
     logger.error("Error exporting video:", error);
@@ -1309,6 +1322,16 @@ ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volum
       clipboard.writeText(outputPath);
     }
     
+    // Log export activity
+    logActivity('export', {
+      clipName,
+      format: 'video',
+      destination: 'trimmed_clipboard', // Specific destination for this action
+      start,
+      end,
+      volume,
+      speed
+    });
     return { success: true, path: outputPath };
   } catch (error) {
     logger.error("Error exporting trimmed video:", error);
@@ -1532,6 +1555,16 @@ ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed
     }
   }
 
+  // Log export activity
+  logActivity('export', {
+    clipName,
+    format: 'audio',
+    destination: savePath ? 'file' : 'clipboard',
+    start,
+    end,
+    volume,
+    speed
+  });
   return { success: true, path: outputPath };
 });
 
@@ -1603,6 +1636,9 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
       }
     );
 
+    // Log import start
+    logActivity('import_start', { source: 'steelseries', sourcePath });
+
     await processor.processFolder();
     return { success: true };
   } catch (error) {
@@ -1640,4 +1676,12 @@ ipcMain.handle('get-volume-range', async (event, clipName) => {
     logger.error(`Error reading volume range for ${clipName}:`, error);
     throw error;
   }
+});
+
+// Handler to log watch sessions from the renderer
+ipcMain.handle('log-watch-session', (event, sessionData) => {
+  if (sessionData && sessionData.durationSeconds > 0) {
+    logActivity('watch_session', sessionData);
+  }
+  // No return value needed
 });
