@@ -40,7 +40,7 @@ const logActivity = async (type, details) => {
         const now = new Date();
         const year = now.getFullYear();
         const month = now.getMonth() + 1; // getMonth() is 0-indexed, add 1
-        const timestamp = now.toISOString();
+        const timestamp = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString();
 
         const logEntry = {
             timestamp,
