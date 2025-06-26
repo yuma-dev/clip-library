@@ -1685,3 +1685,42 @@ ipcMain.handle('log-watch-session', (event, sessionData) => {
   }
   // No return value needed
 });
+
+ipcMain.handle("get-game-icon", async (event, clipName) => {
+  try {
+    const clipsFolder = settings.clipLocation;
+    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+    const gameInfoPath = path.join(metadataFolder, `${clipName}.gameinfo`);
+
+    // Attempt to read the optional .gameinfo file
+    let raw;
+    try {
+      raw = await fs.readFile(gameInfoPath, "utf8");
+    } catch {
+      return null; // no metadata
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null; // malformed json
+    }
+
+    const response = { path: null, title: parsed.window_title || null };
+
+    if (parsed.icon_file) {
+      const iconPath = path.join(clipsFolder, "icons", parsed.icon_file);
+      try {
+        await fs.access(iconPath);
+        response.path = iconPath;
+      } catch {
+        // icon missing -> leave null
+      }
+    }
+
+    return response;
+  } catch {
+    return null;
+  }
+});

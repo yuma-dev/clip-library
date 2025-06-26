@@ -683,6 +683,23 @@ body.dragging * {
 
 .clip-info {
   padding: 10px;
+  position: relative;
+}
+
+.clip-info.has-icon {
+  padding-right: 36px; /* icon (32px) + small gap */
+}
+
+.game-icon {
+  position: absolute;
+  right: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  max-height: 32px;
+  max-width: 32px;
+  height: auto;
+  width: auto;
+  object-fit: contain;
 }
 
 .clip-item {
@@ -1232,7 +1249,8 @@ body.dragging * {
   color: #666;
 }
 
-.clip-info p:last-child {
+.clip-info p:last-child,
+.clip-info .clip-time {
   font-size: 0.8em;
   color: #666;
 }

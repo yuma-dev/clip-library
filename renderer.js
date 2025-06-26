@@ -2546,7 +2546,7 @@ function createClipElement(clip) {
       ${mediaContainer.outerHTML}
       <div class="clip-info">
         <p class="clip-name" contenteditable="true">${clip.customName}</p>
-        <p title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
+        <p class="clip-time" title="${new Date(clip.createdAt).toLocaleString()}">${relativeTime}</p>
       </div>
     `;
 
@@ -2720,6 +2720,29 @@ function createClipElement(clip) {
       clipElement.removeEventListener("mouseenter", handleMouseEnter);
       clipElement.removeEventListener("mouseleave", handleMouseLeave);
     };
+
+    // Fetch a potential game/application icon and append it to the clip-info
+    try {
+      const iconData = await ipcRenderer.invoke('get-game-icon', clip.originalName);
+      const iconPath = iconData && typeof iconData === 'object' ? iconData.path : iconData;
+      const iconTitle = iconData && typeof iconData === 'object' ? iconData.title : null;
+      if (iconPath) {
+        const clipInfo = clipElement.querySelector('.clip-info');
+        if (clipInfo) {
+          const iconImg = document.createElement('img');
+          iconImg.className = 'game-icon';
+          iconImg.src = `file://${iconPath}`;
+          iconImg.alt = 'Application Icon';
+          if (iconTitle) {
+            iconImg.title = iconTitle;
+          }
+          clipInfo.appendChild(iconImg);
+          clipInfo.classList.add('has-icon');
+        }
+      }
+    } catch (error) {
+      logger.error('Error loading game icon:', error);
+    }
 
     resolve(clipElement);
   });
