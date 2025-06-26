@@ -148,6 +148,19 @@ settingsModal.innerHTML = `
             <span id="previewVolumeValue">10%</span>
           </div>
         </div>
+
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Greyscale Icons</div>
+            <div class="settings-item-description">Display clip icons in greyscale</div>
+          </div>
+          <div class="settings-control">
+            <label class="settings-switch">
+              <input type="checkbox" id="greyscaleIcons">
+              <span class="settings-switch-slider"></span>
+            </label>
+          </div>
+        </div>
       </div>
 
       <div class="settings-group">
@@ -247,6 +260,7 @@ async function fetchSettings() {
   // Set defaults if not present
   if (settings.previewVolume === undefined) settings.previewVolume = 0.1;
   if (settings.exportQuality === undefined) settings.exportQuality = 'discord';
+  if (settings.iconGreyscale === undefined) settings.iconGreyscale = false;
   await ipcRenderer.invoke('save-settings', settings);
   logger.info('Settings after defaults:', settings);  // Log after setting defaults
   return settings;
@@ -1972,6 +1986,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   setupContextMenu();
   loadGlobalTags();
+  applyIconGreyscale(settings?.iconGreyscale);
 
   const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
   enableDiscordRPCCheckbox.addEventListener('change', (e) => {
@@ -2300,6 +2315,19 @@ function initializeSettingsModal() {
       e.target.checked = !isEnabled;
     }
   });
+
+  // Greyscale icons toggle
+  const greyscaleToggle = document.getElementById('greyscaleIcons');
+
+  if (greyscaleToggle) {
+    greyscaleToggle.checked = Boolean(settings.iconGreyscale);
+    greyscaleToggle.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      settings.iconGreyscale = enabled;
+      await ipcRenderer.invoke('save-settings', settings);
+      applyIconGreyscale(enabled);
+    });
+  }
 }
 
 async function openSettingsModal() {
@@ -2735,6 +2763,9 @@ function createClipElement(clip) {
           iconImg.alt = 'Application Icon';
           if (iconTitle) {
             iconImg.title = iconTitle;
+          }
+          if (settings?.iconGreyscale) {
+            iconImg.classList.add('greyscale-icon');
           }
           clipInfo.appendChild(iconImg);
           clipInfo.classList.add('has-icon');
@@ -5747,3 +5778,14 @@ async function logCurrentWatchSession() {
 }
 
 document.addEventListener('fullscreenchange', handleFullscreenChange);
+
+function applyIconGreyscale(enabled) {
+  document.querySelectorAll('.game-icon').forEach(icon => {
+    icon.classList.toggle('greyscale-icon', enabled);
+  });
+}
+
+// inside DOMContentLoaded handler after settings loaded
+loadGlobalTags();
+
+applyIconGreyscale(settings?.iconGreyscale);
