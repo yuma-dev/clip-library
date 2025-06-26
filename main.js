@@ -982,6 +982,12 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
   }
 });
 
+// Get default keybindings from settings-manager
+ipcMain.handle('get-default-keybindings', () => {
+  const { DEFAULT_SETTINGS } = require('./settings-manager');
+  return DEFAULT_SETTINGS.keybindings;
+});
+
 async function handleInitialThumbnails(clipNames, event) {
   const initialClips = clipNames.slice(0, 12);
   
