@@ -11,6 +11,8 @@ const DEFAULT_SETTINGS = {
   ignoredVersion: null,
   previewVolume: 0.1,
   exportQuality: 'discord',
+  // Whether to desaturate game icons in the clip list
+  iconGreyscale: false,
   // Default keybindings – users can override any of these in settings.json
   keybindings: {
     playPause: 'Space',
@@ -125,4 +127,4 @@ async function saveSettings(newSettings) {
   }
 }
 
-module.exports = { loadSettings, saveSettings };
+module.exports = { loadSettings, saveSettings, DEFAULT_SETTINGS };

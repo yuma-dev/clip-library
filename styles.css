@@ -314,7 +314,7 @@ body.dragging * {
 .modal {
   display: none;
   position: fixed;
-  z-index: 2000;
+  z-index: 2100;
   left: 0;
   top: 0;
   width: 100%;
@@ -2132,7 +2132,8 @@ body.dragging * {
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37), 0 0 20px rgb(193 193 193 / 8%);
   border: 1px solid rgb(121 121 121 / 20%);
   position: relative;
-  overflow: hidden;
+  max-height: 84%;
+  overflow-y: auto;
 }
 
 /* Settings Header - Simplified without close button */
@@ -3278,4 +3279,69 @@ input:checked + .settings-switch-slider::before {
 
 .greyscale-icon {
   filter: grayscale(100%);
+}
+
+/* -------------------------------------------------- */
+/* Keyboard Shortcuts (Keybinding) Settings Styles */
+/* -------------------------------------------------- */
+.keybinding-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.kb-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  padding: 10px 14px;
+  border-radius: 6px;
+}
+
+.kb-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.kb-label {
+  font-size: 14px;
+  font-weight: 500; /* Match weight of group titles */
+  color: #e8e8e8;
+}
+
+.kb-desc {
+  font-size: 12px;
+  color: #9a9a9a;
+  margin-top: 2px;
+}
+
+.kb-box {
+  min-width: 120px;
+  text-align: center;
+  padding: 6px 12px;
+  background: #2b2b2b;
+  color: #e8e8e8;
+  border: 1px solid #555;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.kb-box:hover {
+  background: #353535;
+}
+
+.kb-box.editing {
+  background: #444;
+  color: #ffa726;
+  border-color: #ffa726;
+}
+
+.kb-hint {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 6px;
 }

@@ -1998,6 +1998,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     toggleDiscordRPC(e.target.checked);
   });
 
+  // Greyscale icons toggle (similar pattern to Discord RPC)
+  const greyscaleIconsCheckbox = document.getElementById('greyscaleIcons');
+  if (greyscaleIconsCheckbox) {
+    greyscaleIconsCheckbox.addEventListener('change', async (e) => {
+      const isEnabled = e.target.checked;
+      try {
+        // Update settings and save
+        const updatedSettings = { ...settings, iconGreyscale: isEnabled };
+        await ipcRenderer.invoke('save-settings', updatedSettings);
+        settings = updatedSettings;
+        
+        // Apply the change immediately
+        applyIconGreyscale(isEnabled);
+        logger.info('Greyscale icons setting changed:', isEnabled);
+      } catch (error) {
+        logger.error('Error saving greyscale icons setting:', error);
+        // Revert the checkbox state on error
+        e.target.checked = !isEnabled;
+      }
+    });
+  }
+
   // Create and setup the tag filter UI
   createTagFilterUI();
   // Load initial tag preferences
@@ -2330,11 +2352,20 @@ function initializeSettingsModal() {
   if (greyscaleToggle) {
     greyscaleToggle.checked = Boolean(settings.iconGreyscale);
     greyscaleToggle.addEventListener('change', async (e) => {
-      const enabled = e.target.checked;
-      settings.iconGreyscale = enabled;
-      await ipcRenderer.invoke('save-settings', settings);
-      applyIconGreyscale(enabled);
+      const isEnabled = e.target.checked;
+      try {
+        const updated = { ...settings, iconGreyscale: isEnabled };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        applyIconGreyscale(isEnabled); // reflect instantly
+      } catch (error) {
+        logger.error('Error toggling Greyscale Icons:', error);
+        // revert visual state
+        e.target.checked = !isEnabled;
+      }
     });
+  } else {
+    logger.error('Greyscale toggle element not found in DOM');
   }
 }
 
@@ -2376,6 +2407,12 @@ async function openSettingsModal() {
     
     if (exportQualitySelect) {
       exportQualitySelect.value = settings.exportQuality || 'discord';
+    }
+
+    // Refresh greyscale toggle to reflect persisted value
+    const greyscaleToggleEl = document.getElementById('greyscaleIcons');
+    if (greyscaleToggleEl) {
+      greyscaleToggleEl.checked = Boolean(settings.iconGreyscale);
     }
 
     if (previewVolumeSlider && previewVolumeValue) {
@@ -2443,6 +2480,17 @@ closeSettingsBtn.addEventListener("click", closeSettingsModal);
 document
   .getElementById("changeLocationBtn")
   .addEventListener("click", changeClipLocation);
+
+// Add click-outside-to-close functionality for settings modal
+document.addEventListener('click', (e) => {
+  const settingsModal = document.getElementById('settingsModal');
+  if (settingsModal && settingsModal.style.display !== 'none') {
+    // Check if we clicked on the modal background (settingsModal div) and not inside the content
+    if (e.target.id === 'settingsModal' && !e.target.closest('.settings-modal-content')) {
+      closeSettingsModal();
+    }
+  }
+});
 
 // Add this function to calculate relative time
 function getRelativeTimeString(timestamp) {
@@ -5821,75 +5869,108 @@ if (!settingsModal.querySelector('.settings-tab[data-tab="shortcuts"]')) {
     <div class="settings-group">
       <h3 class="settings-group-title">Keyboard Shortcuts</h3>
       <div id="keybinding-list" class="keybinding-list"></div>
-      <p style="font-size:12px;opacity:0.8;">Click "Change", then press a new key combination.</p>
+      <p class="kb-hint">Click the key box, then press your new combination.</p>
+      <div style="margin-top: 15px;">
+        <button id="resetKeybindsBtn" class="settings-button settings-button-secondary">Reset to Defaults</button>
+      </div>
     </div>`;
-  contentWrapper.appendChild(shortcutsContent);
+
+  // Insert before the footer so the save button stays at the bottom
+  const footer = contentWrapper.querySelector('.settings-footer');
+  contentWrapper.insertBefore(shortcutsContent, footer);
 }
 
 // Friendly labels for displaying actions
-const ACTION_LABELS = {
-  playPause: 'Play / Pause',
-  frameBackward: 'Frame Backward',
-  frameForward: 'Frame Forward',
-  skipBackward: 'Skip Backward',
-  skipForward: 'Skip Forward',
-  navigatePrev: 'Previous Clip',
-  navigateNext: 'Next Clip',
-  volumeUp: 'Volume Up',
-  volumeDown: 'Volume Down',
-  exportDefault: 'Export Trimmed Video',
-  exportVideo: 'Export Video (file)',
-  exportAudioFile: 'Export Audio (file)',
-  exportAudioClipboard: 'Export Audio (clipboard)',
-  fullscreen: 'Toggle Fullscreen',
-  deleteClip: 'Delete Clip',
-  setTrimStart: 'Set Trim Start',
-  setTrimEnd: 'Set Trim End',
-  focusTitle: 'Focus Title',
-  closePlayer: 'Close Player'
+const ACTION_INFO = {
+  playPause:             { t: 'Play / Pause',            d: 'Toggle video playback' },
+  frameBackward:         { t: 'Frame Backward',          d: 'Step one frame back' },
+  frameForward:          { t: 'Frame Forward',           d: 'Step one frame forward' },
+  skipBackward:          { t: 'Skip Backward',           d: 'Jump back 3% of duration' },
+  skipForward:           { t: 'Skip Forward',            d: 'Jump forward 3% of duration' },
+  navigatePrev:          { t: 'Previous Clip',           d: 'Open previous clip in list' },
+  navigateNext:          { t: 'Next Clip',               d: 'Open next clip in list' },
+  volumeUp:              { t: 'Volume Up',               d: 'Increase playback volume' },
+  volumeDown:            { t: 'Volume Down',             d: 'Decrease playback volume' },
+  exportDefault:         { t: 'Export Trimmed Video',    d: 'Export current trim to clipboard' },
+  exportVideo:           { t: 'Export Video (file)',     d: 'Export full video to file' },
+  exportAudioFile:       { t: 'Export Audio (file)',     d: 'Export audio to file' },
+  exportAudioClipboard:  { t: 'Export Audio (clipboard)',d: 'Copy audio to clipboard' },
+  fullscreen:            { t: 'Toggle Fullscreen',       d: 'Enter/exit fullscreen player' },
+  deleteClip:            { t: 'Delete Clip',             d: 'Delete current clip' },
+  setTrimStart:          { t: 'Set Trim Start',          d: 'Mark trim start at playhead' },
+  setTrimEnd:            { t: 'Set Trim End',            d: 'Mark trim end at playhead' },
+  focusTitle:            { t: 'Focus Title',             d: 'Begin editing title' },
+  closePlayer:           { t: 'Close Player',            d: 'Close the fullscreen player' }
 };
 
-function buildCombo(ev) {
-  const parts = [];
-  if (ev.ctrlKey || ev.metaKey) parts.push('Ctrl');
-  if (ev.shiftKey) parts.push('Shift');
-  if (ev.altKey) parts.push('Alt');
-  let k = ev.key === ' ' ? 'Space' : (ev.key.length === 1 ? ev.key.toLowerCase() : ev.key);
-  parts.push(k);
-  return parts.join('+');
+// Inject minimal CSS for prettier list
+if (false && !document.getElementById('kb-style')) {
+  const s = document.createElement('style');
+  s.id = 'kb-style';
+  s.textContent = `
+    .keybinding-list{display:flex;flex-direction:column;gap:10px;margin-top:8px;}
+    .kb-row{display:flex;justify-content:space-between;align-items:center;background:#1e1e1e;border:1px solid #333;padding:10px 14px;border-radius:6px;}
+    .kb-info{display:flex;flex-direction:column;}
+    .kb-label{font-size:14px;font-weight:600;color:#e8e8e8;}
+    .kb-desc{font-size:12px;color:#9a9a9a;margin-top:2px;}
+    .kb-box{min-width:120px;text-align:center;padding:6px 12px;background:#2b2b2b;color:#e8e8e8;border:1px solid #555;border-radius:4px;cursor:pointer;transition:background 0.2s;}
+    .kb-box:hover{background:#353535;}
+    .kb-box.editing{background:#444;color:#ffa726;border-color:#ffa726;}
+  `;
+  document.head.appendChild(s);
 }
 
-function populateKeybindingList() {
-  const list = document.getElementById('keybinding-list');
-  if (!list) return;
-  list.innerHTML = '';
-  const bindings = require('./keybinding-manager').getAll();
-  Object.keys(ACTION_LABELS).forEach(action => {
-    const row = document.createElement('div');
-    row.className = 'kb-row';
-    row.innerHTML = `<span class="kb-label">${ACTION_LABELS[action]}</span>
-                     <span class="kb-key" id="kb-key-${action}">${bindings[action] || ''}</span>
-                     <button class="kb-change" data-action="${action}">Change</button>`;
-    list.appendChild(row);
+function buildCombo(ev){
+  const parts=[]; if(ev.ctrlKey||ev.metaKey)parts.push('Ctrl'); if(ev.shiftKey)parts.push('Shift'); if(ev.altKey)parts.push('Alt'); let k=ev.key===' '? 'Space':(ev.key.length===1?ev.key.toUpperCase():ev.key); parts.push(k); return parts.join('+'); }
+
+function populateKeybindingList(){
+  const list=document.getElementById('keybinding-list'); if(!list) return; list.innerHTML=''; const bindings=require('./keybinding-manager').getAll(); 
+  Object.entries(ACTION_INFO).forEach(([action,info])=>{ 
+    const row=document.createElement('div'); row.className='kb-row'; 
+    // Convert displayed keybinding to uppercase for single letters
+    let displayBinding = bindings[action] || '';
+    if (displayBinding) {
+      displayBinding = displayBinding.split('+').map(part => part.length === 1 ? part.toUpperCase() : part).join('+');
+    }
+    row.innerHTML=`<div class="kb-info"><div class="kb-label">${info.t}</div><div class="kb-desc">${info.d}</div></div><div class="kb-box" tabindex="0" data-action="${action}" id="kb-box-${action}">${displayBinding}</div>`; 
+    list.appendChild(row); 
   });
-  list.querySelectorAll('.kb-change').forEach(btn => btn.addEventListener('click', handleKeybindChange));
+  list.querySelectorAll('.kb-box').forEach(box=>box.addEventListener('click', startKeyCapture));
 }
 
-function handleKeybindChange(e) {
-  const btn = e.currentTarget;
-  const action = btn.dataset.action;
-  const keySpan = document.getElementById(`kb-key-${action}`);
-  btn.textContent = 'Press keys...';
-  btn.disabled = true;
-
-  const onKey = ev => {
-    ev.preventDefault();
-    const combo = buildCombo(ev);
-    require('./keybinding-manager').setKeybinding(action, combo);
-    keySpan.textContent = combo;
-    btn.textContent = 'Change';
-    btn.disabled = false;
-    document.removeEventListener('keydown', onKey, true);
-  };
-  document.addEventListener('keydown', onKey, true);
+let captureBox=null; let pressed=new Set(); let captureAction=null;
+function startKeyCapture(e){
+  captureBox=e.currentTarget; captureAction=captureBox.dataset.action; pressed.clear(); captureBox.classList.add('editing'); captureBox.textContent='Waiting for keys...';
+  document.addEventListener('keydown', captureKey, true); document.addEventListener('keyup', releaseKey,true);
 }
+
+function captureKey(ev){ if(!captureBox) return; ev.preventDefault(); pressed.add(ev.code); const combo=buildCombo(ev); captureBox.textContent=combo; }
+
+function releaseKey(ev){ if(!captureBox) return; pressed.delete(ev.code); if(pressed.size===0){ // all released
+    const displayCombo=captureBox.textContent; 
+    // Convert the combo to normalized form for storage (single letters as lowercase)
+    const normalizedCombo = displayCombo.split('+').map(part => part.length === 1 ? part.toLowerCase() : part).join('+');
+    require('./keybinding-manager').setKeybinding(captureAction, normalizedCombo); 
+    captureBox.classList.remove('editing');
+    document.removeEventListener('keydown', captureKey, true); document.removeEventListener('keyup', releaseKey, true); captureBox=null; captureAction=null; }
+}
+
+// Add reset keybinds button functionality
+document.addEventListener('click', async (e) => {
+  if (e.target.id === 'resetKeybindsBtn') {
+    const confirmed = await showCustomConfirm('Reset all keyboard shortcuts to default values?');
+    if (confirmed) {
+      // Get default keybindings from settings-manager via IPC
+      const defaultKeybindings = await ipcRenderer.invoke('get-default-keybindings');
+      const keybindManager = require('./keybinding-manager');
+      
+      // Reset each keybinding
+      for (const [action, defaultCombo] of Object.entries(defaultKeybindings)) {
+        await keybindManager.setKeybinding(action, defaultCombo);
+      }
+      
+      // Refresh the keybinding list display
+      populateKeybindingList();
+    }
+  }
+});
