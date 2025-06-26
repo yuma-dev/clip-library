@@ -5867,7 +5867,6 @@ if (!settingsModal.querySelector('.settings-tab[data-tab="shortcuts"]')) {
   shortcutsContent.dataset.tab = 'shortcuts';
   shortcutsContent.innerHTML = `
     <div class="settings-group">
-      <h3 class="settings-group-title">Keyboard Shortcuts</h3>
       <div id="keybinding-list" class="keybinding-list"></div>
       <p class="kb-hint">Click the key box, then press your new combination.</p>
       <div style="margin-top: 15px;">
@@ -5882,25 +5881,25 @@ if (!settingsModal.querySelector('.settings-tab[data-tab="shortcuts"]')) {
 
 // Friendly labels for displaying actions
 const ACTION_INFO = {
-  playPause:             { t: 'Play / Pause',            d: 'Toggle video playback' },
-  frameBackward:         { t: 'Frame Backward',          d: 'Step one frame back' },
-  frameForward:          { t: 'Frame Forward',           d: 'Step one frame forward' },
-  skipBackward:          { t: 'Skip Backward',           d: 'Jump back 3% of duration' },
-  skipForward:           { t: 'Skip Forward',            d: 'Jump forward 3% of duration' },
-  navigatePrev:          { t: 'Previous Clip',           d: 'Open previous clip in list' },
-  navigateNext:          { t: 'Next Clip',               d: 'Open next clip in list' },
-  volumeUp:              { t: 'Volume Up',               d: 'Increase playback volume' },
-  volumeDown:            { t: 'Volume Down',             d: 'Decrease playback volume' },
-  exportDefault:         { t: 'Export Trimmed Video',    d: 'Export current trim to clipboard' },
-  exportVideo:           { t: 'Export Video (file)',     d: 'Export full video to file' },
-  exportAudioFile:       { t: 'Export Audio (file)',     d: 'Export audio to file' },
-  exportAudioClipboard:  { t: 'Export Audio (clipboard)',d: 'Copy audio to clipboard' },
-  fullscreen:            { t: 'Toggle Fullscreen',       d: 'Enter/exit fullscreen player' },
-  deleteClip:            { t: 'Delete Clip',             d: 'Delete current clip' },
-  setTrimStart:          { t: 'Set Trim Start',          d: 'Mark trim start at playhead' },
-  setTrimEnd:            { t: 'Set Trim End',            d: 'Mark trim end at playhead' },
-  focusTitle:            { t: 'Focus Title',             d: 'Begin editing title' },
-  closePlayer:           { t: 'Close Player',            d: 'Close the fullscreen player' }
+  playPause:             { t: 'Play / Pause',            d: 'Toggle video playback',                     i: 'play_arrow' },
+  frameBackward:         { t: 'Frame Backward',          d: 'Step one frame back',                       i: 'keyboard_arrow_left' },
+  frameForward:          { t: 'Frame Forward',           d: 'Step one frame forward',                    i: 'keyboard_arrow_right' },
+  skipBackward:          { t: 'Skip Backward',           d: 'Jump back 3% of duration',                 i: 'replay' },
+  skipForward:           { t: 'Skip Forward',            d: 'Jump forward 3% of duration',              i: 'forward_media' },
+  navigatePrev:          { t: 'Previous Clip',           d: 'Open previous clip in list',               i: 'skip_previous' },
+  navigateNext:          { t: 'Next Clip',               d: 'Open next clip in list',                   i: 'skip_next' },
+  volumeUp:              { t: 'Volume Up',               d: 'Increase playback volume',                 i: 'volume_up' },
+  volumeDown:            { t: 'Volume Down',             d: 'Decrease playback volume',                 i: 'volume_down' },
+  exportDefault:         { t: 'Export Trimmed Video',    d: 'Export current trim to clipboard',         i: 'smart_display' },
+  exportVideo:           { t: 'Export Video (file)',     d: 'Export full video to file',                i: 'video_file' },
+  exportAudioFile:       { t: 'Export Audio (file)',     d: 'Export audio to file',                     i: 'audio_file' },
+  exportAudioClipboard:  { t: 'Export Audio (clipboard)',d: 'Copy audio to clipboard',                  i: 'music_video' },
+  fullscreen:            { t: 'Toggle Fullscreen',       d: 'Enter/exit fullscreen player',             i: 'fullscreen' },
+  deleteClip:            { t: 'Delete Clip',             d: 'Delete current clip',                      i: 'delete' },
+  setTrimStart:          { t: 'Set Trim Start',          d: 'Mark trim start at playhead',              i: 'line_start' },
+  setTrimEnd:            { t: 'Set Trim End',            d: 'Mark trim end at playhead',                i: 'line_end' },
+  focusTitle:            { t: 'Focus Title',             d: 'Begin editing title',                      i: 'edit' },
+  closePlayer:           { t: 'Close Player',            d: 'Close the fullscreen player',              i: 'close' }
 };
 
 // Inject minimal CSS for prettier list
@@ -5924,16 +5923,12 @@ function buildCombo(ev){
   const parts=[]; if(ev.ctrlKey||ev.metaKey)parts.push('Ctrl'); if(ev.shiftKey)parts.push('Shift'); if(ev.altKey)parts.push('Alt'); let k=ev.key===' '? 'Space':(ev.key.length===1?ev.key.toUpperCase():ev.key); parts.push(k); return parts.join('+'); }
 
 function populateKeybindingList(){
-  const list=document.getElementById('keybinding-list'); if(!list) return; list.innerHTML=''; const bindings=require('./keybinding-manager').getAll(); 
+  const list=document.getElementById('keybinding-list'); if(!list) return; list.innerHTML=''; const bindings=require('./keybinding-manager').getAll();
   Object.entries(ACTION_INFO).forEach(([action,info])=>{ 
     const row=document.createElement('div'); row.className='kb-row'; 
-    // Convert displayed keybinding to uppercase for single letters
-    let displayBinding = bindings[action] || '';
-    if (displayBinding) {
-      displayBinding = displayBinding.split('+').map(part => part.length === 1 ? part.toUpperCase() : part).join('+');
-    }
-    row.innerHTML=`<div class="kb-info"><div class="kb-label">${info.t}</div><div class="kb-desc">${info.d}</div></div><div class="kb-box" tabindex="0" data-action="${action}" id="kb-box-${action}">${displayBinding}</div>`; 
-    list.appendChild(row); 
+    let displayBinding=bindings[action]||''; if(displayBinding){displayBinding=displayBinding.split('+').map(p=>p.length===1?p.toUpperCase():p).join('+');}
+    row.innerHTML=`<div class="kb-info"><div class="kb-label"><span class="kb-icon material-symbols-rounded">${info.i}</span>${info.t}</div><div class="kb-desc">${info.d}</div></div><div class="kb-box" tabindex="0" data-action="${action}" id="kb-box-${action}">${displayBinding}</div>`; 
+    list.appendChild(row);
   });
   list.querySelectorAll('.kb-box').forEach(box=>box.addEventListener('click', startKeyCapture));
 }
@@ -5974,3 +5969,12 @@ document.addEventListener('click', async (e) => {
     }
   }
 });
+
+// After initial requires
+if(document && document.fonts){
+  document.fonts.load('24px "Material Symbols Rounded"').then(()=>{
+    document.body.classList.add('icons-ready');
+  }).catch(()=>{
+    document.body.classList.add('icons-ready');
+  });
+}
