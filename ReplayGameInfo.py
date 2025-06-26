@@ -21,6 +21,168 @@ PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 MAX_PATH = 260
 
+windowsSystemApps = [
+  "explorer.exe",           # File Explorer
+  "SystemSettings.exe",     # Windows Settings
+  "SearchUI.exe",           # Windows Search
+  "ShellExperienceHost.exe",
+  "StartMenuExperienceHost.exe",
+  "Taskmgr.exe",            # Task Manager
+  "SnippingTool.exe",       # Snipping Tool
+  "SnipAndSketch.exe",
+  "Magnify.exe",            # Magnifier
+  "Narrator.exe",
+  "osk.exe",                # On-screen keyboard
+  "MSPaint.exe",            # Paint
+  "notepad.exe",
+  "winver.exe",             # Windows version dialog
+  "calc.exe",               # Calculator
+  "mspaint.exe",            # Paint
+  "winword.exe",            # Word (arguably could be useful)
+  "excel.exe",              # Excel
+  "powerpnt.exe",           # PowerPoint
+  "OneNote.exe",
+  "regedit.exe",
+  "cmd.exe",
+  "powershell.exe",
+  "WindowsTerminal.exe",
+  "wt.exe",                 # Terminal (alt)
+  "conhost.exe",
+  "mmc.exe",                # Management console
+  "control.exe",            # Control Panel
+  "rundll32.exe",
+  "CompMgmtLauncher.exe",   # Computer Management
+  "ApplicationFrameHost.exe", # UWP host process
+  "RuntimeBroker.exe",      # UWP broker process
+  "taskschd.msc",
+  "eventvwr.msc",
+  "perfmon.exe",
+  "dfrgui.exe",             # Defragmenter
+  "OptionalFeatures.exe",
+  "SystemPropertiesComputerName.exe",
+  "TaskSchd.exe",          # Task Scheduler main executable
+  "schtasks.exe",          # Task Scheduler CLI
+  "services.msc",          # Services console
+  "devmgmt.msc",           # Device Manager
+  "diskmgmt.msc",          # Disk Management
+  "compmgmt.msc",          # Computer Management (MMC)
+  "gpedit.msc",            # Group Policy Editor
+  "secpol.msc",            # Local Security Policy
+  "Msinfo32.exe",          # System Information
+  "dxdiag.exe",            # DirectX Diagnostic Tool
+  "wscript.exe",           # Windows Script Host
+  "cscript.exe",           # Windows Script Host (CLI)
+  "mrt.exe",                # Malicious Software Removal Tool
+  "SearchApp.exe",          # New Windows Search host
+  "LockApp.exe",            # Lock screen overlay
+  "ctfmon.exe",             # Text Services Framework (IME)
+  "sihost.exe",             # Shell Infrastructure Host
+  "BackgroundTaskHost.exe", # UWP background task host
+  "SettingSyncHost.exe",    # Settings sync host
+  "YourPhone.exe",          # Phone Link
+  "PhoneExperienceHost.exe",
+  "FilePickerHost.exe",     # File picker dialog
+  "PickerHost.exe",         # Variation of file picker
+  "smartscreen.exe",        # Windows SmartScreen
+  "WerFault.exe",           # Error Reporting
+  "cleanmgr.exe",           # Disk Cleanup utility
+  # Common MMC snap‐ins not yet listed
+  "certmgr.msc",            # Certificate Manager
+  "wf.msc"                  # Windows Firewall with Advanced Security
+]
+
+archiveToolsAndFileManagers = [
+  "7zFM.exe",               # 7-Zip
+  "WinRAR.exe",
+  "WinZip32.exe",
+  "PeaZip.exe",
+  "TotalCmd.exe",
+  "FreeCommander.exe",
+  "Q-Dir.exe",
+  "MultiCommander.exe",
+  "Everything.exe",
+  "TreeSizeFree.exe"
+]
+
+installerAndLauncherApps = [
+  "setup.exe",
+  "uninstall.exe",
+  "msiexec.exe",
+  "dxsetup.exe",
+  "installshield.exe",
+  "bootstrapper.exe",
+  "update.exe",
+  "unins000.exe",
+]
+
+virtualizationApps = [
+  "vmware.exe",
+  "vmware-vmx.exe",
+  "VirtualBox.exe",
+  "vboxheadless.exe",
+  "vboxmanage.exe",
+  "mstsc.exe",             
+  "TeamViewer.exe",
+]
+
+antivirusAndCleanerApps = [
+  "AvastUI.exe",
+  "avgui.exe",
+  "msmpeng.exe",
+  "SecurityHealthSystray.exe",
+  "Malwarebytes.exe",
+  "CCleaner.exe",
+  "AdwCleaner.exe",
+  "NortonSecurity.exe",
+  "McUICnt.exe"
+]
+
+debuggingAndDevTools = [
+  "Procmon.exe",            # Sysinternals
+  "ProcessHacker.exe",
+  "ProcessExplorer.exe",
+  "Autoruns.exe",
+  "VMMap.exe",
+  "windbg.exe",
+  "OllyDbg.exe",
+  "x64dbg.exe",
+  "DependencyWalker.exe",
+  "HxD.exe"                 # Hex editor
+]
+
+printerScannerApps = [
+  "FaxConsole.exe",
+  "PrintDialog.exe",
+  "printmanagement.msc",
+  "HPScan.exe",
+  "CanonIJ.exe",
+  "EpsonScan.exe"
+]
+
+accessories = [
+  "wordpad.exe",
+  "write.exe",
+  "charmap.exe",            # Character map
+  "stikynot.exe",           # Sticky Notes
+  "XpsRchVw.exe",           # XPS viewer
+  "hh.exe",                 # HTML Help Viewer
+  "MobilityCenter.exe"
+]
+
+ignoredExecutables = (
+    windowsSystemApps +
+    archiveToolsAndFileManagers +
+    installerAndLauncherApps +
+    virtualizationApps +
+    antivirusAndCleanerApps +
+    debuggingAndDevTools +
+    printerScannerApps +
+    accessories
+)
+
+# Pre-compute a lower-case set for fast, case-insensitive look-ups
+ignoredExecutables_lower = {name.lower() for name in ignoredExecutables}
+
 # No global source uuid needed anymore
 
 
@@ -116,11 +278,12 @@ def extract_icon(exe_path: str, out_path: str):
 
 def handle_replay_saved(recording_path: str, window_title: str, exe_path: Optional[str]):
     try:
-        # Wait briefly until the file is confirmed to exist (it may be moved by other scripts)
-        for _ in range(10):  # up to ~5 seconds total (extended for safety)
-            if os.path.exists(recording_path):
-                break
-            time.sleep(0.5)
+        # Skip generating metadata for ignored executables
+        if exe_path:
+            exe_basename_full = os.path.basename(exe_path)
+            if exe_basename_full.lower() in ignoredExecutables_lower:
+                debug(f"Executable {exe_basename_full} is in ignored list; skipping .gameinfo generation")
+                return
 
         folder = os.path.dirname(recording_path)
         icons_dir = os.path.join(folder, "icons")

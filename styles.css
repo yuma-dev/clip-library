@@ -2480,7 +2480,6 @@ input:checked + .settings-switch-slider::before {
 
 /* Range Slider */
 .settings-range {
-  -webkit-appearance: none;
   width: 200px;
   height: 4px;
   border-radius: 2px;
@@ -3275,4 +3274,8 @@ input:checked + .settings-switch-slider::before {
   margin-top: -20px;
   height: 0;
   overflow: hidden;
+}
+
+.greyscale-icon {
+  filter: grayscale(100%);
 }
