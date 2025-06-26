@@ -4,6 +4,9 @@ const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
 const logger = require('./logger');
 const fs = require('fs').promises;
 
+// Keybinding manager to centralise shortcuts
+const keybinds = require('./keybinding-manager');
+
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
 const videoPlayer = document.getElementById("video-player");
@@ -1854,6 +1857,8 @@ function showExportProgress(current, total, isClipboardExport = false) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Ensure keybindings are loaded before we attach any listeners that use them
+  await keybinds.initKeybindings();
   settings = ipcRenderer.invoke('get-settings');
   fetchSettings();
   const settingsButton = document.getElementById("settingsButton");
@@ -2256,6 +2261,9 @@ function initializeSettingsModal() {
       
       tab.classList.add('active');
       document.querySelector(`.settings-tab-content[data-tab="${targetTab}"]`).classList.add('active');
+      if (typeof populateKeybindingList === 'function' && targetTab === 'shortcuts') {
+        populateKeybindingList();
+      }
     });
   });
 
@@ -3819,70 +3827,74 @@ function handleKeyPress(e) {
 
   showControls();
 
-  if (e.key === "Escape") {
-    closePlayer();
-  }
-  if (e.key === " " && !isClipTitleFocused && !isSearching) {
-    if (videoPlayer.src) {
-      e.preventDefault();
-      togglePlayPause();
-    }
-  }
-
-  // New keybinds
+  // Resolve action from keybindings
   if (!isClipTitleFocused && !isSearching) {
-    switch (e.key) {
-      case ",":
-      case ".":
-        e.preventDefault();
-        moveFrame(e.key === "," ? -1 : 1);
+    const action = keybinds.getActionFromEvent(e);
+    if (!action) return;
+
+    // Prevent default for handled keys unless explicitly allowed
+    e.preventDefault();
+
+    switch (action) {
+      case 'closePlayer':
+        closePlayer();
         break;
-        case "ArrowLeft":
-          case "ArrowRight":
-              e.preventDefault();
-              if (e.ctrlKey) {
-                  navigateToVideo(e.key === "ArrowLeft" ? -1 : 1);
-              } else {
-                  skipTime(e.key === "ArrowLeft" ? -1 : 1);
-              }
-              break;
-      case "ArrowUp":
-        case "ArrowDown":
-          e.preventDefault();
-          changeVolume(e.key === "ArrowUp" ? 0.1 : -0.1);
-          break;
-      case "e":
-      case "E":
-        e.preventDefault();
-        if (e.ctrlKey && e.shiftKey) {
-          exportAudioWithFileSelection();
-        } else if (e.ctrlKey) {
-          exportVideoWithFileSelection();
-        } else if (e.shiftKey) {
-          exportAudioToClipboard();
-        } else {
-          exportTrimmedVideo();
-        }
+      case 'playPause':
+        if (videoPlayer.src) togglePlayPause();
         break;
-      case "f":
-      case "F":
+      case 'frameBackward':
+        moveFrame(-1);
+        break;
+      case 'frameForward':
+        moveFrame(1);
+        break;
+      case 'navigatePrev':
+        navigateToVideo(-1);
+        break;
+      case 'navigateNext':
+        navigateToVideo(1);
+        break;
+      case 'skipBackward':
+        skipTime(-1);
+        break;
+      case 'skipForward':
+        skipTime(1);
+        break;
+      case 'volumeUp':
+        changeVolume(0.1);
+        break;
+      case 'volumeDown':
+        changeVolume(-0.1);
+        break;
+      case 'exportAudioFile':
+        exportAudioWithFileSelection();
+        break;
+      case 'exportVideo':
+        exportVideoWithFileSelection();
+        break;
+      case 'exportAudioClipboard':
+        exportAudioToClipboard();
+        break;
+      case 'exportDefault':
+        exportTrimmedVideo();
+        break;
+      case 'fullscreen':
         toggleFullscreen();
         break;
-      case "Delete":
-        e.preventDefault();
+      case 'deleteClip':
         confirmAndDeleteClip();
         break;
-      case "[":
-        e.preventDefault();
-        setTrimPoint("start");
+      case 'setTrimStart':
+        setTrimPoint('start');
         break;
-      case "]":
-        e.preventDefault();
-        setTrimPoint("end");
+      case 'setTrimEnd':
+        setTrimPoint('end');
         break;
-      case "Tab":
-        e.preventDefault();
+      case 'focusTitle':
         clipTitle.focus();
+        break;
+      default:
+        // Unknown action - do nothing
         break;
     }
   }
@@ -5789,3 +5801,95 @@ function applyIconGreyscale(enabled) {
 loadGlobalTags();
 
 applyIconGreyscale(settings?.iconGreyscale);
+
+// ------------------ Keybinding (Shortcuts) Settings UI ------------------
+if (!settingsModal.querySelector('.settings-tab[data-tab="shortcuts"]')) {
+  // Create tab button
+  const tabsContainer = settingsModal.querySelector('.settings-tabs');
+  const shortcutsTab = document.createElement('div');
+  shortcutsTab.className = 'settings-tab';
+  shortcutsTab.dataset.tab = 'shortcuts';
+  shortcutsTab.textContent = 'Shortcuts';
+  tabsContainer.appendChild(shortcutsTab);
+
+  // Create tab content skeleton
+  const contentWrapper = settingsModal.querySelector('.settings-modal-content');
+  const shortcutsContent = document.createElement('div');
+  shortcutsContent.className = 'settings-tab-content';
+  shortcutsContent.dataset.tab = 'shortcuts';
+  shortcutsContent.innerHTML = `
+    <div class="settings-group">
+      <h3 class="settings-group-title">Keyboard Shortcuts</h3>
+      <div id="keybinding-list" class="keybinding-list"></div>
+      <p style="font-size:12px;opacity:0.8;">Click "Change", then press a new key combination.</p>
+    </div>`;
+  contentWrapper.appendChild(shortcutsContent);
+}
+
+// Friendly labels for displaying actions
+const ACTION_LABELS = {
+  playPause: 'Play / Pause',
+  frameBackward: 'Frame Backward',
+  frameForward: 'Frame Forward',
+  skipBackward: 'Skip Backward',
+  skipForward: 'Skip Forward',
+  navigatePrev: 'Previous Clip',
+  navigateNext: 'Next Clip',
+  volumeUp: 'Volume Up',
+  volumeDown: 'Volume Down',
+  exportDefault: 'Export Trimmed Video',
+  exportVideo: 'Export Video (file)',
+  exportAudioFile: 'Export Audio (file)',
+  exportAudioClipboard: 'Export Audio (clipboard)',
+  fullscreen: 'Toggle Fullscreen',
+  deleteClip: 'Delete Clip',
+  setTrimStart: 'Set Trim Start',
+  setTrimEnd: 'Set Trim End',
+  focusTitle: 'Focus Title',
+  closePlayer: 'Close Player'
+};
+
+function buildCombo(ev) {
+  const parts = [];
+  if (ev.ctrlKey || ev.metaKey) parts.push('Ctrl');
+  if (ev.shiftKey) parts.push('Shift');
+  if (ev.altKey) parts.push('Alt');
+  let k = ev.key === ' ' ? 'Space' : (ev.key.length === 1 ? ev.key.toLowerCase() : ev.key);
+  parts.push(k);
+  return parts.join('+');
+}
+
+function populateKeybindingList() {
+  const list = document.getElementById('keybinding-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const bindings = require('./keybinding-manager').getAll();
+  Object.keys(ACTION_LABELS).forEach(action => {
+    const row = document.createElement('div');
+    row.className = 'kb-row';
+    row.innerHTML = `<span class="kb-label">${ACTION_LABELS[action]}</span>
+                     <span class="kb-key" id="kb-key-${action}">${bindings[action] || ''}</span>
+                     <button class="kb-change" data-action="${action}">Change</button>`;
+    list.appendChild(row);
+  });
+  list.querySelectorAll('.kb-change').forEach(btn => btn.addEventListener('click', handleKeybindChange));
+}
+
+function handleKeybindChange(e) {
+  const btn = e.currentTarget;
+  const action = btn.dataset.action;
+  const keySpan = document.getElementById(`kb-key-${action}`);
+  btn.textContent = 'Press keys...';
+  btn.disabled = true;
+
+  const onKey = ev => {
+    ev.preventDefault();
+    const combo = buildCombo(ev);
+    require('./keybinding-manager').setKeybinding(action, combo);
+    keySpan.textContent = combo;
+    btn.textContent = 'Change';
+    btn.disabled = false;
+    document.removeEventListener('keydown', onKey, true);
+  };
+  document.addEventListener('keydown', onKey, true);
+}

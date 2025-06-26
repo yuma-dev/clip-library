@@ -10,7 +10,29 @@ const DEFAULT_SETTINGS = {
   enableDiscordRPC: false,
   ignoredVersion: null,
   previewVolume: 0.1,
-  exportQuality: 'discord'
+  exportQuality: 'discord',
+  // Default keybindings – users can override any of these in settings.json
+  keybindings: {
+    playPause: 'Space',
+    frameBackward: ',',
+    frameForward: '.',
+    skipBackward: 'ArrowLeft',
+    skipForward: 'ArrowRight',
+    navigatePrev: 'Ctrl+ArrowLeft',
+    navigateNext: 'Ctrl+ArrowRight',
+    volumeUp: 'ArrowUp',
+    volumeDown: 'ArrowDown',
+    exportDefault: 'e',
+    exportVideo: 'Ctrl+E',
+    exportAudioFile: 'Ctrl+Shift+E',
+    exportAudioClipboard: 'Shift+E',
+    fullscreen: 'f',
+    deleteClip: 'Delete',
+    setTrimStart: '[',
+    setTrimEnd: ']',
+    focusTitle: 'Tab',
+    closePlayer: 'Escape'
+  }
 };
 
 async function loadSettings() {
