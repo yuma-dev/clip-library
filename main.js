@@ -1,5 +1,5 @@
 if (require("electron-squirrel-startup")) return;
-const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, powerMonitor } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./logger');
@@ -162,6 +162,9 @@ async function createWindow() {
       clearDiscordPresence();
     }
   });
+
+  // Always resolve with the created window so callers can await it
+  return mainWindow;
 }
 
 async function checkForUpdatesInBackground(mainWindow) {
@@ -172,11 +175,11 @@ async function checkForUpdatesInBackground(mainWindow) {
   }
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  
-  // Start the update check in the background without waiting for it
-  checkForUpdatesInBackground(mainWindow);
+app.whenReady().then(async () => {
+  const win = await createWindow();
+
+  // Kick off the update check once the window exists
+  checkForUpdatesInBackground(win);
 });
 
 app.on("window-all-closed", () => {
