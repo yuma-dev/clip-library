@@ -54,6 +54,11 @@ class Logger {
 
     async initializeMain() {
         try {
+            // Ensure we only access Electron paths after the app is ready
+            if (!this.app.isReady()) {
+                await new Promise(res => this.app.once('ready', res));
+            }
+
             this.logPath = path.join(this.app.getPath('userData'), 'logs');
             await fs.mkdir(this.logPath, { recursive: true });
             
@@ -227,6 +232,11 @@ class Logger {
         if (this.isRenderer) return;
 
         try {
+            // Lazily initialise the log file if it has not been set up yet.
+            if (!this.currentLogFile) {
+                await this.initializeMain();
+            }
+
             await fs.appendFile(this.currentLogFile, message + '\n', 'utf8');
         } catch (error) {
             console.error('Failed to write to log file:', error);
