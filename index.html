@@ -7,6 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/2.3.3/purify.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL@24,400,1" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=stadia_controller" />
   </head>
   <body>
     <div id="export-toast" class="export-toast">
@@ -33,6 +34,9 @@
     </div>
     <div id="clip-counter-container">
       <div id="clip-counter">Clips: 0</div>
+      <div id="controller-indicator" class="controller-indicator" style="display: none;" title="Controller Connected">
+        <span class="material-symbols-rounded">stadia_controller</span>
+      </div>
     </div>
     <div id="top-bar">
       <button id="settingsButton" aria-label="Settings">
