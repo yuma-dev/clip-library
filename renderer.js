@@ -1121,6 +1121,7 @@ function setupContextMenu() {
   const contextMenu = document.getElementById("context-menu");
   const contextMenuExport = document.getElementById("context-menu-export");
   const contextMenuDelete = document.getElementById("context-menu-delete");
+  const contextMenuReveal = document.getElementById("context-menu-reveal");
   const contextMenuTags = document.getElementById("context-menu-tags");
   const tagsDropdown = document.getElementById("tags-dropdown");
   const tagSearchInput = document.getElementById("tag-search-input");
@@ -1129,7 +1130,8 @@ function setupContextMenu() {
   if (
     !contextMenu ||
     !contextMenuExport ||
-    !contextMenuDelete) {
+    !contextMenuDelete ||
+    !contextMenuReveal) {
     logger.error("One or more context menu elements not found");
     return;
   }
@@ -1146,6 +1148,14 @@ function setupContextMenu() {
     logger.info("Export clicked for clip:", contextMenuClip?.originalName);
     if (contextMenuClip) {
       exportClipFromContextMenu(contextMenuClip);
+    }
+    contextMenu.style.display = "none";
+  });
+
+  contextMenuReveal.addEventListener("click", () => {
+    logger.info("Reveal in Explorer clicked for clip:", contextMenuClip?.originalName);
+    if (contextMenuClip) {
+      ipcRenderer.invoke('reveal-clip', contextMenuClip.originalName);
     }
     contextMenu.style.display = "none";
   });

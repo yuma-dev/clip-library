@@ -1,5 +1,5 @@
 if (require("electron-squirrel-startup")) return;
-const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, powerMonitor } = require("electron");
+const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, powerMonitor, shell } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./logger');
@@ -1215,36 +1215,42 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
     videoPlayer.src = "";
   }
 
-  const maxRetries = 160;
-  const retryDelay = 62; // 1 second
+  const maxRetries = 50; // Up to ~5 seconds total retry time
+  const retryDelay = 100; // 0.1 s between attempts
 
   for (let retry = 0; retry < maxRetries; retry++) {
     try {
-      // Attempt to close any open file handles
-      await delay(1000);
-
-      if (process.platform === "win32") {
-        try {
-          await execPromise(
-            `taskkill /F /IM "explorer.exe" /FI "MODULES eq ${path.basename(clipPath)}"`,
-          );
-        } catch (error) {
-          logger.warn("Failed to kill processes:", error);
-        }
-      }
-
-      // Delete the files
+      // Try deleting immediately; we'll retry quickly if the file is still busy.
       for (const file of filesToDelete) {
         try {
-          if (file === clipPath) {
-            await fs.unlink(file);
+          if (process.platform === 'win32') {
+            // Move the file to the Recycle Bin for a more native deletion behaviour
+            await shell.trashItem(file);
           } else {
+            // Fallback for non-Windows platforms (should not be hit in our use-case)
             await fs.unlink(file);
           }
         } catch (e) {
-          if (e.code !== "ENOENT") {
-            throw e;
+          // If trashing failed because the file is missing, continue silently
+          if (e.code === 'ENOENT') {
+            continue;
           }
+
+          // If trashing failed for another reason on Windows, fall back to a direct unlink
+          if (process.platform === 'win32') {
+            try {
+              await fs.unlink(file);
+              continue;
+            } catch (e2) {
+              if (e2.code === 'ENOENT') {
+                continue;
+              }
+              throw e2;
+            }
+          }
+
+          // Throw other unexpected errors so the retry logic can handle them
+          throw e;
         }
       }
 
@@ -1252,9 +1258,9 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
       logActivity('delete', { clipName });
       return { success: true };
     } catch (error) {
-      if (error.code === "EBUSY" && retry < maxRetries - 1) {
+      if ((error.code === "EBUSY" || error.code === "EPERM") && retry < maxRetries - 1) {
         // If the file is busy and we haven't reached max retries, wait and try again
-        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        await delay(retryDelay);
       } else {
         logger.error(`Error deleting clip ${clipName}:`, error);
         return { success: false, error: error.message };
@@ -1268,6 +1274,18 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
     error:
       "Failed to delete clip after multiple attempts. The file may be in use.",
   };
+});
+
+// Reveal clip in File Explorer
+ipcMain.handle('reveal-clip', async (event, clipName) => {
+  try {
+    const clipPath = path.join(settings.clipLocation, clipName);
+    shell.showItemInFolder(clipPath);
+    return { success: true };
+  } catch (error) {
+    logger.error('Error revealing clip:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => {
