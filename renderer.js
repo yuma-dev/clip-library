@@ -93,6 +93,10 @@ let savedTagSelections = new Set(); // Permanent selections that are saved
 let temporaryTagSelections = new Set(); // Temporary (Ctrl+click) selections
 let isInTemporaryMode = false; // Whether we're in temporary selection mode
 
+// Variables for managing auto-seek behavior
+let isAutoResetDisabled = false; // True when user manually seeked outside bounds
+let wasLastSeekManual = false; // Track if the last seek was manual
+
 // Variables for watch session tracking
 let currentSessionStartTime = null;
 let currentSessionActiveDuration = 0;
@@ -1123,6 +1127,7 @@ function setupContextMenu() {
   const contextMenuDelete = document.getElementById("context-menu-delete");
   const contextMenuReveal = document.getElementById("context-menu-reveal");
   const contextMenuTags = document.getElementById("context-menu-tags");
+  const contextMenuResetTrim = document.getElementById("context-menu-reset-trim");
   const tagsDropdown = document.getElementById("tags-dropdown");
   const tagSearchInput = document.getElementById("tag-search-input");
   const addTagButton = document.getElementById("add-tag-button");
@@ -1216,6 +1221,16 @@ function setupContextMenu() {
     }
     contextMenu.style.display = "none";
   });
+
+  if (contextMenuResetTrim) {
+    contextMenuResetTrim.addEventListener("click", async () => {
+      logger.info("Reset trim clicked for clip:", contextMenuClip?.originalName);
+      if (contextMenuClip) {
+        await resetClipTrimTimes(contextMenuClip);
+      }
+      contextMenu.style.display = "none";
+    });
+  }
 
   // Close context menu when clicking outside
   document.addEventListener("click", () => {
@@ -3357,6 +3372,10 @@ async function openClip(originalName, customName) {
   logger.info(`Opening clip: ${originalName}`);
   elapsedTime = 0;
 
+  // Reset auto-seek behavior for new clip
+  isAutoResetDisabled = false;
+  wasLastSeekManual = false;
+
   // Log the previous session if one was active
   await logCurrentWatchSession();
 
@@ -3705,7 +3724,10 @@ function handleVideoCanPlay() {
   }
   // Ensure thumbnail hides when video becomes playable
   videoPlayer.style.opacity = '1';
-  thumbnailOverlay.style.display = 'none';
+  const thumbnailOverlay = document.getElementById('thumbnail-overlay');
+  if (thumbnailOverlay) {
+    thumbnailOverlay.style.display = 'none';
+  }
   videoPlayer.removeEventListener('canplay', handleVideoCanPlay);
 }
 
@@ -3961,6 +3983,9 @@ function handleKeyPress(e) {
 function moveFrame(direction) {
   pauseVideoIfPlaying();
 
+  // Track manual seek
+  wasLastSeekManual = true;
+
   if (!isFrameStepping) {
     isFrameStepping = true;
     frameStepDirection = direction;
@@ -3981,8 +4006,14 @@ function frameStep(timestamp) {
   if (elapsedTime >= minFrameDuration) {
     if (!pendingFrameStep) {
       pendingFrameStep = true;
-      const newTime = videoPlayer.currentTime + frameStepDirection * (1 / 30);
-      videoPlayer.currentTime = Math.max(0, Math.min(newTime, videoPlayer.duration));
+      const newTime = Math.max(0, Math.min(videoPlayer.currentTime + frameStepDirection * (1 / 30), videoPlayer.duration));
+      
+      // If frame stepping outside bounds, disable auto-reset
+      if (newTime < trimStartTime || newTime > trimEndTime) {
+        isAutoResetDisabled = true;
+      }
+      
+      videoPlayer.currentTime = newTime;
     }
     showControls();
   }
@@ -4021,8 +4052,17 @@ function skipTime(direction) {
   const skipDuration = calculateSkipTime(videoPlayer.duration);
   logger.info(`Video duration: ${videoPlayer.duration.toFixed(2)}s, Skip duration: ${skipDuration.toFixed(2)}s`);
   
-  const newTime = videoPlayer.currentTime + (direction * skipDuration);
-  videoPlayer.currentTime = Math.max(0, Math.min(newTime, videoPlayer.duration));
+  // Track manual seek
+  wasLastSeekManual = true;
+  
+  const newTime = Math.max(0, Math.min(videoPlayer.currentTime + (direction * skipDuration), videoPlayer.duration));
+  
+  // If seeking outside bounds, disable auto-reset
+  if (newTime < trimStartTime || newTime > trimEndTime) {
+    isAutoResetDisabled = true;
+  }
+  
+  videoPlayer.currentTime = newTime;
   
   showControls();
 }
@@ -4033,6 +4073,12 @@ function setTrimPoint(point) {
   } else {
     trimEndTime = videoPlayer.currentTime;
   }
+  
+  // When setting trim points, we're adjusting the bounds to match current position,
+  // so re-enable auto-reset since we're now inside the new bounds
+  isAutoResetDisabled = false;
+  wasLastSeekManual = true;
+  
   updateTrimControls();
   saveTrimChanges();
 }
@@ -4078,10 +4124,22 @@ function updatePlayhead() {
   const percent = (currentTime / duration) * 100;
   playhead.style.left = `${percent}%`;
 
-  // Check if the current time is beyond the trim end
-  if (currentTime > trimEndTime) {
+  // Check if current time is outside trim bounds
+  const isOutsideBounds = currentTime > trimEndTime || currentTime < trimStartTime;
+  const isInsideBounds = currentTime >= trimStartTime && currentTime <= trimEndTime;
+  
+  // If playhead is back inside bounds, re-enable auto-reset (regardless of how it got there)
+  if (isInsideBounds && isAutoResetDisabled) {
+    isAutoResetDisabled = false;
+  }
+  
+  // Only auto-reset if not disabled and outside bounds
+  if (!isAutoResetDisabled && isOutsideBounds) {
     videoPlayer.currentTime = trimStartTime;
   }
+  
+  // Reset manual seek flag after processing
+  wasLastSeekManual = false;
 
   // Check if the current time is within the buffered range
   let isBuffered = false;
@@ -4129,7 +4187,16 @@ progressBarContainer.addEventListener("mousedown", (e) => {
     document.addEventListener("mousemove", handleTrimDrag);
     document.addEventListener("mouseup", endTrimDrag);
   } else {
-    videoPlayer.currentTime = clickPercent * videoPlayer.duration;
+    // Track manual seek
+    wasLastSeekManual = true;
+    const newTime = clickPercent * videoPlayer.duration;
+    
+    // If seeking outside bounds, disable auto-reset
+    if (newTime < trimStartTime || newTime > trimEndTime) {
+      isAutoResetDisabled = true;
+    }
+    
+    videoPlayer.currentTime = newTime;
   }
 });
 
@@ -4147,14 +4214,30 @@ function handleTrimDrag(e) {
     const dragPercent = Math.max(0, Math.min(1, x / width));
     const dragTime = dragPercent * videoPlayer.duration;
 
-    if (isDragging === "start" && dragTime < trimEndTime) {
-      trimStartTime = Math.max(0, dragTime);
-    } else if (isDragging === "end" && dragTime > trimStartTime) {
-      trimEndTime = Math.min(videoPlayer.duration, dragTime);
+    // Minimum gap between trim points (0.5 seconds)
+    const minGap = 0.5;
+
+    if (isDragging === "start") {
+      // Ensure start doesn't get too close to end
+      const maxStartTime = Math.max(0, trimEndTime - minGap);
+      trimStartTime = Math.max(0, Math.min(dragTime, maxStartTime));
+    } else if (isDragging === "end") {
+      // Ensure end doesn't get too close to start
+      const minEndTime = Math.min(videoPlayer.duration, trimStartTime + minGap);
+      trimEndTime = Math.max(minEndTime, Math.min(videoPlayer.duration, dragTime));
     }
 
     updateTrimControls();
-    videoPlayer.currentTime = isDragging === "start" ? trimStartTime : trimEndTime;
+    
+    // Track manual seek when dragging trim controls
+    wasLastSeekManual = true;
+    const newTime = isDragging === "start" ? trimStartTime : trimEndTime;
+    
+    // When dragging trim controls, we're adjusting the bounds themselves,
+    // so we should re-enable auto-reset since we're now at the boundary
+    isAutoResetDisabled = false;
+    
+    videoPlayer.currentTime = newTime;
     saveTrimChanges();
   }
 }
@@ -4275,6 +4358,52 @@ async function saveTrimChanges() {
       showCustomAlert(`Error saving trim: ${error.message}`);
     }
   }, 500);
+}
+
+async function resetClipTrimTimes(clip) {
+  try {
+    const isConfirmed = await showCustomConfirm(`Reset trim times for "${clip.customName}"? This will remove any custom start/end points.`);
+    
+    if (!isConfirmed) return;
+
+    // Delete trim data for the clip
+    await ipcRenderer.invoke("delete-trim", clip.originalName);
+    logger.info("Trim data reset successfully for:", clip.originalName);
+
+    // If this is the currently playing clip, reset the UI trim times
+    if (currentClip && currentClip.originalName === clip.originalName) {
+      trimStartTime = 0;
+      trimEndTime = videoPlayer.duration;
+      updateTrimControls();
+    }
+
+    // Regenerate thumbnail to default (start of video)
+    const result = await ipcRenderer.invoke(
+      "regenerate-thumbnail-for-trim",
+      clip.originalName,
+      0
+    );
+
+    if (result.success) {
+      // Update the thumbnail image
+      const clipElement = document.querySelector(
+        `.clip-item[data-original-name="${clip.originalName}"]`
+      );
+      
+      if (clipElement) {
+        const imgElement = clipElement.querySelector(".clip-item-media-container img");
+        if (imgElement) {
+          // Update the thumbnail source with cache busting
+          imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
+        }
+      }
+    }
+
+    await showCustomAlert("Trim times have been reset successfully.");
+  } catch (error) {
+    logger.error("Error resetting trim data:", error);
+    await showCustomAlert(`Error resetting trim times: ${error.message}`);
+  }
 }
 
 let saveTitleTimeout = null;

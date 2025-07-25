@@ -1202,6 +1202,31 @@ ipcMain.handle("save-trim", async (event, clipName, start, end) => {
   }
 });
 
+ipcMain.handle("delete-trim", async (event, clipName) => {
+  try {
+    const clipsFolder = settings.clipLocation;
+    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+    const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
+    
+    // Delete the trim file if it exists
+    try {
+      await fs.unlink(trimFilePath);
+      logger.info(`Deleted trim data for ${clipName}`);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        logger.info(`No trim data file found for ${clipName} (already deleted or never existed)`);
+      } else {
+        throw error;
+      }
+    }
+    
+    return { success: true };
+  } catch (error) {
+    logger.error("Error in delete-trim handler:", error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
   const clipPath = path.join(settings.clipLocation, clipName);
   const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
