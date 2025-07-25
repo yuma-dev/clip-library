@@ -13,6 +13,49 @@ const DEFAULT_SETTINGS = {
   exportQuality: 'discord',
   // Whether to desaturate game icons in the clip list
   iconGreyscale: false,
+  // Controller settings
+  controller: {
+    enabled: true,
+    seekSensitivity: 0.5,
+    volumeSensitivity: 0.1,
+    buttonMappings: {
+      // Face buttons (A, B, X, Y)
+      0: 'playPause',        // A button - play/pause
+      1: 'closePlayer',      // B button - close/back
+      2: 'exportDefault',    // X button - export
+      3: 'fullscreen',       // Y button - fullscreen
+      
+      // Shoulder buttons
+      4: 'navigatePrev',     // LB - previous clip
+      5: 'navigateNext',     // RB - next clip
+      6: 'setTrimStart',     // LT - set trim start
+      7: 'setTrimEnd',       // RT - set trim end
+      
+      // Special buttons
+      8: 'focusTitle',       // Back/Select - focus title
+      9: 'exportVideo',      // Start/Menu - export menu
+      10: null,              // Left stick click
+      11: null,              // Right stick click
+      
+      // D-pad
+      12: 'volumeUp',        // D-pad up - volume up
+      13: 'volumeDown',      // D-pad down - volume down
+      14: 'skipBackward',    // D-pad left - skip backward
+      15: 'skipForward'      // D-pad right - skip forward
+    },
+    analogMappings: {
+      leftStick: {
+        xAxis: 0,    // Left stick X (horizontal navigation)
+        yAxis: 1,    // Left stick Y (vertical navigation)
+        deadzone: 0.2
+      },
+      rightStick: {
+        xAxis: 2,    // Right stick X (timeline seeking)
+        yAxis: 3,    // Right stick Y (volume control)
+        deadzone: 0.2
+      }
+    }
+  },
   // Default keybindings – users can override any of these in settings.json
   keybindings: {
     playPause: 'Space',

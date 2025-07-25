@@ -101,6 +101,43 @@ body.dragging * {
   box-shadow: 0 0 10px rgb(0, 0, 0);
 }
 
+.controller-indicator {
+  position: absolute;
+  left: 100px; /* Position it closer to the clip counter */
+  background-color: rgb(30, 30, 30);
+  color: #ffffff; /* White color for the icon */
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: auto;
+  box-shadow: 0 0 10px rgb(0, 0, 0);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transition: opacity 0.3s ease;
+}
+
+.controller-indicator .material-symbols-rounded {
+  font-size: 18px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+/* Controller focus styles for grid navigation */
+.clip-item.controller-focused {
+  transform: scale(1.02);
+  border: 2px solid #4caf50;
+  z-index: 10;
+}
+
+.clip-item.controller-focused .clip-thumbnail {
+  filter: brightness(1.2);
+}
+
+.clip-item.controller-focused .clip-info {
+  background: linear-gradient(135deg, rgba(76, 175, 80, 0.2), rgba(255, 255, 255, 0.1));
+}
+
 #current-time, #total-time {
   color: white;
   font-size: 14px;

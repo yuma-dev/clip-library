@@ -7,6 +7,9 @@ const fs = require('fs').promises;
 // Keybinding manager to centralise shortcuts
 const keybinds = require('./keybinding-manager');
 
+// Gamepad manager for controller support
+const GamepadManager = require('./gamepad-manager');
+
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
 const videoPlayer = document.getElementById("video-player");
@@ -95,7 +98,590 @@ let isInTemporaryMode = false; // Whether we're in temporary selection mode
 
 // Variables for managing auto-seek behavior
 let isAutoResetDisabled = false; // True when user manually seeked outside bounds
+
+// Gamepad manager instance
+let gamepadManager = null;
 let wasLastSeekManual = false; // Track if the last seek was manual
+
+// Grid navigation state
+let currentGridFocusIndex = 0; // Currently selected clip index in the grid
+let gridNavigationEnabled = false; // Whether grid navigation is active
+let lastGridNavigationTime = 0; // Throttle grid navigation
+const GRID_NAVIGATION_THROTTLE = 200; // 200ms between movements
+let mouseKeyboardListenersSetup = false; // Track if we've set up mouse/keyboard listeners
+
+// Grid navigation functions
+function enableGridNavigation() {
+  gridNavigationEnabled = true;
+  currentGridFocusIndex = 0;
+  updateGridSelection();
+  setupMouseKeyboardDetection(); // Set up detection to hide on mouse/keyboard use
+}
+
+function disableGridNavigation() {
+  gridNavigationEnabled = false;
+  // Remove focus from all clips
+  document.querySelectorAll('.clip-item').forEach(clip => {
+    clip.classList.remove('controller-focused');
+  });
+  removeMouseKeyboardDetection(); // Clean up listeners when disabling
+}
+
+function getVisibleClips() {
+  // Get all visible clip items (not display: none)
+  return Array.from(document.querySelectorAll('.clip-item')).filter(clip => {
+    const style = window.getComputedStyle(clip);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  });
+}
+
+function updateGridSelection() {
+  if (!gridNavigationEnabled) return;
+  
+  const visibleClips = getVisibleClips();
+  if (visibleClips.length === 0) return;
+  
+  // Clamp the focus index to valid range
+  currentGridFocusIndex = Math.max(0, Math.min(currentGridFocusIndex, visibleClips.length - 1));
+  
+  // Remove focus from all clips
+  visibleClips.forEach(clip => {
+    clip.classList.remove('controller-focused');
+  });
+  
+  // Add focus to current clip
+  if (visibleClips[currentGridFocusIndex]) {
+    visibleClips[currentGridFocusIndex].classList.add('controller-focused');
+    
+    // Scroll to keep the focused clip visible
+    visibleClips[currentGridFocusIndex].scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'nearest'
+    });
+  }
+}
+
+function moveGridSelection(direction) {
+  if (!gridNavigationEnabled) return;
+  
+  // Throttle navigation to prevent spam
+  const now = Date.now();
+  if (now - lastGridNavigationTime < GRID_NAVIGATION_THROTTLE) {
+    return;
+  }
+  lastGridNavigationTime = now;
+  
+  const visibleClips = getVisibleClips();
+  if (visibleClips.length === 0) return;
+  
+  const currentClip = visibleClips[currentGridFocusIndex];
+  if (!currentClip) return;
+  
+  let newIndex = currentGridFocusIndex;
+  
+  switch (direction) {
+    case 'left':
+      // Simple: move to previous clip
+      if (currentGridFocusIndex > 0) {
+        newIndex = currentGridFocusIndex - 1;
+      }
+      break;
+      
+    case 'right':
+      // Simple: move to next clip
+      if (currentGridFocusIndex < visibleClips.length - 1) {
+        newIndex = currentGridFocusIndex + 1;
+      }
+      break;
+      
+    case 'up':
+      // Find closest clip above
+      newIndex = findClipInDirection(visibleClips, currentGridFocusIndex, 'up');
+      break;
+      
+    case 'down':
+      // Find closest clip below
+      newIndex = findClipInDirection(visibleClips, currentGridFocusIndex, 'down');
+      break;
+  }
+  
+  if (newIndex !== currentGridFocusIndex && newIndex >= 0 && newIndex < visibleClips.length) {
+    currentGridFocusIndex = newIndex;
+    updateGridSelection();
+  }
+}
+
+function findClipInDirection(visibleClips, currentIndex, direction) {
+  const currentClip = visibleClips[currentIndex];
+  if (!currentClip) return currentIndex;
+  
+  const currentRect = currentClip.getBoundingClientRect();
+  const currentCenterX = currentRect.left + currentRect.width / 2;
+  const currentCenterY = currentRect.top + currentRect.height / 2;
+  
+  let bestIndex = currentIndex;
+  let bestDistance = Infinity;
+  
+  for (let i = 0; i < visibleClips.length; i++) {
+    if (i === currentIndex) continue;
+    
+    const clipRect = visibleClips[i].getBoundingClientRect();
+    const clipCenterX = clipRect.left + clipRect.width / 2;
+    const clipCenterY = clipRect.top + clipRect.height / 2;
+    
+    let isValidDirection = false;
+    let distance = 0;
+    
+    if (direction === 'up') {
+      // Clip must be above current clip
+      isValidDirection = clipCenterY < currentCenterY - 10; // 10px threshold
+      if (isValidDirection) {
+        // Prefer clips that are closer horizontally and vertically
+        const horizontalDistance = Math.abs(clipCenterX - currentCenterX);
+        const verticalDistance = Math.abs(clipCenterY - currentCenterY);
+        distance = horizontalDistance * 0.5 + verticalDistance; // Weight vertical more
+      }
+    } else if (direction === 'down') {
+      // Clip must be below current clip
+      isValidDirection = clipCenterY > currentCenterY + 10; // 10px threshold
+      if (isValidDirection) {
+        const horizontalDistance = Math.abs(clipCenterX - currentCenterX);
+        const verticalDistance = Math.abs(clipCenterY - currentCenterY);
+        distance = horizontalDistance * 0.5 + verticalDistance; // Weight vertical more
+      }
+    }
+    
+    if (isValidDirection && distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+  
+  return bestIndex;
+}
+
+function openCurrentGridSelection() {
+  if (!gridNavigationEnabled) return;
+  
+  const visibleClips = getVisibleClips();
+  if (visibleClips.length === 0 || currentGridFocusIndex >= visibleClips.length) return;
+  
+  const selectedClip = visibleClips[currentGridFocusIndex];
+  if (!selectedClip) return;
+  
+  const originalName = selectedClip.dataset.originalName;
+  const customName = selectedClip.dataset.customName || originalName;
+  
+  if (originalName) {
+    disableGridNavigation(); // Disable grid navigation when opening clip
+    openClip(originalName, customName);
+  }
+}
+
+// Mouse and keyboard detection to hide controller selection
+function setupMouseKeyboardDetection() {
+  if (mouseKeyboardListenersSetup) return; // Already set up
+  
+  // Mouse movement detection
+  document.addEventListener('mousemove', hideControllerSelectionOnInput, { passive: true });
+  
+  // Mouse click detection
+  document.addEventListener('mousedown', hideControllerSelectionOnInput, { passive: true });
+  
+  // Keyboard detection (but exclude controller-related keys in video player)
+  document.addEventListener('keydown', hideControllerSelectionOnKeyboard, { passive: true });
+  
+  mouseKeyboardListenersSetup = true;
+}
+
+function removeMouseKeyboardDetection() {
+  if (!mouseKeyboardListenersSetup) return;
+  
+  document.removeEventListener('mousemove', hideControllerSelectionOnInput);
+  document.removeEventListener('mousedown', hideControllerSelectionOnInput);
+  document.removeEventListener('keydown', hideControllerSelectionOnKeyboard);
+  
+  mouseKeyboardListenersSetup = false;
+}
+
+function hideControllerSelectionOnInput() {
+  if (gridNavigationEnabled) {
+    disableGridNavigation();
+  }
+}
+
+function hideControllerSelectionOnKeyboard(e) {
+  // Don't hide on controller-mapped keys or special keys
+  const isPlayerActive = playerOverlay.style.display === "block";
+  
+  if (isPlayerActive) {
+    // In video player, only hide on specific non-controller keys
+    const allowedKeys = [
+      'Tab', 'Enter', 'Escape', // Navigation keys
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', // Arrow keys
+    ];
+    
+    // Hide if it's a letter/number key or other non-controller key
+    if (!allowedKeys.includes(e.key) && 
+        e.key.length === 1 && // Single character keys (letters, numbers)
+        gridNavigationEnabled) {
+      disableGridNavigation();
+    }
+  } else {
+    // In grid view, hide on most keyboard input except controller actions
+    const controllerKeys = [
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', // D-pad equivalent
+    ];
+    
+    if (!controllerKeys.includes(e.key) && gridNavigationEnabled) {
+      disableGridNavigation();
+    }
+  }
+}
+
+// Global function for resetting controls timeout (needed for fullscreen handlers)
+function resetControlsTimeout() {
+  if (typeof showControls === 'function') {
+    showControls();
+  }
+  clearTimeout(controlsTimeout);
+  if (videoPlayer && !videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
+    controlsTimeout = setTimeout(() => {
+      if (typeof hideControls === 'function') {
+        hideControls();
+      }
+    }, 3000);
+  }
+}
+
+// Initialize gamepad manager with proper callbacks
+async function initializeGamepadManager() {
+  try {
+    gamepadManager = new GamepadManager();
+    
+    // Get controller settings from main settings
+    const appSettings = await ipcRenderer.invoke('get-settings');
+    const controllerSettings = appSettings?.controller;
+    
+    if (controllerSettings) {
+      // Apply custom mappings if they exist
+      if (controllerSettings.buttonMappings) {
+        Object.entries(controllerSettings.buttonMappings).forEach(([buttonIndex, action]) => {
+          gamepadManager.setButtonMapping(parseInt(buttonIndex), action);
+        });
+      }
+      
+      // Apply sensitivity settings
+      if (controllerSettings.seekSensitivity !== undefined) {
+        gamepadManager.seekSensitivity = controllerSettings.seekSensitivity;
+      }
+      if (controllerSettings.volumeSensitivity !== undefined) {
+        gamepadManager.volumeSensitivity = controllerSettings.volumeSensitivity;
+      }
+      
+      // Enable/disable controller based on settings
+      if (controllerSettings.enabled) {
+        gamepadManager.enable();
+      } else {
+        gamepadManager.disable();
+      }
+    } else {
+      // Default: enable controller support
+      gamepadManager.enable();
+    }
+    
+    // Set up action callback for button presses
+    gamepadManager.setActionCallback((action) => {
+      handleControllerAction(action);
+    });
+    
+    // Set up navigation callback for analog sticks
+    gamepadManager.setNavigationCallback((type, value) => {
+      handleControllerNavigation(type, value);
+    });
+    
+    // Set up raw navigation callback for grid scrolling
+    gamepadManager.setRawNavigationCallback((type, value) => {
+      handleControllerRawNavigation(type, value);
+    });
+    
+    // Set up connection callback for UI updates
+    gamepadManager.setConnectionCallback((connected, gamepadId) => {
+      handleControllerConnection(connected, gamepadId);
+    });
+    
+    logger.info('Gamepad manager initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize gamepad manager:', error);
+  }
+}
+
+// Handle controller button actions
+function handleControllerAction(action) {
+  logger.info('Controller action:', action);
+  
+  // Check if we're in the video player
+  const isPlayerActive = playerOverlay.style.display === "block";
+  
+  if (isPlayerActive) {
+    // Use existing keyboard action handler for consistency
+    const fakeEvent = {
+      preventDefault: () => {},
+      key: '', // We'll use the action directly
+      code: ''
+    };
+    
+    // Map the action to the existing switch case logic
+    switch (action) {
+      case 'closePlayer':
+        // If in fullscreen, exit fullscreen first before closing player
+        if (document.fullscreenElement) {
+          try {
+            if (document.exitFullscreen) {
+              document.exitFullscreen();
+            } else if (document.mozCancelFullScreen) {
+              document.mozCancelFullScreen();
+            } else if (document.webkitExitFullscreen) {
+              document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) {
+              document.msExitFullscreen();
+            }
+            // Small delay to let fullscreen exit complete before closing player
+            setTimeout(() => {
+              closePlayer();
+            }, 100);
+          } catch (error) {
+            logger.error('Error exiting fullscreen before closing player:', error);
+            closePlayer(); // Fallback to just closing
+          }
+        } else {
+          closePlayer();
+        }
+        break;
+      case 'playPause':
+        if (videoPlayer.src) togglePlayPause();
+        break;
+      case 'frameBackward':
+        moveFrame(-1);
+        break;
+      case 'frameForward':
+        moveFrame(1);
+        break;
+      case 'navigatePrev':
+        navigateToVideo(-1);
+        break;
+      case 'navigateNext':
+        navigateToVideo(1);
+        break;
+      case 'skipBackward':
+        skipTime(-1);
+        break;
+      case 'skipForward':
+        skipTime(1);
+        break;
+      case 'volumeUp':
+        changeVolume(0.1);
+        break;
+      case 'volumeDown':
+        changeVolume(-0.1);
+        break;
+      case 'exportAudioFile':
+        exportAudioWithFileSelection();
+        break;
+      case 'exportVideo':
+        exportVideoWithFileSelection();
+        break;
+      case 'exportAudioClipboard':
+        exportAudioToClipboard();
+        break;
+      case 'exportDefault':
+        exportTrimmedVideo();
+        break;
+      case 'fullscreen':
+        toggleFullscreen();
+        break;
+      case 'deleteClip':
+        confirmAndDeleteClip();
+        break;
+      case 'setTrimStart':
+        setTrimPoint('start');
+        break;
+      case 'setTrimEnd':
+        setTrimPoint('end');
+        break;
+      case 'focusTitle':
+        clipTitle.focus();
+        break;
+      default:
+        logger.warn('Unknown controller action:', action);
+        break;
+    }
+  } else {
+    // Handle actions when in grid view
+    if (!gridNavigationEnabled) {
+      enableGridNavigation();
+    }
+    
+    switch (action) {
+      case 'closePlayer':
+        // Exit grid navigation or open settings
+        if (gridNavigationEnabled) {
+          disableGridNavigation();
+        }
+        break;
+      case 'playPause':
+        // Open the currently selected clip
+        openCurrentGridSelection();
+        break;
+      case 'exportDefault':
+        // Also open the currently selected clip (alternative action)
+        openCurrentGridSelection();
+        break;
+      case 'volumeUp':
+        // D-pad up - navigate up in grid
+        moveGridSelection('up');
+        break;
+      case 'volumeDown':
+        // D-pad down - navigate down in grid
+        moveGridSelection('down');
+        break;
+      case 'skipBackward':
+        // D-pad left - navigate left in grid
+        moveGridSelection('left');
+        break;
+      case 'skipForward':
+        // D-pad right - navigate right in grid
+        moveGridSelection('right');
+        break;
+      default:
+        // Silently ignore unhandled actions to reduce spam
+        break;
+    }
+  }
+}
+
+// Handle controller navigation (analog sticks)
+function handleControllerNavigation(type, value) {
+  const isPlayerActive = playerOverlay.style.display === "block";
+  
+  if (isPlayerActive && videoPlayer) {
+    switch (type) {
+      case 'seek':
+        // Right stick X - timeline seeking
+        if (Math.abs(value) > 0.1) { // Minimum threshold
+          const newTime = Math.max(0, Math.min(videoPlayer.currentTime + value, videoPlayer.duration));
+          
+          // If seeking outside bounds, disable auto-reset
+          if (newTime < trimStartTime || newTime > trimEndTime) {
+            isAutoResetDisabled = true;
+          }
+          
+          videoPlayer.currentTime = newTime;
+          showControls();
+        }
+        break;
+        
+      case 'volume':
+        // Right stick Y - volume control
+        if (Math.abs(value) > 0.05) { // Minimum threshold
+          changeVolume(value);
+        }
+        break;
+        
+      case 'navigate':
+        // Left stick - UI navigation in video player
+        logger.info('Navigation direction:', value);
+        break;
+        
+      default:
+        logger.warn('Unknown navigation type:', type);
+        break;
+    }
+  } else {
+    // Handle navigation in grid view
+    switch (type) {
+      case 'navigate':
+        // Left stick - grid navigation
+        if (!gridNavigationEnabled) {
+          enableGridNavigation();
+        }
+        moveGridSelection(value);
+        break;
+        
+      default:
+        // Other navigation types handled by raw navigation
+        break;
+    }
+  }
+}
+
+// Handle raw controller navigation (for grid scrolling)
+function handleControllerRawNavigation(type, value) {
+  const isPlayerActive = playerOverlay.style.display === "block";
+  
+  // Only handle raw navigation in grid view
+  if (!isPlayerActive) {
+    switch (type) {
+      case 'seekRaw':
+        // Right stick X - horizontal scrolling in grid
+        if (Math.abs(value) > 0.3) { // Reasonable threshold for raw values
+          const scrollAmount = value * 15; // Smooth scrolling sensitivity
+          window.scrollBy(scrollAmount, 0);
+        }
+        break;
+        
+      case 'volumeRaw':
+        // Right stick Y - vertical scrolling in grid
+        if (Math.abs(value) > 0.3) { // Reasonable threshold for raw values
+          const scrollAmount = value * 15; // Smooth scrolling sensitivity
+          window.scrollBy(0, scrollAmount);
+        }
+        break;
+        
+      default:
+        // Unknown raw navigation type
+        break;
+    }
+  }
+}
+
+// Handle controller connection/disconnection
+function handleControllerConnection(connected, gamepadId) {
+  const indicator = document.getElementById('controller-indicator');
+  
+  if (connected) {
+    // Only log the first controller connection to reduce spam
+    if (gamepadManager && gamepadManager.getConnectedGamepads().length === 1) {
+      logger.info(`Controller connected: ${gamepadId}`);
+    }
+    
+    if (indicator) {
+      indicator.style.display = 'flex';
+      indicator.title = `Controller Connected: ${gamepadId}`;
+    }
+    
+    // Enable grid navigation if we're not in video player and have clips
+    // Only do this once to prevent multiple triggers
+    const isPlayerActive = playerOverlay.style.display === "block";
+    if (!isPlayerActive && getVisibleClips().length > 0 && !gridNavigationEnabled) {
+      setTimeout(() => {
+        enableGridNavigation();
+      }, 500); // Small delay to let everything settle
+    }
+  } else {
+    // Only log when all controllers are disconnected
+    if (gamepadManager && !gamepadManager.isGamepadConnected()) {
+      logger.info(`All controllers disconnected`);
+    }
+    
+    if (indicator && gamepadManager && !gamepadManager.isGamepadConnected()) {
+      // Only hide if no controllers are connected
+      indicator.style.display = 'none';
+      indicator.title = 'Controller Disconnected';
+    }
+  }
+}
 
 // Variables for watch session tracking
 let currentSessionStartTime = null;
@@ -1160,6 +1746,18 @@ async function renderClips(clips) {
   });
 
   logger.info("Rendered clips count:", clips.length);
+  
+  // Setup grid navigation if controller is connected
+  if (gamepadManager && gamepadManager.isGamepadConnected() && clips.length > 0) {
+    setTimeout(() => {
+      if (!gridNavigationEnabled) {
+        enableGridNavigation();
+      } else {
+        updateGridSelection();
+      }
+    }, 100); // Small delay to ensure DOM is updated
+  }
+  
   isRendering = false;
 }
 
@@ -2055,6 +2653,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   await keybinds.initKeybindings();
   settings = ipcRenderer.invoke('get-settings');
   fetchSettings();
+  
+  // Initialize gamepad manager
+  await initializeGamepadManager();
   const settingsButton = document.getElementById("settingsButton");
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettingsModal);
@@ -3295,25 +3896,48 @@ document.addEventListener('mouseleave', handleFullscreenMouseLeave);
 function handleFullscreenChange() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
   
-  if (document.fullscreenElement) {
-    fullscreenPlayer.classList.add('custom-fullscreen');
-    document.addEventListener('mousemove', handleFullscreenMouseMove);
-  } else {
-    fullscreenPlayer.classList.remove('custom-fullscreen');
-    document.removeEventListener('mousemove', handleFullscreenMouseMove);
-    fullscreenPlayer.style.top = '50%';
-    fullscreenPlayer.style.left = '50%';
-    fullscreenPlayer.style.transform = 'translate(-50%, -50%)';
+  if (!fullscreenPlayer) {
+    logger.warn('Fullscreen player element not found');
+    return;
   }
   
-  resetControlsTimeout();
+  try {
+    if (document.fullscreenElement) {
+      // Entering fullscreen
+      fullscreenPlayer.classList.add('custom-fullscreen');
+      document.addEventListener('mousemove', handleFullscreenMouseMove);
+      logger.info('Entered fullscreen mode');
+    } else {
+      // Exiting fullscreen
+      fullscreenPlayer.classList.remove('custom-fullscreen');
+      document.removeEventListener('mousemove', handleFullscreenMouseMove);
+      fullscreenPlayer.style.top = '50%';
+      fullscreenPlayer.style.left = '50%';
+      fullscreenPlayer.style.transform = 'translate(-50%, -50%)';
+      logger.info('Exited fullscreen mode');
+    }
+    
+    // Ensure controls are visible and reset timeout
+    if (typeof showControls === 'function') {
+      showControls();
+    }
+    resetControlsTimeout();
+  } catch (error) {
+    logger.error('Error handling fullscreen change:', error);
+  }
 }
 
 function handleFullscreenMouseMove(e) {
-  if (e.clientY >= window.innerHeight - 1) {
-    hideControlsInstantly();
-  } else {
-    resetControlsTimeout();
+  try {
+    if (e.clientY >= window.innerHeight - 1) {
+      if (typeof hideControlsInstantly === 'function') {
+        hideControlsInstantly();
+      }
+    } else {
+      resetControlsTimeout();
+    }
+  } catch (error) {
+    logger.error('Error in fullscreen mouse move handler:', error);
   }
 }
 
@@ -3322,30 +3946,38 @@ document.addEventListener('fullscreenchange', handleFullscreenChange);
 function toggleFullscreen() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
   
-  if (!document.fullscreenElement) {
-    if (fullscreenPlayer.requestFullscreen) {
-      fullscreenPlayer.requestFullscreen();
-    } else if (fullscreenPlayer.mozRequestFullScreen) {
-      fullscreenPlayer.mozRequestFullScreen();
-    } else if (fullscreenPlayer.webkitRequestFullscreen) {
-      fullscreenPlayer.webkitRequestFullscreen();
-    } else if (fullscreenPlayer.msRequestFullscreen) {
-      fullscreenPlayer.msRequestFullscreen();
+  try {
+    if (!document.fullscreenElement) {
+      // Entering fullscreen
+      if (fullscreenPlayer.requestFullscreen) {
+        fullscreenPlayer.requestFullscreen();
+      } else if (fullscreenPlayer.mozRequestFullScreen) {
+        fullscreenPlayer.mozRequestFullScreen();
+      } else if (fullscreenPlayer.webkitRequestFullscreen) {
+        fullscreenPlayer.webkitRequestFullscreen();
+      } else if (fullscreenPlayer.msRequestFullscreen) {
+        fullscreenPlayer.msRequestFullscreen();
+      }
+    } else {
+      // Exiting fullscreen
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if (document.mozCancelFullScreen) {
+        document.mozCancelFullScreen();
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      } else if (document.msExitFullscreen) {
+        document.msExitFullscreen();
+      }
     }
-  } else {
-    if (document.exitFullscreen) {
-      document.exitFullscreen();
-    } else if (document.mozCancelFullScreen) {
-      document.mozCancelFullScreen();
-    } else if (document.webkitExitFullscreen) {
-      document.webkitExitFullscreen();
-    } else if (document.msExitFullscreen) {
-      document.msExitFullscreen();
-    }
+  } catch (error) {
+    logger.error('Error toggling fullscreen:', error);
   }
   
-  // Reset control visibility
-  showControls();
+  // Reset control visibility (the actual fullscreen change will be handled by the event listener)
+  if (typeof showControls === 'function') {
+    showControls();
+  }
   resetControlsTimeout();
 }
 
@@ -3732,14 +4364,6 @@ async function openClip(originalName, customName) {
   const videoContainer = document.getElementById("video-container");
   const videoControls = document.getElementById("video-controls");
 
-  function resetControlsTimeout() {
-    showControls();
-    clearTimeout(controlsTimeout);
-    if (!videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
-      controlsTimeout = setTimeout(hideControls, 3000);
-    }
-  }
-
   function handleMouseMove(e) {
     // Only respond to actual mouse movements
     if (e.movementX !== 0 || e.movementY !== 0) {
@@ -4051,6 +4675,13 @@ function closePlayer() {
 
   clearInterval(discordPresenceInterval);
   updateDiscordPresence('Browsing clips', `Total: ${currentClipList.length}`);
+  
+  // Re-enable grid navigation if controller is connected
+  if (gamepadManager && gamepadManager.isGamepadConnected() && getVisibleClips().length > 0) {
+    setTimeout(() => {
+      enableGridNavigation();
+    }, 200); // Small delay to ensure player overlay is hidden
+  }
 }
 
 // Make sure this event listener is present on the fullscreenPlayer
@@ -6144,8 +6775,6 @@ async function logCurrentWatchSession() {
   currentSessionActiveDuration = 0;
   lastPlayTimestamp = null;
 }
-
-document.addEventListener('fullscreenchange', handleFullscreenChange);
 
 function applyIconGreyscale(enabled) {
   document.querySelectorAll('.game-icon').forEach(icon => {
