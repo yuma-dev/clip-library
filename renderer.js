@@ -273,13 +273,25 @@ async function fetchSettings() {
   return settings;
 }
 
+let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
+
 async function loadClips() {
   try {
     logger.info("Loading clips...");
     clipLocation = await ipcRenderer.invoke("get-clip-location");
     currentClipLocationSpan.textContent = clipLocation;
+    
+    // Get new clips info before loading all clips
+    newClipsInfo = await ipcRenderer.invoke("get-new-clips-info");
+    logger.info("New clips info:", newClipsInfo);
+    
     allClips = await ipcRenderer.invoke("get-clips");
     logger.info("Clips received:", allClips.length);
+    
+    // Mark which clips are new
+    allClips.forEach(clip => {
+      clip.isNewSinceLastSession = newClipsInfo.newClips.includes(clip.originalName);
+    });
     
     // Load tags for each clip in smaller batches
     const TAG_BATCH_SIZE = 50;
@@ -309,6 +321,15 @@ async function loadClips() {
     updateFilterDropdown();
 
     logger.info("Clips loaded and rendered.");
+    
+    // Show new clips notification if there are any
+      // New clips indicator will be shown inline with clips
+  
+  // Update indicator heights after render complete
+  setTimeout(() => {
+    document.querySelectorAll('.clip-group-content').forEach(updateIndicatorHeight);
+  }, 100);
+    
     hideLoadingScreen();
 
     // Start thumbnail validation after a short delay
@@ -435,6 +456,15 @@ async function addNewClipToLibrary(fileName) {
     }
 
     const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
+    
+    // Mark as new since it's being added during runtime
+    newClipInfo.isNewSinceLastSession = true;
+    
+    // Update the newClipsInfo to include this clip
+    if (!newClipsInfo.newClips.includes(fileName)) {
+      newClipsInfo.newClips.push(fileName);
+      newClipsInfo.totalNewCount++;
+    }
     
     // Check if the clip already exists in allClips
     const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
@@ -684,11 +714,43 @@ function hideThumbnailGenerationText() {
   completedThumbnails = 0;
 }
 
+function updateIndicatorHeight(container) {
+  // Find the first clip item to measure actual height
+  const firstClip = container.querySelector('.clip-item');
+  if (firstClip) {
+    const clipHeight = firstClip.offsetHeight;
+    const gap = 20; // Grid gap from CSS
+    
+    // Update height and recalculate position for all indicators in this container
+    const indicators = container.querySelectorAll('.new-clips-indicator');
+    indicators.forEach(indicator => {
+      // Set the height
+      indicator.style.height = `${clipHeight}px`;
+      
+      // Recalculate top position using actual measured height
+      const row = parseInt(indicator.dataset.row);
+      const newTop = row * (clipHeight + gap);
+      indicator.style.top = `${newTop}px`;
+    });
+  }
+}
+
+// New clips notification functions removed - using inline green line indicator only
+
 window.addEventListener('beforeunload', () => {
   if (window.thumbnailGenerationTimeout) {
     clearTimeout(window.thumbnailGenerationTimeout);
   }
   hideThumbnailGenerationText();
+});
+
+// Add window resize listener to update indicator heights
+window.addEventListener('resize', () => {
+  // Debounce resize events
+  clearTimeout(window.resizeTimeout);
+  window.resizeTimeout = setTimeout(() => {
+    document.querySelectorAll('.clip-group-content').forEach(updateIndicatorHeight);
+  }, 250);
 });
 
 ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
@@ -823,8 +885,51 @@ async function renderClips(clips) {
     getGroupOrder(a[0]) - getGroupOrder(b[0])
   );
 
+  // Find where new clips begin for visual indicator
+  let newClipsStartIndex = -1;
+  if (newClipsInfo.totalNewCount > 0) {
+    newClipsStartIndex = clips.findIndex(clip => clip.isNewSinceLastSession);
+  }
+  
+  // Debug logging
+  console.log('Debug - New clips info:', newClipsInfo);
+  console.log('Debug - newClipsStartIndex:', newClipsStartIndex);
+  console.log('Debug - clips with new status:', clips.map(c => ({ name: c.originalName, isNew: c.isNewSinceLastSession })).slice(0, 10));
+
   // Create and append groups
+  let hasAddedNewClipsIndicator = false;
+  
   for (const [groupName, groupClips] of sortedGroups) {
+    // Check if this group contains the first new clip
+    const groupHasFirstNewClip = newClipsStartIndex >= 0 && 
+      groupClips.some(clip => clip.isNewSinceLastSession) &&
+      !groupClips.every(clip => clip.isNewSinceLastSession);
+    
+    // Check if this entire group consists of new clips and we haven't added indicator yet
+    const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession) && groupClips.length > 0;
+    
+    // Debug logging for this group
+    console.log(`Debug - Group "${groupName}":`, {
+      groupIsAllNewClips,
+      hasAddedNewClipsIndicator,
+      totalNewCount: newClipsInfo.totalNewCount,
+      groupClips: groupClips.map(c => ({ name: c.originalName, isNew: c.isNewSinceLastSession }))
+    });
+    
+    // Add inter-group indicator if this is the first group of all new clips
+    if (groupIsAllNewClips && !hasAddedNewClipsIndicator && newClipsInfo.totalNewCount > 0) {
+      console.log('Debug - Adding inter-group indicator for:', groupName);
+      const interGroupIndicator = document.createElement('div');
+      interGroupIndicator.className = 'new-clips-indicator inter-group';
+      interGroupIndicator.innerHTML = `
+        <div class="new-clips-line"></div>
+        <div class="new-clips-text">New clips since last session</div>
+        <div class="new-clips-line"></div>
+      `;
+      clipGrid.appendChild(interGroupIndicator);
+      hasAddedNewClipsIndicator = true;
+    }
+    
     const groupElement = document.createElement('div');
     groupElement.className = `clip-group ${collapsedState[groupName] ? 'collapsed' : ''}`;
     groupElement.dataset.loaded = collapsedState[groupName] ? 'false' : 'true';
@@ -849,10 +954,45 @@ async function renderClips(clips) {
     if (!collapsedState[groupName]) {
       // Create clip elements
       const clipElements = await Promise.all(groupClips.map(createClipElement));
-      clipElements.forEach(clipElement => {
+      
+      // Add clips to content with new clips indicator
+      for (let i = 0; i < clipElements.length; i++) {
+        const clipElement = clipElements[i];
+        const clip = groupClips[i];
+        
+        // Check if we need to add the "new clips" indicator after this clip (transition from new to old)
+        const shouldAddIndicator = i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator;
+        if (shouldAddIndicator) {
+          console.log('Debug - Adding within-group indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
+          
+          // Calculate position based on grid layout (4 columns)
+          const clipIndex = i - 1; // Index of the last new clip
+          const row = Math.floor(clipIndex / 4);
+          const col = clipIndex % 4;
+          
+          // Position the indicator at the right edge of the last new clip
+          const newClipsIndicator = document.createElement('div');
+          newClipsIndicator.className = 'new-clips-indicator';
+          newClipsIndicator.dataset.row = row;
+          newClipsIndicator.dataset.col = col;
+          newClipsIndicator.innerHTML = `<div class="new-clips-line"></div>`;
+          
+          // Calculate and set position directly in JavaScript
+          const left = `calc(${(col + 1) * 25}% - 1.5px)`;
+          newClipsIndicator.style.left = left;
+          newClipsIndicator.style.top = `${row * 280}px`; // Start with estimated height
+          
+          // Add to the grid container with relative positioning
+          content.style.position = 'relative';
+          content.appendChild(newClipsIndicator);
+          
+          // Update clip height dynamically based on actual clip elements
+          updateIndicatorHeight(content);
+          hasAddedNewClipsIndicator = true;
+        }
+        
         content.appendChild(clipElement);
-        // Remove updateClipTags call since tags are now added directly in createClipElement
-      });
+      }
     } else {
       // Store the clip data for lazy loading
       groupElement.dataset.clips = JSON.stringify(groupClips.map(clip => ({
@@ -915,10 +1055,39 @@ async function renderClips(clips) {
               content.innerHTML = '';
             }
             
-            clipElements.forEach(clipElement => {
+            // Add clips with new clips indicator logic (similar to main render)
+            for (let j = 0; j < clipElements.length; j++) {
+              const clipElement = clipElements[j];
+              const clipIndex = i + j;
+              const clip = batch[j];
+              
+              // Check if we need to add the "new clips" indicator before this clip
+              if (clipIndex > 0 && !groupClips[clipIndex-1].isNewSinceLastSession && clip.isNewSinceLastSession) {
+                // Calculate position for lazy-loaded clips
+                const prevClipIndex = clipIndex - 1;
+                const row = Math.floor(prevClipIndex / 4);
+                const col = prevClipIndex % 4;
+                
+                const newClipsIndicator = document.createElement('div');
+                newClipsIndicator.className = 'new-clips-indicator';
+                newClipsIndicator.dataset.row = row;
+                newClipsIndicator.dataset.col = col;
+                newClipsIndicator.innerHTML = `<div class="new-clips-line"></div>`;
+                
+                // Calculate and set position directly in JavaScript
+                const left = `calc(${(col + 1) * 25}% - 1.5px)`;
+                newClipsIndicator.style.left = left;
+                newClipsIndicator.style.top = `${row * 280}px`; // Start with estimated height
+                
+                content.style.position = 'relative';
+                content.appendChild(newClipsIndicator);
+                
+                // Update clip height dynamically based on actual clip elements
+                updateIndicatorHeight(content);
+              }
+              
               content.appendChild(clipElement);
-              // Remove updateClipTags call since tags are now added directly in createClipElement
-            });
+            }
           }
           
           // Mark as loaded

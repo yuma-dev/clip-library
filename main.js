@@ -939,6 +939,9 @@ async function processQueue() {
 app.on('before-quit', () => {
   // Clear the queue
   thumbnailQueue.length = 0;
+  
+  // Save current clip list for next session comparison
+  saveCurrentClipList();
 });
 
 ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTime) => {
@@ -1775,4 +1778,93 @@ ipcMain.handle("get-game-icon", async (event, clipName) => {
   } catch {
     return null;
   }
+});
+
+const LAST_CLIPS_FILE = path.join(app.getPath('userData'), 'last-clips.json');
+
+async function saveCurrentClipList() {
+  try {
+    const clipsFolder = settings.clipLocation;
+    
+    if (!clipsFolder) {
+      logger.warn('No clip location set, skipping clip list save');
+      return;
+    }
+
+    // Get current clip list (just the originalNames for comparison)
+    const result = await readify(clipsFolder, {
+      type: "raw",
+      sort: "date", 
+      order: "desc",
+    });
+
+    const clipNames = result.files
+      .filter((file) =>
+        [".mp4", ".avi", ".mov"].includes(
+          path.extname(file.name).toLowerCase(),
+        ),
+      )
+      .map(file => file.name);
+
+    const clipListData = {
+      timestamp: Date.now(),
+      clips: clipNames
+    };
+
+    await fs.writeFile(LAST_CLIPS_FILE, JSON.stringify(clipListData, null, 2));
+    logger.info(`Saved ${clipNames.length} clips for next session comparison`);
+  } catch (error) {
+    logger.error('Error saving current clip list:', error);
+  }
+}
+
+async function getNewClipsInfo() {
+  try {
+    // Load previously saved clip list
+    let previousClips = [];
+    try {
+      const data = await fs.readFile(LAST_CLIPS_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      previousClips = parsed.clips || [];
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        logger.error('Error reading previous clip list:', error);
+      }
+      // First time running or file doesn't exist - no previous clips
+      return { newClips: [], totalNewCount: 0 };
+    }
+
+    // Get current clip list
+    const clipsFolder = settings.clipLocation;
+    const result = await readify(clipsFolder, {
+      type: "raw",
+      sort: "date",
+      order: "desc",
+    });
+
+    const currentClips = result.files
+      .filter((file) =>
+        [".mp4", ".avi", ".mov"].includes(
+          path.extname(file.name).toLowerCase(),
+        ),
+      )
+      .map(file => file.name);
+
+    // Find new clips (clips that weren't in the previous list)
+    const newClips = currentClips.filter(clipName => !previousClips.includes(clipName));
+    
+    logger.info(`Found ${newClips.length} new clips since last session`);
+    
+    return {
+      newClips: newClips,
+      totalNewCount: newClips.length
+    };
+  } catch (error) {
+    logger.error('Error getting new clips info:', error);
+    return { newClips: [], totalNewCount: 0 };
+  }
+}
+
+ipcMain.handle('get-new-clips-info', async () => {
+  return await getNewClipsInfo();
 });
