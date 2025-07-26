@@ -180,6 +180,9 @@ app.whenReady().then(async () => {
 
   // Kick off the update check once the window exists
   checkForUpdatesInBackground(win);
+  
+  // Start periodic saves to prevent data loss
+  startPeriodicSave();
 });
 
 app.on("window-all-closed", () => {
@@ -642,6 +645,172 @@ ipcMain.handle("save-global-tags", async (event, tags) => {
   }
 });
 
+ipcMain.handle("restore-missing-global-tags", async () => {
+  try {
+    const clipsFolder = settings.clipLocation;
+    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+    
+    // Get all .tags files
+    let allClipTags = new Set();
+    
+    try {
+      const files = await fs.readdir(metadataFolder);
+      const tagFiles = files.filter(file => file.endsWith('.tags'));
+      
+      for (const tagFile of tagFiles) {
+        try {
+          const tagFilePath = path.join(metadataFolder, tagFile);
+          const tagsData = await fs.readFile(tagFilePath, "utf8");
+          const tags = JSON.parse(tagsData);
+          
+          // Add all tags from this clip to our set
+          tags.forEach(tag => allClipTags.add(tag));
+        } catch (error) {
+          // Skip files that can't be read or parsed
+          logger.warn(`Could not read tags from ${tagFile}:`, error.message);
+        }
+      }
+    } catch (error) {
+      // Metadata folder doesn't exist or can't be read
+      logger.info("No metadata folder found or couldn't read it");
+      return { success: true, restoredCount: 0 };
+    }
+    
+    // Load current global tags
+    const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
+    let currentGlobalTags = [];
+    try {
+      const tagsData = await fs.readFile(tagsFilePath, "utf8");
+      currentGlobalTags = JSON.parse(tagsData);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        logger.error("Error reading global tags during restore:", error);
+      }
+      currentGlobalTags = [];
+    }
+    const currentGlobalTagsSet = new Set(currentGlobalTags);
+    
+    // Find missing tags
+    const missingTags = [...allClipTags].filter(tag => !currentGlobalTagsSet.has(tag));
+    
+         if (missingTags.length > 0) {
+       // Add missing tags to global tags
+       const updatedGlobalTags = [...currentGlobalTags, ...missingTags];
+       
+       // Save updated global tags
+       await fs.writeFile(tagsFilePath, JSON.stringify(updatedGlobalTags));
+      
+      logger.info(`Restored ${missingTags.length} missing global tags:`, missingTags);
+      logActivity('tags_restore_global', { restoredTags: missingTags, count: missingTags.length });
+      
+      return { success: true, restoredCount: missingTags.length, restoredTags: missingTags };
+    } else {
+      logger.info("No missing global tags found");
+      return { success: true, restoredCount: 0 };
+    }
+    
+  } catch (error) {
+    logger.error("Error restoring missing global tags:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {
+  try {
+    const clipsFolder = settings.clipLocation;
+    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+    
+    let modifiedCount = 0;
+    
+    try {
+      const files = await fs.readdir(metadataFolder);
+      const tagFiles = files.filter(file => file.endsWith('.tags'));
+      
+      logger.info(`Checking ${tagFiles.length} .tags files for tag "${tagToRemove}"`);
+      
+      for (const tagFile of tagFiles) {
+        try {
+          const tagFilePath = path.join(metadataFolder, tagFile);
+          const tagsData = await fs.readFile(tagFilePath, "utf8");
+          const tags = JSON.parse(tagsData);
+          
+          // Check if this file contains the tag to remove
+          const tagIndex = tags.indexOf(tagToRemove);
+          if (tagIndex > -1) {
+            // Remove the tag and save the file
+            tags.splice(tagIndex, 1);
+            await fs.writeFile(tagFilePath, JSON.stringify(tags));
+            modifiedCount++;
+            logger.info(`Removed tag "${tagToRemove}" from ${tagFile}`);
+          }
+        } catch (error) {
+          // Skip files that can't be read or parsed
+          logger.warn(`Could not process tags file ${tagFile}:`, error.message);
+        }
+      }
+    } catch (error) {
+      // Metadata folder doesn't exist or can't be read
+      logger.info("No metadata folder found or couldn't read it");
+      return { success: true, modifiedCount: 0 };
+    }
+    
+    logger.info(`Tag deletion completed: modified ${modifiedCount} files`);
+    return { success: true, modifiedCount };
+    
+  } catch (error) {
+    logger.error("Error removing tag from all clips:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("update-tag-in-all-clips", async (event, oldTag, newTag) => {
+  try {
+    const clipsFolder = settings.clipLocation;
+    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
+    
+    let modifiedCount = 0;
+    
+    try {
+      const files = await fs.readdir(metadataFolder);
+      const tagFiles = files.filter(file => file.endsWith('.tags'));
+      
+      logger.info(`Checking ${tagFiles.length} .tags files for tag "${oldTag}" to update to "${newTag}"`);
+      
+      for (const tagFile of tagFiles) {
+        try {
+          const tagFilePath = path.join(metadataFolder, tagFile);
+          const tagsData = await fs.readFile(tagFilePath, "utf8");
+          const tags = JSON.parse(tagsData);
+          
+          // Check if this file contains the old tag
+          const tagIndex = tags.indexOf(oldTag);
+          if (tagIndex > -1) {
+            // Update the tag and save the file
+            tags[tagIndex] = newTag;
+            await fs.writeFile(tagFilePath, JSON.stringify(tags));
+            modifiedCount++;
+            logger.info(`Updated tag "${oldTag}" to "${newTag}" in ${tagFile}`);
+          }
+        } catch (error) {
+          // Skip files that can't be read or parsed
+          logger.warn(`Could not process tags file ${tagFile}:`, error.message);
+        }
+      }
+    } catch (error) {
+      // Metadata folder doesn't exist or can't be read
+      logger.info("No metadata folder found or couldn't read it");
+      return { success: true, modifiedCount: 0 };
+    }
+    
+    logger.info(`Tag update completed: modified ${modifiedCount} files`);
+    return { success: true, modifiedCount };
+    
+  } catch (error) {
+    logger.error("Error updating tag in all clips:", error);
+    return { success: false, error: error.message };
+  }
+});
+
 async function saveCustomNameData(clipName, customName) {
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
@@ -937,6 +1106,9 @@ async function processQueue() {
 }
 
 app.on('before-quit', () => {
+  // Stop periodic saves
+  stopPeriodicSave();
+  
   // Clear the queue
   thumbnailQueue.length = 0;
   
@@ -1811,10 +1983,31 @@ async function saveCurrentClipList() {
       clips: clipNames
     };
 
-    await fs.writeFile(LAST_CLIPS_FILE, JSON.stringify(clipListData, null, 2));
+    // Use atomic write to prevent corruption
+    const tempFile = LAST_CLIPS_FILE + '.tmp';
+    const jsonData = JSON.stringify(clipListData, null, 2);
+    
+    // Write to temp file first
+    await fs.writeFile(tempFile, jsonData, 'utf8');
+    
+    // Verify the temp file was written correctly
+    const verification = await fs.readFile(tempFile, 'utf8');
+    JSON.parse(verification); // This will throw if invalid JSON
+    
+    // Atomically replace the original file
+    await fs.rename(tempFile, LAST_CLIPS_FILE);
+    
     logger.info(`Saved ${clipNames.length} clips for next session comparison`);
   } catch (error) {
     logger.error('Error saving current clip list:', error);
+    
+    // Clean up temp file if it exists
+    try {
+      const tempFile = LAST_CLIPS_FILE + '.tmp';
+      await fs.unlink(tempFile);
+    } catch (cleanupError) {
+      // Ignore cleanup errors
+    }
   }
 }
 
@@ -1824,13 +2017,29 @@ async function getNewClipsInfo() {
     let previousClips = [];
     try {
       const data = await fs.readFile(LAST_CLIPS_FILE, 'utf8');
+      
+      // Check for empty file
+      if (data.trim().length === 0) {
+        logger.warn('Empty clip list file, treating as first run');
+        return { newClips: [], totalNewCount: 0 };
+      }
+      
       const parsed = JSON.parse(data);
       previousClips = parsed.clips || [];
+      logger.info(`Loaded ${previousClips.length} clips from previous session`);
     } catch (error) {
       if (error.code !== 'ENOENT') {
         logger.error('Error reading previous clip list:', error);
+        // Try to backup corrupted file
+        try {
+          const backupPath = LAST_CLIPS_FILE + '.backup.' + Date.now();
+          await fs.copyFile(LAST_CLIPS_FILE, backupPath);
+          logger.info(`Backed up corrupted file to: ${backupPath}`);
+        } catch (backupError) {
+          logger.error('Failed to backup corrupted file:', backupError);
+        }
       }
-      // First time running or file doesn't exist - no previous clips
+      // First time running, file doesn't exist, or corrupted - no previous clips
       return { newClips: [], totalNewCount: 0 };
     }
 
@@ -1868,3 +2077,27 @@ async function getNewClipsInfo() {
 ipcMain.handle('get-new-clips-info', async () => {
   return await getNewClipsInfo();
 });
+
+ipcMain.handle('save-clip-list-immediately', async () => {
+  await saveCurrentClipList();
+});
+
+// Periodic save to prevent data loss
+let periodicSaveInterval;
+
+function startPeriodicSave() {
+  // Save every 5 minutes
+  periodicSaveInterval = setInterval(() => {
+    saveCurrentClipList().catch(error => {
+      logger.error('Error in periodic save:', error);
+    });
+  }, 5 * 60 * 1000);
+}
+
+function stopPeriodicSave() {
+  if (periodicSaveInterval) {
+    clearInterval(periodicSaveInterval);
+    periodicSaveInterval = null;
+  }
+}
+
