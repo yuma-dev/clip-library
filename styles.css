@@ -3232,24 +3232,12 @@ input:checked + .settings-switch-slider::before {
 
 /* New Clips Indicator */
 .new-clips-indicator {
-  position: absolute;
-  width: 2px;
   z-index: 10;
   pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Position and height are set dynamically in JavaScript */
 }
 
-.new-clips-indicator.inter-group {
-  grid-column: 1 / -1; /* Only inter-group spans all columns */
-  margin: 30px 20px;
-  padding: 20px 0;
-  min-height: auto;
-}
-
-.new-clips-line {
+/* Positioned indicators (dynamically placed) */
+.new-clips-indicator.positioned .new-clips-line.vertical {
   width: 100%;
   height: 100%;
   background: linear-gradient(
@@ -3264,7 +3252,32 @@ input:checked + .settings-switch-slider::before {
   animation: newClipsGlow 2s ease-in-out infinite alternate;
 }
 
-/* Make inter-group indicators horizontal */
+.new-clips-indicator.positioned .new-clips-line.horizontal {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #22C55E 20%,
+    #22C55E 80%,
+    transparent
+  );
+  border-radius: 2px;
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+  animation: newClipsGlow 2s ease-in-out infinite alternate;
+}
+
+/* Inter-group indicators (unchanged) */
+.new-clips-indicator.inter-group {
+  grid-column: 1 / -1;
+  margin: 30px 20px;
+  padding: 20px 0;
+  min-height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .new-clips-indicator.inter-group .new-clips-line {
   width: 100%;
   height: 2px;
@@ -3275,6 +3288,9 @@ input:checked + .settings-switch-slider::before {
     #22C55E 80%,
     transparent
   );
+  border-radius: 2px;
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+  animation: newClipsGlow 2s ease-in-out infinite alternate;
 }
 
 .new-clips-text {

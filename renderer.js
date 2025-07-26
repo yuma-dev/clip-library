@@ -896,6 +896,18 @@ async function loadClips() {
     allClips = removeDuplicates(allClips);
     allClips.sort((a, b) => b.createdAt - a.createdAt);
 
+    // Restore any missing global tags from clip tags (e.g., after PC reset)
+    try {
+      const restoreResult = await ipcRenderer.invoke("restore-missing-global-tags");
+      if (restoreResult.success && restoreResult.restoredCount > 0) {
+        logger.info(`Restored ${restoreResult.restoredCount} missing global tags:`, restoreResult.restoredTags);
+        // Reload global tags to include the newly restored ones
+        await loadGlobalTags();
+      }
+    } catch (error) {
+      logger.error("Error during tag restoration:", error);
+    }
+
     await loadTagPreferences(); // This will set up selectedTags
     filterClips(); // This will set currentClipList correctly
     
@@ -911,10 +923,17 @@ async function loadClips() {
     // Show new clips notification if there are any
       // New clips indicator will be shown inline with clips
   
-  // Update indicator heights after render complete
+  // Position indicators after rendering is complete
   setTimeout(() => {
-    document.querySelectorAll('.clip-group-content').forEach(updateIndicatorHeight);
+    positionNewClipsIndicators();
   }, 100);
+  
+  // Save current clip list after initial load
+  try {
+    await ipcRenderer.invoke('save-clip-list-immediately');
+  } catch (error) {
+    logger.error('Failed to save clip list after initial load:', error);
+  }
     
     hideLoadingScreen();
 
@@ -1164,6 +1183,16 @@ async function addNewClipToLibrary(fileName) {
     }
     
     updateFilterDropdown();
+    
+    // Update new clips indicators after adding clip
+    updateNewClipsIndicators();
+    
+    // Save clip list immediately after adding clip
+    try {
+      await ipcRenderer.invoke('save-clip-list-immediately');
+    } catch (error) {
+      logger.error('Failed to save clip list after adding clip:', error);
+    }
 
   } catch (error) {
     // Only log as info if it's a file not found error, otherwise log as error
@@ -1300,28 +1329,153 @@ function hideThumbnailGenerationText() {
   completedThumbnails = 0;
 }
 
-function updateIndicatorHeight(container) {
-  // Find the first clip item to measure actual height
-  const firstClip = container.querySelector('.clip-item');
-  if (firstClip) {
-    const clipHeight = firstClip.offsetHeight;
-    const gap = 20; // Grid gap from CSS
+function positionNewClipsIndicators() {
+  console.log('Positioning new clips indicators...');
+  
+  // Remove any existing positioned indicators first
+  document.querySelectorAll('.new-clips-indicator.positioned').forEach(el => el.remove());
+  
+  // Find all content areas that need indicators
+  const contentAreas = document.querySelectorAll('.clip-group-content[data-needs-indicator="true"]');
+  console.log('Found content areas needing indicators:', contentAreas.length);
+  
+  contentAreas.forEach(content => {
+    const lastNewIndex = parseInt(content.dataset.lastNewIndex);
+    const firstOldIndex = parseInt(content.dataset.firstOldIndex);
     
-    // Update height and recalculate position for all indicators in this container
-    const indicators = container.querySelectorAll('.new-clips-indicator');
-    indicators.forEach(indicator => {
-      // Set the height
-      indicator.style.height = `${clipHeight}px`;
+    console.log(`Processing content area - lastNew: ${lastNewIndex}, firstOld: ${firstOldIndex}`);
+    
+    const clipItems = content.querySelectorAll('.clip-item');
+    console.log('Clip items found:', clipItems.length);
+    
+    if (clipItems.length === 0) return;
+    
+    const lastNewClip = clipItems[lastNewIndex];
+    const firstOldClip = firstOldIndex >= 0 ? clipItems[firstOldIndex] : null;
+    
+    if (!lastNewClip) {
+      console.log('Missing lastNewClip');
+      return;
+    }
+    
+    if (firstOldClip) {
+      console.log('Creating indicator between clips:', lastNewClip.dataset.originalName, 'and', firstOldClip.dataset.originalName);
+    } else {
+      console.log('Creating end-of-group indicator after clip:', lastNewClip.dataset.originalName);
+    }
+    
+    // Get positions relative to the container
+    const containerRect = content.getBoundingClientRect();
+    const lastNewRect = lastNewClip.getBoundingClientRect();
+    
+    // Calculate relative positions
+    const lastNewLeft = lastNewRect.left - containerRect.left;
+    const lastNewTop = lastNewRect.top - containerRect.top;
+    const lastNewRight = lastNewLeft + lastNewRect.width;
+    const lastNewBottom = lastNewTop + lastNewRect.height;
+    
+    // Create the indicator
+    const indicator = document.createElement('div');
+    indicator.className = 'new-clips-indicator positioned';
+    
+    if (firstOldClip) {
+      // Normal case: indicator between two clips
+      const firstOldRect = firstOldClip.getBoundingClientRect();
+      const firstOldLeft = firstOldRect.left - containerRect.left;
+      const firstOldTop = firstOldRect.top - containerRect.top;
       
-      // Recalculate top position using actual measured height
-      const row = parseInt(indicator.dataset.row);
-      const newTop = row * (clipHeight + gap);
-      indicator.style.top = `${newTop}px`;
-    });
-  }
+      // Determine if clips are on same row or different rows
+      const sameRow = Math.abs(lastNewTop - firstOldTop) < 10; // Allow small differences
+      
+      console.log('Same row?', sameRow, 'Y diff:', Math.abs(lastNewTop - firstOldTop));
+      
+      if (sameRow) {
+        // Vertical line between clips in same row
+        const midX = (lastNewRight + firstOldLeft) / 2;
+        
+        console.log('Creating vertical line at X:', midX);
+        
+        indicator.innerHTML = `<div class="new-clips-line vertical"></div>`;
+        indicator.style.cssText = `
+          position: absolute;
+          left: ${midX - 1}px;
+          top: ${lastNewTop}px;
+          width: 2px;
+          height: ${lastNewRect.height}px;
+          z-index: 10;
+          pointer-events: none;
+        `;
+      } else {
+        // Horizontal line between rows
+        const midY = (lastNewBottom + firstOldTop) / 2;
+        
+        console.log('Creating horizontal line at Y:', midY);
+        
+        indicator.innerHTML = `<div class="new-clips-line horizontal"></div>`;
+        indicator.style.cssText = `
+          position: absolute;
+          left: 0;
+          top: ${midY - 1}px;
+          width: 100%;
+          height: 2px;
+          z-index: 10;
+          pointer-events: none;
+        `;
+      }
+    } else {
+      // End of group case: show line after the last new clip
+      console.log('Creating end-of-group line after last new clip');
+      
+      indicator.innerHTML = `<div class="new-clips-line vertical"></div>`;
+      indicator.style.cssText = `
+        position: absolute;
+        left: ${lastNewRight + 10}px;
+        top: ${lastNewTop}px;
+        width: 2px;
+        height: ${lastNewRect.height}px;
+        z-index: 10;
+        pointer-events: none;
+      `;
+    }
+    
+    // Ensure container has relative positioning and is not part of grid
+    content.style.position = 'relative';
+    
+    // Add indicator to the content but not as a grid item
+    indicator.style.pointerEvents = 'none';
+    indicator.style.position = 'absolute';
+    content.appendChild(indicator);
+    
+    console.log('Indicator created and added to content');
+  });
 }
 
-// New clips notification functions removed - using inline green line indicator only
+// Call after DOM changes to reposition indicators
+function updateIndicatorsOnChange() {
+  // Debounce to avoid excessive calls
+  clearTimeout(window.indicatorUpdateTimeout);
+  window.indicatorUpdateTimeout = setTimeout(positionNewClipsIndicators, 50);
+}
+
+// Function to update new clips indicators when clips are added/removed
+function updateNewClipsIndicators() {
+  // Check if we still have new clips visible
+  if (currentClipList && currentClipList.length > 0) {
+    const hasVisibleNewClips = currentClipList.some(clip => clip.isNewSinceLastSession);
+    
+    if (!hasVisibleNewClips) {
+      // No new clips visible, remove all indicators
+      document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
+      return;
+    }
+    
+    // Re-render the current clips to update indicators
+    renderClips(currentClipList);
+  } else {
+    // Remove all indicators if no clips
+    document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
+  }
+}
 
 window.addEventListener('beforeunload', () => {
   if (window.thumbnailGenerationTimeout) {
@@ -1330,14 +1484,97 @@ window.addEventListener('beforeunload', () => {
   hideThumbnailGenerationText();
 });
 
-// Add window resize listener to update indicator heights
+// Add window resize listener to reposition indicators
 window.addEventListener('resize', () => {
-  // Debounce resize events
-  clearTimeout(window.resizeTimeout);
-  window.resizeTimeout = setTimeout(() => {
-    document.querySelectorAll('.clip-group-content').forEach(updateIndicatorHeight);
-  }, 250);
+  updateIndicatorsOnChange();
 });
+
+// Dev console debugging function
+window.setNewClipsCount = function(count) {
+  if (!allClips || allClips.length === 0) {
+    console.log('No clips loaded yet');
+    return;
+  }
+  
+  if (count < 0 || count > allClips.length) {
+    console.log(`Invalid count. Must be between 0 and ${allClips.length}`);
+    return;
+  }
+  
+  // Reset all clips to not new
+  allClips.forEach(clip => {
+    clip.isNewSinceLastSession = false;
+  });
+  
+  // Mark the first 'count' clips as new
+  for (let i = 0; i < count; i++) {
+    allClips[i].isNewSinceLastSession = true;
+  }
+  
+  // Update the global newClipsInfo
+  newClipsInfo = {
+    newClips: allClips.slice(0, count).map(clip => clip.originalName),
+    totalNewCount: count
+  };
+  
+  // Also update currentClipList if it exists
+  if (currentClipList && currentClipList.length > 0) {
+    currentClipList.forEach(clip => {
+      clip.isNewSinceLastSession = allClips.find(ac => ac.originalName === clip.originalName)?.isNewSinceLastSession || false;
+    });
+  }
+  
+  // Re-render to show the changes
+  if (currentClipList) {
+    renderClips(currentClipList);
+    
+    // Position indicators after render completes
+    setTimeout(() => {
+      positionNewClipsIndicators();
+    }, 100);
+  }
+  
+  console.log(`Set ${count} clips as new. Green line should appear after clip ${count} (if visible).`);
+  console.log('New clips:', newClipsInfo.newClips);
+};
+
+// Also add a helper to see current state
+window.debugNewClips = function() {
+  console.log('Current new clips info:', newClipsInfo);
+  console.log('Clips marked as new:', allClips.filter(clip => clip.isNewSinceLastSession).map(c => c.originalName));
+  console.log('Total clips loaded:', allClips.length);
+  console.log('Current filtered clips:', currentClipList.length);
+};
+
+// And a helper to reset
+window.resetNewClips = function() {
+  setNewClipsCount(0);
+  console.log('Reset all clips to not new');
+};
+
+// Debug helper to check data attributes
+window.checkIndicatorData = function() {
+  const contentAreas = document.querySelectorAll('.clip-group-content');
+  console.log('All content areas:', contentAreas.length);
+  
+  contentAreas.forEach((content, index) => {
+    console.log(`Content ${index}:`, {
+      needsIndicator: content.dataset.needsIndicator,
+      lastNewIndex: content.dataset.lastNewIndex,
+      firstOldIndex: content.dataset.firstOldIndex,
+      clipCount: content.querySelectorAll('.clip-item').length
+    });
+  });
+  
+  // Also try positioning
+  positionNewClipsIndicators();
+};
+
+console.log('Dev functions available:');
+console.log('  setNewClipsCount(n) - Mark first n clips as new');
+console.log('  debugNewClips() - Show current state');  
+console.log('  resetNewClips() - Mark all clips as not new');
+console.log('  checkIndicatorData() - Debug data attributes and positioning');
 
 ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
   logger.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
@@ -1546,38 +1783,29 @@ async function renderClips(clips) {
         const clipElement = clipElements[i];
         const clip = groupClips[i];
         
-        // Check if we need to add the "new clips" indicator after this clip (transition from new to old)
-        const shouldAddIndicator = i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator;
-        if (shouldAddIndicator) {
-          console.log('Debug - Adding within-group indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
-          
-          // Calculate position based on grid layout (4 columns)
-          const clipIndex = i - 1; // Index of the last new clip
-          const row = Math.floor(clipIndex / 4);
-          const col = clipIndex % 4;
-          
-          // Position the indicator at the right edge of the last new clip
-          const newClipsIndicator = document.createElement('div');
-          newClipsIndicator.className = 'new-clips-indicator';
-          newClipsIndicator.dataset.row = row;
-          newClipsIndicator.dataset.col = col;
-          newClipsIndicator.innerHTML = `<div class="new-clips-line"></div>`;
-          
-          // Calculate and set position directly in JavaScript
-          const left = `calc(${(col + 1) * 25}% - 1.5px)`;
-          newClipsIndicator.style.left = left;
-          newClipsIndicator.style.top = `${row * 280}px`; // Start with estimated height
-          
-          // Add to the grid container with relative positioning
-          content.style.position = 'relative';
-          content.appendChild(newClipsIndicator);
-          
-          // Update clip height dynamically based on actual clip elements
-          updateIndicatorHeight(content);
+        // Mark this content area for later indicator positioning
+        if (i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
+          console.log('Debug - Will add indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
+          console.log('Debug - Setting data attributes on content for group');
+          content.dataset.needsIndicator = 'true';
+          content.dataset.lastNewIndex = i - 1;
+          content.dataset.firstOldIndex = i;
           hasAddedNewClipsIndicator = true;
         }
         
         content.appendChild(clipElement);
+      }
+      
+      // Check if we need an indicator at the end of the group (last clip is new, no more clips)
+      if (!hasAddedNewClipsIndicator && groupClips.length > 0) {
+        const lastClip = groupClips[groupClips.length - 1];
+        if (lastClip.isNewSinceLastSession) {
+          console.log('Debug - Adding end-of-group indicator after last new clip:', lastClip.originalName);
+          content.dataset.needsIndicator = 'true';
+          content.dataset.lastNewIndex = groupClips.length - 1;
+          content.dataset.firstOldIndex = -1; // Special case: no next clip
+          hasAddedNewClipsIndicator = true;
+        }
       }
     } else {
       // Store the clip data for lazy loading
@@ -1647,29 +1875,11 @@ async function renderClips(clips) {
               const clipIndex = i + j;
               const clip = batch[j];
               
-              // Check if we need to add the "new clips" indicator before this clip
+              // Mark for indicator positioning in lazy-loaded content
               if (clipIndex > 0 && !groupClips[clipIndex-1].isNewSinceLastSession && clip.isNewSinceLastSession) {
-                // Calculate position for lazy-loaded clips
-                const prevClipIndex = clipIndex - 1;
-                const row = Math.floor(prevClipIndex / 4);
-                const col = prevClipIndex % 4;
-                
-                const newClipsIndicator = document.createElement('div');
-                newClipsIndicator.className = 'new-clips-indicator';
-                newClipsIndicator.dataset.row = row;
-                newClipsIndicator.dataset.col = col;
-                newClipsIndicator.innerHTML = `<div class="new-clips-line"></div>`;
-                
-                // Calculate and set position directly in JavaScript
-                const left = `calc(${(col + 1) * 25}% - 1.5px)`;
-                newClipsIndicator.style.left = left;
-                newClipsIndicator.style.top = `${row * 280}px`; // Start with estimated height
-                
-                content.style.position = 'relative';
-                content.appendChild(newClipsIndicator);
-                
-                // Update clip height dynamically based on actual clip elements
-                updateIndicatorHeight(content);
+                content.dataset.needsIndicator = 'true';
+                content.dataset.lastNewIndex = clipIndex - 1;
+                content.dataset.firstOldIndex = clipIndex;
               }
               
               content.appendChild(clipElement);
@@ -1689,6 +1899,11 @@ async function renderClips(clips) {
           });
           
           setupTooltips();
+          
+          // Position indicators for lazy-loaded content
+          setTimeout(() => {
+            positionNewClipsIndicators();
+          }, 50);
         } catch (error) {
           logger.error("Error loading clips for group:", error);
           content.innerHTML = '<div class="error-message">Error loading clips</div>';
@@ -1944,13 +2159,13 @@ function setupContextMenu() {
     }
   });
 
-  addTagButton.addEventListener("click", () => {
+  addTagButton.addEventListener("click", async () => {
     const tagSearchInput = document.getElementById("tag-search-input");
     const newTag = tagSearchInput.value.trim();
     if (newTag && !globalTags.includes(newTag)) {
-      addGlobalTag(newTag);
+      await addGlobalTag(newTag);
       if (contextMenuClip) {
-        toggleClipTag(contextMenuClip, newTag);
+        await toggleClipTag(contextMenuClip, newTag);
       }
       tagSearchInput.value = "";
       updateTagList();
@@ -1958,7 +2173,7 @@ function setupContextMenu() {
   });
 
   tagSearchInput.addEventListener("input", updateTagList);
-  tagSearchInput.addEventListener("keydown", (e) => {
+  tagSearchInput.addEventListener("keydown", async (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
       const searchTerm = tagSearchInput.value.trim().toLowerCase();
@@ -1970,7 +2185,7 @@ function setupContextMenu() {
       );
       
       if (matchingTag && contextMenuClip) {
-        toggleClipTag(contextMenuClip, matchingTag);
+        await toggleClipTag(contextMenuClip, matchingTag);
         tagSearchInput.value = "";
         updateTagList();
       }
@@ -2075,8 +2290,8 @@ function openTagManagement() {
     renderTagList(filteredTags);
   });
 
-  addBtn.addEventListener('click', () => {
-    addNewTag();
+  addBtn.addEventListener('click', async () => {
+    await addNewTag();
   });
 
   closeBtn.addEventListener('click', closeTagManagement);
@@ -2113,8 +2328,11 @@ function renderTagList(tags) {
     input.addEventListener('change', handleTagRename);
   });
 
-  document.querySelectorAll('.tagManagement-deleteBtn').forEach(btn => {
+  const deleteButtons = document.querySelectorAll('.tagManagement-deleteBtn');
+  logger.info(`Setting up ${deleteButtons.length} delete button event listeners`);
+  deleteButtons.forEach((btn, index) => {
     btn.addEventListener('click', handleTagDelete);
+    logger.info(`Delete button ${index + 1} event listener attached`);
   });
 }
 
@@ -2128,29 +2346,37 @@ function handleTagRename(e) {
   }
 }
 
-function handleTagDelete(e) {
+async function handleTagDelete(e) {
   const item = e.target.closest('.tagManagement-item');
   const tag = item.dataset.tag;
 
   if (tag) {
-    deleteTag(tag);
-    item.remove();
+    logger.info(`Starting deletion of tag: "${tag}"`);
+    try {
+      await deleteTag(tag);
+      logger.info(`Successfully deleted tag: "${tag}"`);
+      item.remove();
 
-    // Show no tags message if no tags left
-    const listElement = document.getElementById('tagManagementList');
-    if (listElement.children.length === 0) {
-      listElement.innerHTML = '<div class="tagManagement-noTags">No tags found</div>';
+      // Show no tags message if no tags left
+      const listElement = document.getElementById('tagManagementList');
+      if (listElement.children.length === 0) {
+        listElement.innerHTML = '<div class="tagManagement-noTags">No tags found</div>';
+      }
+    } catch (error) {
+      logger.error(`Error deleting tag "${tag}":`, error);
     }
+  } else {
+    logger.warn('No tag found for deletion');
   }
 }
 
-function addNewTag() {
+async function addNewTag() {
   const searchInput = document.getElementById('tagManagementSearch');
   const newTagName = searchInput.value.trim();
 
   if (newTagName && !globalTags.includes(newTagName)) {
     globalTags.push(newTagName);
-    saveGlobalTags();
+    await saveGlobalTags();
     
     // Automatically enable the new tag
     selectedTags.add(newTagName);
@@ -2214,10 +2440,10 @@ function updateTagList() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = contextMenuClip && contextMenuClip.tags && contextMenuClip.tags.includes(tag);
-    checkbox.onclick = (e) => {
+    checkbox.onclick = async (e) => {
       e.stopPropagation();
       if (contextMenuClip) {
-        toggleClipTag(contextMenuClip, tag);
+        await toggleClipTag(contextMenuClip, tag);
       }
     };
     
@@ -2237,31 +2463,53 @@ function updateTagList() {
 }
 
 async function deleteTag(tag) {
+  logger.info(`deleteTag called for: "${tag}"`);
   const index = globalTags.indexOf(tag);
+  logger.info(`Tag index in globalTags: ${index}`);
+  
   if (index > -1) {
+    logger.info(`Removing tag from globalTags array`);
     globalTags.splice(index, 1);
     await saveGlobalTags();
+    logger.info(`Global tags saved, current count: ${globalTags.length}`);
 
-    // Remove the tag from all clips
-    allClips.forEach(clip => {
-      const tagIndex = clip.tags.indexOf(tag);
-      if (tagIndex > -1) {
-        clip.tags.splice(tagIndex, 1);
-        updateClipTags(clip);
-        saveClipTags(clip);
+    // Remove the tag from all clips by reading files directly from disk (like restoration does)
+    logger.info(`Starting to remove tag "${tag}" from all .tags files on disk...`);
+    const result = await ipcRenderer.invoke("remove-tag-from-all-clips", tag);
+    
+    if (result.success) {
+      logger.info(`Successfully removed tag "${tag}" from ${result.modifiedCount} clips on disk`);
+      
+      // Also update any clips in memory
+      let memoryClipsModified = 0;
+      allClips.forEach(clip => {
+        const tagIndex = clip.tags.indexOf(tag);
+        if (tagIndex > -1) {
+          memoryClipsModified++;
+          clip.tags.splice(tagIndex, 1);
+          updateClipTags(clip);
+        }
+      });
+      
+      if (memoryClipsModified > 0) {
+        logger.info(`Updated ${memoryClipsModified} clips in memory as well`);
       }
-    });
+    } else {
+      logger.error(`Failed to remove tag from clips: ${result.error}`);
+    }
 
     updateFilterDropdown();
+  } else {
+    logger.warn(`Tag "${tag}" not found in globalTags for deletion`);
   }
 }
 
 let globalTags = [];
 
-function addGlobalTag(tag) {
+async function addGlobalTag(tag) {
   if (!globalTags.includes(tag)) {
     globalTags.push(tag);
-    saveGlobalTags();
+    await saveGlobalTags();
     
     // Automatically enable the new tag
     selectedTags.add(tag);
@@ -2281,8 +2529,15 @@ async function loadGlobalTags() {
   }
 }
 
-function saveGlobalTags() {
-  ipcRenderer.invoke("save-global-tags", globalTags);
+async function saveGlobalTags() {
+  try {
+    const result = await ipcRenderer.invoke("save-global-tags", globalTags);
+    logger.info("Global tags saved successfully:", result);
+    return result;
+  } catch (error) {
+    logger.error("Error saving global tags:", error);
+    throw error;
+  }
 }
 
 function updateTagList() {
@@ -2309,10 +2564,10 @@ function updateTagList() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = contextMenuClip && contextMenuClip.tags && contextMenuClip.tags.includes(tag);
-    checkbox.onclick = (e) => {
+    checkbox.onclick = async (e) => {
       e.stopPropagation();
       if (contextMenuClip) {
-        toggleClipTag(contextMenuClip, tag);
+        await toggleClipTag(contextMenuClip, tag);
       }
     };
     
@@ -2331,7 +2586,7 @@ function updateTagList() {
   });
 }
 
-function toggleClipTag(clip, tag) {
+async function toggleClipTag(clip, tag) {
   if (!clip.tags) clip.tags = [];
   const index = clip.tags.indexOf(tag);
   const wasPrivate = clip.tags.includes("Private");
@@ -2343,7 +2598,7 @@ function toggleClipTag(clip, tag) {
   }
   
   updateClipTags(clip);
-  saveClipTags(clip);
+  await saveClipTags(clip);
 
   // If we're in a filtered view and this tag change would affect visibility,
   // re-filter and re-render the entire view
@@ -2386,18 +2641,34 @@ async function updateTag(originalTag, newTag) {
 
   const index = globalTags.indexOf(originalTag);
   if (index > -1) {
+    logger.info(`Updating tag "${originalTag}" to "${newTag}"`);
     globalTags[index] = newTag;
     await saveGlobalTags();
 
-    // Update the tag in all clips
-    allClips.forEach(clip => {
-      const tagIndex = clip.tags.indexOf(originalTag);
-      if (tagIndex > -1) {
-        clip.tags[tagIndex] = newTag;
-        updateClipTags(clip);
-        saveClipTags(clip);
+    // Update the tag in all clips by reading files directly from disk
+    logger.info(`Starting to update tag "${originalTag}" to "${newTag}" in all .tags files on disk...`);
+    const result = await ipcRenderer.invoke("update-tag-in-all-clips", originalTag, newTag);
+    
+    if (result.success) {
+      logger.info(`Successfully updated tag in ${result.modifiedCount} clips on disk`);
+      
+      // Also update any clips in memory
+      let memoryClipsModified = 0;
+      allClips.forEach(clip => {
+        const tagIndex = clip.tags.indexOf(originalTag);
+        if (tagIndex > -1) {
+          memoryClipsModified++;
+          clip.tags[tagIndex] = newTag;
+          updateClipTags(clip);
+        }
+      });
+      
+      if (memoryClipsModified > 0) {
+        logger.info(`Updated ${memoryClipsModified} clips in memory as well`);
       }
-    });
+    } else {
+      logger.error(`Failed to update tag in clips: ${result.error}`);
+    }
 
     // Update the filter dropdown
     updateFilterDropdown();
@@ -3818,6 +4089,16 @@ async function confirmAndDeleteClip(clipToDelete = null) {
     }
 
     updateClipCounter(currentClipList.length);
+    
+    // Update new clips indicators after deletion
+    updateNewClipsIndicators();
+    
+    // Save clip list immediately after deletion
+    try {
+      await ipcRenderer.invoke('save-clip-list-immediately');
+    } catch (error) {
+      logger.error('Failed to save clip list after deletion:', error);
+    }
   }
 }
 
@@ -6056,6 +6337,16 @@ async function deleteSelectedClips() {
     clearSelection();
     updateClipCounter(currentClipList.length);
     hideDeletionTooltip();
+    
+    // Update new clips indicators after bulk deletion
+    updateNewClipsIndicators();
+    
+    // Save clip list immediately after bulk deletion
+    try {
+      await ipcRenderer.invoke('save-clip-list-immediately');
+    } catch (error) {
+      logger.error('Failed to save clip list after bulk deletion:', error);
+    }
   }
 }
 
