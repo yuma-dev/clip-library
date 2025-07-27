@@ -734,6 +734,7 @@ body.dragging * {
   transform: translateY(-50%);
   max-height: 32px;
   max-width: 32px;
+  border-radius: 15%;
   height: auto;
   width: auto;
   object-fit: contain;

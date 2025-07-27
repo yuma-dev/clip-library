@@ -4488,22 +4488,28 @@ async function openClip(originalName, customName) {
     videoPlayer.parentElement.appendChild(thumbnailOverlay);
   }
 
+  logger.info(`[${originalName}] Setting up thumbnail overlay`);
   // Hide video and show thumbnail
   videoPlayer.style.opacity = '0';
   const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", originalName);
   if (thumbnailPath) {
     thumbnailOverlay.src = `file://${thumbnailPath}`;
     thumbnailOverlay.style.display = 'block';
+    logger.info(`[${originalName}] Thumbnail loaded: ${thumbnailPath}`);
+  } else {
+    logger.warn(`[${originalName}] No thumbnail path found`);
   }
 
   // Add cleanup for previous video element
   if(videoPlayer.src) {
+    logger.info(`[${originalName}] Cleaning up previous video`);
     videoPlayer.pause();
     videoPlayer.removeAttribute('src');
     videoPlayer.load();
   }
 
   // Load all data first before setting up video
+  logger.info(`[${originalName}] Loading clip data...`);
   let clipInfo, trimData, clipTags;
   try {
     [clipInfo, trimData, clipTags] = await Promise.all([
@@ -4511,8 +4517,9 @@ async function openClip(originalName, customName) {
       ipcRenderer.invoke("get-trim", originalName),
       ipcRenderer.invoke("get-clip-tags", originalName)
     ]);
+    logger.info(`[${originalName}] Clip data loaded successfully. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
   } catch (error) {
-    logger.error("Error loading clip data:", error);
+    logger.error(`[${originalName}] Error loading clip data:`, error);
     return;
   }
 
@@ -4523,95 +4530,178 @@ async function openClip(originalName, customName) {
     trimStartTime = trimData.start;
     trimEndTime = trimData.end;
     initialPlaybackTime = trimData.start;
+    logger.info(`[${originalName}] Using trim data - Start: ${trimStartTime}, End: ${trimEndTime}, Initial: ${initialPlaybackTime}`);
   } else {
     trimStartTime = 0;
     trimEndTime = clipInfo.format.duration;
     initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
+    logger.info(`[${originalName}] No trim data - Start: ${trimStartTime}, End: ${trimEndTime}, Initial: ${initialPlaybackTime}`);
   }
 
+  logger.info(`[${originalName}] Setting up video load promise...`);
   // Create a promise to handle video loading and seeking
-  const videoLoadPromise = new Promise((resolve) => {
+  const videoLoadPromise = new Promise((resolve, reject) => {
     let isMetadataLoaded = false;
     let isSeeked = false;
+    let timeoutId;
 
     const checkComplete = () => {
       if (isMetadataLoaded && isSeeked) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        logger.info(`[${originalName}] Video load promise resolved - metadata and seek complete`);
         resolve();
       }
     };
 
     const loadHandler = () => {
       isMetadataLoaded = true;
+      logger.info(`[${originalName}] Video metadata loaded - duration: ${videoPlayer.duration}, readyState: ${videoPlayer.readyState}`);
       updateTrimControls();
+      
+      logger.info(`[${originalName}] Attempting to seek to time: ${initialPlaybackTime} (duration: ${videoPlayer.duration})`);
+      const oldTime = videoPlayer.currentTime;
       videoPlayer.currentTime = initialPlaybackTime;
+      
+      // Log if the time actually changed
+      setTimeout(() => {
+        logger.info(`[${originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${videoPlayer.currentTime}, target: ${initialPlaybackTime}`);
+      }, 50);
+      
       videoPlayer.removeEventListener('loadedmetadata', loadHandler);
       checkComplete();
     };
 
     const seekHandler = () => {
       isSeeked = true;
+      logger.info(`[${originalName}] Video seek completed to time: ${videoPlayer.currentTime}`);
       videoPlayer.removeEventListener('seeked', seekHandler);
       checkComplete();
     };
 
+    const errorHandler = (e) => {
+      logger.error(`[${originalName}] Video error during loading:`, e);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      videoPlayer.removeEventListener('seeked', seekHandler);
+      videoPlayer.removeEventListener('error', errorHandler);
+      reject(new Error(`Video error: ${e.message || 'Unknown error'}`));
+    };
+
+    // Add timeout to catch hung promises
+    timeoutId = setTimeout(() => {
+      logger.error(`[${originalName}] Video load promise timeout - metadata: ${isMetadataLoaded}, seeked: ${isSeeked}`);
+      videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      videoPlayer.removeEventListener('seeked', seekHandler);
+      videoPlayer.removeEventListener('error', errorHandler);
+      reject(new Error('Video load timeout'));
+    }, 10000); // 10 second timeout
+
     videoPlayer.addEventListener('loadedmetadata', loadHandler);
     videoPlayer.addEventListener('seeked', seekHandler);
+    videoPlayer.addEventListener('error', errorHandler);
   });
 
   // Set video source
+  logger.info(`[${originalName}] Setting video source: ${clipInfo.format.filename}`);
   videoPlayer.src = `file://${clipInfo.format.filename}`;
 
   // Wait for video to fully load and seek
-  await videoLoadPromise;
+  try {
+    logger.info(`[${originalName}] Waiting for video to load...`);
+    await videoLoadPromise;
+    logger.info(`[${originalName}] Video load promise completed successfully`);
+  } catch (error) {
+    logger.error(`[${originalName}] Video load promise failed:`, error);
+    return;
+  }
 
-  await loadVolumeData();
+  logger.info(`[${originalName}] Loading volume data...`);
+  try {
+    await loadVolumeData();
+    logger.info(`[${originalName}] Volume data loaded successfully`);
+  } catch (error) {
+    logger.error(`[${originalName}] Error loading volume data:`, error);
+  }
 
+  logger.info(`[${originalName}] Setting up play promise...`);
   // Show video and play when ready
-  const playPromise = new Promise((resolve) => {
+  const playPromise = new Promise((resolve, reject) => {
+    let timeoutId;
+    
     const playHandler = () => {
       videoPlayer.style.opacity = '1';
       thumbnailOverlay.style.display = 'none';
       videoPlayer.removeEventListener('playing', playHandler);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      logger.info(`[${originalName}] Video started playing successfully`);
       resolve();
     };
+    
+    // Add timeout for play promise
+    timeoutId = setTimeout(() => {
+      logger.error(`[${originalName}] Play promise timeout - video did not start playing`);
+      videoPlayer.removeEventListener('playing', playHandler);
+      reject(new Error('Play promise timeout'));
+    }, 5000); // 5 second timeout for play
+    
     videoPlayer.addEventListener('playing', playHandler);
+    
+    logger.info(`[${originalName}] Calling videoPlayer.play()`);
     videoPlayer.play().catch(error => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      videoPlayer.removeEventListener('playing', playHandler);
       if (error.name !== "AbortError") {
-        logger.error("Error playing video:", error);
+        logger.error(`[${originalName}] Error calling play():`, error);
+        reject(error);
+      } else {
+        logger.warn(`[${originalName}] Play aborted (not an error):`, error);
+        reject(error);
       }
     });
   });
 
+  logger.info(`[${originalName}] Setting up clip title and metadata...`);
   clipTitle.value = customName || path.basename(originalName, path.extname(originalName));
   clipTitle.dataset.originalName = originalName;
 
   // Load and set the volume before playing the video
+  logger.info(`[${originalName}] Loading volume settings...`);
   try {
     const savedVolume = await loadVolume(originalName);
-    logger.info(`Loaded volume for ${originalName}: ${savedVolume}`);
+    logger.info(`[${originalName}] Loaded volume: ${savedVolume}`);
     setupAudioContext();
     gainNode.gain.setValueAtTime(savedVolume, audioContext.currentTime);
     updateVolumeSlider(savedVolume);
   } catch (error) {
-    logger.error('Error loading volume:', error);
+    logger.error(`[${originalName}] Error loading volume:`, error);
     setupAudioContext();
     gainNode.gain.setValueAtTime(1, audioContext.currentTime);
     updateVolumeSlider(1); // Default to 100%
   }
 
+  logger.info(`[${originalName}] Loading speed settings...`);
   try {
     const savedSpeed = await loadSpeed(originalName);
-    logger.info(`Loaded speed for ${originalName}: ${savedSpeed}`);
+    logger.info(`[${originalName}] Loaded speed: ${savedSpeed}`);
     videoPlayer.playbackRate = savedSpeed;
     updateSpeedSlider(savedSpeed);
     updateSpeedText(savedSpeed);
   } catch (error) {
-    logger.error('Error loading speed:', error);
+    logger.error(`[${originalName}] Error loading speed:`, error);
     videoPlayer.playbackRate = 1;
     updateSpeedSlider(1);
     updateSpeedText(1);
   }
 
+  logger.info(`[${originalName}] Showing player overlay and fullscreen player...`);
   playerOverlay.style.display = "block";
   fullscreenPlayer.style.display = "block";
 
@@ -4726,6 +4816,7 @@ async function openClip(originalName, customName) {
     });
   });
 
+  logger.info(`[${originalName}] Setting up navigation and event listeners...`);
   updateNavigationButtons();
 
   // Clean up function to remove event listeners
@@ -4740,7 +4831,20 @@ async function openClip(originalName, customName) {
     playerOverlay.removeEventListener("click", handleOverlayClick);
   };
 
+  // IMPORTANT: Wait for the video to actually start playing before considering success
+  logger.info(`[${originalName}] Waiting for video to start playing...`);
+  try {
+    await playPromise;
+    logger.info(`[${originalName}] Video is now playing - openClip completed successfully!`);
+  } catch (error) {
+    logger.error(`[${originalName}] Failed to start video playback:`, error);
+    // Don't return here, still update Discord presence even if play failed
+  }
+
+  logger.info(`[${originalName}] Updating Discord presence...`);
   updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, false); // Start paused
+  
+  logger.info(`[${originalName}] openClip function completed`);
 }
 
 const videoControls = document.getElementById("video-controls");
@@ -5205,9 +5309,12 @@ function updatePlayhead() {
   const percent = (currentTime / duration) * 100;
   playhead.style.left = `${percent}%`;
 
-  // Check if current time is outside trim bounds
-  const isOutsideBounds = currentTime > trimEndTime || currentTime < trimStartTime;
-  const isInsideBounds = currentTime >= trimStartTime && currentTime <= trimEndTime;
+  // Check if current time is outside trim bounds (with tolerance for floating point precision)
+  const BOUNDS_TOLERANCE = 0.001; // 1ms tolerance to handle floating point precision issues
+  const isOutsideBounds = (currentTime > trimEndTime + BOUNDS_TOLERANCE) || (currentTime < trimStartTime - BOUNDS_TOLERANCE);
+  const isInsideBounds = (currentTime >= trimStartTime - BOUNDS_TOLERANCE) && (currentTime <= trimEndTime + BOUNDS_TOLERANCE);
+  
+
   
   // If playhead is back inside bounds, re-enable auto-reset (regardless of how it got there)
   if (isInsideBounds && isAutoResetDisabled) {
