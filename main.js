@@ -446,13 +446,24 @@ ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
 });
 
 ipcMain.handle("get-clip-info", async (event, clipName) => {
+  logger.info(`[main] get-clip-info requested for: ${clipName}`);
   const clipPath = path.join(settings.clipLocation, clipName);
   const thumbnailPath = generateThumbnailPath(clipPath);
   
   try {
+    // Check if file exists first
+    try {
+      await fs.access(clipPath);
+      logger.info(`[main] Clip file exists: ${clipPath}`);
+    } catch (accessError) {
+      logger.error(`[main] Clip file does not exist: ${clipPath}`, accessError);
+      throw new Error(`Clip file not found: ${clipName}`);
+    }
+
     // Try to get metadata from cache first
     const metadata = await getThumbnailMetadata(thumbnailPath);
     if (metadata && metadata.duration) {
+      logger.info(`[main] Using cached metadata for ${clipName} - duration: ${metadata.duration}`);
       return {
         format: {
           filename: clipPath,
@@ -461,11 +472,15 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
       };
     }
 
+    logger.info(`[main] No cached metadata found, running ffprobe for: ${clipName}`);
     // If no cached metadata, get it from ffprobe and cache it
     return new Promise((resolve, reject) => {
       ffmpeg.ffprobe(clipPath, async (err, info) => {
-        if (err) reject(err);
-        else {
+        if (err) {
+          logger.error(`[main] ffprobe failed for ${clipName}:`, err);
+          reject(err);
+        } else {
+          logger.info(`[main] ffprobe successful for ${clipName} - duration: ${info.format.duration}`);
           // Cache the metadata
           const existingMetadata = await getThumbnailMetadata(thumbnailPath) || {};
           await saveThumbnailMetadata(thumbnailPath, {
@@ -478,7 +493,7 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
       });
     });
   } catch (error) {
-    logger.error('Error getting clip info:', error);
+    logger.error(`[main] Error getting clip info for ${clipName}:`, error);
     throw error;
   }
 });
@@ -921,14 +936,17 @@ ipcMain.handle("open-folder-dialog", async () => {
 
 // In main.js, modify the 'get-thumbnail-path' handler
 ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
+  logger.info(`[main] get-thumbnail-path requested for: ${clipName}`);
   const clipPath = path.join(settings.clipLocation, clipName);
   const thumbnailPath = generateThumbnailPath(clipPath);
 
   try {
     await fs.access(thumbnailPath);
+    logger.info(`[main] Thumbnail exists for ${clipName}: ${thumbnailPath}`);
     return thumbnailPath;
   } catch (error) {
     // Instead of throwing an error, return null if the thumbnail doesn't exist
+    logger.warn(`[main] Thumbnail not found for ${clipName}: ${thumbnailPath}`);
     return null;
   }
 });
