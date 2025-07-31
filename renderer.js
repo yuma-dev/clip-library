@@ -1156,6 +1156,20 @@ async function addNewClipToLibrary(fileName) {
       // Add the new clip to the group content at the beginning
       content.insertBefore(newClipElement, content.firstChild);
       
+      // Check if this group now contains only new clips and update styling
+      const groupClips = Array.from(content.querySelectorAll('.clip-item')).map(el => {
+        const clipName = el.dataset.originalName;
+        return allClips.find(clip => clip.originalName === clipName);
+      }).filter(Boolean);
+      
+      const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession);
+      if (groupIsAllNewClips) {
+        groupElement.classList.add('new-clips-group');
+        console.log('Debug - Marking dynamically created/updated group as new clips group:', timeGroup);
+      } else {
+        groupElement.classList.remove('new-clips-group');
+      }
+      
       // Force a clean state for the new clip
       const clipElement = newClipElement;
       if (clipElement) {
@@ -1739,22 +1753,16 @@ async function renderClips(clips) {
       groupClips: groupClips.map(c => ({ name: c.originalName, isNew: c.isNewSinceLastSession }))
     });
     
-    // Add inter-group indicator if this is the first group of all new clips
-    if (groupIsAllNewClips && !hasAddedNewClipsIndicator && newClipsInfo.totalNewCount > 0) {
-      console.log('Debug - Adding inter-group indicator for:', groupName);
-      const interGroupIndicator = document.createElement('div');
-      interGroupIndicator.className = 'new-clips-indicator inter-group';
-      interGroupIndicator.innerHTML = `
-        <div class="new-clips-line"></div>
-        <div class="new-clips-text">New clips since last session</div>
-        <div class="new-clips-line"></div>
-      `;
-      clipGrid.appendChild(interGroupIndicator);
-      hasAddedNewClipsIndicator = true;
-    }
-    
     const groupElement = document.createElement('div');
-    groupElement.className = `clip-group ${collapsedState[groupName] ? 'collapsed' : ''}`;
+    let groupClasses = 'clip-group';
+    if (collapsedState[groupName]) {
+      groupClasses += ' collapsed';
+    }
+    if (groupIsAllNewClips) {
+      groupClasses += ' new-clips-group';
+      console.log('Debug - Marking group as new clips group:', groupName);
+    }
+    groupElement.className = groupClasses;
     groupElement.dataset.loaded = collapsedState[groupName] ? 'false' : 'true';
     groupElement.dataset.groupName = groupName;
     
@@ -1784,7 +1792,8 @@ async function renderClips(clips) {
         const clip = groupClips[i];
         
         // Mark this content area for later indicator positioning
-        if (i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
+        // Skip if the whole group is already marked as new clips
+        if (!groupIsAllNewClips && i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
           console.log('Debug - Will add indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
           console.log('Debug - Setting data attributes on content for group');
           content.dataset.needsIndicator = 'true';
@@ -1797,7 +1806,8 @@ async function renderClips(clips) {
       }
       
       // Check if we need an indicator at the end of the group (last clip is new, no more clips)
-      if (!hasAddedNewClipsIndicator && groupClips.length > 0) {
+      // Skip if the whole group is already marked as new clips
+      if (!groupIsAllNewClips && !hasAddedNewClipsIndicator && groupClips.length > 0) {
         const lastClip = groupClips[groupClips.length - 1];
         if (lastClip.isNewSinceLastSession) {
           console.log('Debug - Adding end-of-group indicator after last new clip:', lastClip.originalName);
