@@ -13,6 +13,8 @@ const DEFAULT_SETTINGS = {
   exportQuality: 'discord',
   // Whether to desaturate game icons in the clip list
   iconGreyscale: false,
+  // Whether to show new clips indicators (green lines and group styling)
+  showNewClipsIndicators: true,
   // Controller settings
   controller: {
     enabled: true,

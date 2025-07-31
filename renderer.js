@@ -711,6 +711,7 @@ settingsModal.innerHTML = `
 <div class="settings-modal-content">
     <div class="settings-tabs">
       <div class="settings-tab active" data-tab="general">General</div>
+      <div class="settings-tab" data-tab="display">Display</div>
       <div class="settings-tab" data-tab="exportImport">Export/Import</div>
       <div class="settings-tab" data-tab="about">About</div>
     </div>
@@ -729,32 +730,7 @@ settingsModal.innerHTML = `
         </div>
       </div>
 
-      <div class="settings-group">
-        <h3 class="settings-group-title">Playback</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Preview Volume</div>
-            <div class="settings-item-description">Set the default volume for clip previews</div>
-          </div>
-          <div class="settings-control">
-            <input type="range" id="previewVolumeSlider" class="settings-range" min="0" max="1" step="0.01" value="0.1">
-            <span id="previewVolumeValue">10%</span>
-          </div>
-        </div>
 
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Greyscale Icons</div>
-            <div class="settings-item-description">Display clip icons in greyscale</div>
-          </div>
-          <div class="settings-control">
-            <label class="settings-switch">
-              <input type="checkbox" id="greyscaleIcons">
-              <span class="settings-switch-slider"></span>
-            </label>
-          </div>
-        </div>
-      </div>
 
       <div class="settings-group">
         <h3 class="settings-group-title">Integration</h3>
@@ -781,6 +757,51 @@ settingsModal.innerHTML = `
           </div>
           <div class="settings-control">
             <button id="manageTagsBtn" class="settings-button settings-button-secondary">Manage Tags</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-tab-content" data-tab="display">
+      <div class="settings-group">
+        <h3 class="settings-group-title">Visual Indicators</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Show New Clips Indicators</div>
+            <div class="settings-item-description">Display green lines and highlights to show new clips since last session</div>
+          </div>
+          <div class="settings-control">
+            <label class="settings-switch">
+              <input type="checkbox" id="showNewClipsIndicators">
+              <span class="settings-switch-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Greyscale Icons</div>
+            <div class="settings-item-description">Display clip icons in greyscale</div>
+          </div>
+          <div class="settings-control">
+            <label class="settings-switch">
+              <input type="checkbox" id="greyscaleIcons">
+              <span class="settings-switch-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-group-title">Playback</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Preview Volume</div>
+            <div class="settings-item-description">Set the default volume for clip previews</div>
+          </div>
+          <div class="settings-control">
+            <input type="range" id="previewVolumeSlider" class="settings-range" min="0" max="1" step="0.01" value="0.1">
+            <span id="previewVolumeValue">10%</span>
           </div>
         </div>
       </div>
@@ -1163,7 +1184,7 @@ async function addNewClipToLibrary(fileName) {
       }).filter(Boolean);
       
       const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession);
-      if (groupIsAllNewClips) {
+      if (groupIsAllNewClips && settings.showNewClipsIndicators !== false) {
         groupElement.classList.add('new-clips-group');
         console.log('Debug - Marking dynamically created/updated group as new clips group:', timeGroup);
       } else {
@@ -1349,6 +1370,12 @@ function positionNewClipsIndicators() {
   // Remove any existing positioned indicators first
   document.querySelectorAll('.new-clips-indicator.positioned').forEach(el => el.remove());
   
+  // Check if new clips indicators are disabled
+  if (settings.showNewClipsIndicators === false) {
+    console.log('New clips indicators are disabled in settings');
+    return;
+  }
+  
   // Find all content areas that need indicators
   const contentAreas = document.querySelectorAll('.clip-group-content[data-needs-indicator="true"]');
   console.log('Found content areas needing indicators:', contentAreas.length);
@@ -1473,6 +1500,16 @@ function updateIndicatorsOnChange() {
 
 // Function to update new clips indicators when clips are added/removed
 function updateNewClipsIndicators() {
+  // Check if new clips indicators are disabled
+  if (settings.showNewClipsIndicators === false) {
+    console.log('New clips indicators are disabled, removing all indicators');
+    document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
+    document.querySelectorAll('.clip-group.new-clips-group').forEach(group => {
+      group.classList.remove('new-clips-group');
+    });
+    return;
+  }
+
   // Check if we still have new clips visible
   if (currentClipList && currentClipList.length > 0) {
     const hasVisibleNewClips = currentClipList.some(clip => clip.isNewSinceLastSession);
@@ -1758,7 +1795,7 @@ async function renderClips(clips) {
     if (collapsedState[groupName]) {
       groupClasses += ' collapsed';
     }
-    if (groupIsAllNewClips) {
+    if (groupIsAllNewClips && settings.showNewClipsIndicators !== false) {
       groupClasses += ' new-clips-group';
       console.log('Debug - Marking group as new clips group:', groupName);
     }
@@ -1792,8 +1829,8 @@ async function renderClips(clips) {
         const clip = groupClips[i];
         
         // Mark this content area for later indicator positioning
-        // Skip if the whole group is already marked as new clips
-        if (!groupIsAllNewClips && i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
+        // Skip if the whole group is already marked as new clips or if indicators are disabled
+        if (settings.showNewClipsIndicators !== false && !groupIsAllNewClips && i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
           console.log('Debug - Will add indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
           console.log('Debug - Setting data attributes on content for group');
           content.dataset.needsIndicator = 'true';
@@ -1806,8 +1843,8 @@ async function renderClips(clips) {
       }
       
       // Check if we need an indicator at the end of the group (last clip is new, no more clips)
-      // Skip if the whole group is already marked as new clips
-      if (!groupIsAllNewClips && !hasAddedNewClipsIndicator && groupClips.length > 0) {
+      // Skip if the whole group is already marked as new clips or if indicators are disabled
+      if (settings.showNewClipsIndicators !== false && !groupIsAllNewClips && !hasAddedNewClipsIndicator && groupClips.length > 0) {
         const lastClip = groupClips[groupClips.length - 1];
         if (lastClip.isNewSinceLastSession) {
           console.log('Debug - Adding end-of-group indicator after last new clip:', lastClip.originalName);
@@ -3132,6 +3169,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // New clips indicators toggle (similar pattern to greyscale)
+  const newClipsIndicatorsCheckbox = document.getElementById('showNewClipsIndicators');
+  if (newClipsIndicatorsCheckbox) {
+    newClipsIndicatorsCheckbox.addEventListener('change', async (e) => {
+      const isEnabled = e.target.checked;
+      try {
+        // Update settings and save
+        const updatedSettings = { ...settings, showNewClipsIndicators: isEnabled };
+        await ipcRenderer.invoke('save-settings', updatedSettings);
+        settings = updatedSettings;
+        
+        // Apply the change immediately - re-render clips to update indicators
+        if (currentClipList) {
+          renderClips(currentClipList);
+        }
+        logger.info('New clips indicators setting changed:', isEnabled);
+      } catch (error) {
+        logger.error('Error saving new clips indicators setting:', error);
+        // Revert the checkbox state on error
+        e.target.checked = !isEnabled;
+      }
+    });
+  }
+
   // Create and setup the tag filter UI
   createTagFilterUI();
   // Load initial tag preferences
@@ -3479,6 +3540,31 @@ function initializeSettingsModal() {
   } else {
     logger.error('Greyscale toggle element not found in DOM');
   }
+
+  // New clips indicators toggle
+  const newClipsIndicatorsToggle = document.getElementById('showNewClipsIndicators');
+
+  if (newClipsIndicatorsToggle) {
+    newClipsIndicatorsToggle.checked = Boolean(settings.showNewClipsIndicators ?? true);
+    newClipsIndicatorsToggle.addEventListener('change', async (e) => {
+      const isEnabled = e.target.checked;
+      try {
+        const updated = { ...settings, showNewClipsIndicators: isEnabled };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        // Re-render clips to show/hide indicators instantly
+        if (currentClipList) {
+          renderClips(currentClipList);
+        }
+      } catch (error) {
+        logger.error('Error toggling New Clips Indicators:', error);
+        // revert visual state
+        e.target.checked = !isEnabled;
+      }
+    });
+  } else {
+    logger.error('New clips indicators toggle element not found in DOM');
+  }
 }
 
 async function openSettingsModal() {
@@ -3525,6 +3611,12 @@ async function openSettingsModal() {
     const greyscaleToggleEl = document.getElementById('greyscaleIcons');
     if (greyscaleToggleEl) {
       greyscaleToggleEl.checked = Boolean(settings.iconGreyscale);
+    }
+
+    // Refresh new clips indicators toggle to reflect persisted value
+    const newClipsIndicatorsToggleEl = document.getElementById('showNewClipsIndicators');
+    if (newClipsIndicatorsToggleEl) {
+      newClipsIndicatorsToggleEl.checked = Boolean(settings.showNewClipsIndicators ?? true);
     }
 
     if (previewVolumeSlider && previewVolumeValue) {
