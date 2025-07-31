@@ -3249,8 +3249,8 @@ input:checked + .settings-switch-slider::before {
     transparent
   );
   border-radius: 2px;
-  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
-  animation: newClipsGlow 2s ease-in-out infinite alternate;
+  box-shadow: -15px 0 30px rgba(34, 197, 94, 0.4);
+  animation: newClipsGlowLeft 2s ease-in-out infinite alternate;
 }
 
 .new-clips-indicator.positioned .new-clips-line.horizontal {
@@ -3264,8 +3264,8 @@ input:checked + .settings-switch-slider::before {
     transparent
   );
   border-radius: 2px;
-  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
-  animation: newClipsGlow 2s ease-in-out infinite alternate;
+  box-shadow: 0 -15px 30px rgba(34, 197, 94, 0.4);
+  animation: newClipsGlowTop 2s ease-in-out infinite alternate;
 }
 
 /* Inter-group indicators (unchanged) */
@@ -3290,7 +3290,7 @@ input:checked + .settings-switch-slider::before {
     transparent
   );
   border-radius: 2px;
-  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.4);
   animation: newClipsGlow 2s ease-in-out infinite alternate;
 }
 
@@ -3303,17 +3303,93 @@ input:checked + .settings-switch-slider::before {
   border: 1px solid rgba(34, 197, 94, 0.3);
   border-radius: 20px;
   white-space: nowrap;
-  box-shadow: 0 0 20px rgba(34, 197, 94, 0.2);
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.4);
   animation: newClipsGlow 2s ease-in-out infinite alternate;
 }
 
 @keyframes newClipsGlow {
   from {
-    box-shadow: 0 0 20px rgba(34, 197, 94, 0.2);
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0);
   }
   to {
-    box-shadow: 0 0 30px rgba(34, 197, 94, 0.4);
+    box-shadow: 0 0 30px rgb(34, 197, 94);
   }
+}
+
+/* Directional glow animations */
+@keyframes newClipsGlowLeft {
+  from {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0);
+  }
+  to {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 1);
+  }
+}
+
+@keyframes newClipsGlowTop {
+  from {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0);
+  }
+  to {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 1);
+  }
+}
+
+@keyframes newClipsGlowBottom {
+  from {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0);
+  }
+  to {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 1);
+  }
+}
+
+/* New clips group styling - green divider and logo */
+.clip-group.new-clips-group .clip-group-divider {
+  background: linear-gradient(
+    90deg,
+    rgba(34, 197, 94, 0.4),
+    rgba(34, 197, 94, 0.2) 50%,
+    transparent
+  );
+}
+
+.clip-group.new-clips-group .clip-group-title::before {
+  border-color: #22C55E;
+  box-shadow: 0 15px 30px rgba(34, 197, 94, 0.4);
+  animation: newClipsGlowBottom 2s ease-in-out infinite alternate;
+}
+
+/* When group is collapsed, glow normally instead of just bottom */
+.clip-group.new-clips-group.collapsed .clip-group-title::before {
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.4);
+  animation: newClipsGlow 2s ease-in-out infinite alternate;
+}
+
+/* Hover effects for new clips groups */
+.clip-group.new-clips-group .clip-group-header:hover .clip-group-divider {
+  background: linear-gradient(
+    90deg,
+    rgba(34, 197, 94, 0.6),
+    rgba(34, 197, 94, 0.3) 50%,
+    transparent
+  );
+  transform: scaleX(1.02);
+}
+
+.clip-group.new-clips-group .clip-group-header:hover .clip-group-title::before {
+  border-color: #16A249;
+  transform: rotate(45deg) scale(1);
+  box-shadow: 0 25px 50px rgba(34, 197, 94, 0.7);
+}
+
+.clip-group.new-clips-group.collapsed .clip-group-header:hover .clip-group-title::before {
+  transform: rotate(0deg) scale(1);
+  box-shadow: 0 0 40px rgba(34, 197, 94, 0.7);
+}
+
+.clip-group.new-clips-group.collapsed .clip-group-header:hover .clip-group-divider {
+  transform: scaleX(0.98);
 }
 
 /* New Clips Notification removed - using inline green line indicator only */
