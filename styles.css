@@ -114,7 +114,9 @@ body.dragging * {
   display: flex;
   align-items: center;
   gap: 3px;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 .controller-indicator .material-symbols-rounded {
@@ -122,6 +124,8 @@ body.dragging * {
   line-height: 1;
   vertical-align: middle;
 }
+
+.controller-indicator.visible { opacity: 1; transform: translateY(0); }
 
 /* Controller focus styles for grid navigation */
 .clip-item.controller-focused {
@@ -879,6 +883,27 @@ body.dragging * {
   display: flex !important;
 }
 
+/* Staggered entrance for control elements */
+#video-controls.visible .left-controls > *,
+#video-controls.visible .right-controls > *,
+#video-controls.visible #speed-container,
+#video-controls.visible #volume-container,
+#video-controls.visible #current-time,
+#video-controls.visible #total-time {
+  animation: controlIn 220ms ease both;
+}
+
+#video-controls.visible .left-controls > *:nth-child(1) { animation-delay: 0ms; }
+#video-controls.visible .left-controls > *:nth-child(2) { animation-delay: 30ms; }
+#video-controls.visible .left-controls > *:nth-child(3) { animation-delay: 60ms; }
+#video-controls.visible .right-controls > *:nth-child(1) { animation-delay: 0ms; }
+#video-controls.visible .right-controls > *:nth-child(2) { animation-delay: 30ms; }
+
+@keyframes controlIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .video-nav-button {
   background: rgba(0, 0, 0, 0.5);
   border-radius: 10px;
@@ -893,7 +918,7 @@ body.dragging * {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.3s;
+  transition: background-color 0.3s, transform 0.1s ease;
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
@@ -1036,6 +1061,8 @@ body.dragging * {
   align-items: center;
   cursor: pointer;
   z-index: 10;
+  overflow: hidden;
+  transition: transform 0.1s ease;
 }
 
 #fullscreen-button svg {
@@ -1082,6 +1109,8 @@ body.dragging * {
   color: #e0e0e0;
   font-size: 15px;
   font-weight: normal;
+  position: relative;
+  overflow: hidden;
 }
 
 #speed-button:hover {
@@ -1121,7 +1150,9 @@ body.dragging * {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.3s ease;
+  transition: background-color 0.3s ease, transform 0.1s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 #volume-button:hover {
@@ -1157,6 +1188,9 @@ body.dragging * {
   border-radius: 4px;
   cursor: pointer;
   margin-left: 10px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.1s ease;
 }
 
 #export-button {
@@ -1203,6 +1237,37 @@ body.dragging * {
   width: 100%;
   border-radius: 4px;
 }
+
+#progress-bar-container.clicked { animation: barBump 180ms ease; }
+
+@keyframes barBump {
+  0% { transform: scaleY(1); }
+  50% { transform: scaleY(1.2); }
+  100% { transform: scaleY(1); }
+}
+
+/* Ripple effect */
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  transform: scale(0);
+  animation: ripple 500ms ease-out;
+  background: rgba(255, 255, 255, 0.034);
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+@keyframes ripple { to { transform: scale(4); opacity: 0; } }
+
+/* Micro press feedback */
+#export-button:active,
+#delete-button:active,
+#fullscreen-button:active,
+#volume-button:active,
+#speed-button:active,
+.video-nav-button:active,
+.settings-button:active,
+.action-button:active { transform: scale(0.98); }
 
 #progress-bar {
   height: 100%;
@@ -1588,6 +1653,14 @@ body.dragging * {
   transform: translateX(10%);
 }
 
+.export-toast-content.complete { animation: toastPop 280ms ease-out; }
+
+@keyframes toastPop {
+  0% { transform: scale(0.98); }
+  60% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
 .export-toast-content {
   background: #1e1e1e;
   border-radius: 8px;
@@ -1699,6 +1772,7 @@ body.dragging * {
 .clip-item.selected {
   outline: 3px solid #4CAF50;
   position: relative;
+  animation: selectedPulse 300ms ease-out;
 }
 
 .clip-item.selected::after {
@@ -1711,6 +1785,12 @@ body.dragging * {
   background: rgba(76, 175, 80, 0.2);
   pointer-events: none;
   z-index: 2;
+}
+
+@keyframes selectedPulse {
+  0% { transform: scale(1); box-shadow: 0 0 0 rgba(76,175,80,0); }
+  50% { transform: scale(1.01); box-shadow: 0 0 14px rgba(76,175,80,0.25); }
+  100% { transform: scale(1); box-shadow: 0 0 0 rgba(76,175,80,0); }
 }
 
 #selection-actions {
@@ -1747,6 +1827,8 @@ body.dragging * {
   cursor: pointer;
   font-size: 14px;
   transition: background-color 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 #delete-selected {
@@ -2378,6 +2460,7 @@ body.dragging * {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   overflow: hidden;
+  transform: translateZ(0);
 }
 
 .settings-button::after {
