@@ -68,6 +68,10 @@ let isMouseOverControls = false;
 let isRendering = false;
 let deletionTooltip = null;
 let deletionTimeout = null;
+let isSpaceHeld = false;
+let spaceHoldTimeoutId = null;
+let wasSpaceHoldBoostActive = false;
+let speedBeforeSpaceHold = 1;
 let settings;
 let discordPresenceInterval;
 let clipStartTime;
@@ -658,6 +662,7 @@ function handleControllerConnection(connected, gamepadId) {
     
     if (indicator) {
       indicator.style.display = 'flex';
+      indicator.classList.add('visible');
       indicator.title = `Controller Connected: ${gamepadId}`;
     }
     
@@ -677,8 +682,9 @@ function handleControllerConnection(connected, gamepadId) {
     
     if (indicator && gamepadManager && !gamepadManager.isGamepadConnected()) {
       // Only hide if no controllers are connected
-      indicator.style.display = 'none';
+      indicator.classList.remove('visible');
       indicator.title = 'Controller Disconnected';
+      setTimeout(() => { if (!indicator.classList.contains('visible')) indicator.style.display = 'none'; }, 250);
     }
   }
 }
@@ -2985,6 +2991,7 @@ function showExportProgress(current, total, isClipboardExport = false) {
   progressText.textContent = `${percentage}%`;
 
   if (percentage >= 100) {
+    content.classList.add('complete');
     if (isClipboardExport) {
       title.textContent = 'Copied to clipboard!';
     } else {
@@ -2997,6 +3004,7 @@ function showExportProgress(current, total, isClipboardExport = false) {
         title.textContent = 'Exporting...';
         content.style.setProperty('--progress', '0%');
         progressText.textContent = '0%';
+        content.classList.remove('complete');
       }, 300);
     }, 3000);
   }
@@ -4989,7 +4997,7 @@ const videoControls = document.getElementById("video-controls");
 
 function showControls() {
   videoControls.style.transition = 'none';
-  videoControls.classList.add("visible");
+  videoControls.classList.add('visible');
 }
 
 function hideControls() {
@@ -5219,6 +5227,30 @@ function handleKeyRelease(e) {
     isFrameStepping = false;
     frameStepDirection = 0;
   }
+
+  // Handle Space release for temporary speed boost or tap-to-toggle
+  if (e.key === ' ' || e.code === 'Space') {
+    const isClipTitleFocused = document.activeElement === clipTitle;
+    const isSearching = document.activeElement === document.getElementById("search-input");
+    const isPlayerActive = playerOverlay.style.display === "block";
+    if (!isPlayerActive || isClipTitleFocused || isSearching) return;
+
+    if (spaceHoldTimeoutId) {
+      clearTimeout(spaceHoldTimeoutId);
+      spaceHoldTimeoutId = null;
+    }
+
+    if (wasSpaceHoldBoostActive) {
+      // Restore previous playback rate without saving/updating UI
+      videoPlayer.playbackRate = speedBeforeSpaceHold;
+    } else {
+      // Treat as tap: toggle play/pause
+      if (videoPlayer.src) togglePlayPause();
+    }
+
+    isSpaceHeld = false;
+    wasSpaceHoldBoostActive = false;
+  }
 }
 
 function handleKeyPress(e) {
@@ -5229,6 +5261,26 @@ function handleKeyPress(e) {
   if (!isPlayerActive) return;
 
   showControls();
+
+  // Special handling for Space: hold to 2x while pressed (no metadata/UI update)
+  if (!isClipTitleFocused && !isSearching && (e.key === ' ' || e.code === 'Space')) {
+    e.preventDefault();
+    if (!isSpaceHeld) {
+      isSpaceHeld = true;
+      wasSpaceHoldBoostActive = false;
+      // Start a short delay to distinguish tap vs hold
+      spaceHoldTimeoutId = setTimeout(() => {
+        // Only boost if still held and video is playing
+        if (isSpaceHeld && !videoPlayer.paused) {
+          wasSpaceHoldBoostActive = true;
+          speedBeforeSpaceHold = videoPlayer.playbackRate;
+          videoPlayer.playbackRate = 2;
+        }
+      }, 200);
+    }
+    // Do not process further as a keybinding here
+    return;
+  }
 
   // Resolve action from keybindings
   if (!isClipTitleFocused && !isSearching) {
@@ -5524,6 +5576,28 @@ progressBarContainer.addEventListener("mousedown", (e) => {
     
     videoPlayer.currentTime = newTime;
   }
+});
+
+// Microanimation on progress click: bump + ripple
+progressBarContainer.addEventListener('click', (e) => {
+  try {
+    // Bump animation restart
+    progressBarContainer.classList.remove('clicked');
+    // eslint-disable-next-line no-unused-expressions
+    progressBarContainer.offsetHeight;
+    progressBarContainer.classList.add('clicked');
+
+    // Subtle localized ripple near the bar only
+    const rect = progressBarContainer.getBoundingClientRect();
+    const ripple = document.createElement('span');
+    ripple.className = 'ripple';
+    const size = 24; // fixed small ripple
+    ripple.style.width = ripple.style.height = `${size}px`;
+    ripple.style.left = `${Math.min(Math.max(e.clientX - rect.left - size / 2, 0), rect.width - size)}px`;
+    ripple.style.top = `${(rect.height - size) / 2}px`;
+    progressBarContainer.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 350);
+  } catch (_) {}
 });
 
 function handleTrimDrag(e) {
@@ -6671,10 +6745,18 @@ function createSearchDisplay() {
     searchDisplay.className = 'search-display';
     searchDisplay.setAttribute('role', 'textbox');
     searchDisplay.setAttribute('aria-label', 'Search input');
+    searchDisplay.setAttribute('tabindex', '0');
     
     // Replace input with display
     searchInput.style.display = 'none';
     searchContainer.appendChild(searchDisplay);
+    // Mirror placeholder focus effect on initial focus when user clicks in
+    searchDisplay.addEventListener('focus', () => {
+      searchDisplay.classList.add('focused');
+    });
+    searchDisplay.addEventListener('blur', () => {
+      searchDisplay.classList.remove('focused');
+    });
   }
   
   return searchDisplay;
