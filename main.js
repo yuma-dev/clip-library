@@ -17,6 +17,7 @@ const { loadSettings, saveSettings } = require("./settings-manager");
 const SteelSeriesProcessor = require('./steelseries-processor');
 const readify = require("readify");
 const { logActivity } = require('./activity-tracker');
+const { createDiagnosticsBundle } = require('./diagnostics/collector');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const DiscordRPC = require('discord-rpc');
 const clientId = '1264368321013219449';
@@ -726,6 +727,45 @@ ipcMain.handle("restore-missing-global-tags", async () => {
     
   } catch (error) {
     logger.error("Error restoring missing global tags:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('show-diagnostics-save-dialog', async () => {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const defaultDirectory = app.getPath('documents');
+  const defaultPath = path.join(defaultDirectory, `clips-diagnostics-${timestamp}.zip`);
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Diagnostics Zip',
+    defaultPath,
+    buttonLabel: 'Save Diagnostics',
+    filters: [{ name: 'Zip Files', extensions: ['zip'] }]
+  });
+
+  return result.canceled ? null : result.filePath;
+});
+
+ipcMain.handle('generate-diagnostics-zip', async (event, targetPath) => {
+  const sender = event.sender;
+
+  if (!targetPath) {
+    return { success: false, error: 'No output path provided' };
+  }
+
+  try {
+    const result = await createDiagnosticsBundle({
+      savePath: targetPath,
+      progressCallback: (progress) => {
+        if (sender && !sender.isDestroyed()) {
+          sender.send('diagnostics-progress', progress);
+        }
+      }
+    });
+
+    return { success: true, ...result };
+  } catch (error) {
+    logger.error('Failed to generate diagnostics package:', error);
     return { success: false, error: error.message };
   }
 });

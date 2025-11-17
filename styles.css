@@ -2445,6 +2445,26 @@ body.dragging * {
   font-size: 13px;
 }
 
+.diagnostics-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+  min-height: 16px;
+  word-break: break-all;
+}
+
+.diagnostics-status[data-state="progress"] {
+  color: #facc15;
+}
+
+.diagnostics-status[data-state="success"] {
+  color: #34d399;
+}
+
+.diagnostics-status[data-state="error"] {
+  color: #f87171;
+}
+
 /* Controls */
 .settings-control {
   margin-left: 20px;

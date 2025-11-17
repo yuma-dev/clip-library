@@ -78,6 +78,10 @@ let clipStartTime;
 let elapsedTime = 0;
 let loadingScreen;
 let processingTimeout = null;
+let diagnosticsInProgress = false;
+let diagnosticsStatusEl = null;
+let generateDiagnosticsBtn = null;
+let diagnosticsButtonDefaultLabel = 'Generate Zip';
 let activePreview = null;
 let previewCleanupTimeout = null;
 let isGeneratingThumbnails = false;
@@ -710,6 +714,103 @@ ipcRenderer.on('log', (event, { type, message }) => {
   console[type](`[Main Process] ${message}`);
 });
 
+const DIAGNOSTICS_STAGE_LABELS = {
+  initializing: 'Preparing workspace',
+  'system-info': 'Collecting system info',
+  logs: 'Gathering logs',
+  'settings-files': 'Gathering settings files',
+  'settings-snapshot': 'Capturing settings snapshot',
+  'activity-logs': 'Bundling activity history',
+  complete: 'Complete'
+};
+
+ipcRenderer.on('diagnostics-progress', (event, progress) => {
+  if (!diagnosticsInProgress) return;
+  updateDiagnosticsStatus(progress);
+});
+
+function formatBytes(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+
+  const digits = unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function setDiagnosticsStatusMessage(message, state = 'info') {
+  if (!diagnosticsStatusEl) return;
+  diagnosticsStatusEl.textContent = message;
+  diagnosticsStatusEl.dataset.state = state;
+}
+
+function updateDiagnosticsStatus(progress) {
+  if (!diagnosticsStatusEl) return;
+  const label = DIAGNOSTICS_STAGE_LABELS[progress.stage] || progress.stage;
+
+  if (progress.stage === 'complete') {
+    const sizeText = typeof progress.bytes === 'number' ? ` (${formatBytes(progress.bytes)})` : '';
+    diagnosticsStatusEl.textContent = `${label}${sizeText}`;
+    diagnosticsStatusEl.dataset.state = 'success';
+    return;
+  }
+
+  const total = Number(progress.total) || 0;
+  const completed = Number(progress.completed) || 0;
+  const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+
+  const percentText = percent ? ` (${percent}%)` : '';
+  diagnosticsStatusEl.textContent = `${label}${percentText}`;
+  diagnosticsStatusEl.dataset.state = 'progress';
+}
+
+async function handleDiagnosticsGeneration() {
+  if (diagnosticsInProgress) return;
+
+  const targetPath = await ipcRenderer.invoke('show-diagnostics-save-dialog');
+  if (!targetPath) {
+    setDiagnosticsStatusMessage('Diagnostics generation cancelled.', 'info');
+    return;
+  }
+
+  diagnosticsInProgress = true;
+  setDiagnosticsStatusMessage('Preparing diagnostics bundle...', 'progress');
+
+  if (generateDiagnosticsBtn) {
+    generateDiagnosticsBtn.disabled = true;
+    generateDiagnosticsBtn.textContent = 'Generating...';
+  }
+
+  try {
+    const response = await ipcRenderer.invoke('generate-diagnostics-zip', targetPath);
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'Unknown error');
+    }
+
+    const sizeText = typeof response.size === 'number' ? ` (${formatBytes(response.size)})` : '';
+    setDiagnosticsStatusMessage(`Diagnostics saved to: ${response.zipPath}${sizeText}`, 'success');
+  } catch (error) {
+    logger.error('Failed to generate diagnostics bundle:', error);
+    setDiagnosticsStatusMessage(`Failed to generate diagnostics: ${error.message}`, 'error');
+  } finally {
+    diagnosticsInProgress = false;
+    if (generateDiagnosticsBtn) {
+      generateDiagnosticsBtn.disabled = false;
+      generateDiagnosticsBtn.textContent = diagnosticsButtonDefaultLabel;
+    }
+  }
+}
+
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
 settingsModal.className = "settings-modal";
@@ -766,6 +867,7 @@ settingsModal.innerHTML = `
           </div>
         </div>
       </div>
+
     </div>
 
     <div class="settings-tab-content" data-tab="display">
@@ -855,6 +957,20 @@ settingsModal.innerHTML = `
         </div>
       </div>
 
+      <div class="settings-group">
+        <h3 class="settings-group-title">Diagnostics</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Generate Diagnostics Zip</div>
+            <div class="settings-item-description">Bundle logs, settings, and system info to share for troubleshooting.</div>
+            <div id="diagnosticsStatus" class="settings-item-description diagnostics-status"></div>
+          </div>
+          <div class="settings-control">
+            <button id="generateDiagnosticsBtn" class="settings-button settings-button-secondary">Generate Zip</button>
+          </div>
+        </div>
+      </div>
+
       <div class="settings-version">
         <p>Version: <span id="app-version">Loading...</span></p>
       </div>
@@ -872,6 +988,13 @@ container.appendChild(settingsModal);
 
 const closeSettingsBtn = document.getElementById("closeSettingsBtn");
 const currentClipLocationSpan = document.getElementById("currentClipLocation");
+generateDiagnosticsBtn = document.getElementById('generateDiagnosticsBtn');
+diagnosticsStatusEl = document.getElementById('diagnosticsStatus');
+
+if (generateDiagnosticsBtn) {
+  diagnosticsButtonDefaultLabel = generateDiagnosticsBtn.textContent || diagnosticsButtonDefaultLabel;
+  generateDiagnosticsBtn.addEventListener('click', handleDiagnosticsGeneration);
+}
 
 async function fetchSettings() {
   settings = await ipcRenderer.invoke('get-settings');
