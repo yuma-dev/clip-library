@@ -45,6 +45,9 @@ Clip Library saves edit information separately, preserving your original video f
 
 `Exluding Deletion, this will permanently Delete the actual Video file!`
 
+### 🩺 Diagnostics Bundle
+Need help troubleshooting a tricky issue? Head to **Settings → About** and use the **Generate Diagnostics Zip** button. Choose where to save the archive, and Clip Library will collect recent logs, settings, and system details into a single bundle you can share with the maintainer for faster debugging.
+
 ## Getting Started
 
 1. Download the latest release from the [Releases](https://github.com/yuma-dev/clip-library/releases) page.

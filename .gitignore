@@ -10,4 +10,4 @@ ffmpeg-bin/ffmpeg.exe
 ffmpeg-bin/ffprobe.exe
 __pycache__
 .gitignore
-
+package-lock.json
