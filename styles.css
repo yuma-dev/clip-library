@@ -2978,27 +2978,38 @@ input:checked + .settings-switch-slider::before {
   position: absolute;
   bottom: 0;
   left: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.2);
+  height: 4px;
+  background: rgba(0, 0, 0, 0.3);
   width: 100%;
   overflow: hidden;
+  border-radius: 0 0 8px 8px;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #C084FC, #9333EA);
+  background: rgba(255, 255, 255, 0.95);
   width: 0%;
   transition: width 0.3s ease;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
+  position: relative;
 }
 
 /* Downloading state */
 .update-notification-content.downloading {
-  background: linear-gradient(90deg, #6B21A8, #9333EA);
+  background: linear-gradient(90deg, #581c87, #7c3aed);
   pointer-events: none;
 }
 
+.update-notification-content.downloading::before {
+  display: none;
+}
+
 .update-notification-content.downloading .update-text {
-  opacity: 0.8;
+  opacity: 1;
+}
+
+.update-notification-content.downloading .update-close {
+  display: none;
 }
 
 .changelog-container {

@@ -7061,16 +7061,25 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
     notification.querySelector('.update-notification-content').addEventListener('click', async (e) => {
       if (e.target.closest('.update-close')) return;
       
+      const content = e.currentTarget;
+      const updateText = content.querySelector('.update-text');
+      const originalText = updateText.textContent;
+      
+      // Update text to show downloading state
+      updateText.textContent = 'Downloading update...';
+      
       // Add progress bar
       const progressBar = document.createElement('div');
       progressBar.className = 'download-progress';
       progressBar.innerHTML = '<div class="progress-fill"></div>';
-      e.currentTarget.appendChild(progressBar);
-      e.currentTarget.classList.add('downloading');
+      content.appendChild(progressBar);
+      content.classList.add('downloading');
       
       // Listen for progress updates
       ipcRenderer.on('download-progress', (_, progress) => {
+        const roundedProgress = Math.round(progress);
         progressBar.querySelector('.progress-fill').style.width = `${progress}%`;
+        updateText.textContent = `Downloading update... ${roundedProgress}%`;
       });
     
       // Start update
@@ -7081,6 +7090,82 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
     });
   }
 });
+
+// Test utility for update notification popup
+window.updateNotificationTest = {
+  show: (options = {}) => {
+    const { 
+      currentVersion = '1.0.0', 
+      latestVersion = '2.0.0', 
+      changelog = '## What\'s New\\n- Feature 1\\n- Feature 2\\n- Bug fixes' 
+    } = options;
+    
+    // Remove existing notification if present
+    const existing = document.querySelector('.update-notification');
+    if (existing) existing.remove();
+    
+    // Trigger the show-update-notification event
+    const event = new CustomEvent('test-update-notification');
+    ipcRenderer.emit('show-update-notification', event, { currentVersion, latestVersion, changelog });
+    
+    console.log('Update notification shown. Click on it to simulate downloading.');
+    return 'Update notification displayed';
+  },
+  
+  simulateDownload: (durationMs = 5000) => {
+    const notification = document.querySelector('.update-notification');
+    if (!notification) {
+      console.error('No update notification found. Call updateNotificationTest.show() first.');
+      return;
+    }
+    
+    const content = notification.querySelector('.update-notification-content');
+    if (content.classList.contains('downloading')) {
+      console.log('Already downloading');
+      return;
+    }
+    
+    const updateText = content.querySelector('.update-text');
+    updateText.textContent = 'Downloading update...';
+    
+    // Add progress bar
+    const progressBar = document.createElement('div');
+    progressBar.className = 'download-progress';
+    progressBar.innerHTML = '<div class="progress-fill"></div>';
+    content.appendChild(progressBar);
+    content.classList.add('downloading');
+    
+    // Simulate progress
+    let progress = 0;
+    const interval = setInterval(() => {
+      progress += Math.random() * 15;
+      if (progress >= 100) {
+        progress = 100;
+        clearInterval(interval);
+        updateText.textContent = 'Download complete!';
+        setTimeout(() => {
+          notification.classList.remove('show');
+          setTimeout(() => notification.remove(), 300);
+        }, 1500);
+      }
+      progressBar.querySelector('.progress-fill').style.width = `${progress}%`;
+      updateText.textContent = `Downloading update... ${Math.round(progress)}%`;
+    }, durationMs / 10);
+    
+    console.log(`Simulating download over ${durationMs}ms`);
+    return 'Download simulation started';
+  },
+  
+  hide: () => {
+    const notification = document.querySelector('.update-notification');
+    if (notification) {
+      notification.classList.remove('show');
+      setTimeout(() => notification.remove(), 300);
+      return 'Update notification hidden';
+    }
+    return 'No notification to hide';
+  }
+};
 
 window.loadingScreenTest = {
   show: () => {
