@@ -958,6 +958,20 @@ settingsModal.innerHTML = `
       </div>
 
       <div class="settings-group">
+        <h3 class="settings-group-title">Updates</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Check for Updates</div>
+            <div class="settings-item-description">Manually check if a newer version is available.</div>
+            <div id="updateCheckStatus" class="settings-item-description update-check-status"></div>
+          </div>
+          <div class="settings-control">
+            <button id="checkForUpdatesBtn" class="settings-button settings-button-primary">Check Now</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
         <h3 class="settings-group-title">Diagnostics</h3>
         <div class="settings-item">
           <div class="settings-item-info">
@@ -994,6 +1008,68 @@ diagnosticsStatusEl = document.getElementById('diagnosticsStatus');
 if (generateDiagnosticsBtn) {
   diagnosticsButtonDefaultLabel = generateDiagnosticsBtn.textContent || diagnosticsButtonDefaultLabel;
   generateDiagnosticsBtn.addEventListener('click', handleDiagnosticsGeneration);
+}
+
+// Check for Updates button handler
+const checkForUpdatesBtn = document.getElementById('checkForUpdatesBtn');
+const updateCheckStatusEl = document.getElementById('updateCheckStatus');
+
+if (checkForUpdatesBtn) {
+  checkForUpdatesBtn.addEventListener('click', handleManualUpdateCheck);
+}
+
+async function handleManualUpdateCheck() {
+  const btn = document.getElementById('checkForUpdatesBtn');
+  const statusEl = document.getElementById('updateCheckStatus');
+  
+  if (!btn || !statusEl) return;
+  
+  const originalText = btn.textContent;
+  btn.textContent = 'Checking...';
+  btn.disabled = true;
+  statusEl.textContent = '';
+  statusEl.className = 'settings-item-description update-check-status';
+  
+  try {
+    logger.info('Manual update check initiated');
+    const result = await ipcRenderer.invoke('check-for-updates');
+    
+    if (result.updateAvailable) {
+      statusEl.textContent = `Update available: v${result.latestVersion}`;
+      statusEl.classList.add('update-available');
+      
+      // Show the update notification
+      ipcRenderer.emit('show-update-notification', null, {
+        currentVersion: result.currentVersion,
+        latestVersion: result.latestVersion,
+        changelog: result.changelog
+      });
+      logger.info(`Update found: ${result.currentVersion} -> ${result.latestVersion}`);
+    } else if (result.error === 'network_unavailable') {
+      statusEl.textContent = 'Could not connect. Check your internet connection.';
+      statusEl.classList.add('update-error');
+      logger.warn('Update check failed: network unavailable');
+    } else if (result.error === 'rate_limited') {
+      statusEl.textContent = 'Too many requests. Please try again later.';
+      statusEl.classList.add('update-error');
+      logger.warn('Update check failed: rate limited');
+    } else if (result.error) {
+      statusEl.textContent = `Check failed: ${result.error}`;
+      statusEl.classList.add('update-error');
+      logger.error(`Update check failed: ${result.error}`);
+    } else {
+      statusEl.textContent = `You're up to date! (v${result.currentVersion})`;
+      statusEl.classList.add('update-current');
+      logger.info('Application is up to date');
+    }
+  } catch (error) {
+    statusEl.textContent = 'Failed to check for updates';
+    statusEl.classList.add('update-error');
+    logger.error('Update check error:', error);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 async function fetchSettings() {
@@ -7013,15 +7089,33 @@ async function updateVersionDisplay() {
 }
 
 // Add this near the other ipcRenderer listeners
-ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersion, changelog }) => {
-
-  logger.info(`Renderer received update notification: ${currentVersion} -> ${latestVersion}`);
-  if (!document.querySelector('.update-notification')) {
+ipcRenderer.on('show-update-notification', (event, data) => {
+  console.log('[UPDATE] show-update-notification received:', data);
+  logger.info('[UPDATE] Received show-update-notification IPC message');
+  
+  try {
+    // Validate incoming data
+    if (!data || typeof data !== 'object') {
+      logger.error('Invalid update notification data received:', data);
+      console.error('[UPDATE] Invalid data:', data);
+      return;
+    }
+    
+    const { currentVersion, latestVersion, changelog } = data;
+    
+    logger.info(`Renderer received update notification: ${currentVersion} -> ${latestVersion}`);
+    
+    // Don't create duplicate notifications
+    if (document.querySelector('.update-notification')) {
+      logger.info('Update notification already exists, skipping');
+      return;
+    }
+    
     const notification = document.createElement('div');
     notification.className = 'update-notification';
     notification.innerHTML = `
       <div class="update-notification-content">
-        <span class="update-text">Update available (${latestVersion})</span>
+        <span class="update-text">Update available (${latestVersion || 'unknown'})</span>
         <button class="update-close" aria-label="Close">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -7034,20 +7128,38 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
       </div>
     `;
 
-    // Parse and sanitize markdown
+    // Parse and sanitize markdown (with fallbacks if libraries aren't loaded)
     const changelogContainer = notification.querySelector('.changelog');
     if (changelog) {
-      const parsed = marked.parse(changelog);
-      changelogContainer.innerHTML = DOMPurify.sanitize(parsed);
+      try {
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+          const parsed = marked.parse(changelog);
+          changelogContainer.innerHTML = DOMPurify.sanitize(parsed);
+        } else {
+          // Fallback: show raw text
+          changelogContainer.textContent = changelog;
+          logger.warn('marked or DOMPurify not available, showing raw changelog');
+        }
+      } catch (parseError) {
+        logger.error('Error parsing changelog:', parseError);
+        changelogContainer.textContent = changelog;
+      }
     } else {
       changelogContainer.textContent = 'No release notes available';
     }
+    
     document.body.appendChild(notification);
+    logger.info('Update notification element added to DOM');
+    console.log('[UPDATE] Notification element added to DOM:', notification);
+    console.log('[UPDATE] Notification parent:', notification.parentElement);
     
     // Show notification with slight delay
     setTimeout(() => {
       notification.classList.add('show');
       logger.info('Update notification shown');
+      console.log('[UPDATE] .show class added, notification should be visible');
+      console.log('[UPDATE] Notification classList:', notification.className);
+      console.log('[UPDATE] Notification computed style visibility:', window.getComputedStyle(notification).visibility);
     }, 100);
 
     // Add event listeners
@@ -7065,6 +7177,9 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
       const updateText = content.querySelector('.update-text');
       const originalText = updateText.textContent;
       
+      // Prevent multiple clicks
+      if (content.classList.contains('downloading')) return;
+      
       // Update text to show downloading state
       updateText.textContent = 'Downloading update...';
       
@@ -7075,19 +7190,45 @@ ipcRenderer.on('show-update-notification', (event, { currentVersion, latestVersi
       content.appendChild(progressBar);
       content.classList.add('downloading');
       
-      // Listen for progress updates
-      ipcRenderer.on('download-progress', (_, progress) => {
+      // Progress handler
+      const onProgress = (_, progress) => {
         const roundedProgress = Math.round(progress);
         progressBar.querySelector('.progress-fill').style.width = `${progress}%`;
         updateText.textContent = `Downloading update... ${roundedProgress}%`;
-      });
-    
-      // Start update
-      await ipcRenderer.invoke('start-update');
+      };
       
-      // Cleanup
-      ipcRenderer.removeAllListeners('download-progress');
+      // Error handler
+      const onError = (_, errorMessage) => {
+        logger.error('Update download failed:', errorMessage);
+        updateText.textContent = 'Download failed. Click to retry.';
+        content.classList.remove('downloading');
+        progressBar.remove();
+        cleanup();
+      };
+      
+      // Cleanup function
+      const cleanup = () => {
+        ipcRenderer.removeListener('download-progress', onProgress);
+        ipcRenderer.removeListener('update-download-error', onError);
+      };
+      
+      // Listen for progress updates and errors
+      ipcRenderer.on('download-progress', onProgress);
+      ipcRenderer.on('update-download-error', onError);
+    
+      try {
+        // Start update
+        await ipcRenderer.invoke('start-update');
+      } catch (error) {
+        logger.error('Update invocation failed:', error);
+        updateText.textContent = 'Download failed. Click to retry.';
+        content.classList.remove('downloading');
+        progressBar.remove();
+        cleanup();
+      }
     });
+  } catch (error) {
+    logger.error('Error creating update notification:', error);
   }
 });
 

@@ -179,8 +179,15 @@ async function checkForUpdatesInBackground(mainWindow) {
 app.whenReady().then(async () => {
   const win = await createWindow();
 
-  // Kick off the update check once the window exists
-  checkForUpdatesInBackground(win);
+  // Wait for the renderer to be fully loaded before checking for updates
+  win.webContents.once('did-finish-load', () => {
+    logger.info('Renderer did-finish-load event fired');
+    // Add a small delay to ensure the renderer's IPC listeners are set up
+    setTimeout(() => {
+      logger.info('Starting update check after delay');
+      checkForUpdatesInBackground(win);
+    }, 1500);
+  });
   
   // Start periodic saves to prevent data loss
   startPeriodicSave();
@@ -396,6 +403,16 @@ function setupFileWatcher(clipLocation) {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const result = await checkForUpdates(mainWindow, { silent: true });
+    return result;
+  } catch (error) {
+    logger.error('Manual update check failed:', error);
+    return { updateAvailable: false, error: error.message || 'Check failed' };
+  }
 });
 
 ipcMain.handle('get-new-clip-info', async (event, fileName) => {
