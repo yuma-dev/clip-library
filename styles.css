@@ -2465,6 +2465,28 @@ body.dragging * {
   color: #f87171;
 }
 
+/* Update Check Status */
+.update-check-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+  min-height: 16px;
+  transition: color 0.2s ease;
+}
+
+.update-check-status.update-available {
+  color: #a78bfa;
+  font-weight: 500;
+}
+
+.update-check-status.update-current {
+  color: #34d399;
+}
+
+.update-check-status.update-error {
+  color: #f87171;
+}
+
 /* Controls */
 .settings-control {
   margin-left: 20px;
@@ -2894,7 +2916,7 @@ input:checked + .settings-switch-slider::before {
   opacity: 0;
   transform: translateX(100%);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 9999;
+  z-index: 99999; /* Higher than loading screen */
 }
 
 .update-notification.show {
