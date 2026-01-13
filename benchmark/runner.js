@@ -317,7 +317,7 @@ class BenchmarkRunner {
                   this.results.openClipTimings = [];
                 }
                 this.results.openClipTimings.push(timing);
-                
+
                 // Print timing breakdown
                 console.log(`\n  📊 openClip timing for ${timing.clip}:`);
                 for (const [phase, data] of Object.entries(timing.breakdown)) {
@@ -327,6 +327,57 @@ class BenchmarkRunner {
                 console.log(`     ${'TOTAL'.padEnd(20)} ${timing.total.toFixed(0).padStart(5)}ms`);
               } catch (e) {
                 this.log('Failed to parse timing:', e.message);
+              }
+            }
+          }
+
+          // Look for startup detailed breakdown
+          if (line.includes('STARTUP_BREAKDOWN:')) {
+            const match = line.match(/STARTUP_BREAKDOWN:(.+)/);
+            if (match) {
+              try {
+                const report = JSON.parse(match[1]);
+                this.results.startupBreakdown = report;
+
+                // Print detailed breakdown
+                console.log('\n  ========== STARTUP DETAILED BREAKDOWN ==========');
+                console.log(`  Total Time: ${report.totalTime.toFixed(1)}ms`);
+                console.log(`  Clips: ${report.clipCount} found, ${report.renderedClips} rendered, ${report.groupCount} groups`);
+                console.log('');
+                console.log('  Phase                              Duration    % Total');
+                console.log('  ' + '─'.repeat(55));
+
+                // Sort for bottleneck analysis
+                const sortedPhases = [...report.phases].sort((a, b) => b.duration - a.duration);
+
+                for (const phase of report.phases) {
+                  const bar = '█'.repeat(Math.round(parseFloat(phase.percentage) / 5));
+                  const name = phase.name.padEnd(35);
+                  const dur = `${phase.duration.toFixed(1)}ms`.padStart(8);
+                  const pct = `${phase.percentage}%`.padStart(6);
+                  console.log(`  ${name} ${dur} ${pct} ${bar}`);
+                }
+
+                console.log('  ' + '─'.repeat(55));
+                console.log('');
+                console.log('  TOP BOTTLENECKS:');
+                for (let i = 0; i < Math.min(3, sortedPhases.length); i++) {
+                  const p = sortedPhases[i];
+                  console.log(`    ${i + 1}. ${p.name}: ${p.duration.toFixed(1)}ms (${p.percentage}%)`);
+                }
+
+                if (report.tagBatchDetails && report.tagBatchDetails.batchCount > 1) {
+                  console.log('');
+                  console.log(`  Tag Loading Details: ${report.tagBatchDetails.batchCount} batches`);
+                  console.log(`    Avg batch: ${report.tagBatchDetails.avgBatchTime.toFixed(1)}ms`);
+                  const batchTimes = report.tagBatchDetails.batchTimes;
+                  console.log(`    Min batch: ${Math.min(...batchTimes).toFixed(1)}ms`);
+                  console.log(`    Max batch: ${Math.max(...batchTimes).toFixed(1)}ms`);
+                }
+
+                console.log('  ================================================\n');
+              } catch (e) {
+                this.log('Failed to parse startup breakdown:', e.message);
               }
             }
           }
@@ -457,6 +508,46 @@ class BenchmarkRunner {
       console.log(`  ✗ ${scenario}: FAILED - ${error}`);
     } else {
       console.log(`  ✓ ${scenario}: ${this.formatDuration(duration)}`);
+
+      // Print detailed breakdown for startup_detailed scenario
+      if (scenario === 'startup_detailed' && details && details.phases) {
+        const report = details;
+        console.log('\n  ========== STARTUP DETAILED BREAKDOWN ==========');
+        console.log(`  Total Time: ${report.totalTime.toFixed(1)}ms`);
+        console.log(`  Clips: ${report.clipCount} found, ${report.renderedClips} rendered, ${report.groupCount} groups`);
+        console.log('');
+        console.log('  Phase                              Duration    % Total');
+        console.log('  ' + '─'.repeat(55));
+
+        const sortedPhases = [...report.phases].sort((a, b) => b.duration - a.duration);
+
+        for (const phase of report.phases) {
+          const bar = '█'.repeat(Math.round(parseFloat(phase.percentage) / 5));
+          const name = phase.name.padEnd(35);
+          const dur = `${phase.duration.toFixed(1)}ms`.padStart(8);
+          const pct = `${phase.percentage}%`.padStart(6);
+          console.log(`  ${name} ${dur} ${pct} ${bar}`);
+        }
+
+        console.log('  ' + '─'.repeat(55));
+        console.log('');
+        console.log('  TOP BOTTLENECKS:');
+        for (let i = 0; i < Math.min(3, sortedPhases.length); i++) {
+          const p = sortedPhases[i];
+          console.log(`    ${i + 1}. ${p.name}: ${p.duration.toFixed(1)}ms (${p.percentage}%)`);
+        }
+
+        if (report.tagBatchDetails && report.tagBatchDetails.batchCount > 1) {
+          console.log('');
+          console.log(`  Tag Loading Details: ${report.tagBatchDetails.batchCount} batches`);
+          console.log(`    Avg batch: ${report.tagBatchDetails.avgBatchTime.toFixed(1)}ms`);
+          const batchTimes = report.tagBatchDetails.batchTimes;
+          console.log(`    Min batch: ${Math.min(...batchTimes).toFixed(1)}ms`);
+          console.log(`    Max batch: ${Math.max(...batchTimes).toFixed(1)}ms`);
+        }
+
+        console.log('  ================================================\n');
+      }
     }
   }
 

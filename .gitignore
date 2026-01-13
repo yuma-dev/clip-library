@@ -10,4 +10,7 @@ ffmpeg-bin/ffmpeg.exe
 ffmpeg-bin/ffprobe.exe
 __pycache__
 .gitignore
+
+# Ignore files (and directories) starting with tmpclaude
+tmpclaude*
 package-lock.json
