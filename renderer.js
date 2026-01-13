@@ -1447,11 +1447,6 @@ async function loadClips() {
       await Promise.all(batch.map(async (clip) => {
         clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
       }));
-      
-      // Small delay between tag batches
-      if (i + TAG_BATCH_SIZE < allClips.length) {
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
     }
 
     allClips = removeDuplicates(allClips);
@@ -3740,6 +3735,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const scenarioMap = {
           'load_clips': () => benchmarkHarness.benchmarkLoadClips(),
           'render_clips': () => benchmarkHarness.benchmarkRenderClips(),
+          'startup_detailed': () => benchmarkHarness.benchmarkStartupDetailed(),
           'open_clip': () => benchmarkHarness.benchmarkOpenClip(0),
           'open_clip_detailed': () => benchmarkHarness.benchmarkOpenClipDetailed({ iterations: 5, warmupRuns: 1 }),
           'video_metadata': () => benchmarkHarness.benchmarkVideoMetadata(),

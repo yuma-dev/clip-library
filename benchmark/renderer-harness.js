@@ -348,6 +348,109 @@ class RendererHarness {
   }
 
   /**
+   * Benchmark: Detailed startup breakdown
+   * Times each individual phase of the startup process
+   */
+  async benchmarkStartupDetailed() {
+    this.log('Starting detailed startup breakdown');
+
+    const phases = [];
+    const addPhase = (name, duration) => {
+      phases.push({ name, duration });
+      this.log(`  ${name}: ${duration.toFixed(1)}ms`);
+    };
+
+    // Clear clips grid to simulate fresh start
+    const clipGrid = document.getElementById('clip-grid');
+    if (clipGrid) clipGrid.innerHTML = '';
+
+    let totalStart = performance.now();
+    let phaseStart;
+
+    // Phase 1: Get clip location
+    phaseStart = performance.now();
+    const clipLocation = await ipcRenderer.invoke("get-clip-location");
+    addPhase('get-clip-location', performance.now() - phaseStart);
+
+    // Phase 2: Get new clips info
+    phaseStart = performance.now();
+    const newClipsInfo = await ipcRenderer.invoke("get-new-clips-info");
+    addPhase('get-new-clips-info', performance.now() - phaseStart);
+
+    // Phase 3: Get clips (filesystem scan) - THE BIG ONE
+    phaseStart = performance.now();
+    let allClips = await ipcRenderer.invoke("get-clips");
+    addPhase('get-clips (filesystem)', performance.now() - phaseStart);
+
+    const clipCount = allClips.length;
+    this.log(`  Clips found: ${clipCount}`);
+
+    // Phase 4: Tag loading (batched)
+    phaseStart = performance.now();
+    const TAG_BATCH_SIZE = 50;
+    let tagBatchTimes = [];
+
+    for (let i = 0; i < allClips.length; i += TAG_BATCH_SIZE) {
+      const batchStart = performance.now();
+      const batch = allClips.slice(i, i + TAG_BATCH_SIZE);
+      await Promise.all(batch.map(async (clip) => {
+        clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
+      }));
+      tagBatchTimes.push(performance.now() - batchStart);
+    }
+    const totalTagTime = performance.now() - phaseStart;
+    addPhase(`load-tags (${Math.ceil(clipCount / TAG_BATCH_SIZE)} batches)`, totalTagTime);
+
+    // Phase 5: Sort clips
+    phaseStart = performance.now();
+    allClips.sort((a, b) => b.createdAt - a.createdAt);
+    addPhase('sort-clips', performance.now() - phaseStart);
+
+    // Phase 6: Load global tags
+    phaseStart = performance.now();
+    await ipcRenderer.invoke("load-global-tags");
+    addPhase('load-global-tags', performance.now() - phaseStart);
+
+    // Phase 7: Render clips to DOM
+    phaseStart = performance.now();
+    if (this.appFunctions.renderClips) {
+      await this.appFunctions.renderClips(allClips);
+    }
+    addPhase('render-clips (DOM)', performance.now() - phaseStart);
+
+    // Phase 8: Count rendered elements
+    phaseStart = performance.now();
+    const renderedClips = document.querySelectorAll('.clip-item').length;
+    const groupCount = document.querySelectorAll('.time-group').length;
+    addPhase('DOM query', performance.now() - phaseStart);
+
+    const totalTime = performance.now() - totalStart;
+
+    // Calculate percentages and build report
+    const report = {
+      totalTime,
+      clipCount,
+      renderedClips,
+      groupCount,
+      phases: phases.map(p => ({
+        ...p,
+        percentage: ((p.duration / totalTime) * 100).toFixed(1)
+      })),
+      tagBatchDetails: {
+        batchCount: tagBatchTimes.length,
+        batchTimes: tagBatchTimes,
+        avgBatchTime: tagBatchTimes.length > 0 ?
+          tagBatchTimes.reduce((a, b) => a + b, 0) / tagBatchTimes.length : 0
+      }
+    };
+
+    // Output structured data for the runner to display
+    console.log(`STARTUP_BREAKDOWN:${JSON.stringify(report)}`);
+
+    return report;
+  }
+
+  /**
    * Benchmark: Thumbnail generation
    */
   async benchmarkThumbnailGeneration() {
@@ -543,6 +646,7 @@ class RendererHarness {
       'renderClips': () => this.benchmarkRenderClips(),
       'openClip': () => this.benchmarkOpenClip(),
       'openClipDetailed': () => this.benchmarkOpenClipDetailed(),
+      'startupDetailed': () => this.benchmarkStartupDetailed(),
       'videoMetadata': () => this.benchmarkVideoMetadata(),
       'search': () => this.benchmarkSearch(),
       'seek': () => this.benchmarkSeek(),

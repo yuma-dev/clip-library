@@ -29,6 +29,17 @@ const CATEGORIES = {
  * All available benchmark scenarios
  */
 const SCENARIOS = {
+  // ==================== STARTUP SCENARIOS ====================
+
+  startup_detailed: {
+    id: 'startup_detailed',
+    name: 'Startup Detailed Breakdown',
+    category: CATEGORIES.STARTUP,
+    description: 'Granular timing of each startup phase: settings, IPC calls, tag loading, rendering',
+    renderer: true,
+    timeout: 120000
+  },
+
   // ==================== LOADING SCENARIOS ====================
 
   load_clips: {
@@ -176,6 +187,11 @@ const SUITES = {
   // Open clip deep-dive - detailed profiling to find bottlenecks
   openclip: [
     'open_clip_detailed'
+  ],
+
+  // Startup analysis - detailed breakdown of app startup phases
+  startup: [
+    'startup_detailed'
   ]
 };
 
