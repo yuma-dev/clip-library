@@ -3,6 +3,28 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Secret Easter Egg Overlay */
+.secret-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.secret-overlay img {
+  max-height: 70vh;
+  max-width: 90vw;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 0 60px rgba(255, 255, 255, 0.1);
+}
+
 body {
   font-family: 'Roboto', sans-serif;
   margin: 0;
@@ -833,10 +855,10 @@ body.dragging * {
 /* Fullscreen player styles */
 #fullscreen-player {
   position: fixed;
-  top: 50%;
+  top: 51%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 85%;
+  width: 90%;
   height: auto;
   aspect-ratio: 16 / 9;
   background-color: #1e1e1e;
@@ -905,14 +927,14 @@ body.dragging * {
 }
 
 .video-nav-button {
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(26,26,26);
   border-radius: 10px;
   color: white;
   border: none;
   font-size: 24px;
   padding: 15px;
   cursor: pointer;
-  z-index: 1001;
+  z-index: 999;
   height: 80px;
   width: 50px;
   display: flex;
@@ -1265,7 +1287,6 @@ body.dragging * {
 #fullscreen-button:active,
 #volume-button:active,
 #speed-button:active,
-.video-nav-button:active,
 .settings-button:active,
 .action-button:active { transform: scale(0.98); }
 
@@ -1316,7 +1337,7 @@ body.dragging * {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(5px);
   z-index: 999;
   display: flex;
