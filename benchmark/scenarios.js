@@ -40,6 +40,15 @@ const SCENARIOS = {
     timeout: 120000
   },
 
+  grid_performance: {
+    id: 'grid_performance',
+    name: 'Grid Performance with Many Clips',
+    category: CATEGORIES.LOADING,
+    description: 'Measures FPS and CPU impact with varying numbers of visible clips',
+    renderer: true,
+    timeout: 60000
+  },
+
   // ==================== LOADING SCENARIOS ====================
 
   load_clips: {

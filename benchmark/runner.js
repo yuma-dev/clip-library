@@ -509,6 +509,46 @@ class BenchmarkRunner {
     } else {
       console.log(`  ✓ ${scenario}: ${this.formatDuration(duration)}`);
 
+      // Print grid performance results
+      if (scenario === 'grid_performance' && details) {
+        console.log('\n  ========== GRID PERFORMANCE ANALYSIS ==========');
+        console.log(`  DOM Elements: ${details.domStats?.totalElements || 'N/A'}`);
+        console.log(`  Clip Items: ${details.domStats?.clipItems || 'N/A'}`);
+        console.log(`  Images: ${details.domStats?.images || 'N/A'}`);
+        console.log('');
+
+        if (details.tests && details.tests.length > 0) {
+          console.log('  FPS MEASUREMENTS:');
+          for (const test of details.tests) {
+            console.log(`    ${test.clipCount} clips: ${test.idleFPS} FPS (min: ${test.minFPS})`);
+          }
+        }
+
+        if (details.scrollPerformance) {
+          console.log('');
+          console.log('  SCROLL PERFORMANCE:');
+          console.log(`    Jank frames: ${details.scrollPerformance.jankFrames}/${details.scrollPerformance.totalFrames} (${details.scrollPerformance.jankPercent}%)`);
+        }
+
+        if (details.cssStats) {
+          console.log('');
+          console.log('  CSS IMPACT:');
+          if (details.cssStats.hasBoxShadow > 0) console.log(`    Box-shadow: ${details.cssStats.hasBoxShadow} elements`);
+          if (details.cssStats.hasFilter > 0) console.log(`    Filter: ${details.cssStats.hasFilter} elements`);
+          if (details.cssStats.hasTransform > 0) console.log(`    Transform: ${details.cssStats.hasTransform} elements`);
+        }
+
+        if (details.recommendations && details.recommendations.length > 0) {
+          console.log('');
+          console.log('  RECOMMENDATIONS:');
+          for (const rec of details.recommendations) {
+            console.log(`    ⚠ ${rec}`);
+          }
+        }
+
+        console.log('  ================================================\n');
+      }
+
       // Print detailed breakdown for startup_detailed scenario
       if (scenario === 'startup_detailed' && details && details.phases) {
         const report = details;

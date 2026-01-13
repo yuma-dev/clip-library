@@ -3736,6 +3736,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           'load_clips': () => benchmarkHarness.benchmarkLoadClips(),
           'render_clips': () => benchmarkHarness.benchmarkRenderClips(),
           'startup_detailed': () => benchmarkHarness.benchmarkStartupDetailed(),
+          'grid_performance': () => benchmarkHarness.benchmarkGridPerformance(),
           'open_clip': () => benchmarkHarness.benchmarkOpenClip(0),
           'open_clip_detailed': () => benchmarkHarness.benchmarkOpenClipDetailed({ iterations: 5, warmupRuns: 1 }),
           'video_metadata': () => benchmarkHarness.benchmarkVideoMetadata(),
@@ -4668,7 +4669,8 @@ function createClipElement(clip) {
 
     clipElement.addEventListener("click", (e) => handleClipClick(e, clip));
 
-    clipElement.addEventListener("mousemove", handleOnMouseMove);
+    // Note: mousemove for tilt effect is handled by wrapper-level listener in addHoverEffect()
+    // Removed per-clip mousemove listener to improve performance with large grids
 
     clipElement.addEventListener("contextmenu", (e) => {
       e.preventDefault(); // Prevent the default context menu
