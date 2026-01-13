@@ -10,6 +10,19 @@ const keybinds = require('./keybinding-manager');
 // Gamepad manager for controller support
 const GamepadManager = require('./gamepad-manager');
 
+// Benchmark mode detection and harness initialization
+const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
+let benchmarkHarness = null;
+if (isBenchmarkMode) {
+  try {
+    const { getRendererHarness } = require('./benchmark/renderer-harness');
+    benchmarkHarness = getRendererHarness();
+    logger.info('[Benchmark] Renderer harness initialized');
+  } catch (e) {
+    logger.error('[Benchmark] Failed to load harness:', e);
+  }
+}
+
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
 const videoPlayer = document.getElementById("video-player");
@@ -3589,7 +3602,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   new Titlebar(titlebarOptions);
 
-  loadClips();
+  // Register app functions for benchmark harness
+  if (benchmarkHarness) {
+    benchmarkHarness.registerFunctions({
+      loadClips,
+      renderClips,
+      openClip,
+      closePlayer,
+      performSearch,
+      allClips: () => allClips  // Getter function for current clips
+    });
+  }
+
+  // Run loadClips with benchmark timing if enabled
+  if (benchmarkHarness) {
+    await benchmarkHarness.metrics.measure('initialLoadClips', loadClips);
+  } else {
+    loadClips();
+  }
   setupSearch();
 
   
@@ -3634,6 +3664,102 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateDiscordPresence('Browsing clips', `Total clips: ${currentClipList.length}`);
 
   loadingScreen = document.getElementById('loading-screen');
+
+  // Run benchmark scenarios if in benchmark mode
+  if (isBenchmarkMode && benchmarkHarness) {
+    // Allow UI to fully render before running benchmarks
+    setTimeout(async () => {
+      try {
+        logger.info('[Benchmark] Starting automated benchmark scenarios');
+        
+        // Parse scenarios from environment
+        const scenariosJson = process.env.CLIPS_BENCHMARK_SCENARIOS;
+        let scenarioIds = ['load_clips', 'open_clip', 'close_player', 'search_simple'];
+        
+        if (scenariosJson) {
+          try {
+            scenarioIds = JSON.parse(scenariosJson);
+          } catch (e) {
+            logger.warn('[Benchmark] Failed to parse scenarios, using defaults');
+          }
+        }
+        
+        logger.info(`[Benchmark] Scenarios to run: ${scenarioIds.join(', ')}`);
+        
+        // Map scenario IDs to harness methods
+        const scenarioMap = {
+          'load_clips': () => benchmarkHarness.benchmarkLoadClips(),
+          'render_clips': () => benchmarkHarness.benchmarkRenderClips(),
+          'open_clip': () => benchmarkHarness.benchmarkOpenClip(0),
+          'open_clip_detailed': () => benchmarkHarness.benchmarkOpenClipDetailed({ iterations: 5, warmupRuns: 1 }),
+          'video_metadata': () => benchmarkHarness.benchmarkVideoMetadata(),
+          'video_seek': () => benchmarkHarness.benchmarkSeek(),
+          'close_player': () => benchmarkHarness.benchmarkClosePlayer(),
+          'search_simple': () => benchmarkHarness.benchmarkSearch('clip'),
+          'search_complex': () => benchmarkHarness.benchmarkSearch('gameplay video 2024'),
+          'thumbnail_batch': () => benchmarkHarness.benchmarkThumbnailGeneration()
+        };
+        
+        // Run each requested scenario
+        for (const scenarioId of scenarioIds) {
+          const scenarioFn = scenarioMap[scenarioId];
+          if (scenarioFn) {
+            try {
+              logger.info(`[Benchmark] Running scenario: ${scenarioId}`);
+              
+              const startTime = performance.now();
+              const result = await scenarioFn();
+              const duration = performance.now() - startTime;
+              
+              const resultData = {
+                scenario: scenarioId,
+                duration: result?.duration || duration,
+                memory: result?.memory || { heapUsedDelta: 0 },
+                details: result
+              };
+              
+              // Send result to main process for stdout output
+              await ipcRenderer.invoke('benchmark:outputResult', resultData);
+              
+              logger.info(`[Benchmark] Scenario ${scenarioId} completed in ${duration.toFixed(1)}ms`);
+              
+              // Small delay between scenarios
+              await new Promise(r => setTimeout(r, 500));
+            } catch (error) {
+              logger.error(`[Benchmark] Scenario ${scenarioId} failed:`, error);
+              
+              // Send error result to main
+              await ipcRenderer.invoke('benchmark:outputResult', {
+                scenario: scenarioId,
+                error: error.message
+              });
+            }
+          } else {
+            logger.warn(`[Benchmark] Unknown scenario: ${scenarioId}`);
+          }
+        }
+        
+        // Get final results from main process
+        const mainResults = await ipcRenderer.invoke('benchmark:getResults');
+        
+        // Send complete signal to main for stdout output
+        await ipcRenderer.invoke('benchmark:outputComplete', {
+          renderer: benchmarkHarness.getMetrics(),
+          main: mainResults
+        });
+        
+        logger.info('[Benchmark] All scenarios completed');
+        
+        // Close app after benchmarks complete (with delay for output flushing)
+        setTimeout(() => {
+          ipcRenderer.invoke('benchmark:quit');
+        }, 1000);
+        
+      } catch (error) {
+        logger.error('[Benchmark] Benchmark execution failed:', error);
+      }
+    }, 3000); // Wait 3 seconds for initial load to complete
+  }
 });
 
 async function saveSpeed(clipName, speed) {
@@ -5100,6 +5226,18 @@ videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
 
 async function openClip(originalName, customName) {
   logger.info(`Opening clip: ${originalName}`);
+  
+  // Performance timing for benchmark mode
+  const timings = {};
+  const startTime = performance.now();
+  const mark = (name) => {
+    timings[name] = performance.now() - startTime;
+    if (isBenchmarkMode) {
+      logger.info(`[TIMING] ${name}: ${timings[name].toFixed(1)}ms`);
+    }
+  };
+  mark('start');
+  
   elapsedTime = 0;
 
   // Reset auto-seek behavior for new clip
@@ -5108,6 +5246,7 @@ async function openClip(originalName, customName) {
 
   // Log the previous session if one was active
   await logCurrentWatchSession();
+  mark('logSession');
 
   if (currentCleanup) {
     currentCleanup();
@@ -5140,6 +5279,7 @@ async function openClip(originalName, customName) {
   // Hide video and show thumbnail
   videoPlayer.style.opacity = '0';
   const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", originalName);
+  mark('getThumbnailPath');
   if (thumbnailPath) {
     thumbnailOverlay.src = `file://${thumbnailPath}`;
     thumbnailOverlay.style.display = 'block';
@@ -5155,6 +5295,7 @@ async function openClip(originalName, customName) {
     videoPlayer.removeAttribute('src');
     videoPlayer.load();
   }
+  mark('cleanupPrevious');
 
   // Load all data first before setting up video
   logger.info(`[${originalName}] Loading clip data...`);
@@ -5165,6 +5306,7 @@ async function openClip(originalName, customName) {
       ipcRenderer.invoke("get-trim", originalName),
       ipcRenderer.invoke("get-clip-tags", originalName)
     ]);
+    mark('getClipData');
     logger.info(`[${originalName}] Clip data loaded successfully. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
   } catch (error) {
     logger.error(`[${originalName}] Error loading clip data:`, error);
@@ -5261,6 +5403,7 @@ async function openClip(originalName, customName) {
   try {
     logger.info(`[${originalName}] Waiting for video to load...`);
     await videoLoadPromise;
+    mark('videoLoaded');
     logger.info(`[${originalName}] Video load promise completed successfully`);
   } catch (error) {
     logger.error(`[${originalName}] Video load promise failed:`, error);
@@ -5270,6 +5413,7 @@ async function openClip(originalName, customName) {
   logger.info(`[${originalName}] Loading volume data...`);
   try {
     await loadVolumeData();
+    mark('loadVolumeData');
     logger.info(`[${originalName}] Volume data loaded successfully`);
   } catch (error) {
     logger.error(`[${originalName}] Error loading volume data:`, error);
@@ -5324,6 +5468,7 @@ async function openClip(originalName, customName) {
   logger.info(`[${originalName}] Loading volume settings...`);
   try {
     const savedVolume = await loadVolume(originalName);
+    mark('loadVolume');
     logger.info(`[${originalName}] Loaded volume: ${savedVolume}`);
     setupAudioContext();
     gainNode.gain.setValueAtTime(savedVolume, audioContext.currentTime);
@@ -5338,6 +5483,7 @@ async function openClip(originalName, customName) {
   logger.info(`[${originalName}] Loading speed settings...`);
   try {
     const savedSpeed = await loadSpeed(originalName);
+    mark('loadSpeed');
     logger.info(`[${originalName}] Loaded speed: ${savedSpeed}`);
     videoPlayer.playbackRate = savedSpeed;
     updateSpeedSlider(savedSpeed);
@@ -5352,6 +5498,7 @@ async function openClip(originalName, customName) {
   logger.info(`[${originalName}] Showing player overlay and fullscreen player...`);
   playerOverlay.style.display = "block";
   fullscreenPlayer.style.display = "block";
+  mark('playerVisible');
 
   // Start ambient glow effect (respecting saved settings)
   if (ambientGlowCanvas && videoPlayer) {
@@ -5505,6 +5652,7 @@ async function openClip(originalName, customName) {
   logger.info(`[${originalName}] Waiting for video to start playing...`);
   try {
     await playPromise;
+    mark('videoPlaying');
     logger.info(`[${originalName}] Video is now playing - openClip completed successfully!`);
   } catch (error) {
     logger.error(`[${originalName}] Failed to start video playback:`, error);
@@ -5513,6 +5661,35 @@ async function openClip(originalName, customName) {
 
   logger.info(`[${originalName}] Updating Discord presence...`);
   updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, false); // Start paused
+  mark('complete');
+  
+  // Log complete timing breakdown in benchmark mode
+  if (isBenchmarkMode) {
+    // Calculate deltas for each phase
+    const phases = Object.keys(timings).filter(k => k !== 'start');
+    let prevTime = 0;
+    const breakdown = {};
+    for (const phase of phases) {
+      const elapsed = timings[phase];
+      breakdown[phase] = { delta: elapsed - prevTime, total: elapsed };
+      prevTime = elapsed;
+    }
+    
+    // Output timing via IPC so runner can capture it
+    const timingData = { 
+      clip: originalName, 
+      breakdown, 
+      total: timings.complete || (performance.now() - startTime) 
+    };
+    ipcRenderer.invoke('benchmark:outputTiming', timingData).catch(() => {});
+    
+    // Also log to renderer console for debugging
+    logger.info(`[TIMING BREAKDOWN] ${originalName}:`);
+    for (const phase of phases) {
+      logger.info(`  ${phase}: +${breakdown[phase].delta.toFixed(1)}ms (total: ${breakdown[phase].total.toFixed(1)}ms)`);
+    }
+    logger.info(`  TOTAL: ${timings.complete?.toFixed(1) || (performance.now() - startTime).toFixed(1)}ms`);
+  }
   
   logger.info(`[${originalName}] openClip function completed`);
 }
