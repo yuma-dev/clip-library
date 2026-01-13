@@ -385,9 +385,9 @@ function setupFileWatcher(clipLocation) {
     }
   });
 
-  watcher.on('add', (filePath) => {
+  watcher.on('add', async (filePath) => {
     const ext = path.extname(filePath).toLowerCase();
-    if (['.mp4', '.avi', '.mov'].includes(ext)) {
+    if (['.mp4', '.avi', '.mov', '.mkv', '.webm'].includes(ext)) {
       const fileName = path.basename(filePath);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('new-clip-added', fileName);

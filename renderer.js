@@ -4537,7 +4537,7 @@ function handleFullscreenChange() {
       // Exiting fullscreen
       fullscreenPlayer.classList.remove('custom-fullscreen');
       document.removeEventListener('mousemove', handleFullscreenMouseMove);
-      fullscreenPlayer.style.top = '50%';
+      fullscreenPlayer.style.top = '51%';
       fullscreenPlayer.style.left = '50%';
       fullscreenPlayer.style.transform = 'translate(-50%, -50%)';
       logger.info('Exited fullscreen mode');
@@ -7915,3 +7915,13 @@ if(document && document.fonts){
     document.body.classList.add('icons-ready');
   });
 }
+
+// Secret Easter Egg - F6 toggle
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'F6') {
+    const overlay = document.getElementById('secret-overlay');
+    if (overlay) {
+      overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+    }
+  }
+});
