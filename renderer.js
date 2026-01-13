@@ -22,6 +22,7 @@ const playhead = document.getElementById("playhead");
 const loadingOverlay = document.getElementById("loading-overlay");
 const playerOverlay = document.getElementById("player-overlay");
 const videoClickTarget = document.getElementById("video-click-target");
+const ambientGlowCanvas = document.getElementById("ambient-glow-canvas");
 const MAX_FRAME_RATE = 10;
 const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
 const volumeButton = document.getElementById("volume-button");
@@ -117,6 +118,188 @@ let gridNavigationEnabled = false; // Whether grid navigation is active
 let lastGridNavigationTime = 0; // Throttle grid navigation
 const GRID_NAVIGATION_THROTTLE = 200; // 200ms between movements
 let mouseKeyboardListenersSetup = false; // Track if we've set up mouse/keyboard listeners
+
+// Ambient Glow Manager - YouTube-style background glow effect
+class AmbientGlowManager {
+  constructor(videoElement, canvasElement) {
+    this.video = videoElement;
+    this.canvas = canvasElement;
+    this.ctx = null;
+    this.animationFrameId = null;
+    this.isActive = false;
+    this.lastDrawTime = 0;
+    this.frameInterval = 1000 / 30; // Cap at 30fps for performance
+    this.prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    
+    // Temporal smoothing - blend factor (0.1 = very smooth, 0.5 = responsive, 1.0 = no smoothing)
+    // Lower values = smoother but slower color transitions
+    this.blendFactor = 0.15;
+    
+    // Bind methods
+    this.draw = this.draw.bind(this);
+    this.drawLoop = this.drawLoop.bind(this);
+    this.handlePlay = this.handlePlay.bind(this);
+    this.handlePause = this.handlePause.bind(this);
+    this.handleSeeked = this.handleSeeked.bind(this);
+    
+    this.init();
+  }
+  
+  init() {
+    if (!this.canvas || !this.video) return;
+    
+    this.ctx = this.canvas.getContext('2d', { 
+      alpha: true, // Need alpha for blending
+      willReadFrequently: false 
+    });
+    
+    // Set low-resolution for performance (glow is heavily blurred anyway)
+    this.canvas.width = 16;
+    this.canvas.height = 9;
+    
+    // Small blur on canvas for smoother color sampling
+    this.ctx.filter = 'blur(1px)';
+  }
+  
+  draw(forceFullDraw = false) {
+    if (!this.ctx || !this.video || this.video.readyState < 2) return;
+    
+    try {
+      if (forceFullDraw) {
+        // Full draw without blending (used on seek/initial load)
+        this.ctx.globalAlpha = 1.0;
+        this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+      } else {
+        // Temporal smoothing: blend new frame with existing content
+        // Draw new frame with low opacity on top of existing content
+        this.ctx.globalAlpha = this.blendFactor;
+        this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.globalAlpha = 1.0;
+      }
+    } catch (e) {
+      // Silently handle cross-origin or video not ready errors
+    }
+  }
+  
+  drawLoop(timestamp) {
+    if (!this.isActive) return;
+    
+    // Throttle to target framerate for performance
+    const elapsed = timestamp - this.lastDrawTime;
+    if (elapsed >= this.frameInterval) {
+      this.draw();
+      this.lastDrawTime = timestamp - (elapsed % this.frameInterval);
+    }
+    
+    this.animationFrameId = requestAnimationFrame(this.drawLoop);
+  }
+  
+  start() {
+    if (this.prefersReducedMotion || this.isActive) return;
+    
+    this.isActive = true;
+    this.canvas.classList.remove('hidden');
+    
+    // Draw initial frame
+    this.draw();
+    
+    // Add event listeners
+    this.video.addEventListener('play', this.handlePlay);
+    this.video.addEventListener('pause', this.handlePause);
+    this.video.addEventListener('ended', this.handlePause);
+    this.video.addEventListener('seeked', this.handleSeeked);
+    this.video.addEventListener('loadeddata', this.handleSeeked);
+    
+    // Start loop if video is already playing
+    if (!this.video.paused) {
+      this.handlePlay();
+    }
+  }
+  
+  stop() {
+    this.isActive = false;
+    this.canvas.classList.add('hidden');
+    
+    // Cancel animation frame
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    
+    // Remove event listeners
+    this.video.removeEventListener('play', this.handlePlay);
+    this.video.removeEventListener('pause', this.handlePause);
+    this.video.removeEventListener('ended', this.handlePause);
+    this.video.removeEventListener('seeked', this.handleSeeked);
+    this.video.removeEventListener('loadeddata', this.handleSeeked);
+  }
+  
+  handlePlay() {
+    if (!this.isActive) return;
+    this.lastDrawTime = performance.now();
+    this.animationFrameId = requestAnimationFrame(this.drawLoop);
+  }
+  
+  handlePause() {
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    // Draw one final frame when paused
+    this.draw();
+  }
+  
+  handleSeeked() {
+    // Update canvas immediately when video seeks (no smoothing)
+    this.draw(true);
+  }
+  
+  // Hide during fullscreen mode
+  setFullscreen(isFullscreen) {
+    if (isFullscreen) {
+      this.canvas.classList.add('hidden');
+      if (this.animationFrameId) {
+        cancelAnimationFrame(this.animationFrameId);
+        this.animationFrameId = null;
+      }
+    } else if (this.isActive) {
+      this.canvas.classList.remove('hidden');
+      if (!this.video.paused) {
+        this.handlePlay();
+      } else {
+        this.draw();
+      }
+    }
+  }
+}
+
+// Global ambient glow manager instance
+let ambientGlowManager = null;
+
+// Apply ambient glow settings from the settings object
+function applyAmbientGlowSettings(glowSettings) {
+  if (!ambientGlowCanvas) return;
+  
+  const { enabled, smoothing, fps, blur, saturation, opacity } = glowSettings;
+  
+  // Update canvas CSS
+  ambientGlowCanvas.style.filter = `blur(${blur}px) saturate(${saturation})`;
+  ambientGlowCanvas.style.opacity = opacity;
+  
+  // Update manager settings if it exists
+  if (ambientGlowManager) {
+    ambientGlowManager.frameInterval = 1000 / fps;
+    ambientGlowManager.blendFactor = smoothing;
+  }
+  
+  // Handle enabled/disabled state
+  if (!enabled) {
+    ambientGlowCanvas.classList.add('hidden');
+    if (ambientGlowManager) {
+      ambientGlowManager.stop();
+    }
+  }
+}
 
 // Grid navigation functions
 function enableGridNavigation() {
@@ -910,6 +1093,70 @@ settingsModal.innerHTML = `
           <div class="settings-control">
             <input type="range" id="previewVolumeSlider" class="settings-range" min="0" max="1" step="0.01" value="0.1">
             <span id="previewVolumeValue">10%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-group-title">Ambient Glow</h3>
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Enable Ambient Glow</div>
+            <div class="settings-item-description">Show a colorful glow behind the video player that matches the video content</div>
+          </div>
+          <div class="settings-control">
+            <label class="settings-switch">
+              <input type="checkbox" id="ambientGlowEnabled">
+              <span class="settings-switch-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Smoothing</div>
+            <div class="settings-item-description">How smoothly the glow transitions between colors (lower = smoother)</div>
+          </div>
+          <div class="settings-control">
+            <input type="range" id="ambientGlowSmoothing" class="settings-range" min="0.1" max="1" step="0.1" value="0.5">
+            <span id="ambientGlowSmoothingValue">0.5</span>
+          </div>
+        </div>
+
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Update Rate</div>
+            <div class="settings-item-description">How often the glow updates (higher = smoother but uses more CPU)</div>
+          </div>
+          <div class="settings-control">
+            <select id="ambientGlowFps" class="settings-select">
+              <option value="15">15 fps</option>
+              <option value="24">24 fps</option>
+              <option value="30" selected>30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Blur Amount</div>
+            <div class="settings-item-description">How blurry the glow effect appears</div>
+          </div>
+          <div class="settings-control">
+            <input type="range" id="ambientGlowBlur" class="settings-range" min="40" max="120" step="10" value="80">
+            <span id="ambientGlowBlurValue">80px</span>
+          </div>
+        </div>
+
+        <div class="settings-item">
+          <div class="settings-item-info">
+            <div class="settings-item-title">Opacity</div>
+            <div class="settings-item-description">How visible the glow effect is</div>
+          </div>
+          <div class="settings-control">
+            <input type="range" id="ambientGlowOpacity" class="settings-range" min="0.3" max="1" step="0.1" value="0.7">
+            <span id="ambientGlowOpacityValue">70%</span>
           </div>
         </div>
       </div>
@@ -3647,10 +3894,20 @@ exportQualitySelect.addEventListener('change', async (e) => {
   }
 });
 
-function initializeSettingsModal() {
+async function initializeSettingsModal() {
+  logger.info('initializeSettingsModal called');
+  
+  // Ensure settings are loaded before initializing
+  if (!settings || typeof settings.then === 'function') {
+    logger.info('Settings not ready, fetching...');
+    settings = await ipcRenderer.invoke('get-settings');
+    logger.info('Settings fetched for modal initialization:', settings);
+  }
+  
   const settingsModal = document.getElementById('settingsModal');
   const tabs = document.querySelectorAll('.settings-tab');
   const tabContents = document.querySelectorAll('.settings-tab-content');
+  logger.info('settingsModal found:', !!settingsModal, 'tabs:', tabs.length, 'tabContents:', tabContents.length);
 
   // Tab switching
   tabs.forEach(tab => {
@@ -3772,6 +4029,154 @@ function initializeSettingsModal() {
   } else {
     logger.error('New clips indicators toggle element not found in DOM');
   }
+
+  // Ambient Glow settings
+  const ambientGlowEnabled = document.getElementById('ambientGlowEnabled');
+  const ambientGlowSmoothing = document.getElementById('ambientGlowSmoothing');
+  const ambientGlowSmoothingValue = document.getElementById('ambientGlowSmoothingValue');
+  const ambientGlowFps = document.getElementById('ambientGlowFps');
+  const ambientGlowBlur = document.getElementById('ambientGlowBlur');
+  const ambientGlowBlurValue = document.getElementById('ambientGlowBlurValue');
+  const ambientGlowOpacity = document.getElementById('ambientGlowOpacity');
+  const ambientGlowOpacityValue = document.getElementById('ambientGlowOpacityValue');
+
+  logger.info('Ambient glow elements found:', {
+    enabled: !!ambientGlowEnabled,
+    smoothing: !!ambientGlowSmoothing,
+    fps: !!ambientGlowFps,
+    blur: !!ambientGlowBlur,
+    opacity: !!ambientGlowOpacity
+  });
+
+  // Initialize ambient glow settings from saved values
+  const glowSettings = settings?.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+  logger.info('Initial glow settings:', glowSettings);
+  
+  if (ambientGlowEnabled) {
+    ambientGlowEnabled.checked = glowSettings.enabled;
+    ambientGlowEnabled.addEventListener('change', async (e) => {
+      logger.info('Ambient glow toggle changed:', e.target.checked);
+      try {
+        // Fetch fresh settings to avoid stale data
+        const currentSettings = await ipcRenderer.invoke('get-settings');
+        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+        const updated = { 
+          ...currentSettings, 
+          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, enabled: e.target.checked } 
+        };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        logger.info('Ambient glow settings saved:', settings.ambientGlow);
+        applyAmbientGlowSettings(settings.ambientGlow);
+      } catch (error) {
+        logger.error('Error toggling Ambient Glow:', error);
+        e.target.checked = !e.target.checked;
+      }
+    });
+  } else {
+    logger.error('ambientGlowEnabled element not found!');
+  }
+
+  if (ambientGlowSmoothing) {
+    ambientGlowSmoothing.value = glowSettings.smoothing;
+    ambientGlowSmoothingValue.textContent = glowSettings.smoothing.toFixed(1);
+    ambientGlowSmoothing.addEventListener('input', (e) => {
+      ambientGlowSmoothingValue.textContent = parseFloat(e.target.value).toFixed(1);
+    });
+    ambientGlowSmoothing.addEventListener('change', async (e) => {
+      logger.info('Ambient glow smoothing changed:', e.target.value);
+      try {
+        const currentSettings = await ipcRenderer.invoke('get-settings');
+        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+        const updated = { 
+          ...currentSettings, 
+          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, smoothing: parseFloat(e.target.value) } 
+        };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        logger.info('Ambient glow smoothing saved:', settings.ambientGlow);
+        applyAmbientGlowSettings(settings.ambientGlow);
+      } catch (error) {
+        logger.error('Error saving Ambient Glow smoothing:', error);
+      }
+    });
+  } else {
+    logger.error('ambientGlowSmoothing element not found!');
+  }
+
+  if (ambientGlowFps) {
+    ambientGlowFps.value = glowSettings.fps.toString();
+    ambientGlowFps.addEventListener('change', async (e) => {
+      logger.info('Ambient glow FPS changed:', e.target.value);
+      try {
+        const currentSettings = await ipcRenderer.invoke('get-settings');
+        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+        const updated = { 
+          ...currentSettings, 
+          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, fps: parseInt(e.target.value) } 
+        };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        logger.info('Ambient glow FPS saved:', settings.ambientGlow);
+        applyAmbientGlowSettings(settings.ambientGlow);
+      } catch (error) {
+        logger.error('Error saving Ambient Glow FPS:', error);
+      }
+    });
+  } else {
+    logger.error('ambientGlowFps element not found!');
+  }
+
+  if (ambientGlowBlur) {
+    ambientGlowBlur.value = glowSettings.blur;
+    ambientGlowBlurValue.textContent = `${glowSettings.blur}px`;
+    ambientGlowBlur.addEventListener('input', (e) => {
+      ambientGlowBlurValue.textContent = `${e.target.value}px`;
+    });
+    ambientGlowBlur.addEventListener('change', async (e) => {
+      logger.info('Ambient glow blur changed:', e.target.value);
+      try {
+        const currentSettings = await ipcRenderer.invoke('get-settings');
+        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+        const updated = { 
+          ...currentSettings, 
+          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, blur: parseInt(e.target.value) } 
+        };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        logger.info('Ambient glow blur saved:', settings.ambientGlow);
+        applyAmbientGlowSettings(settings.ambientGlow);
+      } catch (error) {
+        logger.error('Error saving Ambient Glow blur:', error);
+      }
+    });
+  } else {
+    logger.error('ambientGlowBlur element not found!');
+  }
+
+  if (ambientGlowOpacity) {
+    ambientGlowOpacity.value = glowSettings.opacity;
+    ambientGlowOpacityValue.textContent = `${Math.round(glowSettings.opacity * 100)}%`;
+    ambientGlowOpacity.addEventListener('input', (e) => {
+      ambientGlowOpacityValue.textContent = `${Math.round(e.target.value * 100)}%`;
+    });
+    ambientGlowOpacity.addEventListener('change', async (e) => {
+      logger.info('Ambient glow opacity changed:', e.target.value);
+      try {
+        const currentSettings = await ipcRenderer.invoke('get-settings');
+        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+        const updated = { 
+          ...currentSettings, 
+          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, opacity: parseFloat(e.target.value) } 
+        };
+        await ipcRenderer.invoke('save-settings', updated);
+        settings = updated;
+        applyAmbientGlowSettings(settings.ambientGlow);
+      } catch (error) {
+        logger.error('Error saving Ambient Glow opacity:', error);
+      }
+    });
+  }
 }
 
 async function openSettingsModal() {
@@ -3830,6 +4235,40 @@ async function openSettingsModal() {
       const savedVolume = settings.previewVolume ?? 0.1;
       previewVolumeSlider.value = savedVolume;
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
+    }
+
+    // Refresh ambient glow settings to reflect persisted values
+    const glowSettings = settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+    
+    const ambientGlowEnabledEl = document.getElementById('ambientGlowEnabled');
+    if (ambientGlowEnabledEl) {
+      ambientGlowEnabledEl.checked = Boolean(glowSettings.enabled);
+    }
+    
+    const ambientGlowSmoothingEl = document.getElementById('ambientGlowSmoothing');
+    const ambientGlowSmoothingValueEl = document.getElementById('ambientGlowSmoothingValue');
+    if (ambientGlowSmoothingEl && ambientGlowSmoothingValueEl) {
+      ambientGlowSmoothingEl.value = glowSettings.smoothing;
+      ambientGlowSmoothingValueEl.textContent = glowSettings.smoothing.toFixed(1);
+    }
+    
+    const ambientGlowFpsEl = document.getElementById('ambientGlowFps');
+    if (ambientGlowFpsEl) {
+      ambientGlowFpsEl.value = glowSettings.fps.toString();
+    }
+    
+    const ambientGlowBlurEl = document.getElementById('ambientGlowBlur');
+    const ambientGlowBlurValueEl = document.getElementById('ambientGlowBlurValue');
+    if (ambientGlowBlurEl && ambientGlowBlurValueEl) {
+      ambientGlowBlurEl.value = glowSettings.blur;
+      ambientGlowBlurValueEl.textContent = `${glowSettings.blur}px`;
+    }
+    
+    const ambientGlowOpacityEl = document.getElementById('ambientGlowOpacity');
+    const ambientGlowOpacityValueEl = document.getElementById('ambientGlowOpacityValue');
+    if (ambientGlowOpacityEl && ambientGlowOpacityValueEl) {
+      ambientGlowOpacityEl.value = glowSettings.opacity;
+      ambientGlowOpacityValueEl.textContent = `${Math.round(glowSettings.opacity * 100)}%`;
     }
 
     // Set initial active tab
@@ -4292,6 +4731,10 @@ exportButton.addEventListener("click", (e) => {
 });
 
 ipcRenderer.on("close-video-player", () => {
+  // Stop ambient glow effect
+  if (ambientGlowManager) {
+    ambientGlowManager.stop();
+  }
   if (videoPlayer) {
     videoPlayer.pause();
     videoPlayer.src = "";
@@ -4532,6 +4975,10 @@ function handleFullscreenChange() {
       // Entering fullscreen
       fullscreenPlayer.classList.add('custom-fullscreen');
       document.addEventListener('mousemove', handleFullscreenMouseMove);
+      // Hide ambient glow in fullscreen mode
+      if (ambientGlowManager) {
+        ambientGlowManager.setFullscreen(true);
+      }
       logger.info('Entered fullscreen mode');
     } else {
       // Exiting fullscreen
@@ -4540,6 +4987,10 @@ function handleFullscreenChange() {
       fullscreenPlayer.style.top = '51%';
       fullscreenPlayer.style.left = '50%';
       fullscreenPlayer.style.transform = 'translate(-50%, -50%)';
+      // Show ambient glow again when exiting fullscreen
+      if (ambientGlowManager) {
+        ambientGlowManager.setFullscreen(false);
+      }
       logger.info('Exited fullscreen mode');
     }
     
@@ -5050,6 +5501,28 @@ async function openClip(originalName, customName) {
   playerOverlay.style.display = "block";
   fullscreenPlayer.style.display = "block";
 
+  // Start ambient glow effect (respecting saved settings)
+  if (ambientGlowCanvas && videoPlayer) {
+    const glowSettings = settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+    
+    if (!ambientGlowManager) {
+      ambientGlowManager = new AmbientGlowManager(videoPlayer, ambientGlowCanvas);
+    }
+    
+    // Apply saved settings
+    ambientGlowManager.frameInterval = 1000 / glowSettings.fps;
+    ambientGlowManager.blendFactor = glowSettings.smoothing;
+    ambientGlowCanvas.style.filter = `blur(${glowSettings.blur}px) saturate(${glowSettings.saturation})`;
+    ambientGlowCanvas.style.opacity = glowSettings.opacity;
+    
+    // Only start if enabled
+    if (glowSettings.enabled) {
+      ambientGlowManager.start();
+    } else {
+      ambientGlowCanvas.classList.add('hidden');
+    }
+  }
+
   document.addEventListener("keydown", handleKeyPress);
   document.addEventListener("keyup", handleKeyRelease);
 
@@ -5345,6 +5818,11 @@ function closePlayer() {
 
   // Save any pending changes immediately
   saveTitleChange(originalName, oldCustomName, newCustomName, true).then(() => {
+    // Stop ambient glow effect
+    if (ambientGlowManager) {
+      ambientGlowManager.stop();
+    }
+
     playerOverlay.style.display = "none";
     fullscreenPlayer.style.display = "none";
     videoPlayer.pause();
@@ -7061,9 +7539,11 @@ function initializeEnhancedSearch() {
 }
 
 // Add this to your existing DOMContentLoaded listener
-document.addEventListener('DOMContentLoaded', () => {
+logger.info('Registering second DOMContentLoaded handler');
+document.addEventListener('DOMContentLoaded', async () => {
+  logger.info('Second DOMContentLoaded handler called');
   initializeEnhancedSearch();
-  initializeSettingsModal();
+  await initializeSettingsModal();
   
   // Add global click handler for modal backdrop
   const settingsModal = document.getElementById('settingsModal');

@@ -15,6 +15,15 @@ const DEFAULT_SETTINGS = {
   iconGreyscale: false,
   // Whether to show new clips indicators (green lines and group styling)
   showNewClipsIndicators: true,
+  // Ambient glow settings (YouTube-style background glow behind video player)
+  ambientGlow: {
+    enabled: true,
+    smoothing: 0.5,     // Blend factor (0.1-1.0) - higher = more responsive
+    fps: 30,            // Update rate
+    blur: 80,           // CSS blur in px
+    saturation: 1.5,    // Color saturation
+    opacity: 0.7        // Glow opacity
+  },
   // Controller settings
   controller: {
     enabled: true,
