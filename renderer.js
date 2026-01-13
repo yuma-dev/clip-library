@@ -72,6 +72,56 @@ let isLoading = false;
 let currentCleanup = null;
 let allClips = [];
 let contextMenuClip = null;
+
+// Cache for preloaded clip data (improves open clip performance)
+const clipDataCache = new Map();
+const CACHE_EXPIRY_MS = 60000; // 1 minute cache
+
+/**
+ * Preload clip data on hover for faster opening
+ */
+async function preloadClipData(originalName) {
+  // Check if already cached and not expired
+  const cached = clipDataCache.get(originalName);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_EXPIRY_MS) {
+    return cached.data;
+  }
+
+  try {
+    // Preload in parallel
+    const [clipInfo, trimData, clipTags, thumbnailPath] = await Promise.all([
+      ipcRenderer.invoke("get-clip-info", originalName),
+      ipcRenderer.invoke("get-trim", originalName),
+      ipcRenderer.invoke("get-clip-tags", originalName),
+      ipcRenderer.invoke("get-thumbnail-path", originalName)
+    ]);
+
+    const data = { clipInfo, trimData, clipTags, thumbnailPath };
+    clipDataCache.set(originalName, { data, timestamp: Date.now() });
+    
+    // Limit cache size
+    if (clipDataCache.size > 50) {
+      const oldestKey = clipDataCache.keys().next().value;
+      clipDataCache.delete(oldestKey);
+    }
+
+    return data;
+  } catch (error) {
+    logger.warn(`[Preload] Failed to preload ${originalName}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Get cached clip data or load fresh
+ */
+async function getCachedClipData(originalName) {
+  const cached = clipDataCache.get(originalName);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_EXPIRY_MS) {
+    return cached.data;
+  }
+  return null;
+}
 let isTagsDropdownOpen = false;
 let isFrameStepping = false;
 let frameStepDirection = 0;
@@ -4532,8 +4582,11 @@ function createClipElement(clip) {
     }
 
     async function handleMouseEnter() {
+      // OPTIMIZATION: Preload clip data on hover for faster opening
+      preloadClipData(clip.originalName).catch(() => {});
+      
       if (clipElement.classList.contains("video-preview-disabled")) return;
-    
+
       // Clear any existing preview immediately
       cleanupVideoPreview();
     
@@ -5278,8 +5331,44 @@ async function openClip(originalName, customName) {
   logger.info(`[${originalName}] Setting up thumbnail overlay`);
   // Hide video and show thumbnail
   videoPlayer.style.opacity = '0';
-  const thumbnailPath = await ipcRenderer.invoke("get-thumbnail-path", originalName);
-  mark('getThumbnailPath');
+  
+  // OPTIMIZATION: Show player overlay IMMEDIATELY with thumbnail
+  // This gives instant visual feedback while video loads in background
+  playerOverlay.style.display = "block";
+  fullscreenPlayer.style.display = "block";
+  mark('playerVisibleEarly');
+  
+  // OPTIMIZATION: Check if data was preloaded on hover
+  let clipInfo, trimData, clipTags, thumbnailPath;
+  const cachedData = await getCachedClipData(originalName);
+  
+  if (cachedData) {
+    // Use cached data - much faster!
+    clipInfo = cachedData.clipInfo;
+    trimData = cachedData.trimData;
+    clipTags = cachedData.clipTags;
+    thumbnailPath = cachedData.thumbnailPath;
+    mark('usedCachedData');
+    logger.info(`[${originalName}] Using preloaded cached data`);
+  } else {
+    // No cache - load fresh (parallel fetch for speed)
+    logger.info(`[${originalName}] Loading clip data (not cached)...`);
+    try {
+      [clipInfo, trimData, clipTags, thumbnailPath] = await Promise.all([
+        ipcRenderer.invoke("get-clip-info", originalName),
+        ipcRenderer.invoke("get-trim", originalName),
+        ipcRenderer.invoke("get-clip-tags", originalName),
+        ipcRenderer.invoke("get-thumbnail-path", originalName)
+      ]);
+      mark('fetchedClipData');
+    } catch (error) {
+      logger.error(`[${originalName}] Error loading clip data:`, error);
+      return;
+    }
+  }
+  mark('getClipData');
+  
+  // Set up thumbnail
   if (thumbnailPath) {
     thumbnailOverlay.src = `file://${thumbnailPath}`;
     thumbnailOverlay.style.display = 'block';
@@ -5296,22 +5385,8 @@ async function openClip(originalName, customName) {
     videoPlayer.load();
   }
   mark('cleanupPrevious');
-
-  // Load all data first before setting up video
-  logger.info(`[${originalName}] Loading clip data...`);
-  let clipInfo, trimData, clipTags;
-  try {
-    [clipInfo, trimData, clipTags] = await Promise.all([
-      ipcRenderer.invoke("get-clip-info", originalName),
-      ipcRenderer.invoke("get-trim", originalName),
-      ipcRenderer.invoke("get-clip-tags", originalName)
-    ]);
-    mark('getClipData');
-    logger.info(`[${originalName}] Clip data loaded successfully. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
-  } catch (error) {
-    logger.error(`[${originalName}] Error loading clip data:`, error);
-    return;
-  }
+  
+  logger.info(`[${originalName}] Clip data ready. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
 
   currentClip = { originalName, customName, tags: clipTags };
 
@@ -5495,10 +5570,9 @@ async function openClip(originalName, customName) {
     updateSpeedText(1);
   }
 
-  logger.info(`[${originalName}] Showing player overlay and fullscreen player...`);
-  playerOverlay.style.display = "block";
-  fullscreenPlayer.style.display = "block";
-  mark('playerVisible');
+  // Player overlay was already shown early for instant feedback
+  // Just mark this point for timing comparison
+  mark('playerSetupComplete');
 
   // Start ambient glow effect (respecting saved settings)
   if (ambientGlowCanvas && videoPlayer) {
