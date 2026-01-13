@@ -7,7 +7,11 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win"
+    "build": "electron-builder --win",
+    "benchmark": "node benchmark/runner.js",
+    "benchmark:verbose": "node benchmark/runner.js --verbose",
+    "benchmark:json": "node benchmark/runner.js --output json",
+    "benchmark:openclip": "node benchmark/runner.js --suite openclip --verbose"
   },
   "build": {
     "appId": "com.yuma-dev.clips",

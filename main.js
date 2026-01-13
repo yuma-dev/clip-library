@@ -3,6 +3,20 @@ const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, powerMonitor, shel
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./logger');
+
+// Benchmark mode detection and harness initialization
+const isBenchmarkMode = process.env.CLIPS_BENCHMARK === '1';
+let benchmarkHarness = null;
+if (isBenchmarkMode) {
+  try {
+    const { getMainHarness } = require('./benchmark/main-harness');
+    benchmarkHarness = getMainHarness();
+    benchmarkHarness.markStartup('moduleLoad');
+    logger.info('[Benchmark] Main process harness initialized');
+  } catch (e) {
+    logger.error('[Benchmark] Failed to load harness:', e);
+  }
+}
 const { exec, execFile } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
@@ -84,10 +98,16 @@ app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 async function createWindow() {
+  if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
   settings = await loadSettings();
-  setupFileWatcher(settings.clipLocation);
+  if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
 
-  if (settings.enableDiscordRPC) {
+  if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
+  setupFileWatcher(settings.clipLocation);
+  if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
+
+  // Skip Discord RPC in benchmark mode to avoid external dependencies
+  if (settings.enableDiscordRPC && !isBenchmarkMode) {
     initDiscordRPC();
   }
 
@@ -177,11 +197,26 @@ async function checkForUpdatesInBackground(mainWindow) {
 }
 
 app.whenReady().then(async () => {
+  if (benchmarkHarness) {
+    benchmarkHarness.endStartup('moduleLoad');
+    benchmarkHarness.recordAppReady();
+    benchmarkHarness.markStartup('windowCreation');
+  }
+
   const win = await createWindow();
+
+  if (benchmarkHarness) benchmarkHarness.endStartup('windowCreation');
 
   // Wait for the renderer to be fully loaded before checking for updates
   win.webContents.once('did-finish-load', () => {
     logger.info('Renderer did-finish-load event fired');
+    
+    // Skip update check in benchmark mode
+    if (isBenchmarkMode) {
+      logger.info('[Benchmark] Skipping update check in benchmark mode');
+      return;
+    }
+    
     // Add a small delay to ensure the renderer's IPC listeners are set up
     setTimeout(() => {
       logger.info('Starting update check after delay');
