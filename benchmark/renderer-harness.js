@@ -348,6 +348,173 @@ class RendererHarness {
   }
 
   /**
+   * Benchmark: Grid performance with varying clip counts
+   * Measures FPS and responsiveness as more clips become visible
+   */
+  async benchmarkGridPerformance() {
+    this.log('Starting grid performance benchmark');
+
+    const results = {
+      tests: [],
+      recommendations: []
+    };
+
+    // First measure with current state (few clips visible)
+    let initialClipCount = document.querySelectorAll('.clip-item').length;
+    this.log(`Initial clips in DOM: ${initialClipCount}`);
+
+    // Expand all collapsed groups to simulate user scenario
+    const collapsedGroups = document.querySelectorAll('.clip-group.collapsed');
+    this.log(`Expanding ${collapsedGroups.length} collapsed groups...`);
+
+    for (const group of collapsedGroups) {
+      const header = group.querySelector('.clip-group-header');
+      if (header) {
+        header.click();
+        // Wait for lazy loading to complete
+        await this.delay(100);
+      }
+    }
+
+    // Wait for all clips to render
+    await this.delay(500);
+
+    let totalClipsInDOM = document.querySelectorAll('.clip-item').length;
+    this.log(`After expansion: ${totalClipsInDOM} clips in DOM`);
+
+    // Measure baseline FPS with current state
+    const measureFPS = async (duration = 2000) => {
+      let frameCount = 0;
+      let lastTime = performance.now();
+      const frames = [];
+
+      return new Promise(resolve => {
+        const countFrame = (now) => {
+          frameCount++;
+          const delta = now - lastTime;
+          if (delta > 0) {
+            frames.push(1000 / delta);
+          }
+          lastTime = now;
+
+          if (performance.now() - frames[0] < duration) {
+            requestAnimationFrame(countFrame);
+          } else {
+            const avgFPS = frames.length > 0 ? frames.reduce((a, b) => a + b, 0) / frames.length : 0;
+            const minFPS = Math.min(...frames);
+            resolve({ avgFPS, minFPS, frameCount });
+          }
+        };
+
+        // Start measuring after a small delay
+        setTimeout(() => {
+          lastTime = performance.now();
+          frames.push(lastTime);
+          requestAnimationFrame(countFrame);
+        }, 100);
+      });
+    };
+
+    // Measure scroll performance
+    const measureScrollPerformance = async () => {
+      const clipGrid = document.getElementById('clip-grid');
+      if (!clipGrid) return { scrollFPS: 0, jank: 0 };
+
+      const startY = clipGrid.scrollTop;
+      const maxScroll = clipGrid.scrollHeight - clipGrid.clientHeight;
+
+      let frameCount = 0;
+      let jankFrames = 0;
+      let lastFrameTime = performance.now();
+
+      return new Promise(resolve => {
+        const scrollStep = () => {
+          const now = performance.now();
+          const frameDelta = now - lastFrameTime;
+
+          // Count janky frames (>32ms = <30fps)
+          if (frameDelta > 32) jankFrames++;
+          frameCount++;
+          lastFrameTime = now;
+
+          clipGrid.scrollTop += 50;
+
+          if (clipGrid.scrollTop < maxScroll - 100) {
+            requestAnimationFrame(scrollStep);
+          } else {
+            // Scroll back to start
+            clipGrid.scrollTop = startY;
+            resolve({
+              scrollFPS: frameCount / ((now - lastFrameTime) / 1000) || 60,
+              jankFrames,
+              totalFrames: frameCount,
+              jankPercent: ((jankFrames / frameCount) * 100).toFixed(1)
+            });
+          }
+        };
+        requestAnimationFrame(scrollStep);
+      });
+    };
+
+    // Test with current clip count
+    const clipCount = document.querySelectorAll('.clip-item').length;
+    this.log(`Testing with ${clipCount} clips visible`);
+
+    // Measure idle FPS
+    const idleFPS = await measureFPS(1500);
+    results.tests.push({
+      clipCount,
+      idleFPS: idleFPS.avgFPS.toFixed(1),
+      minFPS: idleFPS.minFPS.toFixed(1)
+    });
+
+    // Measure scroll performance
+    const scrollPerf = await measureScrollPerformance();
+    results.scrollPerformance = scrollPerf;
+
+    // Count DOM elements
+    const domStats = {
+      totalElements: document.querySelectorAll('*').length,
+      clipItems: document.querySelectorAll('.clip-item').length,
+      images: document.querySelectorAll('img').length,
+      videos: document.querySelectorAll('video').length
+    };
+    results.domStats = domStats;
+
+    // Check for expensive CSS
+    const clipItems = document.querySelectorAll('.clip-item');
+    let hasBoxShadow = 0;
+    let hasFilter = 0;
+    let hasTransform = 0;
+
+    if (clipItems.length > 0) {
+      const sample = clipItems[0];
+      const style = getComputedStyle(sample);
+      if (style.boxShadow !== 'none') hasBoxShadow = clipItems.length;
+      if (style.filter !== 'none') hasFilter = clipItems.length;
+      if (style.transform !== 'none') hasTransform = clipItems.length;
+    }
+
+    results.cssStats = { hasBoxShadow, hasFilter, hasTransform };
+
+    // Generate recommendations
+    if (domStats.clipItems > 100) {
+      results.recommendations.push(`High clip count (${domStats.clipItems}) - consider virtual scrolling`);
+    }
+    if (scrollPerf.jankPercent > 10) {
+      results.recommendations.push(`Scroll jank detected (${scrollPerf.jankPercent}%) - optimize rendering`);
+    }
+    if (hasBoxShadow > 50) {
+      results.recommendations.push(`${hasBoxShadow} elements with box-shadow - consider removing or simplifying`);
+    }
+
+    // Output results
+    console.log(`GRID_PERFORMANCE:${JSON.stringify(results)}`);
+
+    return results;
+  }
+
+  /**
    * Benchmark: Detailed startup breakdown
    * Times each individual phase of the startup process
    */

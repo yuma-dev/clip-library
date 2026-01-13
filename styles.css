@@ -692,7 +692,7 @@ body.dragging * {
   overflow: hidden;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
   transform: perspective(1000px);
-  animation: fadeIn 0.5s ease;
+  /* Removed fadeIn animation - too expensive with 1000+ clips */
   --mouse-x: 0;
   --mouse-y: 0;
 }
@@ -778,20 +778,25 @@ body.dragging * {
   overflow: hidden;
   box-shadow: 0 0px 14px rgba(0, 0, 0, 0.562);
   transition: transform 0.2s, box-shadow 0.3s;
+
+  /* Performance optimizations for large grids */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 200px; /* Approximate height for layout calculation */
+  contain: layout style paint;
 }
 
+/* Only create pseudo-elements on hover to reduce DOM element count */
 .clip-item::before,
 .clip-item::after {
-  content: "";
+  content: none; /* Don't create by default - saves 3000+ elements */
   position: absolute;
-  inset: -2px; /* Slightly larger than the card to create the edge effect */
+  inset: -2px;
   border-radius: inherit;
-  transition: opacity 0.2s ease-in-out;
-  opacity: 0;
   pointer-events: none;
 }
 
-.clip-item::before {
+/* Create only the white glow on hover (::after blue glow was never used) */
+.clip-item:hover::before {
   content: "";
   position: absolute;
   top: 0;
@@ -799,27 +804,12 @@ body.dragging * {
   right: 0;
   bottom: 0;
   border-radius: inherit;
-  transition: opacity 0.2s ease-in-out;
-  opacity: 0;
+  opacity: 1;
   background: radial-gradient(
     800px circle at var(--mouse-x) var(--mouse-y),
     rgba(255, 255, 255, 0.06),
     transparent 40%
   );
-  pointer-events: none;
-}
-
-.clip-item::after {
-  background: radial-gradient(
-    600px circle at var(--mouse-x) var(--mouse-y),
-    rgba(45, 223, 255, 0.144),
-    transparent 40%
-  );
-}
-
-
-.clip-item:hover::before {
-  opacity: 1;
 }
 
 .clip-item-content {
