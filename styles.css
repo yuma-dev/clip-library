@@ -852,6 +852,37 @@ body.dragging * {
   white-space: nowrap;
 }
 
+/* Ambient glow canvas - YouTube-style background glow effect */
+#ambient-glow-canvas {
+  position: fixed;
+  top: 51%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* Larger than video player for glow overflow */
+  width: calc(90% + 200px);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  z-index: 998;
+  pointer-events: none;
+  filter: blur(80px) saturate(1.5);
+  opacity: 0.7;
+  will-change: contents;
+  contain: strict;
+  transition: opacity 0.3s ease;
+}
+
+/* Hide ambient glow in true fullscreen or when marked hidden */
+#ambient-glow-canvas.hidden {
+  opacity: 0;
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  #ambient-glow-canvas {
+    display: none !important;
+  }
+}
+
 /* Fullscreen player styles */
 #fullscreen-player {
   position: fixed;
