@@ -1332,6 +1332,31 @@ async function fetchSettings() {
   return settings;
 }
 
+/**
+ * Helper to update a nested setting value and save to disk.
+ * @param {string} path - Dot-separated path to the setting (e.g., 'ambientGlow.fps')
+ * @param {*} value - The new value to set
+ * @returns {Promise<object>} The updated settings object
+ */
+async function updateSettingValue(path, value) {
+  const currentSettings = await ipcRenderer.invoke('get-settings');
+  const keys = path.split('.');
+  let target = currentSettings;
+  
+  // Navigate to parent object, creating nested objects if needed
+  for (let i = 0; i < keys.length - 1; i++) {
+    target[keys[i]] = target[keys[i]] || {};
+    target = target[keys[i]];
+  }
+  
+  // Set the value
+  target[keys[keys.length - 1]] = value;
+  
+  await ipcRenderer.invoke('save-settings', currentSettings);
+  settings = currentSettings;
+  return settings;
+}
+
 let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
 
 async function loadClips() {
@@ -3459,8 +3484,13 @@ function showExportProgress(current, total, isClipboardExport = false) {
 document.addEventListener('DOMContentLoaded', async () => {
   // Ensure keybindings are loaded before we attach any listeners that use them
   await keybinds.initKeybindings();
-  settings = ipcRenderer.invoke('get-settings');
-  fetchSettings();
+  
+  // Load settings before any initialization that depends on them
+  await fetchSettings();
+  
+  // Initialize settings modal and enhanced search
+  initializeEnhancedSearch();
+  await initializeSettingsModal();
   
   // Initialize gamepad manager
   await initializeGamepadManager();
@@ -3595,57 +3625,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupContextMenu();
   loadGlobalTags();
   applyIconGreyscale(settings?.iconGreyscale);
-
-  const enableDiscordRPCCheckbox = document.getElementById('enableDiscordRPC');
-  enableDiscordRPCCheckbox.addEventListener('change', (e) => {
-    toggleDiscordRPC(e.target.checked);
-  });
-
-  // Greyscale icons toggle (similar pattern to Discord RPC)
-  const greyscaleIconsCheckbox = document.getElementById('greyscaleIcons');
-  if (greyscaleIconsCheckbox) {
-    greyscaleIconsCheckbox.addEventListener('change', async (e) => {
-      const isEnabled = e.target.checked;
-      try {
-        // Update settings and save
-        const updatedSettings = { ...settings, iconGreyscale: isEnabled };
-        await ipcRenderer.invoke('save-settings', updatedSettings);
-        settings = updatedSettings;
-        
-        // Apply the change immediately
-        applyIconGreyscale(isEnabled);
-        logger.info('Greyscale icons setting changed:', isEnabled);
-      } catch (error) {
-        logger.error('Error saving greyscale icons setting:', error);
-        // Revert the checkbox state on error
-        e.target.checked = !isEnabled;
-      }
-    });
-  }
-
-  // New clips indicators toggle (similar pattern to greyscale)
-  const newClipsIndicatorsCheckbox = document.getElementById('showNewClipsIndicators');
-  if (newClipsIndicatorsCheckbox) {
-    newClipsIndicatorsCheckbox.addEventListener('change', async (e) => {
-      const isEnabled = e.target.checked;
-      try {
-        // Update settings and save
-        const updatedSettings = { ...settings, showNewClipsIndicators: isEnabled };
-        await ipcRenderer.invoke('save-settings', updatedSettings);
-        settings = updatedSettings;
-        
-        // Apply the change immediately - re-render clips to update indicators
-        if (currentClipList) {
-          renderClips(currentClipList);
-        }
-        logger.info('New clips indicators setting changed:', isEnabled);
-      } catch (error) {
-        logger.error('Error saving new clips indicators setting:', error);
-        // Revert the checkbox state on error
-        e.target.checked = !isEnabled;
-      }
-    });
-  }
 
   // Create and setup the tag filter UI
   createTagFilterUI();
@@ -3866,48 +3845,10 @@ async function changeClipLocation() {
   }
 }
 
-const exportQualitySelect = document.getElementById('exportQuality');
-exportQualitySelect.addEventListener('change', async (e) => {
-  const newQuality = e.target.value;
-  logger.info('Export quality changed to:', newQuality);
-  
-  try {
-    // Update local settings first
-    settings = {
-      ...settings,
-      exportQuality: newQuality
-    };
-    
-    // Save settings and wait for completion
-    const savedSettings = await ipcRenderer.invoke('save-settings', settings);
-    
-    // Update local settings with the returned saved settings
-    settings = savedSettings;
-    
-    logger.info('Settings saved successfully:', settings);
-  } catch (error) {
-    logger.error('Error saving settings:', error);
-    // Revert the select value if save failed
-    e.target.value = settings.exportQuality;
-    // Revert local settings
-    settings = await fetchSettings();
-  }
-});
-
 async function initializeSettingsModal() {
-  logger.info('initializeSettingsModal called');
-  
-  // Ensure settings are loaded before initializing
-  if (!settings || typeof settings.then === 'function') {
-    logger.info('Settings not ready, fetching...');
-    settings = await ipcRenderer.invoke('get-settings');
-    logger.info('Settings fetched for modal initialization:', settings);
-  }
-  
   const settingsModal = document.getElementById('settingsModal');
   const tabs = document.querySelectorAll('.settings-tab');
   const tabContents = document.querySelectorAll('.settings-tab-content');
-  logger.info('settingsModal found:', !!settingsModal, 'tabs:', tabs.length, 'tabContents:', tabContents.length);
 
   // Tab switching
   tabs.forEach(tab => {
@@ -3931,9 +3872,17 @@ async function initializeSettingsModal() {
   const previewVolumeValue = document.getElementById('previewVolumeValue');
 
   previewVolumeSlider.addEventListener('input', (e) => {
-    const value = Math.round(e.target.value * 100);
-    previewVolumeValue.textContent = `${value}%`;
-    updateAllPreviewVolumes(e.target.value);
+    const value = parseFloat(e.target.value);
+    previewVolumeValue.textContent = `${Math.round(value * 100)}%`;
+    updateAllPreviewVolumes(value);
+  });
+  
+  previewVolumeSlider.addEventListener('change', async (e) => {
+    try {
+      await updateSettingValue('previewVolume', parseFloat(e.target.value));
+    } catch (error) {
+      logger.error('Error saving preview volume:', error);
+    }
   });
 
   // Settings controls event handlers
@@ -3943,91 +3892,67 @@ async function initializeSettingsModal() {
     closeSettingsModal();
     openTagManagement();
   });
+  
+  // Escape key handler to close settings modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && settingsModal.style.display === 'block') {
+      closeSettingsModal();
+    }
+  });
 
   // Export quality change handler
   document.getElementById('exportQuality').addEventListener('change', async (e) => {
-    const newQuality = e.target.value;
-    logger.info('Export quality changed to:', newQuality);
-    
     try {
-      settings = {
-        ...settings,
-        exportQuality: newQuality
-      };
-      
-      const savedSettings = await ipcRenderer.invoke('save-settings', settings);
-      settings = savedSettings;
-      
-      logger.info('Settings saved successfully:', settings);
+      await updateSettingValue('exportQuality', e.target.value);
     } catch (error) {
-      logger.error('Error saving settings:', error);
+      logger.error('Error saving export quality:', error);
       e.target.value = settings.exportQuality;
-      settings = await fetchSettings();
     }
   });
 
   // Discord RPC toggle handler
   const discordRPCToggle = document.getElementById('enableDiscordRPC');
   discordRPCToggle.addEventListener('change', async (e) => {
-    const isEnabled = e.target.checked;
     try {
-      await toggleDiscordRPC(isEnabled);
-      settings = {
-        ...settings,
-        enableDiscordRPC: isEnabled
-      };
-      await ipcRenderer.invoke('save-settings', settings);
+      await toggleDiscordRPC(e.target.checked);
+      await updateSettingValue('enableDiscordRPC', e.target.checked);
     } catch (error) {
       logger.error('Error toggling Discord RPC:', error);
-      e.target.checked = !isEnabled;
+      e.target.checked = !e.target.checked;
     }
   });
 
   // Greyscale icons toggle
   const greyscaleToggle = document.getElementById('greyscaleIcons');
-
   if (greyscaleToggle) {
     greyscaleToggle.checked = Boolean(settings.iconGreyscale);
     greyscaleToggle.addEventListener('change', async (e) => {
-      const isEnabled = e.target.checked;
       try {
-        const updated = { ...settings, iconGreyscale: isEnabled };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
-        applyIconGreyscale(isEnabled); // reflect instantly
+        await updateSettingValue('iconGreyscale', e.target.checked);
+        applyIconGreyscale(e.target.checked);
       } catch (error) {
         logger.error('Error toggling Greyscale Icons:', error);
-        // revert visual state
-        e.target.checked = !isEnabled;
+        e.target.checked = !e.target.checked;
       }
     });
-  } else {
-    logger.error('Greyscale toggle element not found in DOM');
   }
 
   // New clips indicators toggle
   const newClipsIndicatorsToggle = document.getElementById('showNewClipsIndicators');
-
   if (newClipsIndicatorsToggle) {
     newClipsIndicatorsToggle.checked = Boolean(settings.showNewClipsIndicators ?? true);
     newClipsIndicatorsToggle.addEventListener('change', async (e) => {
-      const isEnabled = e.target.checked;
       try {
-        const updated = { ...settings, showNewClipsIndicators: isEnabled };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
+        await updateSettingValue('showNewClipsIndicators', e.target.checked);
         // Re-render clips to show/hide indicators instantly
         if (currentClipList) {
           renderClips(currentClipList);
         }
       } catch (error) {
         logger.error('Error toggling New Clips Indicators:', error);
-        // revert visual state
-        e.target.checked = !isEnabled;
+        e.target.checked = !e.target.checked;
       }
     });
-  } else {
-    logger.error('New clips indicators toggle element not found in DOM');
   }
 
   // Ambient Glow settings
@@ -4040,41 +3965,20 @@ async function initializeSettingsModal() {
   const ambientGlowOpacity = document.getElementById('ambientGlowOpacity');
   const ambientGlowOpacityValue = document.getElementById('ambientGlowOpacityValue');
 
-  logger.info('Ambient glow elements found:', {
-    enabled: !!ambientGlowEnabled,
-    smoothing: !!ambientGlowSmoothing,
-    fps: !!ambientGlowFps,
-    blur: !!ambientGlowBlur,
-    opacity: !!ambientGlowOpacity
-  });
-
   // Initialize ambient glow settings from saved values
   const glowSettings = settings?.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-  logger.info('Initial glow settings:', glowSettings);
   
   if (ambientGlowEnabled) {
     ambientGlowEnabled.checked = glowSettings.enabled;
     ambientGlowEnabled.addEventListener('change', async (e) => {
-      logger.info('Ambient glow toggle changed:', e.target.checked);
       try {
-        // Fetch fresh settings to avoid stale data
-        const currentSettings = await ipcRenderer.invoke('get-settings');
-        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-        const updated = { 
-          ...currentSettings, 
-          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, enabled: e.target.checked } 
-        };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
-        logger.info('Ambient glow settings saved:', settings.ambientGlow);
+        await updateSettingValue('ambientGlow.enabled', e.target.checked);
         applyAmbientGlowSettings(settings.ambientGlow);
       } catch (error) {
         logger.error('Error toggling Ambient Glow:', error);
         e.target.checked = !e.target.checked;
       }
     });
-  } else {
-    logger.error('ambientGlowEnabled element not found!');
   }
 
   if (ambientGlowSmoothing) {
@@ -4084,47 +3988,25 @@ async function initializeSettingsModal() {
       ambientGlowSmoothingValue.textContent = parseFloat(e.target.value).toFixed(1);
     });
     ambientGlowSmoothing.addEventListener('change', async (e) => {
-      logger.info('Ambient glow smoothing changed:', e.target.value);
       try {
-        const currentSettings = await ipcRenderer.invoke('get-settings');
-        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-        const updated = { 
-          ...currentSettings, 
-          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, smoothing: parseFloat(e.target.value) } 
-        };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
-        logger.info('Ambient glow smoothing saved:', settings.ambientGlow);
+        await updateSettingValue('ambientGlow.smoothing', parseFloat(e.target.value));
         applyAmbientGlowSettings(settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow smoothing:', error);
       }
     });
-  } else {
-    logger.error('ambientGlowSmoothing element not found!');
   }
 
   if (ambientGlowFps) {
     ambientGlowFps.value = glowSettings.fps.toString();
     ambientGlowFps.addEventListener('change', async (e) => {
-      logger.info('Ambient glow FPS changed:', e.target.value);
       try {
-        const currentSettings = await ipcRenderer.invoke('get-settings');
-        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-        const updated = { 
-          ...currentSettings, 
-          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, fps: parseInt(e.target.value) } 
-        };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
-        logger.info('Ambient glow FPS saved:', settings.ambientGlow);
+        await updateSettingValue('ambientGlow.fps', parseInt(e.target.value));
         applyAmbientGlowSettings(settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow FPS:', error);
       }
     });
-  } else {
-    logger.error('ambientGlowFps element not found!');
   }
 
   if (ambientGlowBlur) {
@@ -4134,24 +4016,13 @@ async function initializeSettingsModal() {
       ambientGlowBlurValue.textContent = `${e.target.value}px`;
     });
     ambientGlowBlur.addEventListener('change', async (e) => {
-      logger.info('Ambient glow blur changed:', e.target.value);
       try {
-        const currentSettings = await ipcRenderer.invoke('get-settings');
-        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-        const updated = { 
-          ...currentSettings, 
-          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, blur: parseInt(e.target.value) } 
-        };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
-        logger.info('Ambient glow blur saved:', settings.ambientGlow);
+        await updateSettingValue('ambientGlow.blur', parseInt(e.target.value));
         applyAmbientGlowSettings(settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow blur:', error);
       }
     });
-  } else {
-    logger.error('ambientGlowBlur element not found!');
   }
 
   if (ambientGlowOpacity) {
@@ -4161,16 +4032,8 @@ async function initializeSettingsModal() {
       ambientGlowOpacityValue.textContent = `${Math.round(e.target.value * 100)}%`;
     });
     ambientGlowOpacity.addEventListener('change', async (e) => {
-      logger.info('Ambient glow opacity changed:', e.target.value);
       try {
-        const currentSettings = await ipcRenderer.invoke('get-settings');
-        const glowDefaults = { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-        const updated = { 
-          ...currentSettings, 
-          ambientGlow: { ...glowDefaults, ...currentSettings.ambientGlow, opacity: parseFloat(e.target.value) } 
-        };
-        await ipcRenderer.invoke('save-settings', updated);
-        settings = updated;
+        await updateSettingValue('ambientGlow.opacity', parseFloat(e.target.value));
         applyAmbientGlowSettings(settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow opacity:', error);
@@ -4299,17 +4162,6 @@ function closeSettingsModal() {
     updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
   }
 }
-
-document.getElementById('previewVolumeSlider').addEventListener('input', async (e) => {
-  const value = parseFloat(e.target.value);
-  // Round to 2 decimal places for display
-  document.getElementById('previewVolumeValue').textContent = `${Math.round(value * 100)}%`;
-  settings.previewVolume = value;
-  await ipcRenderer.invoke('save-settings', settings);
-  settings = await fetchSettings();
-  // Update all currently playing preview videos
-  updateAllPreviewVolumes(value);
-});
 
 async function updateSettings() {
   settings = await ipcRenderer.invoke('get-settings');
@@ -7526,8 +7378,7 @@ function setupEnhancedSearch() {
   searchDisplay.innerHTML = '';
 }
 
-// Modify your existing document.addEventListener('DOMContentLoaded', ...) 
-// to call this after the search container is definitely created
+// Initialize enhanced search when DOM is ready
 function initializeEnhancedSearch() {
   if (document.getElementById('search-container')) {
     setupEnhancedSearch();
@@ -7537,24 +7388,6 @@ function initializeEnhancedSearch() {
     setTimeout(initializeEnhancedSearch, 100);
   }
 }
-
-// Add this to your existing DOMContentLoaded listener
-logger.info('Registering second DOMContentLoaded handler');
-document.addEventListener('DOMContentLoaded', async () => {
-  logger.info('Second DOMContentLoaded handler called');
-  initializeEnhancedSearch();
-  await initializeSettingsModal();
-  
-  // Add global click handler for modal backdrop
-  const settingsModal = document.getElementById('settingsModal');
-  
-  // Add escape key handler
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && settingsModal.style.display === 'block') {
-      closeSettingsModal();
-    }
-  });
-});
 
 async function updateVersionDisplay() {
   try {
