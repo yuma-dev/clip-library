@@ -336,6 +336,293 @@ class AmbientGlowManager {
   }
 }
 
+// Clip grid glow manager - shows ambient glow behind hovered clips
+class ClipGlowManager {
+  constructor() {
+    this.canvas = null;
+    this.ctx = null;
+    this.currentClip = null;
+    this.currentSource = null; // img or video element
+    this.animationFrameId = null;
+    this.isActive = false;
+    this.lastDrawTime = 0;
+    this.frameInterval = 1000 / 30; // 30fps
+    this.blendFactor = 0.2;
+    this.glowOverflow = 40; // How far glow extends beyond thumbnail (px)
+    this.dynamicBorder = true; // Enable border color sampled from thumbnail
+    this.borderOpacity = 0.4; // Border color opacity
+    this.borderSaturationBoost = 1.4; // Boost saturation for more vivid border
+    this.prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    this.draw = this.draw.bind(this);
+    this.drawLoop = this.drawLoop.bind(this);
+  }
+
+  init() {
+    const grid = document.getElementById('clip-grid');
+    if (!grid || this.canvas) return;
+
+    // Create canvas element
+    this.canvas = document.createElement('canvas');
+    this.canvas.id = 'clip-glow-canvas';
+    this.canvas.width = 16;
+    this.canvas.height = 9;
+    grid.style.position = 'relative'; // Ensure grid can contain absolute children
+    grid.insertBefore(this.canvas, grid.firstChild);
+
+    this.ctx = this.canvas.getContext('2d', { alpha: true, willReadFrequently: false });
+    this.ctx.filter = 'blur(1px)';
+  }
+
+  show(clipElement) {
+    if (this.prefersReducedMotion || !this.canvas) return;
+
+    this.currentClip = clipElement;
+
+    // Get the thumbnail image as initial source
+    const img = clipElement.querySelector('.clip-item-media-container img');
+    if (img && img.complete && img.naturalWidth > 0) {
+      this.currentSource = img;
+      this.draw(true); // Force full draw
+    }
+
+    this.positionGlow(clipElement);
+    this.canvas.classList.add('visible');
+    this.isActive = true;
+
+    // Start draw loop for video preview support
+    this.lastDrawTime = performance.now();
+    this.animationFrameId = requestAnimationFrame(this.drawLoop);
+  }
+
+  hide() {
+    this.isActive = false;
+    this.currentClip = null;
+    this.currentSource = null;
+
+    if (this.canvas) {
+      this.canvas.classList.remove('visible');
+    }
+
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+  }
+
+  updateSource(videoElement) {
+    if (!this.isActive) return;
+    this.currentSource = videoElement;
+    this.draw(true); // Force full draw on source change
+  }
+
+  positionGlow(clipElement) {
+    if (!this.canvas) return;
+
+    const grid = document.getElementById('clip-grid');
+    const gridRect = grid.getBoundingClientRect();
+    const mediaContainer = clipElement.querySelector('.clip-item-media-container');
+    const mediaRect = mediaContainer.getBoundingClientRect();
+
+    // Position relative to grid (accounting for scroll)
+    const left = mediaRect.left - gridRect.left + grid.scrollLeft;
+    const top = mediaRect.top - gridRect.top + grid.scrollTop;
+
+    // Add overflow for glow effect
+    const overflow = this.glowOverflow;
+    this.canvas.style.left = `${left - overflow}px`;
+    this.canvas.style.top = `${top - overflow}px`;
+    this.canvas.style.width = `${mediaRect.width + overflow * 2}px`;
+    this.canvas.style.height = `${mediaRect.height + overflow * 2}px`;
+  }
+
+  draw(forceFullDraw = false) {
+    if (!this.ctx || !this.currentSource) return;
+
+    try {
+      // Check if source is ready
+      if (this.currentSource.tagName === 'VIDEO') {
+        if (this.currentSource.readyState < 2) return;
+      } else if (this.currentSource.tagName === 'IMG') {
+        if (!this.currentSource.complete || this.currentSource.naturalWidth === 0) return;
+      }
+
+      if (forceFullDraw) {
+        this.ctx.globalAlpha = 1.0;
+        this.ctx.drawImage(this.currentSource, 0, 0, this.canvas.width, this.canvas.height);
+      } else {
+        // Temporal smoothing for video
+        this.ctx.globalAlpha = this.blendFactor;
+        this.ctx.drawImage(this.currentSource, 0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.globalAlpha = 1.0;
+      }
+    } catch (e) {
+      // Silently handle cross-origin or source not ready errors
+    }
+  }
+
+  drawLoop(timestamp) {
+    if (!this.isActive) return;
+
+    // Only draw if source is a video (thumbnails don't need continuous updates)
+    if (this.currentSource && this.currentSource.tagName === 'VIDEO' && !this.currentSource.paused) {
+      const elapsed = timestamp - this.lastDrawTime;
+      if (elapsed >= this.frameInterval) {
+        this.draw();
+        this.lastDrawTime = timestamp - (elapsed % this.frameInterval);
+      }
+    }
+
+    this.animationFrameId = requestAnimationFrame(this.drawLoop);
+  }
+}
+
+// Global clip glow manager instance
+let clipGlowManager = null;
+
+// Console helper for tweaking clip hover effects
+// Usage: clipHoverEffects.scale(1.05) or clipHoverEffects.off('scale')
+window.clipHoverEffects = {
+  _getRoot: () => document.documentElement,
+
+  // Individual property setters
+  scale: (value) => {
+    document.documentElement.style.setProperty('--hover-scale', value);
+    console.log(`Scale set to ${value}`);
+  },
+  lift: (value) => {
+    document.documentElement.style.setProperty('--hover-lift', typeof value === 'number' ? `${value}px` : value);
+    console.log(`Lift set to ${value}`);
+  },
+  brightness: (value) => {
+    document.documentElement.style.setProperty('--hover-brightness', value);
+    console.log(`Brightness set to ${value}`);
+  },
+  borderWidth: (value) => {
+    document.documentElement.style.setProperty('--hover-border-width', typeof value === 'number' ? `${value}px` : value);
+    console.log(`Border width set to ${value}`);
+  },
+  borderColor: (value) => {
+    document.documentElement.style.setProperty('--hover-border-color', value);
+    console.log(`Border color set to ${value}`);
+  },
+  transition: (value) => {
+    document.documentElement.style.setProperty('--hover-transition-duration', typeof value === 'number' ? `${value}s` : value);
+    console.log(`Transition duration set to ${value}`);
+  },
+
+  // Glow canvas settings
+  glowBlur: (value) => {
+    const canvas = document.getElementById('clip-glow-canvas');
+    if (canvas) {
+      const current = getComputedStyle(canvas).filter;
+      const satMatch = current.match(/saturate\(([^)]+)\)/);
+      const sat = satMatch ? satMatch[1] : '1.5';
+      canvas.style.filter = `blur(${value}px) saturate(${sat})`;
+      console.log(`Glow blur set to ${value}px`);
+    }
+  },
+  glowSaturation: (value) => {
+    const canvas = document.getElementById('clip-glow-canvas');
+    if (canvas) {
+      const current = getComputedStyle(canvas).filter;
+      const blurMatch = current.match(/blur\(([^)]+)\)/);
+      const blur = blurMatch ? blurMatch[1] : '60px';
+      canvas.style.filter = `blur(${blur}) saturate(${value})`;
+      console.log(`Glow saturation set to ${value}`);
+    }
+  },
+  glowOpacity: (value) => {
+    const canvas = document.getElementById('clip-glow-canvas');
+    if (canvas) {
+      canvas.style.setProperty('--glow-opacity', value);
+      // Update the .visible class opacity
+      const style = document.createElement('style');
+      style.textContent = `#clip-glow-canvas.visible { opacity: ${value} !important; }`;
+      style.id = 'glow-opacity-override';
+      document.getElementById('glow-opacity-override')?.remove();
+      document.head.appendChild(style);
+      console.log(`Glow opacity set to ${value}`);
+    }
+  },
+  glowOverflow: (value) => {
+    if (clipGlowManager) {
+      clipGlowManager.glowOverflow = value;
+      console.log(`Glow overflow set to ${value}px (re-hover to see change)`);
+    }
+  },
+
+  // Disable individual effects
+  off: (effect) => {
+    const defaults = {
+      scale: '1',
+      lift: '0px',
+      brightness: '1',
+      border: 'transparent'
+    };
+    if (effect === 'scale') window.clipHoverEffects.scale(1);
+    else if (effect === 'lift') window.clipHoverEffects.lift(0);
+    else if (effect === 'brightness') window.clipHoverEffects.brightness(1);
+    else if (effect === 'border') window.clipHoverEffects.borderColor('transparent');
+    else console.log('Unknown effect. Use: scale, lift, brightness, border');
+  },
+
+  // Reset all to defaults
+  reset: () => {
+    document.documentElement.style.setProperty('--hover-scale', '1.03');
+    document.documentElement.style.setProperty('--hover-lift', '-4px');
+    document.documentElement.style.setProperty('--hover-brightness', '1.1');
+    document.documentElement.style.setProperty('--hover-border-width', '1px');
+    document.documentElement.style.setProperty('--hover-border-color', 'rgba(255, 255, 255, 0.15)');
+    document.documentElement.style.setProperty('--hover-transition-duration', '0.2s');
+    document.getElementById('glow-opacity-override')?.remove();
+    console.log('All hover effects reset to defaults');
+  },
+
+  // Show current values
+  show: () => {
+    const cs = getComputedStyle(document.documentElement);
+    console.log('Current hover effect values:');
+    console.log('  scale:', cs.getPropertyValue('--hover-scale') || '1.03');
+    console.log('  lift:', cs.getPropertyValue('--hover-lift') || '-4px');
+    console.log('  brightness:', cs.getPropertyValue('--hover-brightness') || '1.1');
+    console.log('  borderWidth:', cs.getPropertyValue('--hover-border-width') || '1px');
+    console.log('  borderColor:', cs.getPropertyValue('--hover-border-color') || 'rgba(255,255,255,0.15)');
+    console.log('  transition:', cs.getPropertyValue('--hover-transition-duration') || '0.2s');
+    const canvas = document.getElementById('clip-glow-canvas');
+    if (canvas) {
+      console.log('  glowFilter:', getComputedStyle(canvas).filter);
+    }
+  },
+
+  // Help
+  help: () => {
+    console.log(`
+clipHoverEffects - Tweak clip card hover effects live
+
+CARD EFFECTS:
+  .scale(1.05)        - Scale on hover (1 = no scale)
+  .lift(-8)           - Lift amount in px (negative = up)
+  .brightness(1.2)    - Thumbnail brightness (1 = normal)
+  .borderWidth(2)     - Border width in px
+  .borderColor('rgba(255,255,255,0.3)')
+  .transition(0.3)    - Animation duration in seconds
+
+GLOW EFFECTS:
+  .glowBlur(80)       - Glow blur amount in px
+  .glowSaturation(2)  - Color saturation multiplier
+  .glowOpacity(0.8)   - Glow opacity (0-1)
+  .glowOverflow(60)   - How far glow extends beyond card
+
+UTILITIES:
+  .off('scale')       - Disable effect (scale|lift|brightness|border)
+  .reset()            - Reset all to defaults
+  .show()             - Show current values
+  .help()             - Show this help
+    `);
+  }
+};
+
 // Global ambient glow manager instance
 let ambientGlowManager = null;
 
@@ -2473,13 +2760,7 @@ async function renderClips(clips) {
           
           // Remove stored clip data to free memory
           delete groupElement.dataset.clips;
-          
-          // Add event listeners to the newly created clip elements
-          content.querySelectorAll('.clip-item').forEach(card => {
-            card.addEventListener('mouseenter', handleMouseEnter);
-            card.addEventListener('mouseleave', handleMouseLeave);
-          });
-          
+
           setupTooltips();
           
           // Position indicators for lazy-loaded content
@@ -2534,13 +2815,12 @@ async function renderClips(clips) {
 
   setupTooltips();
   currentClipList = clips;
-  addHoverEffect();
 
-  // Add mouse enter/leave handlers
-  document.querySelectorAll('.clip-item').forEach(card => {
-    card.addEventListener('mouseenter', handleMouseEnter);
-    card.addEventListener('mouseleave', handleMouseLeave);
-  });
+  // Initialize clip glow manager if not already done
+  if (!clipGlowManager) {
+    clipGlowManager = new ClipGlowManager();
+  }
+  clipGlowManager.init();
 
   logger.info("Rendered clips count:", clips.length);
   
@@ -2556,47 +2836,6 @@ async function renderClips(clips) {
   }
   
   isRendering = false;
-}
-
-let currentHoveredCard = null;
-
-function handleOnMouseMove(e) {
-  if (!currentHoveredCard) return;
-
-  const rect = currentHoveredCard.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-
-  const centerX = rect.width / 2;
-  const centerY = rect.height / 2;
-
-  const tiltX = (y - centerY) / centerY;
-  const tiltY = (centerX - x) / centerX;
-
-  requestAnimationFrame(() => {
-    if (currentHoveredCard) {
-      currentHoveredCard.style.setProperty("--mouse-x", `${x}px`);
-      currentHoveredCard.style.setProperty("--mouse-y", `${y}px`);
-      currentHoveredCard.style.setProperty("--tilt-x", `${tiltX * 5}deg`);
-      currentHoveredCard.style.setProperty("--tilt-y", `${tiltY * 5}deg`);
-    }
-  });
-}
-
-function handleMouseEnter(e) {
-  currentHoveredCard = e.currentTarget;
-}
-
-function handleMouseLeave(e) {
-  const card = e.currentTarget;
-  card.style.setProperty("--tilt-x", "0deg");
-  card.style.setProperty("--tilt-y", "0deg");
-  currentHoveredCard = null;
-}
-
-function addHoverEffect() {
-  const wrapper = document.getElementById("clip-grid");
-  wrapper.addEventListener("mousemove", handleOnMouseMove);
 }
 
 function setupSearch() {
@@ -4581,7 +4820,12 @@ function createClipElement(clip) {
     async function handleMouseEnter() {
       // OPTIMIZATION: Preload clip data on hover for faster opening
       preloadClipData(clip.originalName).catch(() => {});
-      
+
+      // Show ambient glow behind clip
+      if (clipGlowManager) {
+        clipGlowManager.show(clipElement);
+      }
+
       if (clipElement.classList.contains("video-preview-disabled")) return;
 
       // Clear any existing preview immediately
@@ -4642,7 +4886,12 @@ function createClipElement(clip) {
     
             imgElement.style.display = "none";
             videoElement.currentTime = startTime;
-            videoElement.play().catch((error) => {
+            videoElement.play().then(() => {
+              // Update glow to sample from video instead of thumbnail
+              if (clipGlowManager) {
+                clipGlowManager.updateSource(videoElement);
+              }
+            }).catch((error) => {
               if (error.name !== "AbortError") {
                 logger.error("Error playing video:", error);
               }
@@ -4659,6 +4908,11 @@ function createClipElement(clip) {
     }
 
     function handleMouseLeave() {
+      // Hide ambient glow
+      if (clipGlowManager) {
+        clipGlowManager.hide();
+      }
+
       if (clipElement.classList.contains("video-preview-disabled")) return;
       cleanupVideoPreview();
     }
@@ -4668,9 +4922,6 @@ function createClipElement(clip) {
     clipElement.addEventListener("mouseleave", handleMouseLeave);
 
     clipElement.addEventListener("click", (e) => handleClipClick(e, clip));
-
-    // Note: mousemove for tilt effect is handled by wrapper-level listener in addHoverEffect()
-    // Removed per-clip mousemove listener to improve performance with large grids
 
     clipElement.addEventListener("contextmenu", (e) => {
       e.preventDefault(); // Prevent the default context menu

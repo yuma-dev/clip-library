@@ -685,18 +685,6 @@ body.dragging * {
   margin: 0;
 }
 
-.clip-item {
-  position: relative;
-  background-color: #2a2a2a;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  transform: perspective(1000px);
-  /* Removed fadeIn animation - too expensive with 1000+ clips */
-  --mouse-x: 0;
-  --mouse-y: 0;
-}
-
 .clip-item img {
   width: 100%;
   height: 100%;
@@ -767,17 +755,24 @@ body.dragging * {
 }
 
 .clip-item {
-  --mouse-x: 0;
-  --mouse-y: 0;
-  --tilt-x: 0;
-  --tilt-y: 0;
-  transform-style: preserve-3d;
+  /* Hover effect variables - tweak via console with clipHoverEffects */
+  --hover-scale: 1.03;
+  --hover-lift: -4px;
+  --hover-brightness: 1.1;
+  --hover-border-width: 1px;
+  --hover-border-color: rgba(255, 255, 255, 0.15);
+  --hover-transition-duration: 0.2s;
+
   position: relative;
   background-color: #2a2a2a;
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 0px 14px rgba(0, 0, 0, 0.562);
-  transition: transform 0.2s, box-shadow 0.3s;
+  border: var(--hover-border-width) solid transparent;
+  transition:
+    transform var(--hover-transition-duration) ease,
+    box-shadow var(--hover-transition-duration) ease,
+    border-color var(--hover-transition-duration) ease;
 
   /* Performance optimizations for large grids */
   content-visibility: auto;
@@ -785,52 +780,27 @@ body.dragging * {
   contain: layout style paint;
 }
 
-/* Only create pseudo-elements on hover to reduce DOM element count */
-.clip-item::before,
-.clip-item::after {
-  content: none; /* Don't create by default - saves 3000+ elements */
-  position: absolute;
-  inset: -2px;
-  border-radius: inherit;
-  pointer-events: none;
-}
-
-/* Create only the white glow on hover (::after blue glow was never used) */
-.clip-item:hover::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border-radius: inherit;
-  opacity: 1;
-  background: radial-gradient(
-    800px circle at var(--mouse-x) var(--mouse-y),
-    rgba(255, 255, 255, 0.06),
-    transparent 40%
-  );
-}
-
 .clip-item-content {
   position: relative;
   background-color: #2a2a2a;
   height: 100%;
   width: 100%;
-  z-index: 2;
 }
 
-.clip-item:hover .clip-item-content {
-  transform: translateZ(10px);
+.clip-item-media-container img,
+.clip-item-media-container video {
+  transition: filter var(--hover-transition-duration) ease;
 }
 
 .clip-item:hover {
-  transform: 
-    perspective(1000px) 
-    rotateX(var(--tilt-x)) 
-    rotateY(var(--tilt-y))
-    scale(1.02);
-  box-shadow: 0 0 25px rgba(0, 0, 0, 0.8);
+  transform: scale(var(--hover-scale)) translateY(var(--hover-lift));
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.9);
+  border-color: var(--hover-border-color);
+}
+
+.clip-item:hover .clip-item-media-container img,
+.clip-item:hover .clip-item-media-container video {
+  filter: brightness(var(--hover-brightness));
 }
 
 .clip-info p {
@@ -869,6 +839,27 @@ body.dragging * {
 /* Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   #ambient-glow-canvas {
+    display: none !important;
+  }
+}
+
+/* Clip grid ambient glow canvas - shows glow behind hovered clips */
+#clip-glow-canvas {
+  position: absolute;
+  pointer-events: none;
+  filter: blur(30px) saturate(1.5);
+  opacity: 0;
+  z-index: 0; /* Behind clip-items */
+  will-change: transform, opacity, contents;
+  transition: opacity 0.2s ease;
+}
+
+#clip-glow-canvas.visible {
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #clip-glow-canvas {
     display: none !important;
   }
 }
