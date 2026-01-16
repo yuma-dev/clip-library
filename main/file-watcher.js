@@ -6,7 +6,7 @@
 
 const chokidar = require('chokidar');
 const path = require('path');
-const logger = require('../logger');
+const logger = require('../utils/logger');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
 

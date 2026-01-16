@@ -13,8 +13,8 @@ const os = require('os');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
 const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar', 'app.asar.unpacked');
-const logger = require('../logger');
-const { logActivity } = require('../activity-tracker');
+const logger = require('../utils/logger');
+const { logActivity } = require('../utils/activity-tracker');
 
 // Configure FFmpeg paths
 ffmpeg.setFfmpegPath(ffmpegPath);

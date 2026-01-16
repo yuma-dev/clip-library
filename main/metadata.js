@@ -7,8 +7,8 @@
 
 const path = require('path');
 const fs = require('fs').promises;
-const logger = require('../logger');
-const { logActivity } = require('../activity-tracker');
+const logger = require('../utils/logger');
+const { logActivity } = require('../utils/activity-tracker');
 
 // ============================================================================
 // File Utilities

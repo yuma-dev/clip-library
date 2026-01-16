@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE
-**Last Updated:** 2025-01-16
-**Current Phase:** Core modularization complete. Future phases (Discord, FileWatcher, Clips) optional.
+## Status: PHASES 1-3 COMPLETE (+ REORG + FILE WATCHER COMPLETE)
+**Last Updated:** 2026-01-16
+**Current Phase:** Core modularization + repo organization complete. Remaining optional phases: Discord RPC, Clips management.
 
 ---
 
@@ -14,25 +14,29 @@ This is the **permanent structure** for the codebase going forward. All future c
 ```
 clip-library/
 ├── main.js                 # App lifecycle, window, IPC registration ONLY (~800 lines target)
-├── renderer.js             # UI entry point (future: split into renderer/)
+├── renderer.js             # UI entry point (future: split further into renderer/)
 ├── main/                   # Main process modules
 │   ├── ffmpeg.js           # ✅ Video/audio encoding, export, FFprobe
 │   ├── thumbnails.js       # ✅ Generation, caching, validation, queue
 │   ├── metadata.js         # ✅ .clip_metadata file I/O, atomic writes, tags
-│   ├── file-watcher.js     # 🔮 Chokidar setup, new clip detection
+│   ├── file-watcher.js     # ✅ Chokidar setup, new clip detection
+│   ├── updater.js          # ✅ GitHub release-based update checking
+│   ├── steelseries-processor.js # ✅ Import tool for SteelSeries GG Moments clips
 │   ├── discord.js          # 🔮 Discord RPC integration
 │   └── clips.js            # 🔮 Clip list management, periodic saves
-├── renderer/               # 🔮 Future: split renderer.js
-│   ├── video-player.js     # Video player, ambient glow
-│   ├── clip-grid.js        # Grid display, virtualization
-│   ├── controls.js         # Trim, volume, speed controls
-│   └── state.js            # Centralized state management
+├── renderer/               # ✅ Extracted renderer helpers (more optional splitting later)
+│   ├── keybinding-manager.js # ✅ Keyboard shortcut handling
+│   ├── gamepad-manager.js    # ✅ Controller/gamepad input support
+│   ├── video-player.js     # 🔮 Video player, ambient glow
+│   ├── clip-grid.js        # 🔮 Grid display, virtualization
+│   ├── controls.js         # 🔮 Trim, volume, speed controls
+│   └── state.js            # 🔮 Centralized state management
 ├── shared/                 # 🔮 Code used by both processes
 │   └── constants.js        # Shared constants, file extensions, etc.
 └── utils/                  # Existing utilities
-    ├── logger.js
-    ├── settings-manager.js
-    ├── activity-tracker.js
+    ├── logger.js           # ✅ Unified logging system
+    ├── settings-manager.js # ✅ Settings persistence with defaults
+    ├── activity-tracker.js # ✅ Usage analytics and activity logging
     └── ...
 ```
 
@@ -47,8 +51,15 @@ clip-library/
 | `main/thumbnails.js` | Thumbnail generation, caching, validation, queue |
 | `main/metadata.js` | Reading/writing .clip_metadata files |
 | `main/file-watcher.js` | File system watching for new clips |
+| `main/updater.js` | Update checking + download flow |
+| `main/steelseries-processor.js` | SteelSeries import processing |
 | `main/discord.js` | Discord Rich Presence |
 | `main/clips.js` | Clip list loading, periodic saves, new clip detection |
+| `utils/logger.js` | Logging (shared by main + renderer) |
+| `utils/settings-manager.js` | Settings load/save + defaults |
+| `utils/activity-tracker.js` | Persistent activity logging |
+| `renderer/keybinding-manager.js` | Renderer-side keybinding mapping + persistence |
+| `renderer/gamepad-manager.js` | Renderer-side gamepad/controller input |
 
 ### Design Principles (Follow Forever)
 
@@ -62,12 +73,22 @@ clip-library/
 ### Dependency Graph
 ```
 main.js
-  ├── main/ffmpeg.js (standalone)
-  ├── main/thumbnails.js → depends on ffmpeg.js, metadata.js
-  ├── main/metadata.js (standalone)
-  ├── main/file-watcher.js (standalone)
+  ├── utils/logger.js (shared)
+  ├── utils/settings-manager.js
+  ├── utils/activity-tracker.js
+  ├── main/ffmpeg.js → depends on utils/*
+  ├── main/thumbnails.js → depends on main/ffmpeg.js, main/metadata.js, utils/logger.js
+  ├── main/metadata.js → depends on utils/*
+  ├── main/file-watcher.js → depends on utils/logger.js
+  ├── main/updater.js → depends on utils/logger.js
+  ├── main/steelseries-processor.js (standalone)
   ├── main/discord.js (standalone)
-  └── main/clips.js → depends on metadata.js
+  └── main/clips.js → depends on main/metadata.js
+
+ renderer.js
+  ├── utils/logger.js
+  ├── renderer/keybinding-manager.js
+  └── renderer/gamepad-manager.js
 ```
 
 ---
