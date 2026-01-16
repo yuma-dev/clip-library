@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE (+ REORG + FILE WATCHER + DISCORD RPC COMPLETE)
+## Status: PHASES 1-3 COMPLETE (+ REORG + FILE WATCHER + DISCORD RPC + CLIPS COMPLETE)
 **Last Updated:** 2026-01-16
-**Current Phase:** Core modularization + repo organization complete. Remaining optional phase: Clips management.
+**Current Phase:** Core modularization + repo organization complete.
 
 ---
 
@@ -23,7 +23,7 @@ clip-library/
 │   ├── updater.js          # ✅ GitHub release-based update checking
 │   ├── steelseries-processor.js # ✅ Import tool for SteelSeries GG Moments clips
 │   ├── discord.js          # ✅ Discord RPC integration
-│   └── clips.js            # 🔮 Clip list management, periodic saves
+│   └── clips.js            # ✅ Clip list management, periodic saves
 ├── renderer/               # ✅ Extracted renderer helpers (more optional splitting later)
 │   ├── keybinding-manager.js # ✅ Keyboard shortcut handling
 │   ├── gamepad-manager.js    # ✅ Controller/gamepad input support
@@ -83,7 +83,7 @@ main.js
   ├── main/updater.js → depends on utils/logger.js
   ├── main/steelseries-processor.js (standalone)
   ├── main/discord.js → depends on utils/logger.js
-  └── main/clips.js → depends on main/metadata.js
+  └── main/clips.js → depends on utils/logger.js
 
  renderer.js
   ├── utils/logger.js

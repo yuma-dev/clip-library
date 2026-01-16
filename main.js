@@ -45,6 +45,9 @@ const fileWatcherModule = require('./main/file-watcher');
 // Discord RPC module
 const discordModule = require('./main/discord');
 
+// Clips module
+const clipsModule = require('./main/clips');
+
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
   logger.error('FFmpeg initialization failed:', err);
@@ -219,7 +222,7 @@ app.whenReady().then(async () => {
   });
   
   // Start periodic saves to prevent data loss
-  startPeriodicSave();
+  clipsModule.startPeriodicSave(getSettings);
 });
 
 app.on("window-all-closed", () => {
@@ -573,13 +576,13 @@ ipcMain.handle("get-thumbnail-paths-batch", async (event, clipNames) => {
 
 app.on('before-quit', () => {
   // Stop periodic saves
-  stopPeriodicSave();
+  clipsModule.stopPeriodicSave();
 
   // Stop thumbnail queue processing
   thumbnailsModule.stopQueue();
 
   // Save current clip list for next session comparison
-  saveCurrentClipList();
+  clipsModule.saveCurrentClipList(getSettings);
 });
 
 ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTime) => {
@@ -845,152 +848,11 @@ ipcMain.handle("get-game-icon", async (event, clipName) => {
   return metadataModule.getGameIcon(clipName, getSettings);
 });
 
-const LAST_CLIPS_FILE = path.join(app.getPath('userData'), 'last-clips.json');
-
-async function saveCurrentClipList() {
-  try {
-    const clipsFolder = settings.clipLocation;
-    
-    if (!clipsFolder) {
-      logger.warn('No clip location set, skipping clip list save');
-      return;
-    }
-
-    // Get current clip list (just the originalNames for comparison)
-    const result = await readify(clipsFolder, {
-      type: "raw",
-      sort: "date", 
-      order: "desc",
-    });
-
-    const clipNames = result.files
-      .filter((file) =>
-        [".mp4", ".avi", ".mov"].includes(
-          path.extname(file.name).toLowerCase(),
-        ),
-      )
-      .map(file => file.name);
-
-    const clipListData = {
-      timestamp: Date.now(),
-      clips: clipNames
-    };
-
-    // Use atomic write to prevent corruption
-    const tempFile = LAST_CLIPS_FILE + '.tmp';
-    const jsonData = JSON.stringify(clipListData, null, 2);
-    
-    // Write to temp file first
-    await fs.writeFile(tempFile, jsonData, 'utf8');
-    
-    // Verify the temp file was written correctly
-    const verification = await fs.readFile(tempFile, 'utf8');
-    JSON.parse(verification); // This will throw if invalid JSON
-    
-    // Atomically replace the original file
-    await fs.rename(tempFile, LAST_CLIPS_FILE);
-    
-    logger.info(`Saved ${clipNames.length} clips for next session comparison`);
-  } catch (error) {
-    logger.error('Error saving current clip list:', error);
-    
-    // Clean up temp file if it exists
-    try {
-      const tempFile = LAST_CLIPS_FILE + '.tmp';
-      await fs.unlink(tempFile);
-    } catch (cleanupError) {
-      // Ignore cleanup errors
-    }
-  }
-}
-
-async function getNewClipsInfo() {
-  try {
-    // Load previously saved clip list
-    let previousClips = [];
-    try {
-      const data = await fs.readFile(LAST_CLIPS_FILE, 'utf8');
-      
-      // Check for empty file
-      if (data.trim().length === 0) {
-        logger.warn('Empty clip list file, treating as first run');
-        return { newClips: [], totalNewCount: 0 };
-      }
-      
-      const parsed = JSON.parse(data);
-      previousClips = parsed.clips || [];
-      logger.info(`Loaded ${previousClips.length} clips from previous session`);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        logger.error('Error reading previous clip list:', error);
-        // Try to backup corrupted file
-        try {
-          const backupPath = LAST_CLIPS_FILE + '.backup.' + Date.now();
-          await fs.copyFile(LAST_CLIPS_FILE, backupPath);
-          logger.info(`Backed up corrupted file to: ${backupPath}`);
-        } catch (backupError) {
-          logger.error('Failed to backup corrupted file:', backupError);
-        }
-      }
-      // First time running, file doesn't exist, or corrupted - no previous clips
-      return { newClips: [], totalNewCount: 0 };
-    }
-
-    // Get current clip list
-    const clipsFolder = settings.clipLocation;
-    const result = await readify(clipsFolder, {
-      type: "raw",
-      sort: "date",
-      order: "desc",
-    });
-
-    const currentClips = result.files
-      .filter((file) =>
-        [".mp4", ".avi", ".mov"].includes(
-          path.extname(file.name).toLowerCase(),
-        ),
-      )
-      .map(file => file.name);
-
-    // Find new clips (clips that weren't in the previous list)
-    const newClips = currentClips.filter(clipName => !previousClips.includes(clipName));
-    
-    logger.info(`Found ${newClips.length} new clips since last session`);
-    
-    return {
-      newClips: newClips,
-      totalNewCount: newClips.length
-    };
-  } catch (error) {
-    logger.error('Error getting new clips info:', error);
-    return { newClips: [], totalNewCount: 0 };
-  }
-}
-
 ipcMain.handle('get-new-clips-info', async () => {
-  return await getNewClipsInfo();
+  return await clipsModule.getNewClipsInfo(getSettings);
 });
 
 ipcMain.handle('save-clip-list-immediately', async () => {
-  await saveCurrentClipList();
+  await clipsModule.saveCurrentClipList(getSettings);
 });
-
-// Periodic save to prevent data loss
-let periodicSaveInterval;
-
-function startPeriodicSave() {
-  // Save every 5 minutes
-  periodicSaveInterval = setInterval(() => {
-    saveCurrentClipList().catch(error => {
-      logger.error('Error in periodic save:', error);
-    });
-  }, 5 * 60 * 1000);
-}
-
-function stopPeriodicSave() {
-  if (periodicSaveInterval) {
-    clearInterval(periodicSaveInterval);
-    periodicSaveInterval = null;
-  }
-}
 
