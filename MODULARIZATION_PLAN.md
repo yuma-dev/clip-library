@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
 ## Status: IN PROGRESS
-**Last Updated:** 2024-01-16
-**Current Phase:** Phase 2 - Thumbnails Extraction (NEXT)
+**Last Updated:** 2025-01-16
+**Current Phase:** Phase 3 - Metadata Extraction (NEXT)
 
 ---
 
@@ -17,7 +17,7 @@ clip-library/
 ├── renderer.js             # UI entry point (future: split into renderer/)
 ├── main/                   # Main process modules
 │   ├── ffmpeg.js           # ✅ Video/audio encoding, export, FFprobe
-│   ├── thumbnails.js       # ⏳ Generation, caching, validation, queue
+│   ├── thumbnails.js       # ✅ Generation, caching, validation, queue
 │   ├── metadata.js         # ⏳ .clip_metadata file I/O, atomic writes
 │   ├── file-watcher.js     # 🔮 Chokidar setup, new clip detection
 │   ├── discord.js          # 🔮 Discord RPC integration
@@ -77,12 +77,13 @@ main.js
 | Phase | Status | Lines Moved | Notes |
 |-------|--------|-------------|-------|
 | Phase 1: FFmpeg | ✅ COMPLETE | ~290 lines | All exports working |
-| Phase 2: Thumbnails | ⏳ NEXT | ~300 lines (est) | Queue, validation, caching |
-| Phase 3: Metadata | ⏸️ PENDING | ~400 lines (est) | File I/O, atomic writes |
+| Phase 2: Thumbnails | ✅ COMPLETE | ~420 lines | Queue, validation, caching |
+| Phase 3: Metadata | ⏳ NEXT | ~400 lines (est) | File I/O, atomic writes |
 
 **Current State:**
-- `main.js`: ~1940 lines (down from ~2230)
-- `main/ffmpeg.js`: ~340 lines (new)
+- `main.js`: ~1520 lines (down from ~1940)
+- `main/ffmpeg.js`: ~340 lines
+- `main/thumbnails.js`: ~430 lines (new)
 
 ---
 
@@ -172,57 +173,39 @@ const { ffmpeg, ffprobeAsync, generateScreenshot } = ffmpegModule;
 
 ---
 
-## Phase 2: Thumbnails Extraction ⏳ NEXT
+## Phase 2: Thumbnails Extraction ✅ COMPLETE
 
-### What to Extract
-- **Lines 42-46**: Thumbnail constants (CONCURRENT_GENERATIONS, queue, etc.)
-- **Lines 83-90**: THUMBNAIL_CACHE_DIR setup
-- **Lines 308-311**: `generateThumbnailPath()`
-- **Lines 1079-1132**: `validateThumbnail()`
-- **Lines 1134-1147**: `saveThumbnailMetadata()`, `getThumbnailMetadata()`
-- **Lines 1149-1235**: `processQueue()`
-- **Lines 1248-1278**: `regenerate-thumbnail-for-trim` logic
-- **Lines 1298-1404**: `handleInitialThumbnails()`
-- **Lines 1406-1464**: `generate-thumbnails-progressively` logic
-- **Lines 1467-1497**: `generate-thumbnail` logic
-- **Lines 1030-1063**: `get-thumbnail-path` and batch handler logic
+### What Was Extracted
+- Thumbnail constants (CONCURRENT_GENERATIONS, queue state, etc.)
+- THUMBNAIL_CACHE_DIR setup and initialization
+- `generateThumbnailPath()` - MD5 hash-based path generation
+- `validateThumbnail()` - checks thumbnail validity against trim data
+- `saveThumbnailMetadata()`, `getThumbnailMetadata()` - .meta file I/O
+- `processQueue()` - concurrent thumbnail generation queue
+- `handleInitialThumbnails()` - fast-path for initial visible clips
+- `regenerateThumbnailForTrim()` - updates thumbnail when trim changes
+- `generateThumbnail()` - single thumbnail generation
+- `getThumbnailPath()`, `getThumbnailPathsBatch()` - path lookups
 
-### Dependencies
-- FFmpeg module (for ffprobe, screenshot generation)
-- `settings` (for clipLocation)
-- `getTrimData` from metadata module
-- `fs`, `path`, `crypto`
-- `logger`
+### Files Changed
+- `main.js`: Removed ~420 lines, added import and thin IPC handlers
+- `main/thumbnails.js`: Created with ~430 lines
 
-### Module Interface (main/thumbnails.js)
-```javascript
-module.exports = {
-  initThumbnailCache(),
-  generateThumbnailPath(),
-  validateThumbnail(),
-  getThumbnailMetadata(),
-  saveThumbnailMetadata(),
-  queueThumbnailGeneration(),
-  processQueue(),
-  handleInitialThumbnails(),
-  regenerateThumbnailForTrim(),
-  stopQueue(),  // For cleanup on app quit
-}
-```
+### Design Decisions
+- `getTrimData` passed as dependency (not extracted yet to metadata module)
+- `loadSettings` passed as dependency for clipLocation access
+- Cache directory initialized via `initThumbnailCache()` called in `createWindow()`
+- Removed `crypto` import from main.js (now only in thumbnails module)
 
-### Status Checklist
-- [ ] Create main/thumbnails.js
-- [ ] Move thumbnail constants and cache setup
-- [ ] Move generation functions
-- [ ] Move queue processing
-- [ ] Update main.js to import and use module
-- [ ] Test: App startup thumbnail generation
-- [ ] Test: Trim updates thumbnail
-- [ ] Test: Thumbnail progress events
+### Tested & Working
+- [x] App starts without errors
+- [x] New clip thumbnail generation
+- [x] Trim updates thumbnail correctly
+- [x] Progressive thumbnail loading
 
 ---
 
-## Phase 3: Metadata Extraction ⏸️ PENDING
+## Phase 3: Metadata Extraction ⏳ NEXT
 
 ### What to Extract
 - **Lines 956-1007**: `ensureDirectoryExists()`, `writeFileWithRetry()`, `writeFileAtomically()`
@@ -319,9 +302,10 @@ rm main/metadata.js
 ### Quick Start for Next Session
 ```
 1. Read this file first (MODULARIZATION_PLAN.md)
-2. Current phase: Phase 2 - Thumbnails
-3. main.js is at ~1940 lines, target is ~1200 after all phases
+2. Current phase: Phase 3 - Metadata
+3. main.js is at ~1520 lines, target is ~800-1000 after all phases
 4. Pattern established: thin IPC handlers in main.js, logic in modules
+5. Two modules complete: main/ffmpeg.js (~340 lines), main/thumbnails.js (~430 lines)
 ```
 
 ### How to Resume

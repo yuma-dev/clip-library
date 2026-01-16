@@ -22,7 +22,6 @@ const isDev = !app.isPackaged;
 const path = require("path");
 const chokidar = require("chokidar");
 const fs = require("fs").promises;
-const crypto = require("crypto");
 const { loadSettings, saveSettings } = require("./settings-manager");
 const SteelSeriesProcessor = require('./steelseries-processor');
 const readify = require("readify");
@@ -37,12 +36,8 @@ const IDLE_TIMEOUT = 5 * 60 * 1000;
 const ffmpegModule = require('./main/ffmpeg');
 const { ffmpeg, ffprobeAsync, generateScreenshot } = ffmpegModule;
 
-const CONCURRENT_GENERATIONS = 4; // Maximum concurrent FFmpeg processes
-const thumbnailQueue = [];
-const THUMBNAIL_RETRY_ATTEMPTS = 3;
-const FAST_PATH_THRESHOLD = 12;
-let isProcessingQueue = false;
-let completedThumbnails = 0;
+// Thumbnails module
+const thumbnailsModule = require('./main/thumbnails');
 
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
@@ -69,14 +64,6 @@ ipcMain.handle('get-ffmpeg-version', async (event) => {
 
 let idleTimer;
 
-const THUMBNAIL_CACHE_DIR = path.join(
-  app.getPath("userData"),
-  "thumbnail-cache",
-);
-
-// Ensure cache directory exists
-fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true }).catch(logger.error);
-
 let mainWindow;
 let settings;
 
@@ -90,6 +77,9 @@ async function createWindow() {
   if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
   settings = await loadSettings();
   if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
+
+  // Initialize thumbnail cache
+  await thumbnailsModule.initThumbnailCache();
 
   if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
   setupFileWatcher(settings.clipLocation);
@@ -294,11 +284,6 @@ ipcMain.handle('get-settings', () => {
   return settings;
 });
 
-function generateThumbnailPath(clipPath) {
-  const hash = crypto.createHash("md5").update(clipPath).digest("hex");
-  return path.join(THUMBNAIL_CACHE_DIR, `${hash}.jpg`);
-}
-
 ipcMain.handle("get-clips", async () => {
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
@@ -369,7 +354,7 @@ ipcMain.handle("get-clips", async () => {
           // If date file doesn't exist or is invalid, keep using the file system date
         }
 
-        const thumbnailPath = generateThumbnailPath(fullPath);
+        const thumbnailPath = thumbnailsModule.generateThumbnailPath(fullPath);
 
         return {
           originalName: file.name,
@@ -490,7 +475,7 @@ ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
 ipcMain.handle("get-clip-info", async (event, clipName) => {
   logger.info(`[main] get-clip-info requested for: ${clipName}`);
   const clipPath = path.join(settings.clipLocation, clipName);
-  const thumbnailPath = generateThumbnailPath(clipPath);
+  const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
   
   try {
     // Check if file exists first
@@ -503,7 +488,7 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
     }
 
     // Try to get metadata from cache first
-    const metadata = await getThumbnailMetadata(thumbnailPath);
+    const metadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath);
     if (metadata && metadata.duration) {
       logger.info(`[main] Using cached metadata for ${clipName} - duration: ${metadata.duration}`);
       return {
@@ -524,8 +509,8 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
         } else {
           logger.info(`[main] ffprobe successful for ${clipName} - duration: ${info.format.duration}`);
           // Cache the metadata
-          const existingMetadata = await getThumbnailMetadata(thumbnailPath) || {};
-          await saveThumbnailMetadata(thumbnailPath, {
+          const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
+          await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
             ...existingMetadata,
             duration: info.format.duration,
             timestamp: Date.now()
@@ -1015,40 +1000,12 @@ ipcMain.handle("open-folder-dialog", async () => {
   return null;
 });
 
-// In main.js, modify the 'get-thumbnail-path' handler
 ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
-  logger.info(`[main] get-thumbnail-path requested for: ${clipName}`);
-  const clipPath = path.join(settings.clipLocation, clipName);
-  const thumbnailPath = generateThumbnailPath(clipPath);
-
-  try {
-    await fs.access(thumbnailPath);
-    logger.info(`[main] Thumbnail exists for ${clipName}: ${thumbnailPath}`);
-    return thumbnailPath;
-  } catch (error) {
-    // Instead of throwing an error, return null if the thumbnail doesn't exist
-    logger.warn(`[main] Thumbnail not found for ${clipName}: ${thumbnailPath}`);
-    return null;
-  }
+  return thumbnailsModule.getThumbnailPath(clipName, loadSettings);
 });
 
-// Batch thumbnail path lookup - eliminates N individual IPC calls
 ipcMain.handle("get-thumbnail-paths-batch", async (event, clipNames) => {
-  const results = {};
-
-  await Promise.all(clipNames.map(async (clipName) => {
-    const clipPath = path.join(settings.clipLocation, clipName);
-    const thumbnailPath = generateThumbnailPath(clipPath);
-
-    try {
-      await fs.access(thumbnailPath);
-      results[clipName] = thumbnailPath;
-    } catch (error) {
-      results[clipName] = null;
-    }
-  }));
-
-  return results;
+  return thumbnailsModule.getThumbnailPathsBatch(clipNames, loadSettings);
 });
 
 async function getTrimData(clipName) {
@@ -1065,205 +1022,19 @@ async function getTrimData(clipName) {
   }
 }
 
-async function validateThumbnail(clipName, thumbnailPath) {
-  const EPSILON = 0.001;
-  
-  try {
-    // First check if thumbnail exists
-    try {
-      await fs.access(thumbnailPath);
-    } catch (error) {
-      logger.info(`${clipName}: No thumbnail file exists`);
-      return false;
-    }
-
-    // Then check if metadata exists
-    try {
-      const metadata = await getThumbnailMetadata(thumbnailPath);
-      if (!metadata) {
-        return false;
-      }
-
-      const currentTrimData = await getTrimData(clipName);
-      
-      if (currentTrimData) {
-        const isValid = Math.abs(metadata.startTime - currentTrimData.start) < EPSILON;
-        /*
-        logger.info(`${clipName}: Validating trim data:`, {
-          metadataStartTime: metadata.startTime,
-          trimStartTime: currentTrimData.start,
-          diff: Math.abs(metadata.startTime - currentTrimData.start),
-          isValid
-        });
-        */
-        return isValid;
-      }
-
-      if (metadata.duration) {
-        const expectedStartTime = metadata.duration > 40 ? metadata.duration / 2 : 0;
-        const isValid = Math.abs(metadata.startTime - expectedStartTime) < 0.1;
-        if (!isValid) {
-          logger.info(`${clipName}: Start time mismatch - Metadata: ${metadata.startTime}, Expected: ${expectedStartTime}`);
-        }
-        return isValid;
-      }
-
-      logger.info(`${clipName}: Missing duration in metadata`);
-      return false;
-    } catch (error) {
-      logger.info(`${clipName}: No metadata file exists`);
-      return false;
-    }
-  } catch (error) {
-    logger.error(`Error validating thumbnail for ${clipName}:`, error);
-    return false;
-  }
-}
-
-async function saveThumbnailMetadata(thumbnailPath, metadata) {
-  const metadataPath = thumbnailPath + '.meta';
-  await fs.writeFile(metadataPath, JSON.stringify(metadata));
-}
-
-async function getThumbnailMetadata(thumbnailPath) {
-  try {
-    const metadataPath = thumbnailPath + '.meta';
-    const data = await fs.readFile(metadataPath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    return null;
-  }
-}
-
-async function processQueue() {
-  if (isProcessingQueue || thumbnailQueue.length === 0) return;
-
-  isProcessingQueue = true;
-  completedThumbnails = 0;
-  
-  try {
-    while (thumbnailQueue.length > 0) {
-      const batch = thumbnailQueue.slice(0, CONCURRENT_GENERATIONS);
-      if (batch.length === 0) break;
-
-      const totalToProcess = batch[0].totalToProcess;
-
-      await Promise.all(batch.map(async ({ clipName, event, attempts = 0 }) => {
-        const clipPath = path.join(settings.clipLocation, clipName);
-        const thumbnailPath = generateThumbnailPath(clipPath);
-
-        try {
-          const isValid = await validateThumbnail(clipName, thumbnailPath);
-          
-          if (!isValid) {
-            // Get video info first
-            const info = await new Promise((resolve, reject) => {
-              ffmpeg.ffprobe(clipPath, (err, metadata) => {
-                if (err) reject(err);
-                else resolve(metadata);
-              });
-            });
-
-            const trimData = await getTrimData(clipName);
-            const duration = info.format.duration;
-            const startTime = trimData ? trimData.start : (duration > 40 ? duration / 2 : 0);
-
-            await new Promise((resolve, reject) => {
-              ffmpeg(clipPath)
-                .screenshots({
-                  timestamps: [startTime],
-                  filename: path.basename(thumbnailPath),
-                  folder: path.dirname(thumbnailPath),
-                  size: '640x360'
-                })
-                .on('end', resolve)
-                .on('error', reject);
-            });
-
-            await saveThumbnailMetadata(thumbnailPath, {
-              startTime,
-              duration,
-              clipName,
-              timestamp: Date.now()
-            });
-          }
-
-          completedThumbnails++;
-          
-          event.sender.send("thumbnail-progress", {
-            current: completedThumbnails,
-            total: totalToProcess,
-            clipName
-          });
-
-        } catch (error) {
-          logger.error("Error processing thumbnail for", clipName, error);
-          if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
-            thumbnailQueue.push({ clipName, event, attempts: attempts + 1 });
-          }
-        }
-      }));
-
-      thumbnailQueue.splice(0, batch.length);
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-  } finally {
-    isProcessingQueue = false;
-    
-    // Only send completion event if queue is actually empty
-    if (thumbnailQueue.length === 0) {
-      const event = batch?.[0]?.event;
-      if (event) {
-        event.sender.send("thumbnail-generation-complete");
-      }
-    } else if (!isProcessingQueue) {
-      // If there are still items in queue, restart processing
-      processQueue();
-    }
-  }
-}
-
 app.on('before-quit', () => {
   // Stop periodic saves
   stopPeriodicSave();
-  
-  // Clear the queue
-  thumbnailQueue.length = 0;
-  
+
+  // Stop thumbnail queue processing
+  thumbnailsModule.stopQueue();
+
   // Save current clip list for next session comparison
   saveCurrentClipList();
 });
 
 ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTime) => {
-  const clipPath = path.join(settings.clipLocation, clipName);
-  const thumbnailPath = generateThumbnailPath(clipPath);
-
-  try {
-    // Generate new thumbnail at trim point
-    await new Promise((resolve, reject) => {
-      ffmpeg(clipPath)
-        .screenshots({
-          timestamps: [startTime],
-          filename: path.basename(thumbnailPath),
-          folder: path.dirname(thumbnailPath),
-          size: '640x360'
-        })
-        .on('end', resolve)
-        .on('error', reject);
-    });
-
-    // Save new metadata
-    await saveThumbnailMetadata(thumbnailPath, {
-      startTime,
-      clipName,
-      timestamp: Date.now()
-    });
-
-    return { success: true, thumbnailPath };
-  } catch (error) {
-    logger.error('Error regenerating thumbnail:', error);
-    return { success: false, error: error.message };
-  }
+  return thumbnailsModule.regenerateThumbnailForTrim(clipName, startTime, loadSettings);
 });
 
 // In main.js
@@ -1284,205 +1055,13 @@ ipcMain.handle('get-default-keybindings', () => {
   return DEFAULT_SETTINGS.keybindings;
 });
 
-async function handleInitialThumbnails(clipNames, event) {
-  const initialClips = clipNames.slice(0, 12);
-  
-  // Quick parallel check for existence
-  const missingThumbnails = await Promise.all(
-    initialClips.map(async clipName => {
-      const clipPath = path.join(settings.clipLocation, clipName);
-      const thumbnailPath = generateThumbnailPath(clipPath);
-      try {
-        await fs.access(thumbnailPath);
-        return null;
-      } catch {
-        return clipName;
-      }
-    })
-  );
-
-  // Filter out nulls
-  const clipsNeedingGeneration = missingThumbnails.filter(Boolean);
-
-  if (clipsNeedingGeneration.length > 0) {
-    logger.info(`Fast-tracking thumbnail generation for ${clipsNeedingGeneration.length} initial clips`);
-    
-    // Get correct timestamps first
-    const clipData = await Promise.all(
-      clipsNeedingGeneration.map(async clipName => {
-        const clipPath = path.join(settings.clipLocation, clipName);
-        try {
-          // Check trim data first
-          const trimData = await getTrimData(clipName);
-          if (trimData) {
-            return { clipName, startTime: trimData.start };
-          }
-
-          // If no trim data, get duration
-          const info = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(clipPath, (err, metadata) => {
-              if (err) reject(err);
-              else resolve(metadata);
-            });
-          });
-          
-          const duration = info.format.duration;
-          return { 
-            clipName, 
-            startTime: duration > 40 ? duration / 2 : 0,
-            duration 
-          };
-        } catch (error) {
-          logger.error(`Error getting data for ${clipName}:`, error);
-          return null;
-        }
-      })
-    );
-
-    // Filter out failed clips
-    const validClipData = clipData.filter(Boolean);
-
-    // Generate all in parallel with correct timestamps
-    await Promise.all(
-      validClipData.map(async ({ clipName, startTime, duration }, index) => {
-        const clipPath = path.join(settings.clipLocation, clipName);
-        const thumbnailPath = generateThumbnailPath(clipPath);
-
-        try {
-          await new Promise((resolve, reject) => {
-            ffmpeg(clipPath)
-              .screenshots({
-                timestamps: [startTime],
-                filename: path.basename(thumbnailPath),
-                folder: path.dirname(thumbnailPath),
-                size: '640x360'
-              })
-              .on('end', resolve)
-              .on('error', reject);
-          });
-
-          // Save metadata
-          await saveThumbnailMetadata(thumbnailPath, {
-            startTime,
-            duration,
-            clipName,
-            timestamp: Date.now()
-          });
-
-          // Only send the thumbnail generated event, no progress events
-          event.sender.send("thumbnail-generated", {
-            clipName,
-            thumbnailPath
-          });
-
-        } catch (error) {
-          logger.error(`Error generating thumbnail for ${clipName}:`, error);
-          event.sender.send("thumbnail-generation-failed", {
-            clipName,
-            error: error.message
-          });
-        }
-      })
-    );
-  }
-
-  return {
-    processed: clipsNeedingGeneration.length,
-    processedClips: new Set(clipsNeedingGeneration)
-  };
-}
-
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
-  try {
-    // Handle initial clips first (silently)
-    const { processed, processedClips } = await handleInitialThumbnails(clipNames, event);
-    
-    // Process remaining clips if any
-    if (clipNames.length > 12) {
-      const remainingClips = clipNames.slice(12).filter(clipName => !processedClips.has(clipName));
-      let clipsNeedingGeneration = [];
-      
-      // Validate remaining clips
-      for (const clipName of remainingClips) {
-        const clipPath = path.join(settings.clipLocation, clipName);
-        const thumbnailPath = generateThumbnailPath(clipPath);
-        
-        try {
-          const isValid = await validateThumbnail(clipName, thumbnailPath);
-          if (!isValid) {
-            clipsNeedingGeneration.push(clipName);
-          }
-        } catch (error) {
-          logger.error(`Error validating thumbnail for ${clipName}:`, error);
-          clipsNeedingGeneration.push(clipName);
-        }
-      }
-
-      // Only show progress and start queue if there are clips to process
-      if (clipsNeedingGeneration.length > 0) {
-        event.sender.send("thumbnail-validation-start", {
-          total: clipsNeedingGeneration.length
-        });
-
-        thumbnailQueue.length = 0;
-        thumbnailQueue.push(...clipsNeedingGeneration.map(clipName => ({ 
-          clipName, 
-          event,
-          totalToProcess: clipsNeedingGeneration.length
-        })));
-        
-        if (!isProcessingQueue) {
-          processQueue();
-        }
-      }
-      // Note: No else clause here - we don't send completion for no-op cases
-    } else if (processed > 0) {
-      // Only send completion if we actually processed initial clips
-      event.sender.send("thumbnail-generation-complete");
-    }
-    
-    return { 
-      needsGeneration: processed + (thumbnailQueue.length || 0), 
-      total: clipNames.length,
-      initialProcessed: processed
-    };
-  } catch (error) {
-    logger.error('Error in thumbnail generation:', error);
-    throw error;
-  }
+  return thumbnailsModule.generateThumbnailsProgressively(clipNames, event, loadSettings, getTrimData);
 });
 
 
 ipcMain.handle("generate-thumbnail", async (event, clipName) => {
-  const clipPath = path.join(settings.clipLocation, clipName);
-  const thumbnailPath = generateThumbnailPath(clipPath);
-
-  try {
-    // Check if cached thumbnail exists
-    await fs.access(thumbnailPath);
-    return thumbnailPath;
-  } catch (error) {
-    logger.info(`Generating new thumbnail for ${clipName}`);
-    // If thumbnail doesn't exist, generate it
-    return new Promise((resolve, reject) => {
-      ffmpeg(clipPath)
-        .screenshots({
-          count: 1,
-          timemarks: ["00:00:00"],
-          folder: path.dirname(thumbnailPath),
-          filename: path.basename(thumbnailPath),
-          size: "640x360",
-        })
-        .on("end", () => {
-          logger.info(`Thumbnail generated successfully for ${clipName}`);
-          resolve(thumbnailPath);
-        })
-        .on("error", (err) => {
-          logger.error(`Error generating thumbnail for ${clipName}:`, err);
-          reject(err);
-        });
-    });
-  }
+  return thumbnailsModule.generateThumbnail(clipName, loadSettings);
 });
 
 ipcMain.handle("save-trim", async (event, clipName, start, end) => {
@@ -1525,7 +1104,7 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
   const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
   const customNamePath = path.join(metadataFolder, `${clipName}.customname`);
   const trimDataPath = path.join(metadataFolder, `${clipName}.trim`);
-  const thumbnailPath = generateThumbnailPath(clipPath);
+  const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
 
   const filesToDelete = [clipPath, customNamePath, trimDataPath, thumbnailPath];
 
