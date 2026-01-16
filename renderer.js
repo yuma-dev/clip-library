@@ -3685,6 +3685,8 @@ function hideTooltip(tooltip) {
 async function saveClipTags(clip) {
   try {
     await ipcRenderer.invoke("save-clip-tags", clip.originalName, clip.tags);
+    // Invalidate cache so next open gets fresh data
+    clipDataCache.delete(clip.originalName);
   } catch (error) {
     logger.error("Error saving clip tags:", error);
   }
@@ -6800,6 +6802,9 @@ async function saveTrimChanges() {
       );
       logger.info("Trim data saved successfully");
 
+      // Invalidate cache so next open gets fresh data
+      clipDataCache.delete(clipToUpdate.originalName);
+
       // Regenerate thumbnail at new start point
       const result = await ipcRenderer.invoke(
         "regenerate-thumbnail-for-trim",
@@ -6841,6 +6846,9 @@ async function resetClipTrimTimes(clip) {
     // Delete trim data for the clip
     await ipcRenderer.invoke("delete-trim", clip.originalName);
     logger.info("Trim data reset successfully for:", clip.originalName);
+
+    // Invalidate cache so next open gets fresh data
+    clipDataCache.delete(clip.originalName);
 
     // If this is the currently playing clip, reset the UI trim times
     if (currentClip && currentClip.originalName === clip.originalName) {

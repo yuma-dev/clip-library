@@ -39,6 +39,9 @@ const { ffmpeg, ffprobeAsync, generateScreenshot } = ffmpegModule;
 // Thumbnails module
 const thumbnailsModule = require('./main/thumbnails');
 
+// Metadata module
+const metadataModule = require('./main/metadata');
+
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
   logger.error('FFmpeg initialization failed:', err);
@@ -66,6 +69,9 @@ let idleTimer;
 
 let mainWindow;
 let settings;
+
+// Getter for cached settings (used by modules instead of loadSettings which reads from disk)
+const getSettings = async () => settings;
 
 setupTitlebar();
 
@@ -462,9 +468,7 @@ ipcMain.handle('get-new-clip-info', async (event, fileName) => {
 
 ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
   try {
-    await saveCustomNameData(originalName, customName);
-    // Log the rename activity
-    logActivity('rename', { originalName, newCustomName: customName });
+    await metadataModule.saveCustomName(originalName, customName, getSettings);
     return { success: true, customName };
   } catch (error) {
     logger.error("Error in save-custom-name handler:", error);
@@ -526,235 +530,43 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
 });
 
 ipcMain.handle("get-trim", async (event, clipName) => {
-  logger.info(`Getting trim data for: ${clipName}`);
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
-
-  try {
-    const trimData = await fs.readFile(trimFilePath, "utf8");
-    logger.info(`Found trim data for ${clipName}:`, trimData);
-    return JSON.parse(trimData);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      logger.info(`No trim data found for ${clipName}`);
-      return null;
-    }
-    logger.error(`Error reading trim data for ${clipName}:`, error);
-    throw error;
-  }
+  return metadataModule.getTrimData(clipName, getSettings);
 });
 
 ipcMain.handle("save-speed", async (event, clipName, speed) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  await ensureDirectoryExists(metadataFolder);
-  const speedFilePath = path.join(metadataFolder, `${clipName}.speed`);
-
-  try {
-    await writeFileAtomically(speedFilePath, speed.toString());
-    logger.info(`Speed saved successfully for ${clipName}: ${speed}`);
-    // Log speed change
-    logActivity('speed_change', { clipName, speed });
-    return { success: true };
-  } catch (error) {
-    logger.error(`Error saving speed for ${clipName}:`, error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.saveSpeed(clipName, speed, getSettings);
 });
 
 ipcMain.handle("get-speed", async (event, clipName) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  const speedFilePath = path.join(metadataFolder, `${clipName}.speed`);
-
-  try {
-    const speedData = await fs.readFile(speedFilePath, "utf8");
-    const parsedSpeed = parseFloat(speedData);
-    if (isNaN(parsedSpeed)) {
-      logger.warn(`Invalid speed data for ${clipName}, using default`);
-      return 1;
-    }
-    return parsedSpeed;
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      logger.info(`No speed data found for ${clipName}, using default`);
-      return 1; // Default speed if not set
-    }
-    logger.error(`Error reading speed for ${clipName}:`, error);
-    throw error;
-  }
+  return metadataModule.getSpeed(clipName, getSettings);
 });
 
 ipcMain.handle("save-volume", async (event, clipName, volume) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  await ensureDirectoryExists(metadataFolder);
-  const volumeFilePath = path.join(metadataFolder, `${clipName}.volume`);
-
-  try {
-    await writeFileAtomically(volumeFilePath, volume.toString());
-    logger.info(`Volume saved successfully for ${clipName}: ${volume}`);
-    // Log volume change
-    logActivity('volume_change', { clipName, volume });
-    return { success: true };
-  } catch (error) {
-    logger.error(`Error saving volume for ${clipName}:`, error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.saveVolume(clipName, volume, getSettings);
 });
 
 ipcMain.handle("get-volume", async (event, clipName) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  const volumeFilePath = path.join(metadataFolder, `${clipName}.volume`);
-
-  try {
-    const volumeData = await fs.readFile(volumeFilePath, "utf8");
-    const parsedVolume = parseFloat(volumeData);
-    if (isNaN(parsedVolume)) {
-      logger.warn(`Invalid volume data for ${clipName}, using default`);
-      return 1;
-    }
-    return parsedVolume;
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      logger.info(`No volume data found for ${clipName}, using default`);
-      return 1; // Default volume if not set
-    }
-    logger.error(`Error reading volume for ${clipName}:`, error);
-    throw error;
-  }
+  return metadataModule.getVolume(clipName, getSettings);
 });
 
 ipcMain.handle("get-clip-tags", async (event, clipName) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  const tagsFilePath = path.join(metadataFolder, `${clipName}.tags`);
-
-  try {
-    const tagsData = await fs.readFile(tagsFilePath, "utf8");
-    return JSON.parse(tagsData);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return []; // No tags file exists
-    }
-    logger.error("Error reading tags:", error);
-    return [];
-  }
+  return metadataModule.getClipTags(clipName, getSettings);
 });
 
 ipcMain.handle("save-clip-tags", async (event, clipName, tags) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  const tagsFilePath = path.join(metadataFolder, `${clipName}.tags`);
-
-  try {
-    await fs.writeFile(tagsFilePath, JSON.stringify(tags));
-    // Log clip tags update
-    logActivity('tags_update_clip', { clipName, tags });
-    return { success: true };
-  } catch (error) {
-    logger.error("Error saving tags:", error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.saveClipTags(clipName, tags, getSettings);
 });
 
 ipcMain.handle("load-global-tags", async () => {
-  const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
-  try {
-    const tagsData = await fs.readFile(tagsFilePath, "utf8");
-    return JSON.parse(tagsData);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return []; // No tags file exists yet
-    }
-    logger.error("Error reading global tags:", error);
-    return [];
-  }
+  return metadataModule.loadGlobalTags(app.getPath.bind(app));
 });
 
 ipcMain.handle("save-global-tags", async (event, tags) => {
-  const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
-  try {
-    await fs.writeFile(tagsFilePath, JSON.stringify(tags));
-    // Log global tags update
-    logActivity('tags_update_global', { tags });
-    return { success: true };
-  } catch (error) {
-    logger.error("Error saving global tags:", error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.saveGlobalTags(tags, app.getPath.bind(app));
 });
 
 ipcMain.handle("restore-missing-global-tags", async () => {
-  try {
-    const clipsFolder = settings.clipLocation;
-    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-    
-    // Get all .tags files
-    let allClipTags = new Set();
-    
-    try {
-      const files = await fs.readdir(metadataFolder);
-      const tagFiles = files.filter(file => file.endsWith('.tags'));
-      
-      for (const tagFile of tagFiles) {
-        try {
-          const tagFilePath = path.join(metadataFolder, tagFile);
-          const tagsData = await fs.readFile(tagFilePath, "utf8");
-          const tags = JSON.parse(tagsData);
-          
-          // Add all tags from this clip to our set
-          tags.forEach(tag => allClipTags.add(tag));
-        } catch (error) {
-          // Skip files that can't be read or parsed
-          logger.warn(`Could not read tags from ${tagFile}:`, error.message);
-        }
-      }
-    } catch (error) {
-      // Metadata folder doesn't exist or can't be read
-      logger.info("No metadata folder found or couldn't read it");
-      return { success: true, restoredCount: 0 };
-    }
-    
-    // Load current global tags
-    const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
-    let currentGlobalTags = [];
-    try {
-      const tagsData = await fs.readFile(tagsFilePath, "utf8");
-      currentGlobalTags = JSON.parse(tagsData);
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.error("Error reading global tags during restore:", error);
-      }
-      currentGlobalTags = [];
-    }
-    const currentGlobalTagsSet = new Set(currentGlobalTags);
-    
-    // Find missing tags
-    const missingTags = [...allClipTags].filter(tag => !currentGlobalTagsSet.has(tag));
-    
-         if (missingTags.length > 0) {
-       // Add missing tags to global tags
-       const updatedGlobalTags = [...currentGlobalTags, ...missingTags];
-       
-       // Save updated global tags
-       await fs.writeFile(tagsFilePath, JSON.stringify(updatedGlobalTags));
-      
-      logger.info(`Restored ${missingTags.length} missing global tags:`, missingTags);
-      logActivity('tags_restore_global', { restoredTags: missingTags, count: missingTags.length });
-      
-      return { success: true, restoredCount: missingTags.length, restoredTags: missingTags };
-    } else {
-      logger.info("No missing global tags found");
-      return { success: true, restoredCount: 0 };
-    }
-    
-  } catch (error) {
-    logger.error("Error restoring missing global tags:", error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.restoreMissingGlobalTags(getSettings, app.getPath.bind(app));
 });
 
 ipcMain.handle('show-diagnostics-save-dialog', async () => {
@@ -797,188 +609,12 @@ ipcMain.handle('generate-diagnostics-zip', async (event, targetPath) => {
 });
 
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {
-  try {
-    const clipsFolder = settings.clipLocation;
-    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-    
-    let modifiedCount = 0;
-    
-    try {
-      const files = await fs.readdir(metadataFolder);
-      const tagFiles = files.filter(file => file.endsWith('.tags'));
-      
-      logger.info(`Checking ${tagFiles.length} .tags files for tag "${tagToRemove}"`);
-      
-      for (const tagFile of tagFiles) {
-        try {
-          const tagFilePath = path.join(metadataFolder, tagFile);
-          const tagsData = await fs.readFile(tagFilePath, "utf8");
-          const tags = JSON.parse(tagsData);
-          
-          // Check if this file contains the tag to remove
-          const tagIndex = tags.indexOf(tagToRemove);
-          if (tagIndex > -1) {
-            // Remove the tag and save the file
-            tags.splice(tagIndex, 1);
-            await fs.writeFile(tagFilePath, JSON.stringify(tags));
-            modifiedCount++;
-            logger.info(`Removed tag "${tagToRemove}" from ${tagFile}`);
-          }
-        } catch (error) {
-          // Skip files that can't be read or parsed
-          logger.warn(`Could not process tags file ${tagFile}:`, error.message);
-        }
-      }
-    } catch (error) {
-      // Metadata folder doesn't exist or can't be read
-      logger.info("No metadata folder found or couldn't read it");
-      return { success: true, modifiedCount: 0 };
-    }
-    
-    logger.info(`Tag deletion completed: modified ${modifiedCount} files`);
-    return { success: true, modifiedCount };
-    
-  } catch (error) {
-    logger.error("Error removing tag from all clips:", error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.removeTagFromAllClips(tagToRemove, getSettings);
 });
 
 ipcMain.handle("update-tag-in-all-clips", async (event, oldTag, newTag) => {
-  try {
-    const clipsFolder = settings.clipLocation;
-    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-    
-    let modifiedCount = 0;
-    
-    try {
-      const files = await fs.readdir(metadataFolder);
-      const tagFiles = files.filter(file => file.endsWith('.tags'));
-      
-      logger.info(`Checking ${tagFiles.length} .tags files for tag "${oldTag}" to update to "${newTag}"`);
-      
-      for (const tagFile of tagFiles) {
-        try {
-          const tagFilePath = path.join(metadataFolder, tagFile);
-          const tagsData = await fs.readFile(tagFilePath, "utf8");
-          const tags = JSON.parse(tagsData);
-          
-          // Check if this file contains the old tag
-          const tagIndex = tags.indexOf(oldTag);
-          if (tagIndex > -1) {
-            // Update the tag and save the file
-            tags[tagIndex] = newTag;
-            await fs.writeFile(tagFilePath, JSON.stringify(tags));
-            modifiedCount++;
-            logger.info(`Updated tag "${oldTag}" to "${newTag}" in ${tagFile}`);
-          }
-        } catch (error) {
-          // Skip files that can't be read or parsed
-          logger.warn(`Could not process tags file ${tagFile}:`, error.message);
-        }
-      }
-    } catch (error) {
-      // Metadata folder doesn't exist or can't be read
-      logger.info("No metadata folder found or couldn't read it");
-      return { success: true, modifiedCount: 0 };
-    }
-    
-    logger.info(`Tag update completed: modified ${modifiedCount} files`);
-    return { success: true, modifiedCount };
-    
-  } catch (error) {
-    logger.error("Error updating tag in all clips:", error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.updateTagInAllClips(oldTag, newTag, getSettings);
 });
-
-async function saveCustomNameData(clipName, customName) {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  await ensureDirectoryExists(metadataFolder);
-
-  const customNameFilePath = path.join(
-    metadataFolder,
-    `${clipName}.customname`,
-  );
-  try {
-    await writeFileAtomically(customNameFilePath, customName);
-    logger.info(`Custom name saved successfully for ${clipName}`);
-  } catch (error) {
-    logger.error(`Error saving custom name for ${clipName}:`, error);
-    throw error;
-  }
-}
-
-async function saveTrimData(clipName, trimData) {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  await ensureDirectoryExists(metadataFolder);
-
-  const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
-  try {
-    await writeFileAtomically(trimFilePath, JSON.stringify(trimData));
-    logger.info(`Trim data saved successfully for ${clipName}`);
-    // Log trim activity
-    logActivity('trim', { clipName, start: trimData.start, end: trimData.end });
-  } catch (error) {
-    logger.error(`Error saving trim data for ${clipName}:`, error);
-    throw error;
-  }
-}
-
-async function ensureDirectoryExists(dirPath) {
-  try {
-    await fs.access(dirPath);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      await fs.mkdir(dirPath, { recursive: true });
-    } else {
-      throw error;
-    }
-  }
-}
-
-async function writeFileWithRetry(filePath, data, retries = 3) {
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      await fs.writeFile(filePath, data, { flag: "w" });
-      return;
-    } catch (error) {
-      if (error.code === "EPERM" || error.code === "EACCES") {
-        if (attempt === retries - 1) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 100)); // Wait 100ms before retry
-      } else {
-        throw error;
-      }
-    }
-  }
-}
-
-async function writeFileAtomically(filePath, data) {
-  const tempPath = `${filePath}.tmp`;
-  const dir = path.dirname(filePath);
-
-  try {
-    // Ensure the directory exists
-    await fs.mkdir(dir, { recursive: true });
-
-    await writeFileWithRetry(tempPath, data);
-    await fs.rename(tempPath, filePath);
-  } catch (error) {
-    logger.error(`Error in writeFileAtomically: ${error.message}`);
-    // If rename fails, try direct write as a fallback
-    await writeFileWithRetry(filePath, data);
-  } finally {
-    try {
-      await fs.unlink(tempPath);
-    } catch (error) {
-      // Ignore error if temp file doesn't exist
-      if (error.code !== "ENOENT")
-        logger.error(`Error deleting temp file: ${error.message}`);
-    }
-  }
-}
 
 ipcMain.handle("get-clip-location", () => {
   return settings.clipLocation;
@@ -1001,26 +637,12 @@ ipcMain.handle("open-folder-dialog", async () => {
 });
 
 ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
-  return thumbnailsModule.getThumbnailPath(clipName, loadSettings);
+  return thumbnailsModule.getThumbnailPath(clipName, getSettings);
 });
 
 ipcMain.handle("get-thumbnail-paths-batch", async (event, clipNames) => {
-  return thumbnailsModule.getThumbnailPathsBatch(clipNames, loadSettings);
+  return thumbnailsModule.getThumbnailPathsBatch(clipNames, getSettings);
 });
-
-async function getTrimData(clipName) {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-  const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
-
-  try {
-    const trimData = await fs.readFile(trimFilePath, "utf8");
-    return JSON.parse(trimData);
-  } catch (error) {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  }
-}
 
 app.on('before-quit', () => {
   // Stop periodic saves
@@ -1034,7 +656,7 @@ app.on('before-quit', () => {
 });
 
 ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTime) => {
-  return thumbnailsModule.regenerateThumbnailForTrim(clipName, startTime, loadSettings);
+  return thumbnailsModule.regenerateThumbnailForTrim(clipName, startTime, getSettings);
 });
 
 // In main.js
@@ -1056,17 +678,19 @@ ipcMain.handle('get-default-keybindings', () => {
 });
 
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
-  return thumbnailsModule.generateThumbnailsProgressively(clipNames, event, loadSettings, getTrimData);
+  // Wrapper to call metadata module's getTrimData with getSettings
+  const getTrimDataWrapper = (clipName) => metadataModule.getTrimData(clipName, getSettings);
+  return thumbnailsModule.generateThumbnailsProgressively(clipNames, event, getSettings, getTrimDataWrapper);
 });
 
 
 ipcMain.handle("generate-thumbnail", async (event, clipName) => {
-  return thumbnailsModule.generateThumbnail(clipName, loadSettings);
+  return thumbnailsModule.generateThumbnail(clipName, getSettings);
 });
 
 ipcMain.handle("save-trim", async (event, clipName, start, end) => {
   try {
-    await saveTrimData(clipName, { start, end });
+    await metadataModule.saveTrimData(clipName, { start, end }, getSettings);
     return { success: true };
   } catch (error) {
     logger.error("Error in save-trim handler:", error);
@@ -1076,22 +700,7 @@ ipcMain.handle("save-trim", async (event, clipName, start, end) => {
 
 ipcMain.handle("delete-trim", async (event, clipName) => {
   try {
-    const clipsFolder = settings.clipLocation;
-    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-    const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
-    
-    // Delete the trim file if it exists
-    try {
-      await fs.unlink(trimFilePath);
-      logger.info(`Deleted trim data for ${clipName}`);
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        logger.info(`No trim data file found for ${clipName} (already deleted or never existed)`);
-      } else {
-        throw error;
-      }
-    }
-    
+    await metadataModule.deleteTrimData(clipName, getSettings);
     return { success: true };
   } catch (error) {
     logger.error("Error in delete-trim handler:", error);
@@ -1200,15 +809,15 @@ ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => 
 });
 
 ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
-  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, loadSettings);
+  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, getSettings);
 });
 
 ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
-  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, loadSettings);
+  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, getSettings);
 });
 
 ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath) => {
-  return ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, loadSettings);
+  return ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, getSettings);
 });
 
 ipcMain.handle('get-tag-preferences', async () => {
@@ -1290,35 +899,11 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
 });
 
 ipcMain.handle('save-volume-range', async (event, clipName, volumeData) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
-
-  try {
-    await writeFileAtomically(volumeRangeFilePath, JSON.stringify(volumeData));
-    logger.info(`Volume range data saved successfully for ${clipName}`);
-    return { success: true };
-  } catch (error) {
-    logger.error(`Error saving volume range for ${clipName}:`, error);
-    return { success: false, error: error.message };
-  }
+  return metadataModule.saveVolumeRange(clipName, volumeData, getSettings);
 });
 
 ipcMain.handle('get-volume-range', async (event, clipName) => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
-
-  try {
-    const volumeData = await fs.readFile(volumeRangeFilePath, 'utf8');
-    return JSON.parse(volumeData);
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return null; // No volume range data exists
-    }
-    logger.error(`Error reading volume range for ${clipName}:`, error);
-    throw error;
-  }
+  return metadataModule.getVolumeRange(clipName, getSettings);
 });
 
 // Handler to log watch sessions from the renderer
@@ -1330,42 +915,7 @@ ipcMain.handle('log-watch-session', (event, sessionData) => {
 });
 
 ipcMain.handle("get-game-icon", async (event, clipName) => {
-  try {
-    const clipsFolder = settings.clipLocation;
-    const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-    const gameInfoPath = path.join(metadataFolder, `${clipName}.gameinfo`);
-
-    // Attempt to read the optional .gameinfo file
-    let raw;
-    try {
-      raw = await fs.readFile(gameInfoPath, "utf8");
-    } catch {
-      return null; // no metadata
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return null; // malformed json
-    }
-
-    const response = { path: null, title: parsed.window_title || null };
-
-    if (parsed.icon_file) {
-      const iconPath = path.join(clipsFolder, "icons", parsed.icon_file);
-      try {
-        await fs.access(iconPath);
-        response.path = iconPath;
-      } catch {
-        // icon missing -> leave null
-      }
-    }
-
-    return response;
-  } catch {
-    return null;
-  }
+  return metadataModule.getGameIcon(clipName, getSettings);
 });
 
 const LAST_CLIPS_FILE = path.join(app.getPath('userData'), 'last-clips.json');
