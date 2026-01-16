@@ -27,8 +27,6 @@ const readify = require("readify");
 const { logActivity } = require('./utils/activity-tracker');
 const { createDiagnosticsBundle } = require('./diagnostics/collector');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
-const DiscordRPC = require('discord-rpc');
-const clientId = '1264368321013219449';
 const IDLE_TIMEOUT = 5 * 60 * 1000;
 
 // FFmpeg module
@@ -43,6 +41,9 @@ const metadataModule = require('./main/metadata');
 
 // File watcher module
 const fileWatcherModule = require('./main/file-watcher');
+
+// Discord RPC module
+const discordModule = require('./main/discord');
 
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
@@ -101,7 +102,7 @@ async function createWindow() {
 
   // Skip Discord RPC in benchmark mode to avoid external dependencies
   if (settings.enableDiscordRPC && !isBenchmarkMode) {
-    initDiscordRPC();
+    discordModule.initDiscordRPC(getSettings);
   }
 
   mainWindow = new BrowserWindow({
@@ -159,7 +160,7 @@ async function createWindow() {
   mainWindow.on('blur', () => {
     if (settings.enableDiscordRPC) {
       idleTimer = setTimeout(() => {
-        clearDiscordPresence();
+        discordModule.clearDiscordPresence();
       }, IDLE_TIMEOUT);
     }
   });
@@ -173,7 +174,7 @@ async function createWindow() {
 
   powerMonitor.on('lock-screen', () => {
     if (settings.enableDiscordRPC) {
-      clearDiscordPresence();
+      discordModule.clearDiscordPresence();
     }
   });
 
@@ -229,69 +230,24 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-let rpc = null;
-let rpcReady = false;
-
-function initDiscordRPC() {
-  rpc = new DiscordRPC.Client({ transport: 'ipc' });
-  rpc.on('ready', () => {
-    logger.info('Discord RPC connected successfully');
-    rpcReady = true;
-    updateDiscordPresence('Browsing clips');
-  });
-  rpc.login({ clientId }).catch(error => {
-    logger.error('Failed to initialize Discord RPC:', error);
-  });
-}
-
-function updateDiscordPresence(details, state = null) {
-  if (!rpcReady || !settings.enableDiscordRPC) {
-    logger.info('RPC not ready or disabled');
-    return;
-  }
-
-  const activity = {
-    details: String(details),
-    largeImageKey: 'app_logo',
-    largeImageText: 'Clip Library',
-    buttons: [{ label: 'View on GitHub', url: 'https://github.com/yuma-dev/clip-library' }]
-  };
-
-  if (state !== null) {
-    activity.state = String(state);
-  }
-
-  rpc.setActivity(activity).catch(error => {
-    logger.error('Failed to update Discord presence:', error);
-  });
-}
-
-function clearDiscordPresence() {
-  if (rpcReady) {
-    rpc.clearActivity().catch(logger.error);
-  }
-}
-
 ipcMain.handle('update-discord-presence', (event, details, state, startTimestamp) => {
   clearTimeout(idleTimer);
-  updateDiscordPresence(details, state, startTimestamp);
+  discordModule.updateDiscordPresence(details, state);
 });
 
 ipcMain.handle('toggle-discord-rpc', async (event, enable) => {
   settings.enableDiscordRPC = enable;
   await saveSettings(settings);
-  if (enable && !rpc) {
-    initDiscordRPC();
-  } else if (!enable && rpc) {
-    clearDiscordPresence();
-    rpc.destroy();
-    rpc = null;
-    rpcReady = false;
+  if (enable) {
+    await discordModule.initDiscordRPC(getSettings);
+  } else {
+    discordModule.clearDiscordPresence();
+    discordModule.destroyDiscordRPC();
   }
 });
 
 ipcMain.handle('clear-discord-presence', () => {
-  clearDiscordPresence();
+  discordModule.clearDiscordPresence();
 });
 
 ipcMain.handle('get-settings', () => {
