@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE (+ REORG + FILE WATCHER COMPLETE)
+## Status: PHASES 1-3 COMPLETE (+ REORG + FILE WATCHER + DISCORD RPC COMPLETE)
 **Last Updated:** 2026-01-16
-**Current Phase:** Core modularization + repo organization complete. Remaining optional phases: Discord RPC, Clips management.
+**Current Phase:** Core modularization + repo organization complete. Remaining optional phase: Clips management.
 
 ---
 
@@ -22,7 +22,7 @@ clip-library/
 │   ├── file-watcher.js     # ✅ Chokidar setup, new clip detection
 │   ├── updater.js          # ✅ GitHub release-based update checking
 │   ├── steelseries-processor.js # ✅ Import tool for SteelSeries GG Moments clips
-│   ├── discord.js          # 🔮 Discord RPC integration
+│   ├── discord.js          # ✅ Discord RPC integration
 │   └── clips.js            # 🔮 Clip list management, periodic saves
 ├── renderer/               # ✅ Extracted renderer helpers (more optional splitting later)
 │   ├── keybinding-manager.js # ✅ Keyboard shortcut handling
@@ -82,7 +82,7 @@ main.js
   ├── main/file-watcher.js → depends on utils/logger.js
   ├── main/updater.js → depends on utils/logger.js
   ├── main/steelseries-processor.js (standalone)
-  ├── main/discord.js (standalone)
+  ├── main/discord.js → depends on utils/logger.js
   └── main/clips.js → depends on main/metadata.js
 
  renderer.js
