@@ -1,5 +1,5 @@
 if (require("electron-squirrel-startup")) return;
-const { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, powerMonitor, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./logger');
@@ -17,15 +17,11 @@ if (isBenchmarkMode) {
     logger.error('[Benchmark] Failed to load harness:', e);
   }
 }
-const { exec, execFile } = require("child_process");
-const util = require("util");
-const execPromise = util.promisify(exec);
 const { checkForUpdates } = require('./updater');
 const isDev = !app.isPackaged;
 const path = require("path");
 const chokidar = require("chokidar");
 const fs = require("fs").promises;
-const os = require("os");
 const crypto = require("crypto");
 const { loadSettings, saveSettings } = require("./settings-manager");
 const SteelSeriesProcessor = require('./steelseries-processor');
@@ -36,9 +32,11 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const DiscordRPC = require('discord-rpc');
 const clientId = '1264368321013219449';
 const IDLE_TIMEOUT = 5 * 60 * 1000;
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
-const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar', 'app.asar.unpacked');
+
+// FFmpeg module
+const ffmpegModule = require('./main/ffmpeg');
+const { ffmpeg, ffprobeAsync, generateScreenshot } = ffmpegModule;
+
 const CONCURRENT_GENERATIONS = 4; // Maximum concurrent FFmpeg processes
 const thumbnailQueue = [];
 const THUMBNAIL_RETRY_ATTEMPTS = 3;
@@ -46,15 +44,9 @@ const FAST_PATH_THRESHOLD = 12;
 let isProcessingQueue = false;
 let completedThumbnails = 0;
 
-ffmpeg.setFfmpegPath(ffmpegPath);
-ffmpeg.setFfprobePath(ffprobePath);
-
-execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
-  if (error) {
-    logger.error('Error getting ffmpeg version:', error);
-  } else {
-    logger.info('FFmpeg version:', stdout);
-  }
+// FFmpeg is initialized in the module, verify on startup
+ffmpegModule.initFFmpeg().catch(err => {
+  logger.error('FFmpeg initialization failed:', err);
 });
 
 function sendLog(window, type, message) {
@@ -65,17 +57,14 @@ function sendLog(window, type, message) {
 
 // Log ffmpeg version
 ipcMain.handle('get-ffmpeg-version', async (event) => {
-  return new Promise((resolve, reject) => {
-    execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
-      if (error) {
-        sendLog(event.sender.getOwnerBrowserWindow(), 'error', `Error getting ffmpeg version: ${error}`);
-        reject(error);
-      } else {
-        sendLog(event.sender.getOwnerBrowserWindow(), 'info', `FFmpeg version: ${stdout}`);
-        resolve(stdout);
-      }
-    });
-  });
+  try {
+    const version = await ffmpegModule.getFFmpegVersion();
+    sendLog(event.sender.getOwnerBrowserWindow(), 'info', `FFmpeg version: ${version}`);
+    return version;
+  } catch (error) {
+    sendLog(event.sender.getOwnerBrowserWindow(), 'error', `Error getting ffmpeg version: ${error}`);
+    throw error;
+  }
 });
 
 let idleTimer;
@@ -1043,6 +1032,25 @@ ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
   }
 });
 
+// Batch thumbnail path lookup - eliminates N individual IPC calls
+ipcMain.handle("get-thumbnail-paths-batch", async (event, clipNames) => {
+  const results = {};
+
+  await Promise.all(clipNames.map(async (clipName) => {
+    const clipPath = path.join(settings.clipLocation, clipName);
+    const thumbnailPath = generateThumbnailPath(clipPath);
+
+    try {
+      await fs.access(thumbnailPath);
+      results[clipName] = thumbnailPath;
+    } catch (error) {
+      results[clipName] = null;
+    }
+  }));
+
+  return results;
+});
+
 async function getTrimData(clipName) {
   const clipsFolder = settings.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
@@ -1613,296 +1621,15 @@ ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => 
 });
 
 ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
-  const inputPath = path.join(settings.clipLocation, clipName);
-  const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${clipName}`);
-
-  try {
-    await exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed);
-    
-    // Add clipboard functionality here
-    if (!savePath) {
-      if (process.platform === "win32") {
-        clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
-      } else {
-        clipboard.writeText(outputPath);
-      }
-    }
-    
-    // Log export activity
-    logActivity('export', {
-      clipName,
-      format: 'video',
-      destination: savePath ? 'file' : 'clipboard',
-      start,
-      end,
-      volume,
-      speed
-    });
-    return { success: true, path: outputPath };
-  } catch (error) {
-    logger.error("Error exporting video:", error);
-    return { success: false, error: error.message };
-  }
+  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, loadSettings);
 });
 
 ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
-  const inputPath = path.join(settings.clipLocation, clipName);
-  const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${clipName}`);
-
-  try {
-    await exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed);
-    
-    // Add clipboard functionality here
-    if (process.platform === "win32") {
-      clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
-    } else {
-      clipboard.writeText(outputPath);
-    }
-    
-    // Log export activity
-    logActivity('export', {
-      clipName,
-      format: 'video',
-      destination: 'trimmed_clipboard', // Specific destination for this action
-      start,
-      end,
-      volume,
-      speed
-    });
-    return { success: true, path: outputPath };
-  } catch (error) {
-    logger.error("Error exporting trimmed video:", error);
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.on('ffmpeg-fallback', () => {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    window.webContents.send('show-fallback-notice');
-  });
-});
-
-// In main.js
-
-async function exportVideoWithFallback(inputPath, outputPath, start, end, volume, speed) {
-  // Load volume range data if it exists
-  const clipName = path.basename(inputPath);
-  const metadataFolder = path.join(path.dirname(inputPath), '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
-  
-  let volumeData = null;
-  try {
-    const volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
-    volumeData = JSON.parse(volumeDataRaw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      logger.error('Error reading volume range data:', error);
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    const duration = end - start;
-    let usingFallback = false;
-    let lastProgressTime = Date.now();
-    let totalFrames = 0;
-    let processedFrames = 0;
-    
-    ffmpeg.ffprobe(inputPath, async (err, metadata) => {
-      if (err) {
-        logger.error('Error getting video info:', err);
-        return;
-      }
-      
-      const fps = eval(metadata.streams[0].r_frame_rate);
-      totalFrames = Math.ceil(duration * fps);
-      
-      const settings = await loadSettings();
-      const quality = settings.exportQuality;
-
-      let command = ffmpeg(inputPath)
-        .setStartTime(start)
-        .setDuration(duration)
-        .videoFilters(`setpts=${1/speed}*PTS`)
-        .audioFilters(`atempo=${speed}`);
-
-      // Apply volume filter
-      if (volumeData) {
-        // Convert absolute timestamps to relative timestamps based on trim
-        const relativeStart = Math.max(0, volumeData.start - start);
-        const relativeEnd = Math.min(duration, volumeData.end - start);
-        
-        if (relativeStart < duration && relativeEnd > 0) {
-          // Complex volume filter for the specified range
-          command.audioFilters([
-            `volume=${volume}`,
-            `volume=${volumeData.level}:enable='between(t,${relativeStart},${relativeEnd})'`
-          ]);
-        } else {
-          command.audioFilters(`volume=${volume}`);
-        }
-      } else {
-        command.audioFilters(`volume=${volume}`);
-      }
-
-      switch (quality) {
-        case 'lossless':
-          command.outputOptions([
-            '-c:v h264_nvenc',
-            '-preset p7',
-            '-rc:v constqp',
-            '-qp 16',
-            '-profile:v high',
-            '-b:a 256k'
-          ]);
-          break;
-        case 'high':
-          command.outputOptions([
-            '-c:v h264_nvenc',
-            '-preset p4',
-            '-rc vbr',
-            '-cq 20',
-            '-b:v 8M',
-            '-maxrate 10M',
-            '-bufsize 10M',
-            '-profile:v high',
-            '-rc-lookahead 32'
-          ]);
-          break;
-        default: // discord
-          command.outputOptions([
-            '-c:v h264_nvenc',
-            '-preset slow',
-            '-crf 23'
-          ]);
-      }
-
-      command.outputOptions([
-        '-progress pipe:1',
-        '-stats_period 0.1'
-      ])
-      .on('start', (commandLine) => {
-        logger.info('Spawned FFmpeg with command: ' + commandLine);
-      })
-      .on('stderr', (stderrLine) => {
-        // Parse frame information from stderr
-        const frameMatch = stderrLine.match(/frame=\s*(\d+)/);
-        if (frameMatch) {
-          processedFrames = parseInt(frameMatch[1]);
-          const progress = Math.min((processedFrames / totalFrames) * 100, 99.9);
-          
-          // Only emit progress if enough time has passed or it's a significant change
-          const now = Date.now();
-          if (now - lastProgressTime >= 100) { // Throttle updates to max 10 per second
-            ipcMain.emit('ffmpeg-progress', progress);
-            lastProgressTime = now;
-          }
-        }
-      })
-      .on('error', (err, stdout, stderr) => {
-        logger.warn('Hardware encoding failed, falling back to software encoding');
-        logger.error('Error:', err.message);
-        logger.error('stdout:', stdout);
-        logger.error('stderr:', stderr);
-        
-        usingFallback = true;
-        ipcMain.emit('ffmpeg-fallback');
-
-        // Reset progress tracking for fallback
-        processedFrames = 0;
-        lastProgressTime = Date.now();
-
-        ffmpeg(inputPath)
-          .setStartTime(start)
-          .setDuration(duration)
-          .audioFilters(`volume=${volume}`)
-          .videoFilters(`setpts=${1/speed}*PTS`)
-          .audioFilters(`atempo=${speed}`)
-          .outputOptions([
-            '-c:v libx264',
-            '-preset medium',
-            '-crf 23',
-            '-progress pipe:1',
-            '-stats_period 0.1'
-          ])
-          .on('stderr', (stderrLine) => {
-            const frameMatch = stderrLine.match(/frame=\s*(\d+)/);
-            if (frameMatch) {
-              processedFrames = parseInt(frameMatch[1]);
-              const progress = Math.min((processedFrames / totalFrames) * 100, 99.9);
-              
-              const now = Date.now();
-              if (now - lastProgressTime >= 100) {
-                ipcMain.emit('ffmpeg-progress', progress);
-                lastProgressTime = now;
-              }
-            }
-          })
-          .on('end', () => {
-            ipcMain.emit('ffmpeg-progress', 100);
-            resolve(usingFallback);
-          })
-          .on('error', (err, stdout, stderr) => {
-            logger.error('FFmpeg error:', err.message);
-            logger.error('FFmpeg stdout:', stdout);
-            logger.error('FFmpeg stderr:', stderr);
-            reject(err);
-          })
-          .save(outputPath);
-      })
-      .on('end', () => {
-        ipcMain.emit('ffmpeg-progress', 100);
-        resolve(usingFallback);
-      })
-      .save(outputPath);
-    });
-  });
-}
-
-ipcMain.on('ffmpeg-progress', (percent) => {
-  // Send progress to all renderer processes
-  BrowserWindow.getAllWindows().forEach((window) => {
-    window.webContents.send('export-progress', percent);
-  });
+  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, loadSettings);
 });
 
 ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath) => {
-  const inputPath = path.join(settings.clipLocation, clipName);
-  const outputPath = savePath || path.join(os.tmpdir(), `audio_${Date.now()}_${path.parse(clipName).name}.mp3`);
-
-  // Adjust duration based on speed
-  const adjustedDuration = (end - start) / speed;
-
-  await new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .setStartTime(start)
-      .setDuration(adjustedDuration)
-      .audioFilters(`volume=${volume},atempo=${speed}`)
-      .output(outputPath)
-      .audioCodec("libmp3lame")
-      .on("end", resolve)
-      .on("error", reject)
-      .run();
-  });
-
-  if (!savePath) {
-    if (process.platform === "win32") {
-      clipboard.writeBuffer("FileNameW", Buffer.from(outputPath + "\0", "ucs2"));
-    } else {
-      clipboard.writeText(outputPath);
-    }
-  }
-
-  // Log export activity
-  logActivity('export', {
-    clipName,
-    format: 'audio',
-    destination: savePath ? 'file' : 'clipboard',
-    start,
-    end,
-    volume,
-    speed
-  });
-  return { success: true, path: outputPath };
+  return ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, loadSettings);
 });
 
 ipcMain.handle('get-tag-preferences', async () => {

@@ -14,3 +14,4 @@ __pycache__
 # Ignore files (and directories) starting with tmpclaude
 tmpclaude*
 package-lock.json
+CLAUDE.md
