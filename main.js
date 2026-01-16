@@ -20,7 +20,6 @@ if (isBenchmarkMode) {
 const { checkForUpdates } = require('./updater');
 const isDev = !app.isPackaged;
 const path = require("path");
-const chokidar = require("chokidar");
 const fs = require("fs").promises;
 const { loadSettings, saveSettings } = require("./settings-manager");
 const SteelSeriesProcessor = require('./steelseries-processor');
@@ -41,6 +40,9 @@ const thumbnailsModule = require('./main/thumbnails');
 
 // Metadata module
 const metadataModule = require('./main/metadata');
+
+// File watcher module
+const fileWatcherModule = require('./main/file-watcher');
 
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
@@ -88,7 +90,13 @@ async function createWindow() {
   await thumbnailsModule.initThumbnailCache();
 
   if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
-  setupFileWatcher(settings.clipLocation);
+  fileWatcherModule.setupFileWatcher(settings.clipLocation, {
+    onNewClip: (fileName) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('new-clip-added', fileName);
+      }
+    }
+  });
   if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
 
   // Skip Discord RPC in benchmark mode to avoid external dependencies
@@ -378,43 +386,6 @@ ipcMain.handle("get-clips", async () => {
     return [];
   }
 });
-
-function setupFileWatcher(clipLocation) {
-  if (!clipLocation) {
-    logger.warn('No clip location provided for file watcher');
-    return;
-  }
-
-  // Clean up any existing watcher
-  if (global.fileWatcher) {
-    global.fileWatcher.close();
-  }
-
-  const watcher = chokidar.watch(clipLocation, {
-    ignored: /(^|[\/\\])\../, // ignore dotfiles
-    persistent: true,
-    ignoreInitial: true,  // Don't fire events for existing files
-    awaitWriteFinish: {   // Wait for file to be fully written
-      stabilityThreshold: 2000,
-      pollInterval: 100
-    }
-  });
-
-  watcher.on('add', async (filePath) => {
-    const ext = path.extname(filePath).toLowerCase();
-    if (['.mp4', '.avi', '.mov', '.mkv', '.webm'].includes(ext)) {
-      const fileName = path.basename(filePath);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('new-clip-added', fileName);
-      }
-    }
-  });
-
-  // Store watcher reference for cleanup
-  global.fileWatcher = watcher;
-
-  logger.info(`File watcher set up for: ${clipLocation}`);
-}
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
