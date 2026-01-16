@@ -10,6 +10,9 @@ const keybinds = require('./renderer/keybinding-manager');
 // Gamepad manager for controller support
 const GamepadManager = require('./renderer/gamepad-manager');
 
+// Centralized state management
+const state = require('./renderer/state');
+
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
 let benchmarkHarness = null;
@@ -54,31 +57,8 @@ const volumeIcons = {
 const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
 const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
 
-let audioContext, gainNode;
-let initialPlaybackTime = 0;
-let lastActivityTime = Date.now();
-let currentClipList = [];
-let currentClip = null;
-let trimStartTime = 0;
-let trimEndTime = 0;
-let isDragging = null;
-let isDraggingTrim = false;
-let dragStartX = 0;
-let dragThreshold = 5; // pixels
-let lastMousePosition = { x: 0, y: 0 };
-let isMouseDown = false;
-let clipLocation;
-let isLoading = false;
-let currentCleanup = null;
-let allClips = [];
-let contextMenuClip = null;
-
-// Cache for preloaded clip data (improves open clip performance)
-const clipDataCache = new Map();
-const CACHE_EXPIRY_MS = 60000; // 1 minute cache
-
-// Cache for thumbnail paths - batch fetched to avoid N individual IPC calls
-const thumbnailPathCache = new Map();
+// All state variables moved to renderer/state.js
+// Access via state.getXxx() and state.setXxx() methods
 
 /**
  * Batch fetch thumbnail paths for multiple clips in a single IPC call
@@ -90,7 +70,7 @@ async function prefetchThumbnailPaths(clipNames) {
     const results = await ipcRenderer.invoke("get-thumbnail-paths-batch", clipNames);
     // Store results in cache
     for (const [clipName, thumbnailPath] of Object.entries(results)) {
-      thumbnailPathCache.set(clipName, thumbnailPath);
+      state.thumbnailPathCache.set(clipName, thumbnailPath);
     }
   } catch (error) {
     logger.warn("Failed to batch fetch thumbnail paths:", error.message);
@@ -102,12 +82,12 @@ async function prefetchThumbnailPaths(clipNames) {
  */
 async function getThumbnailPath(clipName) {
   // Check cache first
-  if (thumbnailPathCache.has(clipName)) {
-    return thumbnailPathCache.get(clipName);
+  if (state.thumbnailPathCache.has(clipName)) {
+    return state.thumbnailPathCache.get(clipName);
   }
   // Fallback to individual IPC call (for edge cases)
   const path = await ipcRenderer.invoke("get-thumbnail-path", clipName);
-  thumbnailPathCache.set(clipName, path);
+  state.thumbnailPathCache.set(clipName, path);
   return path;
 }
 
@@ -116,8 +96,8 @@ async function getThumbnailPath(clipName) {
  */
 async function preloadClipData(originalName) {
   // Check if already cached and not expired
-  const cached = clipDataCache.get(originalName);
-  if (cached && (Date.now() - cached.timestamp) < CACHE_EXPIRY_MS) {
+  const cached = state.clipDataCache.get(originalName);
+  if (cached && (Date.now() - cached.timestamp) < state.CACHE_EXPIRY_MS) {
     return cached.data;
   }
 
@@ -131,12 +111,12 @@ async function preloadClipData(originalName) {
     ]);
 
     const data = { clipInfo, trimData, clipTags, thumbnailPath };
-    clipDataCache.set(originalName, { data, timestamp: Date.now() });
-    
+    state.clipDataCache.set(originalName, { data, timestamp: Date.now() });
+
     // Limit cache size
-    if (clipDataCache.size > 50) {
-      const oldestKey = clipDataCache.keys().next().value;
-      clipDataCache.delete(oldestKey);
+    if (state.clipDataCache.size > 50) {
+      const oldestKey = state.clipDataCache.keys().next().value;
+      state.clipDataCache.delete(oldestKey);
     }
 
     return data;
@@ -150,71 +130,12 @@ async function preloadClipData(originalName) {
  * Get cached clip data or load fresh
  */
 async function getCachedClipData(originalName) {
-  const cached = clipDataCache.get(originalName);
-  if (cached && (Date.now() - cached.timestamp) < CACHE_EXPIRY_MS) {
+  const cached = state.clipDataCache.get(originalName);
+  if (cached && (Date.now() - cached.timestamp) < state.CACHE_EXPIRY_MS) {
     return cached.data;
   }
   return null;
 }
-let isTagsDropdownOpen = false;
-let isFrameStepping = false;
-let frameStepDirection = 0;
-let lastFrameStepTime = 0;
-let pendingFrameStep = false;
-let controlsTimeout;
-let isMouseOverControls = false;
-let isRendering = false;
-let deletionTooltip = null;
-let deletionTimeout = null;
-let isSpaceHeld = false;
-let spaceHoldTimeoutId = null;
-let wasSpaceHoldBoostActive = false;
-let speedBeforeSpaceHold = 1;
-let settings;
-let discordPresenceInterval;
-let clipStartTime;
-let elapsedTime = 0;
-let loadingScreen;
-let processingTimeout = null;
-let diagnosticsInProgress = false;
-let diagnosticsStatusEl = null;
-let generateDiagnosticsBtn = null;
-let diagnosticsButtonDefaultLabel = 'Generate Zip';
-let activePreview = null;
-let previewCleanupTimeout = null;
-let isGeneratingThumbnails = false;
-let currentGenerationTotal = 0;
-let completedThumbnails = 0;
-let thumbnailGenerationStartTime = 0;
-let selectedClips = new Set();
-let selectionStartIndex = -1;
-let selectedTags = new Set();
-let volumeStartTime = 0;
-let volumeEndTime = 0;
-let volumeLevel = 0; // Volume level for the range
-let isVolumeDragging = null;
-let volumeStartElement = null;
-let volumeEndElement = null;
-let volumeRegionElement = null;
-let volumeDragControl = null;
-let isVolumeControlsVisible = false;
-let savedTagSelections = new Set(); // Permanent selections that are saved
-let temporaryTagSelections = new Set(); // Temporary (Ctrl+click) selections
-let isInTemporaryMode = false; // Whether we're in temporary selection mode
-
-// Variables for managing auto-seek behavior
-let isAutoResetDisabled = false; // True when user manually seeked outside bounds
-
-// Gamepad manager instance
-let gamepadManager = null;
-let wasLastSeekManual = false; // Track if the last seek was manual
-
-// Grid navigation state
-let currentGridFocusIndex = 0; // Currently selected clip index in the grid
-let gridNavigationEnabled = false; // Whether grid navigation is active
-let lastGridNavigationTime = 0; // Throttle grid navigation
-const GRID_NAVIGATION_THROTTLE = 200; // 200ms between movements
-let mouseKeyboardListenersSetup = false; // Track if we've set up mouse/keyboard listeners
 
 // Ambient Glow Manager - YouTube-style background glow effect
 class AmbientGlowManager {
@@ -545,7 +466,7 @@ window.clipHoverEffects = {
     console.log(`Transition duration set to ${value}`);
   },
 
-  // Glow canvas settings
+  // Glow canvas state.settings
   glowBlur: (value) => {
     const canvas = document.getElementById('clip-glow-canvas');
     if (canvas) {
@@ -660,7 +581,7 @@ UTILITIES:
 // Global ambient glow manager instance
 let ambientGlowManager = null;
 
-// Apply ambient glow settings from the settings object
+// Apply ambient glow state.settings from the state.settings object
 function applyAmbientGlowSettings(glowSettings) {
   if (!ambientGlowCanvas) return;
   
@@ -670,7 +591,7 @@ function applyAmbientGlowSettings(glowSettings) {
   ambientGlowCanvas.style.filter = `blur(${blur}px) saturate(${saturation})`;
   ambientGlowCanvas.style.opacity = opacity;
   
-  // Update manager settings if it exists
+  // Update manager state.settings if it exists
   if (ambientGlowManager) {
     ambientGlowManager.frameInterval = 1000 / fps;
     ambientGlowManager.blendFactor = smoothing;
@@ -687,14 +608,14 @@ function applyAmbientGlowSettings(glowSettings) {
 
 // Grid navigation functions
 function enableGridNavigation() {
-  gridNavigationEnabled = true;
-  currentGridFocusIndex = 0;
+  state.gridNavigationEnabled = true;
+  state.currentGridFocusIndex = 0;
   updateGridSelection();
   setupMouseKeyboardDetection(); // Set up detection to hide on mouse/keyboard use
 }
 
 function disableGridNavigation() {
-  gridNavigationEnabled = false;
+  state.gridNavigationEnabled = false;
   // Remove focus from all clips
   document.querySelectorAll('.clip-item').forEach(clip => {
     clip.classList.remove('controller-focused');
@@ -711,13 +632,13 @@ function getVisibleClips() {
 }
 
 function updateGridSelection() {
-  if (!gridNavigationEnabled) return;
+  if (!state.gridNavigationEnabled) return;
   
   const visibleClips = getVisibleClips();
   if (visibleClips.length === 0) return;
   
   // Clamp the focus index to valid range
-  currentGridFocusIndex = Math.max(0, Math.min(currentGridFocusIndex, visibleClips.length - 1));
+  state.currentGridFocusIndex = Math.max(0, Math.min(state.currentGridFocusIndex, visibleClips.length - 1));
   
   // Remove focus from all clips
   visibleClips.forEach(clip => {
@@ -725,11 +646,11 @@ function updateGridSelection() {
   });
   
   // Add focus to current clip
-  if (visibleClips[currentGridFocusIndex]) {
-    visibleClips[currentGridFocusIndex].classList.add('controller-focused');
+  if (visibleClips[state.currentGridFocusIndex]) {
+    visibleClips[state.currentGridFocusIndex].classList.add('controller-focused');
     
     // Scroll to keep the focused clip visible
-    visibleClips[currentGridFocusIndex].scrollIntoView({
+    visibleClips[state.currentGridFocusIndex].scrollIntoView({
       behavior: 'smooth',
       block: 'nearest',
       inline: 'nearest'
@@ -738,60 +659,60 @@ function updateGridSelection() {
 }
 
 function moveGridSelection(direction) {
-  if (!gridNavigationEnabled) return;
+  if (!state.gridNavigationEnabled) return;
   
   // Throttle navigation to prevent spam
   const now = Date.now();
-  if (now - lastGridNavigationTime < GRID_NAVIGATION_THROTTLE) {
+  if (now - state.lastGridNavigationTime < GRID_NAVIGATION_THROTTLE) {
     return;
   }
-  lastGridNavigationTime = now;
+  state.lastGridNavigationTime = now;
   
   const visibleClips = getVisibleClips();
   if (visibleClips.length === 0) return;
   
-  const currentClip = visibleClips[currentGridFocusIndex];
-  if (!currentClip) return;
+  state.currentClip = visibleClips[state.currentGridFocusIndex];
+  if (!state.currentClip) return;
   
-  let newIndex = currentGridFocusIndex;
+  let newIndex = state.currentGridFocusIndex;
   
   switch (direction) {
     case 'left':
       // Simple: move to previous clip
-      if (currentGridFocusIndex > 0) {
-        newIndex = currentGridFocusIndex - 1;
+      if (state.currentGridFocusIndex > 0) {
+        newIndex = state.currentGridFocusIndex - 1;
       }
       break;
       
     case 'right':
       // Simple: move to next clip
-      if (currentGridFocusIndex < visibleClips.length - 1) {
-        newIndex = currentGridFocusIndex + 1;
+      if (state.currentGridFocusIndex < visibleClips.length - 1) {
+        newIndex = state.currentGridFocusIndex + 1;
       }
       break;
       
     case 'up':
       // Find closest clip above
-      newIndex = findClipInDirection(visibleClips, currentGridFocusIndex, 'up');
+      newIndex = findClipInDirection(visibleClips, state.currentGridFocusIndex, 'up');
       break;
       
     case 'down':
       // Find closest clip below
-      newIndex = findClipInDirection(visibleClips, currentGridFocusIndex, 'down');
+      newIndex = findClipInDirection(visibleClips, state.currentGridFocusIndex, 'down');
       break;
   }
   
-  if (newIndex !== currentGridFocusIndex && newIndex >= 0 && newIndex < visibleClips.length) {
-    currentGridFocusIndex = newIndex;
+  if (newIndex !== state.currentGridFocusIndex && newIndex >= 0 && newIndex < visibleClips.length) {
+    state.currentGridFocusIndex = newIndex;
     updateGridSelection();
   }
 }
 
 function findClipInDirection(visibleClips, currentIndex, direction) {
-  const currentClip = visibleClips[currentIndex];
-  if (!currentClip) return currentIndex;
+  state.currentClip = visibleClips[currentIndex];
+  if (!state.currentClip) return currentIndex;
   
-  const currentRect = currentClip.getBoundingClientRect();
+  const currentRect = state.currentClip.getBoundingClientRect();
   const currentCenterX = currentRect.left + currentRect.width / 2;
   const currentCenterY = currentRect.top + currentRect.height / 2;
   
@@ -837,12 +758,12 @@ function findClipInDirection(visibleClips, currentIndex, direction) {
 }
 
 function openCurrentGridSelection() {
-  if (!gridNavigationEnabled) return;
+  if (!state.gridNavigationEnabled) return;
   
   const visibleClips = getVisibleClips();
-  if (visibleClips.length === 0 || currentGridFocusIndex >= visibleClips.length) return;
+  if (visibleClips.length === 0 || state.currentGridFocusIndex >= visibleClips.length) return;
   
-  const selectedClip = visibleClips[currentGridFocusIndex];
+  const selectedClip = visibleClips[state.currentGridFocusIndex];
   if (!selectedClip) return;
   
   const originalName = selectedClip.dataset.originalName;
@@ -856,7 +777,7 @@ function openCurrentGridSelection() {
 
 // Mouse and keyboard detection to hide controller selection
 function setupMouseKeyboardDetection() {
-  if (mouseKeyboardListenersSetup) return; // Already set up
+  if (state.mouseKeyboardListenersSetup) return; // Already set up
   
   // Mouse movement detection
   document.addEventListener('mousemove', hideControllerSelectionOnInput, { passive: true });
@@ -867,21 +788,21 @@ function setupMouseKeyboardDetection() {
   // Keyboard detection (but exclude controller-related keys in video player)
   document.addEventListener('keydown', hideControllerSelectionOnKeyboard, { passive: true });
   
-  mouseKeyboardListenersSetup = true;
+  state.mouseKeyboardListenersSetup = true;
 }
 
 function removeMouseKeyboardDetection() {
-  if (!mouseKeyboardListenersSetup) return;
+  if (!state.mouseKeyboardListenersSetup) return;
   
   document.removeEventListener('mousemove', hideControllerSelectionOnInput);
   document.removeEventListener('mousedown', hideControllerSelectionOnInput);
   document.removeEventListener('keydown', hideControllerSelectionOnKeyboard);
   
-  mouseKeyboardListenersSetup = false;
+  state.mouseKeyboardListenersSetup = false;
 }
 
 function hideControllerSelectionOnInput() {
-  if (gridNavigationEnabled) {
+  if (state.gridNavigationEnabled) {
     disableGridNavigation();
   }
 }
@@ -900,7 +821,7 @@ function hideControllerSelectionOnKeyboard(e) {
     // Hide if it's a letter/number key or other non-controller key
     if (!allowedKeys.includes(e.key) && 
         e.key.length === 1 && // Single character keys (letters, numbers)
-        gridNavigationEnabled) {
+        state.gridNavigationEnabled) {
       disableGridNavigation();
     }
   } else {
@@ -909,7 +830,7 @@ function hideControllerSelectionOnKeyboard(e) {
       'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', // D-pad equivalent
     ];
     
-    if (!controllerKeys.includes(e.key) && gridNavigationEnabled) {
+    if (!controllerKeys.includes(e.key) && state.gridNavigationEnabled) {
       disableGridNavigation();
     }
   }
@@ -920,9 +841,9 @@ function resetControlsTimeout() {
   if (typeof showControls === 'function') {
     showControls();
   }
-  clearTimeout(controlsTimeout);
+  clearTimeout(state.controlsTimeout);
   if (videoPlayer && !videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
-    controlsTimeout = setTimeout(() => {
+    state.controlsTimeout = setTimeout(() => {
       if (typeof hideControls === 'function') {
         hideControls();
       }
@@ -933,9 +854,9 @@ function resetControlsTimeout() {
 // Initialize gamepad manager with proper callbacks
 async function initializeGamepadManager() {
   try {
-    gamepadManager = new GamepadManager();
+    state.gamepadManager = new GamepadManager();
     
-    // Get controller settings from main settings
+    // Get controller state.settings from main state.settings
     const appSettings = await ipcRenderer.invoke('get-settings');
     const controllerSettings = appSettings?.controller;
     
@@ -943,46 +864,46 @@ async function initializeGamepadManager() {
       // Apply custom mappings if they exist
       if (controllerSettings.buttonMappings) {
         Object.entries(controllerSettings.buttonMappings).forEach(([buttonIndex, action]) => {
-          gamepadManager.setButtonMapping(parseInt(buttonIndex), action);
+          state.gamepadManager.setButtonMapping(parseInt(buttonIndex), action);
         });
       }
       
-      // Apply sensitivity settings
+      // Apply sensitivity state.settings
       if (controllerSettings.seekSensitivity !== undefined) {
-        gamepadManager.seekSensitivity = controllerSettings.seekSensitivity;
+        state.gamepadManager.seekSensitivity = controllerSettings.seekSensitivity;
       }
       if (controllerSettings.volumeSensitivity !== undefined) {
-        gamepadManager.volumeSensitivity = controllerSettings.volumeSensitivity;
+        state.gamepadManager.volumeSensitivity = controllerSettings.volumeSensitivity;
       }
       
-      // Enable/disable controller based on settings
+      // Enable/disable controller based on state.settings
       if (controllerSettings.enabled) {
-        gamepadManager.enable();
+        state.gamepadManager.enable();
       } else {
-        gamepadManager.disable();
+        state.gamepadManager.disable();
       }
     } else {
       // Default: enable controller support
-      gamepadManager.enable();
+      state.gamepadManager.enable();
     }
     
     // Set up action callback for button presses
-    gamepadManager.setActionCallback((action) => {
+    state.gamepadManager.setActionCallback((action) => {
       handleControllerAction(action);
     });
     
     // Set up navigation callback for analog sticks
-    gamepadManager.setNavigationCallback((type, value) => {
+    state.gamepadManager.setNavigationCallback((type, value) => {
       handleControllerNavigation(type, value);
     });
     
     // Set up raw navigation callback for grid scrolling
-    gamepadManager.setRawNavigationCallback((type, value) => {
+    state.gamepadManager.setRawNavigationCallback((type, value) => {
       handleControllerRawNavigation(type, value);
     });
     
     // Set up connection callback for UI updates
-    gamepadManager.setConnectionCallback((connected, gamepadId) => {
+    state.gamepadManager.setConnectionCallback((connected, gamepadId) => {
       handleControllerConnection(connected, gamepadId);
     });
     
@@ -1094,14 +1015,14 @@ function handleControllerAction(action) {
     }
   } else {
     // Handle actions when in grid view
-    if (!gridNavigationEnabled) {
+    if (!state.gridNavigationEnabled) {
       enableGridNavigation();
     }
     
     switch (action) {
       case 'closePlayer':
-        // Exit grid navigation or open settings
-        if (gridNavigationEnabled) {
+        // Exit grid navigation or open state.settings
+        if (state.gridNavigationEnabled) {
           disableGridNavigation();
         }
         break;
@@ -1148,8 +1069,8 @@ function handleControllerNavigation(type, value) {
           const newTime = Math.max(0, Math.min(videoPlayer.currentTime + value, videoPlayer.duration));
           
           // If seeking outside bounds, disable auto-reset
-          if (newTime < trimStartTime || newTime > trimEndTime) {
-            isAutoResetDisabled = true;
+          if (newTime < state.trimStartTime || newTime > state.trimEndTime) {
+            state.isAutoResetDisabled = true;
           }
           
           videoPlayer.currentTime = newTime;
@@ -1178,7 +1099,7 @@ function handleControllerNavigation(type, value) {
     switch (type) {
       case 'navigate':
         // Left stick - grid navigation
-        if (!gridNavigationEnabled) {
+        if (!state.gridNavigationEnabled) {
           enableGridNavigation();
         }
         moveGridSelection(value);
@@ -1227,7 +1148,7 @@ function handleControllerConnection(connected, gamepadId) {
   
   if (connected) {
     // Only log the first controller connection to reduce spam
-    if (gamepadManager && gamepadManager.getConnectedGamepads().length === 1) {
+    if (state.gamepadManager && state.gamepadManager.getConnectedGamepads().length === 1) {
       logger.info(`Controller connected: ${gamepadId}`);
     }
     
@@ -1240,18 +1161,18 @@ function handleControllerConnection(connected, gamepadId) {
     // Enable grid navigation if we're not in video player and have clips
     // Only do this once to prevent multiple triggers
     const isPlayerActive = playerOverlay.style.display === "block";
-    if (!isPlayerActive && getVisibleClips().length > 0 && !gridNavigationEnabled) {
+    if (!isPlayerActive && getVisibleClips().length > 0 && !state.gridNavigationEnabled) {
       setTimeout(() => {
         enableGridNavigation();
       }, 500); // Small delay to let everything settle
     }
   } else {
     // Only log when all controllers are disconnected
-    if (gamepadManager && !gamepadManager.isGamepadConnected()) {
+    if (state.gamepadManager && !state.gamepadManager.isGamepadConnected()) {
       logger.info(`All controllers disconnected`);
     }
     
-    if (indicator && gamepadManager && !gamepadManager.isGamepadConnected()) {
+    if (indicator && state.gamepadManager && !state.gamepadManager.isGamepadConnected()) {
       // Only hide if no controllers are connected
       indicator.classList.remove('visible');
       indicator.title = 'Controller Disconnected';
@@ -1285,14 +1206,14 @@ const DIAGNOSTICS_STAGE_LABELS = {
   initializing: 'Preparing workspace',
   'system-info': 'Collecting system info',
   logs: 'Gathering logs',
-  'settings-files': 'Gathering settings files',
-  'settings-snapshot': 'Capturing settings snapshot',
+  'settings-files': 'Gathering state.settings files',
+  'settings-snapshot': 'Capturing state.settings snapshot',
   'activity-logs': 'Bundling activity history',
   complete: 'Complete'
 };
 
 ipcRenderer.on('diagnostics-progress', (event, progress) => {
-  if (!diagnosticsInProgress) return;
+  if (!state.diagnosticsInProgress) return;
   updateDiagnosticsStatus(progress);
 });
 
@@ -1315,19 +1236,19 @@ function formatBytes(value) {
 }
 
 function setDiagnosticsStatusMessage(message, state = 'info') {
-  if (!diagnosticsStatusEl) return;
-  diagnosticsStatusEl.textContent = message;
-  diagnosticsStatusEl.dataset.state = state;
+  if (!state.diagnosticsStatusEl) return;
+  state.diagnosticsStatusEl.textContent = message;
+  state.diagnosticsStatusEl.dataset.state = state;
 }
 
 function updateDiagnosticsStatus(progress) {
-  if (!diagnosticsStatusEl) return;
+  if (!state.diagnosticsStatusEl) return;
   const label = DIAGNOSTICS_STAGE_LABELS[progress.stage] || progress.stage;
 
   if (progress.stage === 'complete') {
     const sizeText = typeof progress.bytes === 'number' ? ` (${formatBytes(progress.bytes)})` : '';
-    diagnosticsStatusEl.textContent = `${label}${sizeText}`;
-    diagnosticsStatusEl.dataset.state = 'success';
+    state.diagnosticsStatusEl.textContent = `${label}${sizeText}`;
+    state.diagnosticsStatusEl.dataset.state = 'success';
     return;
   }
 
@@ -1336,12 +1257,12 @@ function updateDiagnosticsStatus(progress) {
   const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
 
   const percentText = percent ? ` (${percent}%)` : '';
-  diagnosticsStatusEl.textContent = `${label}${percentText}`;
-  diagnosticsStatusEl.dataset.state = 'progress';
+  state.diagnosticsStatusEl.textContent = `${label}${percentText}`;
+  state.diagnosticsStatusEl.dataset.state = 'progress';
 }
 
 async function handleDiagnosticsGeneration() {
-  if (diagnosticsInProgress) return;
+  if (state.diagnosticsInProgress) return;
 
   const targetPath = await ipcRenderer.invoke('show-diagnostics-save-dialog');
   if (!targetPath) {
@@ -1349,12 +1270,12 @@ async function handleDiagnosticsGeneration() {
     return;
   }
 
-  diagnosticsInProgress = true;
+  state.diagnosticsInProgress = true;
   setDiagnosticsStatusMessage('Preparing diagnostics bundle...', 'progress');
 
-  if (generateDiagnosticsBtn) {
-    generateDiagnosticsBtn.disabled = true;
-    generateDiagnosticsBtn.textContent = 'Generating...';
+  if (state.generateDiagnosticsBtn) {
+    state.generateDiagnosticsBtn.disabled = true;
+    state.generateDiagnosticsBtn.textContent = 'Generating...';
   }
 
   try {
@@ -1370,10 +1291,10 @@ async function handleDiagnosticsGeneration() {
     logger.error('Failed to generate diagnostics bundle:', error);
     setDiagnosticsStatusMessage(`Failed to generate diagnostics: ${error.message}`, 'error');
   } finally {
-    diagnosticsInProgress = false;
-    if (generateDiagnosticsBtn) {
-      generateDiagnosticsBtn.disabled = false;
-      generateDiagnosticsBtn.textContent = diagnosticsButtonDefaultLabel;
+    state.diagnosticsInProgress = false;
+    if (state.generateDiagnosticsBtn) {
+      state.generateDiagnosticsBtn.disabled = false;
+      state.generateDiagnosticsBtn.textContent = diagnosticsButtonDefaultLabel;
     }
   }
 }
@@ -1633,12 +1554,12 @@ container.appendChild(settingsModal);
 
 const closeSettingsBtn = document.getElementById("closeSettingsBtn");
 const currentClipLocationSpan = document.getElementById("currentClipLocation");
-generateDiagnosticsBtn = document.getElementById('generateDiagnosticsBtn');
-diagnosticsStatusEl = document.getElementById('diagnosticsStatus');
+state.generateDiagnosticsBtn = document.getElementById('state.generateDiagnosticsBtn');
+state.diagnosticsStatusEl = document.getElementById('diagnosticsStatus');
 
-if (generateDiagnosticsBtn) {
-  diagnosticsButtonDefaultLabel = generateDiagnosticsBtn.textContent || diagnosticsButtonDefaultLabel;
-  generateDiagnosticsBtn.addEventListener('click', handleDiagnosticsGeneration);
+if (state.generateDiagnosticsBtn) {
+  diagnosticsButtonDefaultLabel = state.generateDiagnosticsBtn.textContent || diagnosticsButtonDefaultLabel;
+  state.generateDiagnosticsBtn.addEventListener('click', handleDiagnosticsGeneration);
 }
 
 // Check for Updates button handler
@@ -1704,23 +1625,23 @@ async function handleManualUpdateCheck() {
 }
 
 async function fetchSettings() {
-  settings = await ipcRenderer.invoke('get-settings');
-  logger.info('Fetched settings:', settings);  // Log the fetched settings
+  state.settings = await ipcRenderer.invoke('get-settings');
+  logger.info('Fetched settings:', state.settings);  // Log the fetched settings
   
   // Set defaults if not present
-  if (settings.previewVolume === undefined) settings.previewVolume = 0.1;
-  if (settings.exportQuality === undefined) settings.exportQuality = 'discord';
-  if (settings.iconGreyscale === undefined) settings.iconGreyscale = false;
-  await ipcRenderer.invoke('save-settings', settings);
-  logger.info('Settings after defaults:', settings);  // Log after setting defaults
-  return settings;
+  if (state.settings.previewVolume === undefined) state.settings.previewVolume = 0.1;
+  if (state.settings.exportQuality === undefined) state.settings.exportQuality = 'discord';
+  if (state.settings.iconGreyscale === undefined) state.settings.iconGreyscale = false;
+  await ipcRenderer.invoke('save-settings', state.settings);
+  logger.info('Settings after defaults:', state.settings);  // Log after setting defaults
+  return state.settings;
 }
 
 /**
  * Helper to update a nested setting value and save to disk.
  * @param {string} path - Dot-separated path to the setting (e.g., 'ambientGlow.fps')
  * @param {*} value - The new value to set
- * @returns {Promise<object>} The updated settings object
+ * @returns {Promise<object>} The updated state.settings object
  */
 async function updateSettingValue(path, value) {
   const currentSettings = await ipcRenderer.invoke('get-settings');
@@ -1737,8 +1658,8 @@ async function updateSettingValue(path, value) {
   target[keys[keys.length - 1]] = value;
   
   await ipcRenderer.invoke('save-settings', currentSettings);
-  settings = currentSettings;
-  return settings;
+  state.settings = currentSettings;
+  return state.settings;
 }
 
 let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
@@ -1746,32 +1667,32 @@ let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
 async function loadClips() {
   try {
     logger.info("Loading clips...");
-    clipLocation = await ipcRenderer.invoke("get-clip-location");
-    currentClipLocationSpan.textContent = clipLocation;
+    state.clipLocation = await ipcRenderer.invoke("get-clip-location");
+    currentClipLocationSpan.textContent = state.clipLocation;
     
     // Get new clips info before loading all clips
     newClipsInfo = await ipcRenderer.invoke("get-new-clips-info");
     logger.info("New clips info:", newClipsInfo);
     
-    allClips = await ipcRenderer.invoke("get-clips");
-    logger.info("Clips received:", allClips.length);
+    state.allClips = await ipcRenderer.invoke("get-clips");
+    logger.info("Clips received:", state.allClips.length);
     
     // Mark which clips are new
-    allClips.forEach(clip => {
+    state.allClips.forEach(clip => {
       clip.isNewSinceLastSession = newClipsInfo.newClips.includes(clip.originalName);
     });
     
     // Load tags for each clip in smaller batches
     const TAG_BATCH_SIZE = 50;
-    for (let i = 0; i < allClips.length; i += TAG_BATCH_SIZE) {
-      const batch = allClips.slice(i, i + TAG_BATCH_SIZE);
+    for (let i = 0; i < state.allClips.length; i += TAG_BATCH_SIZE) {
+      const batch = state.allClips.slice(i, i + TAG_BATCH_SIZE);
       await Promise.all(batch.map(async (clip) => {
         clip.tags = await ipcRenderer.invoke("get-clip-tags", clip.originalName);
       }));
     }
 
-    allClips = removeDuplicates(allClips);
-    allClips.sort((a, b) => b.createdAt - a.createdAt);
+    state.allClips = removeDuplicates(state.allClips);
+    state.allClips.sort((a, b) => b.createdAt - a.createdAt);
 
     // Restore any missing global tags from clip tags (e.g., after PC reset)
     try {
@@ -1785,12 +1706,12 @@ async function loadClips() {
       logger.error("Error during tag restoration:", error);
     }
 
-    await loadTagPreferences(); // This will set up selectedTags
-    filterClips(); // This will set currentClipList correctly
+    await loadTagPreferences(); // This will set up state.selectedTags
+    filterClips(); // This will set state.currentClipList correctly
     
-    logger.info("Initial currentClipList length:", currentClipList.length);
-    updateClipCounter(currentClipList.length);
-    renderClips(currentClipList);
+    logger.info("Initial state.currentClipList length:", state.currentClipList.length);
+    updateClipCounter(state.currentClipList.length);
+    renderClips(state.currentClipList);
     setupClipTitleEditing();
     validateClipLists();
     updateFilterDropdown();
@@ -1829,7 +1750,7 @@ async function loadClips() {
 }
 
 async function startThumbnailValidation() {
-  logger.info("Starting thumbnail validation for clips:", allClips.length);
+  logger.info("Starting thumbnail validation for clips:", state.allClips.length);
   
   await new Promise(resolve => setTimeout(resolve, THUMBNAIL_INIT_DELAY));
   
@@ -1849,7 +1770,7 @@ async function startThumbnailValidation() {
     let currentTimeout = createTimeout();
 
     // Add this line to collect pending clips
-    const pendingClips = new Set(allClips.map(clip => clip.originalName));
+    const pendingClips = new Set(state.allClips.map(clip => clip.originalName));
 
     const generationPromise = new Promise((resolve) => {
       ipcRenderer.invoke("generate-thumbnails-progressively", Array.from(pendingClips))
@@ -1859,7 +1780,7 @@ async function startThumbnailValidation() {
 
           ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
             currentTimeout = createTimeout();
-            if (isGeneratingThumbnails) {
+            if (state.isGeneratingThumbnails) {
               updateThumbnailGenerationText(total - current);
             }
             
@@ -1869,7 +1790,7 @@ async function startThumbnailValidation() {
             ipcRenderer.invoke("get-thumbnail-path", clipName).then(thumbnailPath => {
               if (thumbnailPath) {
                 // Update cache with newly generated thumbnail path
-                thumbnailPathCache.set(clipName, thumbnailPath);
+                state.thumbnailPathCache.set(clipName, thumbnailPath);
                 updateClipThumbnail(clipName, thumbnailPath);
               }
             });
@@ -1905,13 +1826,13 @@ async function startThumbnailValidation() {
 }
 
 function hideLoadingScreen() {
-  if (loadingScreen) {
+  if (state.loadingScreen) {
     // Add the fade-out class to trigger the animations
-    loadingScreen.classList.add('fade-out');
+    state.loadingScreen.classList.add('fade-out');
     
     // Remove the element after the animation completes
     setTimeout(() => {
-      loadingScreen.style.display = 'none';
+      state.loadingScreen.style.display = 'none';
     }, 1000); // Match this with the animation duration (1s)
   }
 }
@@ -1931,7 +1852,7 @@ async function updateVersionDisplay() {
 async function addNewClipToLibrary(fileName) {
   try {
     // First check if the file exists
-    const clipPath = path.join(settings.clipLocation, fileName);
+    const clipPath = path.join(state.settings.state.clipLocation, fileName);
     try {
       await fs.access(clipPath);
     } catch (error) {
@@ -1950,12 +1871,12 @@ async function addNewClipToLibrary(fileName) {
       newClipsInfo.totalNewCount++;
     }
     
-    // Check if the clip already exists in allClips
-    const existingClipIndex = allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
+    // Check if the clip already exists in state.allClips
+    const existingClipIndex = state.allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
     
     if (existingClipIndex === -1) {
-      // If it doesn't exist, add it to allClips
-      allClips.unshift(newClipInfo);
+      // If it doesn't exist, add it to state.allClips
+      state.allClips.unshift(newClipInfo);
       
       // Create clip element with a loading thumbnail first
       const newClipElement = await createClipElement({
@@ -2038,11 +1959,11 @@ async function addNewClipToLibrary(fileName) {
       // Check if this group now contains only new clips and update styling
       const groupClips = Array.from(content.querySelectorAll('.clip-item')).map(el => {
         const clipName = el.dataset.originalName;
-        return allClips.find(clip => clip.originalName === clipName);
+        return state.allClips.find(clip => clip.originalName === clipName);
       }).filter(Boolean);
       
       const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession);
-      if (groupIsAllNewClips && settings.showNewClipsIndicators !== false) {
+      if (groupIsAllNewClips && state.settings.showNewClipsIndicators !== false) {
         groupElement.classList.add('new-clips-group');
         console.log('Debug - Marking dynamically created/updated group as new clips group:', timeGroup);
       } else {
@@ -2067,7 +1988,7 @@ async function addNewClipToLibrary(fileName) {
 
     } else {
       // If it exists, update the existing clip info
-      allClips[existingClipIndex] = newClipInfo;
+      state.allClips[existingClipIndex] = newClipInfo;
       const existingElement = document.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
       if (existingElement) {
         const updatedElement = await createClipElement(newClipInfo);
@@ -2098,12 +2019,12 @@ async function addNewClipToLibrary(fileName) {
 }
 
 ipcRenderer.on('new-clip-added', async (event, fileName) => {
-  // Wait for settings to be loaded if they haven't been yet
-  if (!settings) {
+  // Wait for state.settings to be loaded if they haven't been yet
+  if (!state.settings) {
     try {
-      settings = await ipcRenderer.invoke('get-settings');
+      state.settings = await ipcRenderer.invoke('get-settings');
     } catch (error) {
-      logger.error('Failed to load settings:', error);
+      logger.error('Failed to load state.settings:', error);
       return;
     }
   }
@@ -2114,10 +2035,10 @@ ipcRenderer.on('new-clip-added', async (event, fileName) => {
 
 ipcRenderer.on("thumbnail-validation-start", (event, { total }) => {
   // Always reset state when validation starts
-  isGeneratingThumbnails = false;
-  currentGenerationTotal = 0;
-  completedThumbnails = 0;
-  thumbnailGenerationStartTime = null;
+  state.isGeneratingThumbnails = false;
+  state.currentGenerationTotal = 0;
+  state.completedThumbnails = 0;
+  state.thumbnailGenerationStartTime = null;
   
   if (total > 0) {
     showThumbnailGenerationText(total);
@@ -2125,7 +2046,7 @@ ipcRenderer.on("thumbnail-validation-start", (event, { total }) => {
 });
 
 ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
-  if (isGeneratingThumbnails) {
+  if (state.isGeneratingThumbnails) {
     updateThumbnailGenerationText(total - current);
   }
   logger.info(`Thumbnail generation progress: (${current}/${total}) - Processing: ${clipName}`);
@@ -2133,7 +2054,7 @@ ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
 
 ipcRenderer.on("thumbnail-generation-complete", () => {
   hideThumbnailGenerationText();
-  isGeneratingThumbnails = false;
+  state.isGeneratingThumbnails = false;
   // Clear any existing timeouts here as well
   if (window.thumbnailGenerationTimeout) {
     clearTimeout(window.thumbnailGenerationTimeout);
@@ -2145,10 +2066,10 @@ function showThumbnailGenerationText(totalToGenerate) {
   if (totalToGenerate <= 12) return;
   
   // Reset all state variables
-  isGeneratingThumbnails = true;
-  currentGenerationTotal = totalToGenerate;
-  completedThumbnails = 0;
-  thumbnailGenerationStartTime = Date.now();
+  state.isGeneratingThumbnails = true;
+  state.currentGenerationTotal = totalToGenerate;
+  state.completedThumbnails = 0;
+  state.thumbnailGenerationStartTime = Date.now();
   
   let textElement = document.getElementById("thumbnail-generation-text");
   
@@ -2180,7 +2101,7 @@ function updateClipCounter(count) {
 }
 
 function updateThumbnailGenerationText(remaining) {
-  if (!isGeneratingThumbnails) return;
+  if (!state.isGeneratingThumbnails) return;
   
   const textElement = document.getElementById("thumbnail-generation-text");
   if (!textElement) return;
@@ -2192,14 +2113,14 @@ function updateThumbnailGenerationText(remaining) {
     return;
   }
 
-  completedThumbnails = currentGenerationTotal - remaining;
-  const percentage = Math.round((completedThumbnails / currentGenerationTotal) * 100);
+  state.completedThumbnails = state.currentGenerationTotal - remaining;
+  const percentage = Math.round((state.completedThumbnails / state.currentGenerationTotal) * 100);
   
   // Calculate time estimate based on actual progress
   let estimatedTimeRemaining = 0;
-  if (completedThumbnails > 0) {
-    const elapsedTime = (Date.now() - thumbnailGenerationStartTime) / 1000; // in seconds
-    const averageTimePerThumbnail = elapsedTime / completedThumbnails;
+  if (state.completedThumbnails > 0) {
+    state.elapsedTime = (Date.now() - state.thumbnailGenerationStartTime) / 1000; // in seconds
+    const averageTimePerThumbnail = state.elapsedTime / state.completedThumbnails;
     // Calculate remaining time and convert to minutes, rounding up
     estimatedTimeRemaining = Math.ceil((averageTimePerThumbnail * remaining) / 60);
     
@@ -2209,7 +2130,7 @@ function updateThumbnailGenerationText(remaining) {
     }
   }
 
-  textElement.textContent = `Generating thumbnails... ${completedThumbnails}/${currentGenerationTotal} (${percentage}%) - Est. ${estimatedTimeRemaining} min remaining`;
+  textElement.textContent = `Generating thumbnails... ${state.completedThumbnails}/${state.currentGenerationTotal} (${percentage}%) - Est. ${estimatedTimeRemaining} min remaining`;
 }
 
 function hideThumbnailGenerationText() {
@@ -2217,9 +2138,9 @@ function hideThumbnailGenerationText() {
   if (textElement) {
     textElement.remove();
   }
-  isGeneratingThumbnails = false;
-  currentGenerationTotal = 0;
-  completedThumbnails = 0;
+  state.isGeneratingThumbnails = false;
+  state.currentGenerationTotal = 0;
+  state.completedThumbnails = 0;
 }
 
 function positionNewClipsIndicators() {
@@ -2229,8 +2150,8 @@ function positionNewClipsIndicators() {
   document.querySelectorAll('.new-clips-indicator.positioned').forEach(el => el.remove());
   
   // Check if new clips indicators are disabled
-  if (settings.showNewClipsIndicators === false) {
-    console.log('New clips indicators are disabled in settings');
+  if (state.settings.showNewClipsIndicators === false) {
+    console.log('New clips indicators are disabled in state.settings');
     return;
   }
   
@@ -2359,7 +2280,7 @@ function updateIndicatorsOnChange() {
 // Function to update new clips indicators when clips are added/removed
 function updateNewClipsIndicators() {
   // Check if new clips indicators are disabled
-  if (settings.showNewClipsIndicators === false) {
+  if (state.settings.showNewClipsIndicators === false) {
     console.log('New clips indicators are disabled, removing all indicators');
     document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
     document.querySelectorAll('.clip-group.new-clips-group').forEach(group => {
@@ -2369,8 +2290,8 @@ function updateNewClipsIndicators() {
   }
 
   // Check if we still have new clips visible
-  if (currentClipList && currentClipList.length > 0) {
-    const hasVisibleNewClips = currentClipList.some(clip => clip.isNewSinceLastSession);
+  if (state.currentClipList && state.currentClipList.length > 0) {
+    const hasVisibleNewClips = state.currentClipList.some(clip => clip.isNewSinceLastSession);
     
     if (!hasVisibleNewClips) {
       // No new clips visible, remove all indicators
@@ -2379,7 +2300,7 @@ function updateNewClipsIndicators() {
     }
     
     // Re-render the current clips to update indicators
-    renderClips(currentClipList);
+    renderClips(state.currentClipList);
   } else {
     // Remove all indicators if no clips
     document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
@@ -2400,42 +2321,42 @@ window.addEventListener('resize', () => {
 
 // Dev console debugging function
 window.setNewClipsCount = function(count) {
-  if (!allClips || allClips.length === 0) {
+  if (!state.allClips || state.allClips.length === 0) {
     console.log('No clips loaded yet');
     return;
   }
   
-  if (count < 0 || count > allClips.length) {
-    console.log(`Invalid count. Must be between 0 and ${allClips.length}`);
+  if (count < 0 || count > state.allClips.length) {
+    console.log(`Invalid count. Must be between 0 and ${state.allClips.length}`);
     return;
   }
   
   // Reset all clips to not new
-  allClips.forEach(clip => {
+  state.allClips.forEach(clip => {
     clip.isNewSinceLastSession = false;
   });
   
   // Mark the first 'count' clips as new
   for (let i = 0; i < count; i++) {
-    allClips[i].isNewSinceLastSession = true;
+    state.allClips[i].isNewSinceLastSession = true;
   }
   
   // Update the global newClipsInfo
   newClipsInfo = {
-    newClips: allClips.slice(0, count).map(clip => clip.originalName),
+    newClips: state.allClips.slice(0, count).map(clip => clip.originalName),
     totalNewCount: count
   };
   
-  // Also update currentClipList if it exists
-  if (currentClipList && currentClipList.length > 0) {
-    currentClipList.forEach(clip => {
-      clip.isNewSinceLastSession = allClips.find(ac => ac.originalName === clip.originalName)?.isNewSinceLastSession || false;
+  // Also update state.currentClipList if it exists
+  if (state.currentClipList && state.currentClipList.length > 0) {
+    state.currentClipList.forEach(clip => {
+      clip.isNewSinceLastSession = state.allClips.find(ac => ac.originalName === clip.originalName)?.isNewSinceLastSession || false;
     });
   }
   
   // Re-render to show the changes
-  if (currentClipList) {
-    renderClips(currentClipList);
+  if (state.currentClipList) {
+    renderClips(state.currentClipList);
     
     // Position indicators after render completes
     setTimeout(() => {
@@ -2450,9 +2371,9 @@ window.setNewClipsCount = function(count) {
 // Also add a helper to see current state
 window.debugNewClips = function() {
   console.log('Current new clips info:', newClipsInfo);
-  console.log('Clips marked as new:', allClips.filter(clip => clip.isNewSinceLastSession).map(c => c.originalName));
-  console.log('Total clips loaded:', allClips.length);
-  console.log('Current filtered clips:', currentClipList.length);
+  console.log('Clips marked as new:', state.allClips.filter(clip => clip.isNewSinceLastSession).map(c => c.originalName));
+  console.log('Total clips loaded:', state.allClips.length);
+  console.log('Current filtered clips:', state.currentClipList.length);
 };
 
 // And a helper to reset
@@ -2491,7 +2412,7 @@ ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
 
 ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
   // Update cache with newly generated thumbnail
-  thumbnailPathCache.set(clipName, thumbnailPath);
+  state.thumbnailPathCache.set(clipName, thumbnailPath);
   updateClipThumbnail(clipName, thumbnailPath);
 });
 
@@ -2582,12 +2503,12 @@ function saveCollapsedState(state) {
 }
 
 async function renderClips(clips) {
-  if (isRendering) {
+  if (state.isRendering) {
     logger.info("Render already in progress, skipping");
     return;
   }
   
-  isRendering = true;
+  state.isRendering = true;
   logger.info("Rendering clips. Input length:", clips.length);
   
   const clipGrid = document.getElementById('clip-grid');
@@ -2595,7 +2516,7 @@ async function renderClips(clips) {
 
   if (!clips || clips.length === 0) {
     clipGrid.innerHTML = '<div class="error-message">No clips found</div>';
-    isRendering = false;
+    state.isRendering = false;
     return;
   }
 
@@ -2659,7 +2580,7 @@ async function renderClips(clips) {
     if (collapsedState[groupName]) {
       groupClasses += ' collapsed';
     }
-    if (groupIsAllNewClips && settings.showNewClipsIndicators !== false) {
+    if (groupIsAllNewClips && state.settings.showNewClipsIndicators !== false) {
       groupClasses += ' new-clips-group';
       console.log('Debug - Marking group as new clips group:', groupName);
     }
@@ -2694,7 +2615,7 @@ async function renderClips(clips) {
         
         // Mark this content area for later indicator positioning
         // Skip if the whole group is already marked as new clips or if indicators are disabled
-        if (settings.showNewClipsIndicators !== false && !groupIsAllNewClips && i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
+        if (state.settings.showNewClipsIndicators !== false && !groupIsAllNewClips && i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
           console.log('Debug - Will add indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
           console.log('Debug - Setting data attributes on content for group');
           content.dataset.needsIndicator = 'true';
@@ -2708,7 +2629,7 @@ async function renderClips(clips) {
       
       // Check if we need an indicator at the end of the group (last clip is new, no more clips)
       // Skip if the whole group is already marked as new clips or if indicators are disabled
-      if (settings.showNewClipsIndicators !== false && !groupIsAllNewClips && !hasAddedNewClipsIndicator && groupClips.length > 0) {
+      if (state.settings.showNewClipsIndicators !== false && !groupIsAllNewClips && !hasAddedNewClipsIndicator && groupClips.length > 0) {
         const lastClip = groupClips[groupClips.length - 1];
         if (lastClip.isNewSinceLastSession) {
           console.log('Debug - Adding end-of-group indicator after last new clip:', lastClip.originalName);
@@ -2747,7 +2668,7 @@ async function renderClips(clips) {
             groupClips = JSON.parse(groupElement.dataset.clips);
           } else {
             // Fallback to find clips in the current list if data not stored
-            groupClips = currentClipList.filter(
+            groupClips = state.currentClipList.filter(
               clip => getTimeGroup(clip.createdAt) === groupName
             );
           }
@@ -2836,7 +2757,7 @@ async function renderClips(clips) {
           content.innerHTML = '';
           
           // Store the clip data again for future loading
-          const groupClips = currentClipList.filter(
+          const groupClips = state.currentClipList.filter(
             clip => getTimeGroup(clip.createdAt) === groupName
           );
           groupElement.dataset.clips = JSON.stringify(groupClips.map(clip => ({
@@ -2859,7 +2780,7 @@ async function renderClips(clips) {
   }
 
   setupTooltips();
-  currentClipList = clips;
+  state.currentClipList = clips;
 
   // Initialize clip glow manager if not already done
   if (!clipGlowManager) {
@@ -2870,9 +2791,9 @@ async function renderClips(clips) {
   logger.info("Rendered clips count:", clips.length);
   
   // Setup grid navigation if controller is connected
-  if (gamepadManager && gamepadManager.isGamepadConnected() && clips.length > 0) {
+  if (state.gamepadManager && state.gamepadManager.isGamepadConnected() && clips.length > 0) {
     setTimeout(() => {
-      if (!gridNavigationEnabled) {
+      if (!state.gridNavigationEnabled) {
         enableGridNavigation();
       } else {
         updateGridSelection();
@@ -2880,7 +2801,7 @@ async function renderClips(clips) {
     }, 100); // Small delay to ensure DOM is updated
   }
   
-  isRendering = false;
+  state.isRendering = false;
 }
 
 function setupSearch() {
@@ -2896,7 +2817,7 @@ function performSearch() {
   const searchTerms = parseSearchTerms(searchText);
   
   // Start with all clips
-  let filteredClips = [...allClips];
+  let filteredClips = [...state.allClips];
   
   // Apply search terms if they exist
   if (searchTerms.tags.length > 0 || searchTerms.text.length > 0) {
@@ -2921,29 +2842,29 @@ function performSearch() {
   }
   
   // Apply tag filter from dropdown
-  if (selectedTags.size > 0) {
+  if (state.selectedTags.size > 0) {
     filteredClips = filteredClips.filter(clip => {
-      if (selectedTags.has('Untagged')) {
+      if (state.selectedTags.has('Untagged')) {
         if (!clip.tags || clip.tags.length === 0) {
           return true;
         }
       }
-      return clip.tags && clip.tags.some(tag => selectedTags.has(tag));
+      return clip.tags && clip.tags.some(tag => state.selectedTags.has(tag));
     });
   }
 
   // Remove duplicates
-  currentClipList = filteredClips.filter((clip, index, self) =>
+  state.currentClipList = filteredClips.filter((clip, index, self) =>
     index === self.findIndex((t) => t.originalName === clip.originalName)
   );
 
   // Sort by creation date
-  currentClipList.sort((a, b) => b.createdAt - a.createdAt);
+  state.currentClipList.sort((a, b) => b.createdAt - a.createdAt);
 
-  renderClips(currentClipList);
-  updateClipCounter(currentClipList.length);
+  renderClips(state.currentClipList);
+  updateClipCounter(state.currentClipList.length);
 
-  if (currentClip) {
+  if (state.currentClip) {
     updateNavigationButtons();
   }
 }
@@ -2992,33 +2913,33 @@ function setupContextMenu() {
   document.addEventListener("click", (e) => {
     if (!contextMenu.contains(e.target)) {
       contextMenu.style.display = "none";
-      isTagsDropdownOpen = false;
+      state.isTagsDropdownOpen = false;
       tagsDropdown.style.display = "none";
     }
   });
 
   contextMenuExport.addEventListener("click", () => {
-    logger.info("Export clicked for clip:", contextMenuClip?.originalName);
-    if (contextMenuClip) {
-      exportClipFromContextMenu(contextMenuClip);
+    logger.info("Export clicked for clip:", state.contextMenuClip?.originalName);
+    if (state.contextMenuClip) {
+      exportClipFromContextMenu(state.contextMenuClip);
     }
     contextMenu.style.display = "none";
   });
 
   contextMenuReveal.addEventListener("click", () => {
-    logger.info("Reveal in Explorer clicked for clip:", contextMenuClip?.originalName);
-    if (contextMenuClip) {
-      ipcRenderer.invoke('reveal-clip', contextMenuClip.originalName);
+    logger.info("Reveal in Explorer clicked for clip:", state.contextMenuClip?.originalName);
+    if (state.contextMenuClip) {
+      ipcRenderer.invoke('reveal-clip', state.contextMenuClip.originalName);
     }
     contextMenu.style.display = "none";
   });
 
   contextMenuTags.addEventListener("click", (e) => {
     e.stopPropagation();
-    isTagsDropdownOpen = !isTagsDropdownOpen;
+    state.isTagsDropdownOpen = !state.isTagsDropdownOpen;
     const tagsDropdown = document.getElementById("tags-dropdown");
-    tagsDropdown.style.display = isTagsDropdownOpen ? "block" : "none";
-    if (isTagsDropdownOpen) {
+    tagsDropdown.style.display = state.isTagsDropdownOpen ? "block" : "none";
+    if (state.isTagsDropdownOpen) {
       const tagSearchInput = document.getElementById("tag-search-input");
       tagSearchInput.focus();
       updateTagList();
@@ -3030,8 +2951,8 @@ function setupContextMenu() {
     const newTag = tagSearchInput.value.trim();
     if (newTag && !globalTags.includes(newTag)) {
       await addGlobalTag(newTag);
-      if (contextMenuClip) {
-        await toggleClipTag(contextMenuClip, newTag);
+      if (state.contextMenuClip) {
+        await toggleClipTag(state.contextMenuClip, newTag);
       }
       tagSearchInput.value = "";
       updateTagList();
@@ -3050,8 +2971,8 @@ function setupContextMenu() {
         tag.toLowerCase().startsWith(searchTerm)
       );
       
-      if (matchingTag && contextMenuClip) {
-        await toggleClipTag(contextMenuClip, matchingTag);
+      if (matchingTag && state.contextMenuClip) {
+        await toggleClipTag(state.contextMenuClip, matchingTag);
         tagSearchInput.value = "";
         updateTagList();
       }
@@ -3063,18 +2984,18 @@ function setupContextMenu() {
   });
 
   contextMenuDelete.addEventListener("click", async () => {
-    logger.info("Delete clicked for clip:", contextMenuClip?.originalName);
-    if (contextMenuClip) {
-      await confirmAndDeleteClip(contextMenuClip);
+    logger.info("Delete clicked for clip:", state.contextMenuClip?.originalName);
+    if (state.contextMenuClip) {
+      await confirmAndDeleteClip(state.contextMenuClip);
     }
     contextMenu.style.display = "none";
   });
 
   if (contextMenuResetTrim) {
     contextMenuResetTrim.addEventListener("click", async () => {
-      logger.info("Reset trim clicked for clip:", contextMenuClip?.originalName);
-      if (contextMenuClip) {
-        await resetClipTrimTimes(contextMenuClip);
+      logger.info("Reset trim clicked for clip:", state.contextMenuClip?.originalName);
+      if (state.contextMenuClip) {
+        await resetClipTrimTimes(state.contextMenuClip);
       }
       contextMenu.style.display = "none";
     });
@@ -3245,7 +3166,7 @@ async function addNewTag() {
     await saveGlobalTags();
     
     // Automatically enable the new tag
-    selectedTags.add(newTagName);
+    state.selectedTags.add(newTagName);
     saveTagPreferences();
     
     searchInput.value = '';
@@ -3305,11 +3226,11 @@ function updateTagList() {
     
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = contextMenuClip && contextMenuClip.tags && contextMenuClip.tags.includes(tag);
+    checkbox.checked = state.contextMenuClip && state.contextMenuClip.tags && state.contextMenuClip.tags.includes(tag);
     checkbox.onclick = async (e) => {
       e.stopPropagation();
-      if (contextMenuClip) {
-        await toggleClipTag(contextMenuClip, tag);
+      if (state.contextMenuClip) {
+        await toggleClipTag(state.contextMenuClip, tag);
       }
     };
     
@@ -3348,7 +3269,7 @@ async function deleteTag(tag) {
       
       // Also update any clips in memory
       let memoryClipsModified = 0;
-      allClips.forEach(clip => {
+      state.allClips.forEach(clip => {
         const tagIndex = clip.tags.indexOf(tag);
         if (tagIndex > -1) {
           memoryClipsModified++;
@@ -3378,7 +3299,7 @@ async function addGlobalTag(tag) {
     await saveGlobalTags();
     
     // Automatically enable the new tag
-    selectedTags.add(tag);
+    state.selectedTags.add(tag);
     saveTagPreferences();
     
     updateFilterDropdown();
@@ -3429,11 +3350,11 @@ function updateTagList() {
     
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = contextMenuClip && contextMenuClip.tags && contextMenuClip.tags.includes(tag);
+    checkbox.checked = state.contextMenuClip && state.contextMenuClip.tags && state.contextMenuClip.tags.includes(tag);
     checkbox.onclick = async (e) => {
       e.stopPropagation();
-      if (contextMenuClip) {
-        await toggleClipTag(contextMenuClip, tag);
+      if (state.contextMenuClip) {
+        await toggleClipTag(state.contextMenuClip, tag);
       }
     };
     
@@ -3468,7 +3389,7 @@ async function toggleClipTag(clip, tag) {
 
   // If we're in a filtered view and this tag change would affect visibility,
   // re-filter and re-render the entire view
-  if (selectedTags.size > 0) {
+  if (state.selectedTags.size > 0) {
     // Check if this clip would be filtered out based on current tag selection
     const shouldBeVisible = () => {
       // Check if clip is unnamed
@@ -3482,22 +3403,22 @@ async function toggleClipTag(clip, tag) {
       let matchesSystemTag = false;
       
       // Handle untagged clips
-      if (selectedTags.has('Untagged') && isUntagged) {
+      if (state.selectedTags.has('Untagged') && isUntagged) {
         matchesSystemTag = true;
       }
 
       // Handle unnamed clips
-      if (selectedTags.has('Unnamed') && isUnnamed) {
+      if (state.selectedTags.has('Unnamed') && isUnnamed) {
         matchesSystemTag = true;
       }
 
       // If clip is untagged and "Untagged" is not selected, exclude it
-      if (isUntagged && !selectedTags.has('Untagged')) {
+      if (isUntagged && !state.selectedTags.has('Untagged')) {
         return false;
       }
 
       // If clip is unnamed and "Unnamed" is not selected, exclude it
-      if (isUnnamed && !selectedTags.has('Unnamed')) {
+      if (isUnnamed && !state.selectedTags.has('Unnamed')) {
         return false;
       }
 
@@ -3508,12 +3429,12 @@ async function toggleClipTag(clip, tag) {
 
       // For clips with tags, check regular tag filtering
       if (clip.tags && clip.tags.length > 0) {
-        if (isInTemporaryMode) {
+        if (state.isInTemporaryMode) {
           // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
-          return clip.tags.some(tag => temporaryTagSelections.has(tag));
+          return clip.tags.some(tag => state.temporaryTagSelections.has(tag));
         } else {
           // In normal mode, clips must have ALL their tags selected to be shown
-          return clip.tags.every(tag => selectedTags.has(tag));
+          return clip.tags.every(tag => state.selectedTags.has(tag));
         }
       }
 
@@ -3549,7 +3470,7 @@ async function updateTag(originalTag, newTag) {
       
       // Also update any clips in memory
       let memoryClipsModified = 0;
-      allClips.forEach(clip => {
+      state.allClips.forEach(clip => {
         const tagIndex = clip.tags.indexOf(originalTag);
         if (tagIndex > -1) {
           memoryClipsModified++;
@@ -3585,23 +3506,23 @@ async function loadTagPreferences() {
   try {
     const savedTags = await ipcRenderer.invoke('get-tag-preferences');
     if (savedTags && savedTags.length > 0) {
-      savedTagSelections = new Set(savedTags);
+      state.savedTagSelections = new Set(savedTags);
       
       // If "Unnamed" is not in saved preferences, add it automatically (first time feature introduction)
-      if (!savedTagSelections.has('Unnamed')) {
-        savedTagSelections.add('Unnamed');
+      if (!state.savedTagSelections.has('Unnamed')) {
+        state.savedTagSelections.add('Unnamed');
         // Save the updated preferences
-        await ipcRenderer.invoke('save-tag-preferences', Array.from(savedTagSelections));
+        await ipcRenderer.invoke('save-tag-preferences', Array.from(state.savedTagSelections));
       }
     } else {
       // Default to all tags visible, including system tags
-      savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
+      state.savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
     }
-    selectedTags = new Set(savedTagSelections); // Initialize global selectedTags
+    state.selectedTags = new Set(state.savedTagSelections); // Initialize global state.selectedTags
   } catch (error) {
     logger.error('Error loading tag preferences:', error);
-    savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
-    selectedTags = new Set(savedTagSelections);
+    state.savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
+    state.selectedTags = new Set(state.savedTagSelections);
   }
   
   updateFilterDropdown();
@@ -3686,7 +3607,7 @@ async function saveClipTags(clip) {
   try {
     await ipcRenderer.invoke("save-clip-tags", clip.originalName, clip.tags);
     // Invalidate cache so next open gets fresh data
-    clipDataCache.delete(clip.originalName);
+    state.clipDataCache.delete(clip.originalName);
   } catch (error) {
     logger.error("Error saving clip tags:", error);
   }
@@ -3734,7 +3655,7 @@ function showContextMenu(e, clip) {
     // Reset the context menu state
     contextMenu.style.display = "none";
     tagsDropdown.style.display = "none";
-    isTagsDropdownOpen = false; 
+    state.isTagsDropdownOpen = false; 
     
     // Clear any checked checkboxes
     const checkboxes = tagsDropdown.querySelectorAll('input[type="checkbox"]');
@@ -3749,8 +3670,8 @@ function showContextMenu(e, clip) {
     contextMenu.style.top = `${e.clientY}px`;
     contextMenu.style.display = "block";
 
-    // Update the contextMenuClip
-    contextMenuClip = clip;
+    // Update the state.contextMenuClip
+    state.contextMenuClip = clip;
 
     logger.info("Context menu shown for clip:", clip.originalName);
     
@@ -3783,7 +3704,7 @@ function closeContextMenu(e) {
   if (!contextMenu.contains(e.target)) {
     contextMenu.style.display = "none";
     tagsDropdown.style.display = "none";
-    isTagsDropdownOpen = false;
+    state.isTagsDropdownOpen = false;
     document.removeEventListener('click', closeContextMenu);
     if (overlay) {
       overlay.remove();
@@ -3829,10 +3750,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Ensure keybindings are loaded before we attach any listeners that use them
   await keybinds.initKeybindings();
   
-  // Load settings before any initialization that depends on them
+  // Load state.settings before any initialization that depends on them
   await fetchSettings();
   
-  // Initialize settings modal and enhanced search
+  // Initialize state.settings modal and enhanced search
   initializeEnhancedSearch();
   await initializeSettingsModal();
   
@@ -3897,9 +3818,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       const result = await ipcRenderer.invoke('import-steelseries-clips', sourcePath);
   
       if (result.success) {
-        // Add "Imported" to selectedTags if not already present
-        if (!selectedTags.has("Imported")) {
-          selectedTags.add("Imported");
+        // Add "Imported" to state.selectedTags if not already present
+        if (!state.selectedTags.has("Imported")) {
+          state.selectedTags.add("Imported");
           await saveTagPreferences();
         }
   
@@ -3941,7 +3862,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       openClip,
       closePlayer,
       performSearch,
-      allClips: () => allClips  // Getter function for current clips
+      allClips: () => state.allClips  // Getter function for current clips
     });
   }
 
@@ -3956,13 +3877,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   volumeSlider.addEventListener("input", (e) => {
     const newVolume = parseFloat(e.target.value);
-    if (!audioContext) setupAudioContext();
-    gainNode.gain.setValueAtTime(newVolume, audioContext.currentTime);
+    if (!state.audioContext) setupAudioContext();
+    state.gainNode.gain.setValueAtTime(newVolume, state.audioContext.currentTime);
     updateVolumeSlider(newVolume);
     updateVolumeIcon(newVolume);
     
-    if (currentClip) {
-      debouncedSaveVolume(currentClip.originalName, newVolume);
+    if (state.currentClip) {
+      debouncedSaveVolume(state.currentClip.originalName, newVolume);
     }
   });
 
@@ -3985,16 +3906,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   setupContextMenu();
   loadGlobalTags();
-  applyIconGreyscale(settings?.iconGreyscale);
+  applyIconGreyscale(state.settings?.iconGreyscale);
 
   // Create and setup the tag filter UI
   createTagFilterUI();
   // Load initial tag preferences
   await loadTagPreferences();
 
-  updateDiscordPresence('Browsing clips', `Total clips: ${currentClipList.length}`);
+  updateDiscordPresence('Browsing clips', `Total clips: ${state.currentClipList.length}`);
 
-  loadingScreen = document.getElementById('loading-screen');
+  state.loadingScreen = document.getElementById('loading-screen');
 
   // Run benchmark scenarios if in benchmark mode
   if (isBenchmarkMode && benchmarkHarness) {
@@ -4120,8 +4041,8 @@ function changeSpeed(speed) {
   updateSpeedText(speed);
   showSpeedContainer();
   
-  if (currentClip) {
-    debouncedSaveSpeed(currentClip.originalName, speed);
+  if (state.currentClip) {
+    debouncedSaveSpeed(state.currentClip.originalName, speed);
   }
 }
 
@@ -4193,29 +4114,29 @@ speedContainer.addEventListener("mouseleave", () => {
 });
 
 function setupAudioContext() {
-  if (audioContext) return; // If already set up, don't create a new context
-  audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  gainNode = audioContext.createGain();
-  const source = audioContext.createMediaElementSource(videoPlayer);
-  source.connect(gainNode);
-  gainNode.connect(audioContext.destination);
+  if (state.audioContext) return; // If already set up, don't create a new context
+  state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  state.gainNode = state.audioContext.createGain();
+  const source = state.audioContext.createMediaElementSource(videoPlayer);
+  source.connect(state.gainNode);
+  state.gainNode.connect(state.audioContext.destination);
 }
 
 function changeVolume(delta) {
-  if (!audioContext) setupAudioContext();
+  if (!state.audioContext) setupAudioContext();
   
-  const currentVolume = gainNode.gain.value;
+  const currentVolume = state.gainNode.gain.value;
   let newVolume = currentVolume + delta;
   
   newVolume = Math.round(newVolume * 100) / 100;
   newVolume = Math.min(Math.max(newVolume, 0), 2);
   
-  gainNode.gain.setValueAtTime(newVolume, audioContext.currentTime);
+  state.gainNode.gain.setValueAtTime(newVolume, state.audioContext.currentTime);
   updateVolumeSlider(newVolume);
   updateVolumeIcon(newVolume);
   
-  if (currentClip) {
-    debouncedSaveVolume(currentClip.originalName, newVolume);
+  if (state.currentClip) {
+    debouncedSaveVolume(state.currentClip.originalName, newVolume);
   }
   
   showVolumeContainer();
@@ -4294,7 +4215,7 @@ async function changeClipLocation() {
   if (newLocation) {
     try {
       await ipcRenderer.invoke("set-clip-location", newLocation);
-      clipLocation = newLocation;
+      state.clipLocation = newLocation;
       currentClipLocationSpan.textContent = newLocation;
       await loadClips(); // Reload clips with the new location
     } catch (error) {
@@ -4352,7 +4273,7 @@ async function initializeSettingsModal() {
     openTagManagement();
   });
   
-  // Escape key handler to close settings modal
+  // Escape key handler to close state.settings modal
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && settingsModal.style.display === 'block') {
       closeSettingsModal();
@@ -4365,7 +4286,7 @@ async function initializeSettingsModal() {
       await updateSettingValue('exportQuality', e.target.value);
     } catch (error) {
       logger.error('Error saving export quality:', error);
-      e.target.value = settings.exportQuality;
+      e.target.value = state.settings.exportQuality;
     }
   });
 
@@ -4384,7 +4305,7 @@ async function initializeSettingsModal() {
   // Greyscale icons toggle
   const greyscaleToggle = document.getElementById('greyscaleIcons');
   if (greyscaleToggle) {
-    greyscaleToggle.checked = Boolean(settings.iconGreyscale);
+    greyscaleToggle.checked = Boolean(state.settings.iconGreyscale);
     greyscaleToggle.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('iconGreyscale', e.target.checked);
@@ -4399,13 +4320,13 @@ async function initializeSettingsModal() {
   // New clips indicators toggle
   const newClipsIndicatorsToggle = document.getElementById('showNewClipsIndicators');
   if (newClipsIndicatorsToggle) {
-    newClipsIndicatorsToggle.checked = Boolean(settings.showNewClipsIndicators ?? true);
+    newClipsIndicatorsToggle.checked = Boolean(state.settings.showNewClipsIndicators ?? true);
     newClipsIndicatorsToggle.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('showNewClipsIndicators', e.target.checked);
         // Re-render clips to show/hide indicators instantly
-        if (currentClipList) {
-          renderClips(currentClipList);
+        if (state.currentClipList) {
+          renderClips(state.currentClipList);
         }
       } catch (error) {
         logger.error('Error toggling New Clips Indicators:', error);
@@ -4414,7 +4335,7 @@ async function initializeSettingsModal() {
     });
   }
 
-  // Ambient Glow settings
+  // Ambient Glow state.settings
   const ambientGlowEnabled = document.getElementById('ambientGlowEnabled');
   const ambientGlowSmoothing = document.getElementById('ambientGlowSmoothing');
   const ambientGlowSmoothingValue = document.getElementById('ambientGlowSmoothingValue');
@@ -4424,15 +4345,15 @@ async function initializeSettingsModal() {
   const ambientGlowOpacity = document.getElementById('ambientGlowOpacity');
   const ambientGlowOpacityValue = document.getElementById('ambientGlowOpacityValue');
 
-  // Initialize ambient glow settings from saved values
-  const glowSettings = settings?.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+  // Initialize ambient glow state.settings from saved values
+  const glowSettings = state.settings?.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
   
   if (ambientGlowEnabled) {
     ambientGlowEnabled.checked = glowSettings.enabled;
     ambientGlowEnabled.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('ambientGlow.enabled', e.target.checked);
-        applyAmbientGlowSettings(settings.ambientGlow);
+        applyAmbientGlowSettings(state.settings.ambientGlow);
       } catch (error) {
         logger.error('Error toggling Ambient Glow:', error);
         e.target.checked = !e.target.checked;
@@ -4449,7 +4370,7 @@ async function initializeSettingsModal() {
     ambientGlowSmoothing.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('ambientGlow.smoothing', parseFloat(e.target.value));
-        applyAmbientGlowSettings(settings.ambientGlow);
+        applyAmbientGlowSettings(state.settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow smoothing:', error);
       }
@@ -4461,7 +4382,7 @@ async function initializeSettingsModal() {
     ambientGlowFps.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('ambientGlow.fps', parseInt(e.target.value));
-        applyAmbientGlowSettings(settings.ambientGlow);
+        applyAmbientGlowSettings(state.settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow FPS:', error);
       }
@@ -4477,7 +4398,7 @@ async function initializeSettingsModal() {
     ambientGlowBlur.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('ambientGlow.blur', parseInt(e.target.value));
-        applyAmbientGlowSettings(settings.ambientGlow);
+        applyAmbientGlowSettings(state.settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow blur:', error);
       }
@@ -4493,7 +4414,7 @@ async function initializeSettingsModal() {
     ambientGlowOpacity.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('ambientGlow.opacity', parseFloat(e.target.value));
-        applyAmbientGlowSettings(settings.ambientGlow);
+        applyAmbientGlowSettings(state.settings.ambientGlow);
       } catch (error) {
         logger.error('Error saving Ambient Glow opacity:', error);
       }
@@ -4502,11 +4423,11 @@ async function initializeSettingsModal() {
 }
 
 async function openSettingsModal() {
-  logger.debug('Opening settings modal. Current settings:', settings);
+  logger.debug('Opening state.settings modal. Current state.settings:', state.settings);
   
-  // Fetch fresh settings
-  settings = await fetchSettings();
-  logger.debug('Fresh settings fetched:', settings);
+  // Fetch fresh state.settings
+  state.settings = await fetchSettings();
+  logger.debug('Fresh state.settings fetched:', state.settings);
   
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
@@ -4518,49 +4439,49 @@ async function openSettingsModal() {
     // Update clip location
     const currentClipLocation = document.getElementById('currentClipLocation');
     if (currentClipLocation) {
-      currentClipLocation.textContent = clipLocation || 'Not set';
+      currentClipLocation.textContent = state.clipLocation || 'Not set';
     }
     
-    // Set control values from settings
+    // Set control values from state.settings
     const enableDiscordRPCToggle = document.getElementById('enableDiscordRPC');
     const exportQualitySelect = document.getElementById('exportQuality');
     const previewVolumeSlider = document.getElementById('previewVolumeSlider');
     const previewVolumeValue = document.getElementById('previewVolumeValue');
 
     logger.debug('Setting controls with values:', {
-      enableDiscordRPC: settings.enableDiscordRPC,
-      exportQuality: settings.exportQuality,
-      previewVolume: settings.previewVolume
+      enableDiscordRPC: state.settings.enableDiscordRPC,
+      exportQuality: state.settings.exportQuality,
+      previewVolume: state.settings.previewVolume
     });
 
     if (enableDiscordRPCToggle) {
-      enableDiscordRPCToggle.checked = Boolean(settings.enableDiscordRPC);
+      enableDiscordRPCToggle.checked = Boolean(state.settings.enableDiscordRPC);
     }
     
     if (exportQualitySelect) {
-      exportQualitySelect.value = settings.exportQuality || 'discord';
+      exportQualitySelect.value = state.settings.exportQuality || 'discord';
     }
 
     // Refresh greyscale toggle to reflect persisted value
     const greyscaleToggleEl = document.getElementById('greyscaleIcons');
     if (greyscaleToggleEl) {
-      greyscaleToggleEl.checked = Boolean(settings.iconGreyscale);
+      greyscaleToggleEl.checked = Boolean(state.settings.iconGreyscale);
     }
 
     // Refresh new clips indicators toggle to reflect persisted value
     const newClipsIndicatorsToggleEl = document.getElementById('showNewClipsIndicators');
     if (newClipsIndicatorsToggleEl) {
-      newClipsIndicatorsToggleEl.checked = Boolean(settings.showNewClipsIndicators ?? true);
+      newClipsIndicatorsToggleEl.checked = Boolean(state.settings.showNewClipsIndicators ?? true);
     }
 
     if (previewVolumeSlider && previewVolumeValue) {
-      const savedVolume = settings.previewVolume ?? 0.1;
+      const savedVolume = state.settings.previewVolume ?? 0.1;
       previewVolumeSlider.value = savedVolume;
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
     }
 
-    // Refresh ambient glow settings to reflect persisted values
-    const glowSettings = settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+    // Refresh ambient glow state.settings to reflect persisted values
+    const glowSettings = state.settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
     
     const ambientGlowEnabledEl = document.getElementById('ambientGlowEnabled');
     if (ambientGlowEnabledEl) {
@@ -4612,7 +4533,7 @@ function closeSettingsModal() {
     }, 300);
   }
   
-  // Save settings state
+  // Save state.settings state
   updateSettings();
   
   // Update preview volumes
@@ -4623,7 +4544,7 @@ function closeSettingsModal() {
 }
 
 async function updateSettings() {
-  settings = await ipcRenderer.invoke('get-settings');
+  state.settings = await ipcRenderer.invoke('get-settings');
 }
 
 function updateAllPreviewVolumes(newVolume) {
@@ -4642,7 +4563,7 @@ document
   .getElementById("changeLocationBtn")
   .addEventListener("click", changeClipLocation);
 
-// Add click-outside-to-close functionality for settings modal
+// Add click-outside-to-close functionality for state.settings modal
 document.addEventListener('click', (e) => {
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal && settingsModal.style.display !== 'none') {
@@ -4838,13 +4759,13 @@ function createClipElement(clip) {
 
     function cleanupVideoPreview() {
       // Clear the timeout if it exists
-      if (previewCleanupTimeout) {
-        clearTimeout(previewCleanupTimeout);
-        previewCleanupTimeout = null;
+      if (state.previewCleanupTimeout) {
+        clearTimeout(state.previewCleanupTimeout);
+        state.previewCleanupTimeout = null;
       }
     
       // Reset active preview
-      activePreview = null;
+      state.activePreview = null;
     
       // Clean up video element if it exists
       if (videoElement) {
@@ -4878,19 +4799,19 @@ function createClipElement(clip) {
     
       // Store the current preview context
       const currentPreviewContext = {};
-      activePreview = currentPreviewContext;
+      state.activePreview = currentPreviewContext;
     
       // Set a small delay before creating the preview
-      previewCleanupTimeout = setTimeout(async () => {
+      state.previewCleanupTimeout = setTimeout(async () => {
         // Check if this preview is still the active one
-        if (activePreview !== currentPreviewContext) return;
+        if (state.activePreview !== currentPreviewContext) return;
     
         try {
           const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
           const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
           
           // Check again if this preview is still active
-          if (activePreview !== currentPreviewContext) return;
+          if (state.activePreview !== currentPreviewContext) return;
     
           let startTime;
           if (trimData) {
@@ -4900,13 +4821,13 @@ function createClipElement(clip) {
           }
     
           // Final check before creating video element
-          if (activePreview !== currentPreviewContext) return;
+          if (state.activePreview !== currentPreviewContext) return;
     
           // Get the current preview volume setting
-          const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? settings?.previewVolume ?? 0.1;
+          const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? state.settings?.previewVolume ?? 0.1;
     
           videoElement = document.createElement("video");
-          videoElement.src = `file://${path.join(clipLocation, clip.originalName)}`;
+          videoElement.src = `file://${path.join(state.clipLocation, clip.originalName)}`;
           videoElement.volume = currentPreviewVolume;
           videoElement.loop = true;
           videoElement.preload = "metadata";
@@ -4924,7 +4845,7 @@ function createClipElement(clip) {
           // Add loadedmetadata event listener
           videoElement.addEventListener('loadedmetadata', () => {
             // Final check before playing
-            if (activePreview !== currentPreviewContext || !clipElement.matches(':hover')) {
+            if (state.activePreview !== currentPreviewContext || !clipElement.matches(':hover')) {
               cleanupVideoPreview();
               return;
             }
@@ -4995,7 +4916,7 @@ function createClipElement(clip) {
           if (iconTitle) {
             iconImg.title = iconTitle;
           }
-          if (settings?.iconGreyscale) {
+          if (state.settings?.iconGreyscale) {
             iconImg.classList.add('greyscale-icon');
           }
           clipInfo.appendChild(iconImg);
@@ -5024,7 +4945,7 @@ function handleClipClick(e, clip) {
   }
 
   // Clear selection if clicking without modifier keys
-  if (selectedClips.size > 0) {
+  if (state.selectedClips.size > 0) {
     clearSelection();
     return;
   }
@@ -5068,9 +4989,9 @@ ipcRenderer.on("close-video-player", () => {
 });
 
 function updateNavigationButtons() {
-  const currentIndex = currentClipList.findIndex(clip => clip.originalName === currentClip.originalName);
+  const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === state.currentClip.originalName);
   document.getElementById('prev-video').disabled = currentIndex <= 0;
-  document.getElementById('next-video').disabled = currentIndex >= currentClipList.length - 1;
+  document.getElementById('next-video').disabled = currentIndex >= state.currentClipList.length - 1;
 }
 
 function pauseVideoIfPlaying() {
@@ -5080,10 +5001,10 @@ function pauseVideoIfPlaying() {
 }
 
 function navigateToVideo(direction) {
-  const currentIndex = currentClipList.findIndex(clip => clip.originalName === currentClip.originalName);
+  const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === state.currentClip.originalName);
   const newIndex = currentIndex + direction;
-  if (newIndex >= 0 && newIndex < currentClipList.length) {
-    const nextClip = currentClipList[newIndex];
+  if (newIndex >= 0 && newIndex < state.currentClipList.length) {
+    const nextClip = state.currentClipList[newIndex];
     openClip(nextClip.originalName, nextClip.customName);
   }
 }
@@ -5099,9 +5020,9 @@ document.getElementById('next-video').addEventListener('click', (e) => {
 });
 
 async function confirmAndDeleteClip(clipToDelete = null) {
-  if (!clipToDelete && !currentClip) return;
+  if (!clipToDelete && !state.currentClip) return;
   
-  const clipInfo = clipToDelete || currentClip;
+  const clipInfo = clipToDelete || state.currentClip;
   
   const isConfirmed = await showCustomConfirm(`Are you sure you want to delete "${clipInfo.customName}"? This action cannot be undone.`);
 
@@ -5114,16 +5035,16 @@ async function confirmAndDeleteClip(clipToDelete = null) {
       clipElement.remove();
     }
 
-    // Remove from allClips and currentClipList
-    const allClipsIndex = allClips.findIndex(clip => clip.originalName === clipInfo.originalName);
-    const currentClipListIndex = currentClipList.findIndex(clip => clip.originalName === clipInfo.originalName);
+    // Remove from state.allClips and state.currentClipList
+    const allClipsIndex = state.allClips.findIndex(clip => clip.originalName === clipInfo.originalName);
+    const currentClipListIndex = state.currentClipList.findIndex(clip => clip.originalName === clipInfo.originalName);
     
-    if (allClipsIndex > -1) allClips.splice(allClipsIndex, 1);
-    if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 1);
+    if (allClipsIndex > -1) state.allClips.splice(allClipsIndex, 1);
+    if (currentClipListIndex > -1) state.currentClipList.splice(currentClipListIndex, 1);
 
     try {
       // Close the player if we're deleting the current clip
-      if (currentClip && currentClip.originalName === clipInfo.originalName) {
+      if (state.currentClip && state.currentClip.originalName === clipInfo.originalName) {
         closePlayer();
       }
       
@@ -5194,14 +5115,14 @@ async function confirmAndDeleteClip(clipToDelete = null) {
       }
       
       // Revert data changes
-      if (allClipsIndex > -1) allClips.splice(allClipsIndex, 0, clipInfo);
-      if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 0, clipInfo);
+      if (allClipsIndex > -1) state.allClips.splice(allClipsIndex, 0, clipInfo);
+      if (currentClipListIndex > -1) state.currentClipList.splice(currentClipListIndex, 0, clipInfo);
     } finally {
       // Hide deletion tooltip
       hideDeletionTooltip();
     }
 
-    updateClipCounter(currentClipList.length);
+    updateClipCounter(state.currentClipList.length);
     
     // Update new clips indicators after deletion
     updateNewClipsIndicators();
@@ -5216,34 +5137,34 @@ async function confirmAndDeleteClip(clipToDelete = null) {
 }
 
 function showDeletionTooltip() {
-  if (!deletionTooltip) {
-    deletionTooltip = document.createElement('div');
-    deletionTooltip.className = 'deletion-tooltip';
-    deletionTooltip.textContent = 'Deleting files...';
-    document.body.appendChild(deletionTooltip);
+  if (!state.deletionTooltip) {
+    state.deletionTooltip = document.createElement('div');
+    state.deletionTooltip.className = 'deletion-tooltip';
+    state.deletionTooltip.textContent = 'Deleting files...';
+    document.body.appendChild(state.deletionTooltip);
   }
   
   // Force a reflow to ensure the initial state is applied
-  deletionTooltip.offsetHeight;
+  state.deletionTooltip.offsetHeight;
   
-  deletionTooltip.classList.add('show');
+  state.deletionTooltip.classList.add('show');
   
-  if (deletionTimeout) {
-    clearTimeout(deletionTimeout);
+  if (state.deletionTimeout) {
+    clearTimeout(state.deletionTimeout);
   }
   
-  deletionTimeout = setTimeout(() => {
+  state.deletionTimeout = setTimeout(() => {
     hideDeletionTooltip();
   }, 5000);
 }
 
 function hideDeletionTooltip() {
-  if (deletionTooltip) {
-    deletionTooltip.classList.remove('show');
+  if (state.deletionTooltip) {
+    state.deletionTooltip.classList.remove('show');
   }
-  if (deletionTimeout) {
-    clearTimeout(deletionTimeout);
-    deletionTimeout = null;
+  if (state.deletionTimeout) {
+    clearTimeout(state.deletionTimeout);
+    state.deletionTimeout = null;
   }
 }
 
@@ -5397,35 +5318,35 @@ function isVideoInFullscreen(videoElement) {
 }
 
 async function exportVideoWithFileSelection() {
-  if (!currentClip) return;
-  const savePath = await ipcRenderer.invoke("open-save-dialog", "video", currentClip.originalName, currentClip.customName);
+  if (!state.currentClip) return;
+  const savePath = await ipcRenderer.invoke("open-save-dialog", "video", state.currentClip.originalName, state.currentClip.customName);
   if (savePath) {
     await exportVideo(savePath);
   }
 }
 
 async function exportAudioWithFileSelection() {
-  if (!currentClip) return;
-  const savePath = await ipcRenderer.invoke("open-save-dialog", "audio", currentClip.originalName, currentClip.customName);
+  if (!state.currentClip) return;
+  const savePath = await ipcRenderer.invoke("open-save-dialog", "audio", state.currentClip.originalName, state.currentClip.customName);
   if (savePath) {
     await exportAudio(savePath);
   }
 }
 
 async function exportAudioToClipboard() {
-  if (!currentClip) return;
+  if (!state.currentClip) return;
   await exportAudio();
 }
 
 async function exportVideo(savePath = null) {
   try {
-    const volume = await loadVolume(currentClip.originalName);
+    const volume = await loadVolume(state.currentClip.originalName);
     const speed = videoPlayer.playbackRate;
     const result = await ipcRenderer.invoke(
       "export-video",
-      currentClip.originalName,
-      trimStartTime,
-      trimEndTime,
+      state.currentClip.originalName,
+      state.trimStartTime,
+      state.trimEndTime,
       volume,
       speed,
       savePath
@@ -5463,13 +5384,13 @@ function showFallbackNotice() {
 
 async function exportAudio(savePath = null) {
   try {
-    const volume = await loadVolume(currentClip.originalName);
+    const volume = await loadVolume(state.currentClip.originalName);
     const speed = videoPlayer.playbackRate;
     const result = await ipcRenderer.invoke(
       "export-audio",
-      currentClip.originalName,
-      trimStartTime,
-      trimEndTime,
+      state.currentClip.originalName,
+      state.trimStartTime,
+      state.trimEndTime,
       volume,
       speed,
       savePath
@@ -5491,23 +5412,23 @@ ipcRenderer.on('ffmpeg-error', (event, message) => {
 });
 
 async function exportTrimmedVideo() {
-  if (!currentClip) return;
+  if (!state.currentClip) return;
 
   try {
     await getFfmpegVersion();
-    const volume = await loadVolume(currentClip.originalName);
+    const volume = await loadVolume(state.currentClip.originalName);
     const speed = videoPlayer.playbackRate;
-    logger.info(`Exporting video: ${currentClip.originalName}`);
-    logger.info(`Trim start: ${trimStartTime}, Trim end: ${trimEndTime}`);
+    logger.info(`Exporting video: ${state.currentClip.originalName}`);
+    logger.info(`Trim start: ${state.trimStartTime}, Trim end: ${state.trimEndTime}`);
     logger.info(`Volume: ${volume}, Speed: ${speed}`);
 
     showExportProgress(0, 100, true); // Show initial progress
 
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
-      currentClip.originalName,
-      trimStartTime,
-      trimEndTime,
+      state.currentClip.originalName,
+      state.trimStartTime,
+      state.trimEndTime,
       volume,
       speed
     );
@@ -5585,19 +5506,19 @@ async function openClip(originalName, customName) {
   };
   mark('start');
   
-  elapsedTime = 0;
+  state.elapsedTime = 0;
 
   // Reset auto-seek behavior for new clip
-  isAutoResetDisabled = false;
-  wasLastSeekManual = false;
+  state.isAutoResetDisabled = false;
+  state.wasLastSeekManual = false;
 
   // Log the previous session if one was active
   await logCurrentWatchSession();
   mark('logSession');
 
-  if (currentCleanup) {
-    currentCleanup();
-    currentCleanup = null;
+  if (state.currentCleanup) {
+    state.currentCleanup();
+    state.currentCleanup = null;
   }
 
   // Remove last-opened class from any previously highlighted clip
@@ -5682,19 +5603,19 @@ async function openClip(originalName, customName) {
   
   logger.info(`[${originalName}] Clip data ready. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
 
-  currentClip = { originalName, customName, tags: clipTags };
+  state.currentClip = { originalName, customName, tags: clipTags };
 
   // Set up trim points before video loads
   if (trimData) {
-    trimStartTime = trimData.start;
-    trimEndTime = trimData.end;
-    initialPlaybackTime = trimData.start;
-    logger.info(`[${originalName}] Using trim data - Start: ${trimStartTime}, End: ${trimEndTime}, Initial: ${initialPlaybackTime}`);
+    state.trimStartTime = trimData.start;
+    state.trimEndTime = trimData.end;
+    state.initialPlaybackTime = trimData.start;
+    logger.info(`[${originalName}] Using trim data - Start: ${state.trimStartTime}, End: ${state.trimEndTime}, Initial: ${state.initialPlaybackTime}`);
   } else {
-    trimStartTime = 0;
-    trimEndTime = clipInfo.format.duration;
-    initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
-    logger.info(`[${originalName}] No trim data - Start: ${trimStartTime}, End: ${trimEndTime}, Initial: ${initialPlaybackTime}`);
+    state.trimStartTime = 0;
+    state.trimEndTime = clipInfo.format.duration;
+    state.initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
+    logger.info(`[${originalName}] No trim data - Start: ${state.trimStartTime}, End: ${state.trimEndTime}, Initial: ${state.initialPlaybackTime}`);
   }
 
   logger.info(`[${originalName}] Setting up video load promise...`);
@@ -5719,13 +5640,13 @@ async function openClip(originalName, customName) {
       logger.info(`[${originalName}] Video metadata loaded - duration: ${videoPlayer.duration}, readyState: ${videoPlayer.readyState}`);
       updateTrimControls();
       
-      logger.info(`[${originalName}] Attempting to seek to time: ${initialPlaybackTime} (duration: ${videoPlayer.duration})`);
+      logger.info(`[${originalName}] Attempting to seek to time: ${state.initialPlaybackTime} (duration: ${videoPlayer.duration})`);
       const oldTime = videoPlayer.currentTime;
-      videoPlayer.currentTime = initialPlaybackTime;
+      videoPlayer.currentTime = state.initialPlaybackTime;
       
       // Log if the time actually changed
       setTimeout(() => {
-        logger.info(`[${originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${videoPlayer.currentTime}, target: ${initialPlaybackTime}`);
+        logger.info(`[${originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${videoPlayer.currentTime}, target: ${state.initialPlaybackTime}`);
       }, 50);
       
       videoPlayer.removeEventListener('loadedmetadata', loadHandler);
@@ -5834,22 +5755,22 @@ async function openClip(originalName, customName) {
   clipTitle.dataset.originalName = originalName;
 
   // Load and set the volume before playing the video
-  logger.info(`[${originalName}] Loading volume settings...`);
+  logger.info(`[${originalName}] Loading volume state.settings...`);
   try {
     const savedVolume = await loadVolume(originalName);
     mark('loadVolume');
     logger.info(`[${originalName}] Loaded volume: ${savedVolume}`);
     setupAudioContext();
-    gainNode.gain.setValueAtTime(savedVolume, audioContext.currentTime);
+    state.gainNode.gain.setValueAtTime(savedVolume, state.audioContext.currentTime);
     updateVolumeSlider(savedVolume);
   } catch (error) {
     logger.error(`[${originalName}] Error loading volume:`, error);
     setupAudioContext();
-    gainNode.gain.setValueAtTime(1, audioContext.currentTime);
+    state.gainNode.gain.setValueAtTime(1, state.audioContext.currentTime);
     updateVolumeSlider(1); // Default to 100%
   }
 
-  logger.info(`[${originalName}] Loading speed settings...`);
+  logger.info(`[${originalName}] Loading speed state.settings...`);
   try {
     const savedSpeed = await loadSpeed(originalName);
     mark('loadSpeed');
@@ -5868,15 +5789,15 @@ async function openClip(originalName, customName) {
   // Just mark this point for timing comparison
   mark('playerSetupComplete');
 
-  // Start ambient glow effect (respecting saved settings)
+  // Start ambient glow effect (respecting saved state.settings)
   if (ambientGlowCanvas && videoPlayer) {
-    const glowSettings = settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
+    const glowSettings = state.settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
     
     if (!ambientGlowManager) {
       ambientGlowManager = new AmbientGlowManager(videoPlayer, ambientGlowCanvas);
     }
     
-    // Apply saved settings
+    // Apply saved state.settings
     ambientGlowManager.frameInterval = 1000 / glowSettings.fps;
     ambientGlowManager.blendFactor = glowSettings.smoothing;
     ambientGlowCanvas.style.filter = `blur(${glowSettings.blur}px) saturate(${glowSettings.saturation})`;
@@ -5893,19 +5814,19 @@ async function openClip(originalName, customName) {
   document.addEventListener("keydown", handleKeyPress);
   document.addEventListener("keyup", handleKeyRelease);
 
-  // Update the clip duration in the allClips array
-  const clipIndex = allClips.findIndex(
+  // Update the clip duration in the state.allClips array
+  const clipIndex = state.allClips.findIndex(
     (clip) => clip.originalName === originalName,
   );
   if (clipIndex !== -1) {
-    allClips[clipIndex].duration = clipInfo.format.duration;
+    state.allClips[clipIndex].duration = clipInfo.format.duration;
   }
 
   showLoadingOverlay();
 
   videoPlayer.addEventListener("loadedmetadata", async () => {
     updateTrimControls();
-    videoPlayer.currentTime = initialPlaybackTime;
+    videoPlayer.currentTime = state.initialPlaybackTime;
   }, { once: true });
   videoPlayer.addEventListener("canplay", handleVideoCanPlay);
   videoPlayer.addEventListener("progress", updateLoadingProgress);
@@ -5932,22 +5853,22 @@ async function openClip(originalName, customName) {
     showControls();
   });
   videoContainer.addEventListener("mouseleave", () => {
-    isMouseOverControls = false;
+    state.isMouseOverControls = false;
     if (!videoPlayer.paused && !document.activeElement.closest('#video-controls')) {
-      controlsTimeout = setTimeout(hideControls, 3000);
+      state.controlsTimeout = setTimeout(hideControls, 3000);
     }
   });
 
   videoPlayer.addEventListener('ended', () => {
     videoPlayer.pause();
     isPlaying = false;
-    videoPlayer.currentTime = trimStartTime;
+    videoPlayer.currentTime = state.trimStartTime;
   });
 
   videoPlayer.addEventListener('pause', () => {
     showControls();
-    if (currentClip) {
-      updateDiscordPresenceForClip(currentClip, false);
+    if (state.currentClip) {
+      updateDiscordPresenceForClip(state.currentClip, false);
     }
     // Update active duration when paused
     if (lastPlayTimestamp) {
@@ -5956,8 +5877,8 @@ async function openClip(originalName, customName) {
     }
   });
   videoPlayer.addEventListener("play", () => {
-    if (currentClip) {
-      updateDiscordPresenceForClip(currentClip, true);
+    if (state.currentClip) {
+      updateDiscordPresenceForClip(state.currentClip, true);
     }
     // Start tracking active time
     lastPlayTimestamp = Date.now();
@@ -5967,19 +5888,19 @@ async function openClip(originalName, customName) {
     }
 
     showControls();
-    controlsTimeout = setTimeout(hideControls, 3000);
+    state.controlsTimeout = setTimeout(hideControls, 3000);
     resetControlsTimeout();
   });
 
   videoControls.addEventListener("mouseenter", () => {
-    isMouseOverControls = true;
+    state.isMouseOverControls = true;
     showControls();
   });
 
   videoControls.addEventListener("mouseleave", () => {
-    isMouseOverControls = false;
+    state.isMouseOverControls = false;
     if (!videoPlayer.paused) {
-      controlsTimeout = setTimeout(hideControls, 3000);
+      state.controlsTimeout = setTimeout(hideControls, 3000);
     }
   });
 
@@ -5987,15 +5908,15 @@ async function openClip(originalName, customName) {
   const interactiveElements = videoControls.querySelectorAll('button, input, #clip-title');
   interactiveElements.forEach(element => {
     element.addEventListener('focus', () => {
-      clearTimeout(controlsTimeout);
+      clearTimeout(state.controlsTimeout);
       showControls();
     });
   
     element.addEventListener('blur', (e) => {
       // Only hide controls if we're not focusing another interactive element
       if (!e.relatedTarget || !videoControls.contains(e.relatedTarget)) {
-        if (!videoPlayer.paused && !isMouseOverControls) {
-          controlsTimeout = setTimeout(hideControls, 3000);
+        if (!videoPlayer.paused && !state.isMouseOverControls) {
+          state.controlsTimeout = setTimeout(hideControls, 3000);
         }
       }
     });
@@ -6005,7 +5926,7 @@ async function openClip(originalName, customName) {
   updateNavigationButtons();
 
   // Clean up function to remove event listeners
-  currentCleanup = () => {
+  state.currentCleanup = () => {
     document.removeEventListener("keydown", handleKeyPress);
     document.removeEventListener("keyup", handleKeyRelease);
     videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
@@ -6070,7 +5991,7 @@ function showControls() {
 }
 
 function hideControls() {
-  if (!videoPlayer.paused && !isMouseOverControls && !document.activeElement.closest('#video-controls')) {
+  if (!videoPlayer.paused && !state.isMouseOverControls && !document.activeElement.closest('#video-controls')) {
     videoControls.style.transition = 'opacity 0.5s';
     videoControls.classList.remove("visible");
   }
@@ -6095,25 +6016,25 @@ document.addEventListener('mouseleave', handleMouseLeave);
 
 function hideControlsInstantly() {
   videoControls.classList.remove("visible");
-  clearTimeout(controlsTimeout);
+  clearTimeout(state.controlsTimeout);
 }
 
 function handleVideoSeeked() {
-  if (currentClip) {
-    elapsedTime = Math.floor(videoPlayer.currentTime);
+  if (state.currentClip) {
+    state.elapsedTime = Math.floor(videoPlayer.currentTime);
     // Check if the clip is private before updating Discord presence
-    logger.info('Current clip:', currentClip.tags);
-    if (!currentClip.tags || !currentClip.tags.includes('Private')) {
-      updateDiscordPresenceForClip(currentClip, !videoPlayer.paused);
+    logger.info('Current clip:', state.currentClip.tags);
+    if (!state.currentClip.tags || !state.currentClip.tags.includes('Private')) {
+      updateDiscordPresenceForClip(state.currentClip, !videoPlayer.paused);
     }
   }
 }
 
 function handleVideoCanPlay() {
-  if (isLoading) {
-    isLoading = false;
+  if (state.isLoading) {
+    state.isLoading = false;
     hideLoadingOverlay();
-    videoPlayer.currentTime = initialPlaybackTime;
+    videoPlayer.currentTime = state.initialPlaybackTime;
   }
   // Ensure thumbnail hides when video becomes playable
   videoPlayer.style.opacity = '1';
@@ -6153,10 +6074,10 @@ function setupClipTitleEditing() {
 }
 
 function clipTitleInputHandler() {
-  if (currentClip) {
+  if (state.currentClip) {
     saveTitleChange(
-      currentClip.originalName,
-      currentClip.customName,
+      state.currentClip.originalName,
+      state.currentClip.customName,
       clipTitle.value,
       false,
     );
@@ -6167,7 +6088,7 @@ function clipTitleFocusHandler() {
   isRenamingActive = true;
 
   clipTitle.dataset.originalValue = clipTitle.value;
-  updateDiscordPresence('Editing clip title', currentClip.customName);
+  updateDiscordPresence('Editing clip title', state.currentClip.customName);
   logger.info(
     "Clip title focused. Original value:",
     clipTitle.dataset.originalValue,
@@ -6176,10 +6097,10 @@ function clipTitleFocusHandler() {
 
 function clipTitleBlurHandler() {
   isRenamingActive = false;
-  if (currentClip) {
+  if (state.currentClip) {
     saveTitleChange(
-      currentClip.originalName,
-      currentClip.customName,
+      state.currentClip.originalName,
+      state.currentClip.customName,
       clipTitle.value,
       false,
     );
@@ -6208,9 +6129,9 @@ function closePlayer() {
     document.removeEventListener("keyup", handleKeyRelease);
   }
 
-  // Capture necessary information before resetting currentClip
-  const originalName = currentClip ? currentClip.originalName : null;
-  const oldCustomName = currentClip ? currentClip.customName : null;
+  // Capture necessary information before resetting state.currentClip
+  const originalName = state.currentClip ? state.currentClip.originalName : null;
+  const oldCustomName = state.currentClip ? state.currentClip.customName : null;
   const newCustomName = clipTitle.value;
 
   // Save any pending changes immediately
@@ -6271,18 +6192,18 @@ function closePlayer() {
     }
 
     // Reset current clip
-    currentClip = null;
-    if (currentCleanup) {
-      currentCleanup();
-      currentCleanup = null;
+    state.currentClip = null;
+    if (state.currentCleanup) {
+      state.currentCleanup();
+      state.currentCleanup = null;
     }
   });
 
-  clearInterval(discordPresenceInterval);
-  updateDiscordPresence('Browsing clips', `Total: ${currentClipList.length}`);
+  clearInterval(state.discordPresenceInterval);
+  updateDiscordPresence('Browsing clips', `Total: ${state.currentClipList.length}`);
   
   // Re-enable grid navigation if controller is connected
-  if (gamepadManager && gamepadManager.isGamepadConnected() && getVisibleClips().length > 0) {
+  if (state.gamepadManager && state.gamepadManager.isGamepadConnected() && getVisibleClips().length > 0) {
     setTimeout(() => {
       enableGridNavigation();
     }, 200); // Small delay to ensure player overlay is hidden
@@ -6298,8 +6219,8 @@ playerOverlay.addEventListener("click", closePlayer);
 
 function handleKeyRelease(e) {
   if (e.key === "," || e.key === ".") {
-    isFrameStepping = false;
-    frameStepDirection = 0;
+    state.isFrameStepping = false;
+    state.frameStepDirection = 0;
   }
 
   // Handle Space release for temporary speed boost or tap-to-toggle
@@ -6309,21 +6230,21 @@ function handleKeyRelease(e) {
     const isPlayerActive = playerOverlay.style.display === "block";
     if (!isPlayerActive || isClipTitleFocused || isSearching) return;
 
-    if (spaceHoldTimeoutId) {
-      clearTimeout(spaceHoldTimeoutId);
-      spaceHoldTimeoutId = null;
+    if (state.spaceHoldTimeoutId) {
+      clearTimeout(state.spaceHoldTimeoutId);
+      state.spaceHoldTimeoutId = null;
     }
 
-    if (wasSpaceHoldBoostActive) {
+    if (state.wasSpaceHoldBoostActive) {
       // Restore previous playback rate without saving/updating UI
-      videoPlayer.playbackRate = speedBeforeSpaceHold;
+      videoPlayer.playbackRate = state.speedBeforeSpaceHold;
     } else {
       // Treat as tap: toggle play/pause
       if (videoPlayer.src) togglePlayPause();
     }
 
-    isSpaceHeld = false;
-    wasSpaceHoldBoostActive = false;
+    state.isSpaceHeld = false;
+    state.wasSpaceHoldBoostActive = false;
   }
 }
 
@@ -6339,15 +6260,15 @@ function handleKeyPress(e) {
   // Special handling for Space: hold to 2x while pressed (no metadata/UI update)
   if (!isClipTitleFocused && !isSearching && (e.key === ' ' || e.code === 'Space')) {
     e.preventDefault();
-    if (!isSpaceHeld) {
-      isSpaceHeld = true;
-      wasSpaceHoldBoostActive = false;
+    if (!state.isSpaceHeld) {
+      state.isSpaceHeld = true;
+      state.wasSpaceHoldBoostActive = false;
       // Start a short delay to distinguish tap vs hold
-      spaceHoldTimeoutId = setTimeout(() => {
+      state.spaceHoldTimeoutId = setTimeout(() => {
         // Only boost if still held and video is playing
-        if (isSpaceHeld && !videoPlayer.paused) {
-          wasSpaceHoldBoostActive = true;
-          speedBeforeSpaceHold = videoPlayer.playbackRate;
+        if (state.isSpaceHeld && !videoPlayer.paused) {
+          state.wasSpaceHoldBoostActive = true;
+          state.speedBeforeSpaceHold = videoPlayer.playbackRate;
           videoPlayer.playbackRate = 2;
         }
       }, 200);
@@ -6433,33 +6354,33 @@ function moveFrame(direction) {
   pauseVideoIfPlaying();
 
   // Track manual seek
-  wasLastSeekManual = true;
+  state.wasLastSeekManual = true;
 
-  if (!isFrameStepping) {
-    isFrameStepping = true;
-    frameStepDirection = direction;
-    lastFrameStepTime = 0;
-    pendingFrameStep = false;
+  if (!state.isFrameStepping) {
+    state.isFrameStepping = true;
+    state.frameStepDirection = direction;
+    state.lastFrameStepTime = 0;
+    state.pendingFrameStep = false;
     requestAnimationFrame(frameStep);
   } else {
-    frameStepDirection = direction;
+    state.frameStepDirection = direction;
   }
 }
 
 function frameStep(timestamp) {
-  if (!isFrameStepping) return;
+  if (!state.isFrameStepping) return;
 
   const minFrameDuration = 1000 / MAX_FRAME_RATE;
-  const elapsedTime = timestamp - lastFrameStepTime;
+  state.elapsedTime = timestamp - state.lastFrameStepTime;
 
-  if (elapsedTime >= minFrameDuration) {
-    if (!pendingFrameStep) {
-      pendingFrameStep = true;
-      const newTime = Math.max(0, Math.min(videoPlayer.currentTime + frameStepDirection * (1 / 30), videoPlayer.duration));
+  if (state.elapsedTime >= minFrameDuration) {
+    if (!state.pendingFrameStep) {
+      state.pendingFrameStep = true;
+      const newTime = Math.max(0, Math.min(videoPlayer.currentTime + state.frameStepDirection * (1 / 30), videoPlayer.duration));
       
       // If frame stepping outside bounds, disable auto-reset
-      if (newTime < trimStartTime || newTime > trimEndTime) {
-        isAutoResetDisabled = true;
+      if (newTime < state.trimStartTime || newTime > state.trimEndTime) {
+        state.isAutoResetDisabled = true;
       }
       
       videoPlayer.currentTime = newTime;
@@ -6471,9 +6392,9 @@ function frameStep(timestamp) {
 }
 
 videoPlayer.addEventListener('seeked', function() {
-  if (pendingFrameStep) {
-    lastFrameStepTime = performance.now();
-    pendingFrameStep = false;
+  if (state.pendingFrameStep) {
+    state.lastFrameStepTime = performance.now();
+    state.pendingFrameStep = false;
     updateVideoDisplay();
   }
 });
@@ -6502,13 +6423,13 @@ function skipTime(direction) {
   logger.info(`Video duration: ${videoPlayer.duration.toFixed(2)}s, Skip duration: ${skipDuration.toFixed(2)}s`);
   
   // Track manual seek
-  wasLastSeekManual = true;
+  state.wasLastSeekManual = true;
   
   const newTime = Math.max(0, Math.min(videoPlayer.currentTime + (direction * skipDuration), videoPlayer.duration));
   
   // If seeking outside bounds, disable auto-reset
-  if (newTime < trimStartTime || newTime > trimEndTime) {
-    isAutoResetDisabled = true;
+  if (newTime < state.trimStartTime || newTime > state.trimEndTime) {
+    state.isAutoResetDisabled = true;
   }
   
   videoPlayer.currentTime = newTime;
@@ -6518,15 +6439,15 @@ function skipTime(direction) {
 
 function setTrimPoint(point) {
   if (point === "start") {
-    trimStartTime = videoPlayer.currentTime;
+    state.trimStartTime = videoPlayer.currentTime;
   } else {
-    trimEndTime = videoPlayer.currentTime;
+    state.trimEndTime = videoPlayer.currentTime;
   }
   
   // When setting trim points, we're adjusting the bounds to match current position,
   // so re-enable auto-reset since we're now inside the new bounds
-  isAutoResetDisabled = false;
-  wasLastSeekManual = true;
+  state.isAutoResetDisabled = false;
+  state.wasLastSeekManual = true;
   
   updateTrimControls();
   saveTrimChanges();
@@ -6538,7 +6459,7 @@ function togglePlayPause() {
       // If the video is at the end (current time is at or very close to duration)
       // ensure we start from the trim start point
       if (Math.abs(videoPlayer.currentTime - videoPlayer.duration) < 0.1) {
-        videoPlayer.currentTime = trimStartTime;
+        videoPlayer.currentTime = state.trimStartTime;
       }
       videoPlayer.play();
       isPlaying = true;
@@ -6556,8 +6477,8 @@ videoClickTarget.addEventListener("click", (e) => {
 
 function updateTrimControls() {
   const duration = videoPlayer.duration;
-  const startPercent = (trimStartTime / duration) * 100;
-  const endPercent = (trimEndTime / duration) * 100;
+  const startPercent = (state.trimStartTime / duration) * 100;
+  const endPercent = (state.trimEndTime / duration) * 100;
 
   trimStart.style.left = `${startPercent}%`;
   trimEnd.style.right = `${100 - endPercent}%`;
@@ -6575,23 +6496,23 @@ function updatePlayhead() {
 
   // Check if current time is outside trim bounds (with tolerance for floating point precision)
   const BOUNDS_TOLERANCE = 0.001; // 1ms tolerance to handle floating point precision issues
-  const isOutsideBounds = (currentTime > trimEndTime + BOUNDS_TOLERANCE) || (currentTime < trimStartTime - BOUNDS_TOLERANCE);
-  const isInsideBounds = (currentTime >= trimStartTime - BOUNDS_TOLERANCE) && (currentTime <= trimEndTime + BOUNDS_TOLERANCE);
+  const isOutsideBounds = (currentTime > state.trimEndTime + BOUNDS_TOLERANCE) || (currentTime < state.trimStartTime - BOUNDS_TOLERANCE);
+  const isInsideBounds = (currentTime >= state.trimStartTime - BOUNDS_TOLERANCE) && (currentTime <= state.trimEndTime + BOUNDS_TOLERANCE);
   
 
   
   // If playhead is back inside bounds, re-enable auto-reset (regardless of how it got there)
-  if (isInsideBounds && isAutoResetDisabled) {
-    isAutoResetDisabled = false;
+  if (isInsideBounds && state.isAutoResetDisabled) {
+    state.isAutoResetDisabled = false;
   }
   
   // Only auto-reset if not disabled and outside bounds
-  if (!isAutoResetDisabled && isOutsideBounds) {
-    videoPlayer.currentTime = trimStartTime;
+  if (!state.isAutoResetDisabled && isOutsideBounds) {
+    videoPlayer.currentTime = state.trimStartTime;
   }
   
   // Reset manual seek flag after processing
-  wasLastSeekManual = false;
+  state.wasLastSeekManual = false;
 
   // Check if the current time is within the buffered range
   let isBuffered = false;
@@ -6625,27 +6546,27 @@ progressBarContainer.addEventListener("mousedown", (e) => {
   const width = rect.width;
   const clickPercent = x / width;
 
-  dragStartX = e.clientX;
+  state.dragStartX = e.clientX;
   
-  if (Math.abs(clickPercent - trimStartTime / videoPlayer.duration) < 0.02) {
-    isDragging = "start";
-  } else if (Math.abs(clickPercent - trimEndTime / videoPlayer.duration) < 0.02) {
-    isDragging = "end";
+  if (Math.abs(clickPercent - state.trimStartTime / videoPlayer.duration) < 0.02) {
+    state.isDragging = "start";
+  } else if (Math.abs(clickPercent - state.trimEndTime / videoPlayer.duration) < 0.02) {
+    state.isDragging = "end";
   }
 
-  if (isDragging) {
-    isDraggingTrim = false; // Reset drag state
+  if (state.isDragging) {
+    state.isDraggingTrim = false; // Reset drag state
     document.body.classList.add('dragging'); // Add dragging class
     document.addEventListener("mousemove", handleTrimDrag);
     document.addEventListener("mouseup", endTrimDrag);
   } else {
     // Track manual seek
-    wasLastSeekManual = true;
+    state.wasLastSeekManual = true;
     const newTime = clickPercent * videoPlayer.duration;
     
     // If seeking outside bounds, disable auto-reset
-    if (newTime < trimStartTime || newTime > trimEndTime) {
-      isAutoResetDisabled = true;
+    if (newTime < state.trimStartTime || newTime > state.trimEndTime) {
+      state.isAutoResetDisabled = true;
     }
     
     videoPlayer.currentTime = newTime;
@@ -6675,13 +6596,13 @@ progressBarContainer.addEventListener('click', (e) => {
 });
 
 function handleTrimDrag(e) {
-  const dragDistance = Math.abs(e.clientX - dragStartX);
+  const dragDistance = Math.abs(e.clientX - state.dragStartX);
   
-  if (dragDistance > dragThreshold) {
-    isDraggingTrim = true;
+  if (dragDistance > state.dragThreshold) {
+    state.isDraggingTrim = true;
   }
   
-  if (isDraggingTrim) {
+  if (state.isDraggingTrim) {
     const rect = progressBarContainer.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const width = rect.width;
@@ -6691,25 +6612,25 @@ function handleTrimDrag(e) {
     // Minimum gap between trim points (0.5 seconds)
     const minGap = 0.5;
 
-    if (isDragging === "start") {
+    if (state.isDragging === "start") {
       // Ensure start doesn't get too close to end
-      const maxStartTime = Math.max(0, trimEndTime - minGap);
-      trimStartTime = Math.max(0, Math.min(dragTime, maxStartTime));
-    } else if (isDragging === "end") {
+      const maxStartTime = Math.max(0, state.trimEndTime - minGap);
+      state.trimStartTime = Math.max(0, Math.min(dragTime, maxStartTime));
+    } else if (state.isDragging === "end") {
       // Ensure end doesn't get too close to start
-      const minEndTime = Math.min(videoPlayer.duration, trimStartTime + minGap);
-      trimEndTime = Math.max(minEndTime, Math.min(videoPlayer.duration, dragTime));
+      const minEndTime = Math.min(videoPlayer.duration, state.trimStartTime + minGap);
+      state.trimEndTime = Math.max(minEndTime, Math.min(videoPlayer.duration, dragTime));
     }
 
     updateTrimControls();
     
     // Track manual seek when dragging trim controls
-    wasLastSeekManual = true;
-    const newTime = isDragging === "start" ? trimStartTime : trimEndTime;
+    state.wasLastSeekManual = true;
+    const newTime = state.isDragging === "start" ? state.trimStartTime : state.trimEndTime;
     
     // When dragging trim controls, we're adjusting the bounds themselves,
     // so we should re-enable auto-reset since we're now at the boundary
-    isAutoResetDisabled = false;
+    state.isAutoResetDisabled = false;
     
     videoPlayer.currentTime = newTime;
     saveTrimChanges();
@@ -6717,14 +6638,14 @@ function handleTrimDrag(e) {
 }
 
 function endTrimDrag(e) {
-  if (!isDraggingTrim) {
+  if (!state.isDraggingTrim) {
     // It was just a click, not a drag
-    const clickPercent = (dragStartX - progressBarContainer.getBoundingClientRect().left) / progressBarContainer.offsetWidth;
+    const clickPercent = (state.dragStartX - progressBarContainer.getBoundingClientRect().left) / progressBarContainer.offsetWidth;
     videoPlayer.currentTime = clickPercent * videoPlayer.duration;
   }
   
-  isDragging = null;
-  isDraggingTrim = false;
+  state.isDragging = null;
+  state.isDraggingTrim = false;
   document.body.classList.remove('dragging');
   document.removeEventListener("mousemove", handleTrimDrag);
   document.removeEventListener("mouseup", endTrimDrag);
@@ -6741,33 +6662,33 @@ function endTrimDrag(e) {
 
 // Add mousedown and mouseup event listeners to track mouse button state
 document.addEventListener("mousedown", () => {
-  isMouseDown = true;
+  state.isMouseDown = true;
 });
 
 document.addEventListener("mouseup", () => {
-  isMouseDown = false;
-  if (isDraggingTrim) {
+  state.isMouseDown = false;
+  if (state.isDraggingTrim) {
     mouseUpTime = Date.now();
   }
-  isDragging = null;
-  isDraggingTrim = false;
+  state.isDragging = null;
+  state.isDraggingTrim = false;
 });
 
 setInterval(checkDragState, 100);
 
 // Modify the checkDragState function
 function checkDragState() {
-  if ((isDragging || isDraggingTrim) && !isMouseDown) {
+  if ((state.isDragging || state.isDraggingTrim) && !state.isMouseDown) {
     const rect = progressBarContainer.getBoundingClientRect();
     if (
-      lastMousePosition.x < rect.left ||
-      lastMousePosition.x > rect.right ||
-      lastMousePosition.y < rect.top ||
-      lastMousePosition.y > rect.bottom
+      state.lastMousePosition.x < rect.left ||
+      state.lastMousePosition.x > rect.right ||
+      state.lastMousePosition.y < rect.top ||
+      state.lastMousePosition.y > rect.bottom
     ) {
       logger.info("Drag state reset due to mouse being outside the progress bar and mouse button not pressed");
-      isDragging = null;
-      isDraggingTrim = false;
+      state.isDragging = null;
+      state.isDraggingTrim = false;
       updateTrimControls();
     }
   }
@@ -6780,7 +6701,7 @@ async function updateClipDisplay(originalName) {
 }
 
 async function saveTrimChanges() {
-  const clipToUpdate = currentClip ? { ...currentClip } : null;
+  const clipToUpdate = state.currentClip ? { ...state.currentClip } : null;
   
   if (!clipToUpdate) {
     logger.info("No clip to save trim data for");
@@ -6797,19 +6718,19 @@ async function saveTrimChanges() {
       await ipcRenderer.invoke(
         "save-trim",
         clipToUpdate.originalName,
-        trimStartTime,
-        trimEndTime
+        state.trimStartTime,
+        state.trimEndTime
       );
       logger.info("Trim data saved successfully");
 
       // Invalidate cache so next open gets fresh data
-      clipDataCache.delete(clipToUpdate.originalName);
+      state.clipDataCache.delete(clipToUpdate.originalName);
 
       // Regenerate thumbnail at new start point
       const result = await ipcRenderer.invoke(
         "regenerate-thumbnail-for-trim",
         clipToUpdate.originalName,
-        trimStartTime
+        state.trimStartTime
       );
 
       if (result.success) {
@@ -6827,8 +6748,8 @@ async function saveTrimChanges() {
         }
       }
 
-      if (currentClip) {
-        updateDiscordPresence('Editing a clip', currentClip.customName);
+      if (state.currentClip) {
+        updateDiscordPresence('Editing a clip', state.currentClip.customName);
       }
     } catch (error) {
       logger.error("Error saving trim data:", error);
@@ -6848,12 +6769,12 @@ async function resetClipTrimTimes(clip) {
     logger.info("Trim data reset successfully for:", clip.originalName);
 
     // Invalidate cache so next open gets fresh data
-    clipDataCache.delete(clip.originalName);
+    state.clipDataCache.delete(clip.originalName);
 
     // If this is the currently playing clip, reset the UI trim times
-    if (currentClip && currentClip.originalName === clip.originalName) {
-      trimStartTime = 0;
-      trimEndTime = videoPlayer.duration;
+    if (state.currentClip && state.currentClip.originalName === clip.originalName) {
+      state.trimStartTime = 0;
+      state.trimEndTime = videoPlayer.duration;
       updateTrimControls();
     }
 
@@ -6906,15 +6827,15 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
         updateClipNameInLibrary(originalName, newCustomName);
         logger.info(`Title successfully changed to: ${newCustomName}`);
         
-        // Update the currentClip object
-        if (currentClip && currentClip.originalName === originalName) {
-          currentClip.customName = newCustomName;
+        // Update the state.currentClip object
+        if (state.currentClip && state.currentClip.originalName === originalName) {
+          state.currentClip.customName = newCustomName;
         }
         
-        // Update the clip in allClips array
-        const clipIndex = allClips.findIndex(clip => clip.originalName === originalName);
+        // Update the clip in state.allClips array
+        const clipIndex = state.allClips.findIndex(clip => clip.originalName === originalName);
         if (clipIndex !== -1) {
-          allClips[clipIndex].customName = newCustomName;
+          state.allClips[clipIndex].customName = newCustomName;
         }
 
         // Update the clip element in the grid
@@ -7033,9 +6954,9 @@ function showCustomConfirm(message) {
 
 const debouncedFilterClips = debounce((filter) => {
   logger.info("Filtering clips with filter:", filter);
-  logger.info("allClips length before filtering:", allClips.length);
+  logger.info("state.allClips length before filtering:", state.allClips.length);
   
-  let filteredClips = [...allClips];
+  let filteredClips = [...state.allClips];
 
   if (filter === "all") {
     filteredClips = filteredClips.filter(clip => !clip.tags.includes("Private"));
@@ -7052,23 +6973,23 @@ const debouncedFilterClips = debounce((filter) => {
 
   logger.info("Filtered clips length:", filteredClips.length);
 
-  currentClipList = filteredClips;
-  renderClips(currentClipList);
+  state.currentClipList = filteredClips;
+  renderClips(state.currentClipList);
 
-  if (currentClip) {
+  if (state.currentClip) {
     updateNavigationButtons();
   }
 
   validateClipLists();
   updateClipCounter(filteredClips.length);
-  updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${currentClipList.length}`);
+  updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${state.currentClipList.length}`);
 }, 300);  // 300ms debounce time
 
 function filterClips() {
-  if (selectedTags.size === 0) {
-    currentClipList = [];
+  if (state.selectedTags.size === 0) {
+    state.currentClipList = [];
   } else {
-    currentClipList = allClips.filter(clip => {
+    state.currentClipList = state.allClips.filter(clip => {
       // Check if clip is unnamed
       const baseFileName = clip.originalName.replace(/\.[^/.]+$/, '');
       const isUnnamed = clip.customName === baseFileName;
@@ -7080,22 +7001,22 @@ function filterClips() {
       let matchesSystemTag = false;
       
       // Handle untagged clips
-      if (selectedTags.has('Untagged') && isUntagged) {
+      if (state.selectedTags.has('Untagged') && isUntagged) {
         matchesSystemTag = true;
       }
 
       // Handle unnamed clips
-      if (selectedTags.has('Unnamed') && isUnnamed) {
+      if (state.selectedTags.has('Unnamed') && isUnnamed) {
         matchesSystemTag = true;
       }
 
       // If clip is untagged and "Untagged" is not selected, exclude it
-      if (isUntagged && !selectedTags.has('Untagged')) {
+      if (isUntagged && !state.selectedTags.has('Untagged')) {
         return false;
       }
 
       // If clip is unnamed and "Unnamed" is not selected, exclude it
-      if (isUnnamed && !selectedTags.has('Unnamed')) {
+      if (isUnnamed && !state.selectedTags.has('Unnamed')) {
         return false;
       }
 
@@ -7106,12 +7027,12 @@ function filterClips() {
 
       // For clips with tags, check regular tag filtering
       if (clip.tags && clip.tags.length > 0) {
-        if (isInTemporaryMode) {
+        if (state.isInTemporaryMode) {
           // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
-          return clip.tags.some(tag => temporaryTagSelections.has(tag));
+          return clip.tags.some(tag => state.temporaryTagSelections.has(tag));
         } else {
           // In normal mode, clips must have ALL their tags selected to be shown
-          return clip.tags.every(tag => selectedTags.has(tag));
+          return clip.tags.every(tag => state.selectedTags.has(tag));
         }
       }
 
@@ -7119,9 +7040,9 @@ function filterClips() {
     });
   }
   
-  currentClipList = removeDuplicates(currentClipList);
-  renderClips(currentClipList);
-  updateClipCounter(currentClipList.length);
+  state.currentClipList = removeDuplicates(state.currentClipList);
+  renderClips(state.currentClipList);
+  updateClipCounter(state.currentClipList.length);
 }
 
 // Helper function to remove duplicates
@@ -7135,15 +7056,15 @@ function removeDuplicates(clips) {
 
 function validateClipLists() {
   logger.info("Validating clip lists");
-  logger.info("allClips length:", allClips.length);
-  logger.info("currentClipList length:", currentClipList.length);
+  logger.info("state.allClips length:", state.allClips.length);
+  logger.info("state.currentClipList length:", state.currentClipList.length);
   logger.info("Rendered clips count:", clipGrid.children.length);
 
-  const allClipsUnique = new Set(allClips.map(clip => clip.originalName)).size === allClips.length;
-  const currentClipListUnique = new Set(currentClipList.map(clip => clip.originalName)).size === currentClipList.length;
+  const allClipsUnique = new Set(state.allClips.map(clip => clip.originalName)).size === state.allClips.length;
+  const currentClipListUnique = new Set(state.currentClipList.map(clip => clip.originalName)).size === state.currentClipList.length;
 
-  logger.info("allClips is unique:", allClipsUnique);
-  logger.info("currentClipList is unique:", currentClipListUnique);
+  logger.info("state.allClips is unique:", allClipsUnique);
+  logger.info("state.currentClipList is unique:", currentClipListUnique);
 
   if (!allClipsUnique || !currentClipListUnique) {
     logger.warn("Duplicate clips detected!");
@@ -7162,7 +7083,7 @@ function updateFilterDropdown() {
   const allTags = new Set(['Untagged', 'Unnamed', ...globalTags]);
   
   // Update count
-  tagCount.textContent = `(${selectedTags.size}/${allTags.size})`;
+  tagCount.textContent = `(${state.selectedTags.size}/${allTags.size})`;
 
   // Create and add the "Untagged" option first
   const untaggedItem = createTagItem('Untagged');
@@ -7186,7 +7107,7 @@ function updateFilterDropdown() {
 
 function createTagItem(tag) {
   const tagItem = document.createElement('div');
-  tagItem.className = `tagv2-item ${savedTagSelections.has(tag) ? 'selected' : ''}`;
+  tagItem.className = `tagv2-item ${state.savedTagSelections.has(tag) ? 'selected' : ''}`;
   
   const label = document.createElement('span');
   label.className = 'tagv2-item-label';
@@ -7219,7 +7140,7 @@ function createTagItem(tag) {
 }
 
 function handleCtrlClickTag(tag, tagItem) {
-  if (!isInTemporaryMode || !temporaryTagSelections.has(tag)) {
+  if (!state.isInTemporaryMode || !state.temporaryTagSelections.has(tag)) {
     // Enter temporary mode or add to temporary selections
     enterTemporaryMode(tag);
   } else {
@@ -7232,18 +7153,18 @@ function handleCtrlClickTag(tag, tagItem) {
 }
 
 function handleRegularClickTag(tag, tagItem) {
-  if (isInTemporaryMode) {
+  if (state.isInTemporaryMode) {
     // If in temporary mode, regular click exits it
     exitTemporaryMode();
   } 
   
   // Toggle the tag selection
-  if (savedTagSelections.has(tag)) {
-    savedTagSelections.delete(tag);
+  if (state.savedTagSelections.has(tag)) {
+    state.savedTagSelections.delete(tag);
   } else {
-    savedTagSelections.add(tag);
+    state.savedTagSelections.add(tag);
   }
-  selectedTags = new Set(savedTagSelections);
+  state.selectedTags = new Set(state.savedTagSelections);
   saveTagPreferences();
   
   updateTagSelectionUI();
@@ -7251,30 +7172,30 @@ function handleRegularClickTag(tag, tagItem) {
 }
 
 function enterTemporaryMode(tag) {
-  isInTemporaryMode = true;
-  temporaryTagSelections.clear();
-  temporaryTagSelections.add(tag);
-  selectedTags = temporaryTagSelections; // Update the global selectedTags
+  state.isInTemporaryMode = true;
+  state.temporaryTagSelections.clear();
+  state.temporaryTagSelections.add(tag);
+  state.selectedTags = state.temporaryTagSelections; // Update the global state.selectedTags
 }
 
 function exitTemporaryMode() {
-  isInTemporaryMode = false;
-  temporaryTagSelections.clear();
-  selectedTags = new Set(savedTagSelections); // Restore saved selections
+  state.isInTemporaryMode = false;
+  state.temporaryTagSelections.clear();
+  state.selectedTags = new Set(state.savedTagSelections); // Restore saved selections
 }
 
 function updateTagSelectionUI() {
   const tagItems = document.querySelectorAll('.tagv2-item');
   tagItems.forEach(item => {
     const label = item.querySelector('.tagv2-item-label').textContent;
-    const isSelected = isInTemporaryMode ? 
-      temporaryTagSelections.has(label) : 
-      savedTagSelections.has(label);
+    const isSelected = state.isInTemporaryMode ? 
+      state.temporaryTagSelections.has(label) : 
+      state.savedTagSelections.has(label);
     
     item.classList.toggle('selected', isSelected);
     
     // Add visual indicator for temporary mode
-    if (isInTemporaryMode && temporaryTagSelections.has(label)) {
+    if (state.isInTemporaryMode && state.temporaryTagSelections.has(label)) {
       item.classList.add('temp-selected');
     } else {
       item.classList.remove('temp-selected');
@@ -7288,19 +7209,19 @@ function updateTagSelectionStates() {
   const tagItems = document.querySelectorAll('.tagv2-item');
   tagItems.forEach(item => {
     const label = item.querySelector('.tagv2-item-label').textContent;
-    item.classList.toggle('selected', selectedTags.has(label));
+    item.classList.toggle('selected', state.selectedTags.has(label));
   });
 }
 
 function updateTagCount() {
   const tagCount = document.getElementById('tagv2-count');
   const allTags = new Set(['Untagged', ...globalTags]);
-  tagCount.textContent = `(${selectedTags.size}/${allTags.size})`;
+  tagCount.textContent = `(${state.selectedTags.size}/${allTags.size})`;
 }
 
 async function saveTagPreferences() {
   try {
-    await ipcRenderer.invoke('save-tag-preferences', Array.from(selectedTags));
+    await ipcRenderer.invoke('save-tag-preferences', Array.from(state.selectedTags));
   } catch (error) {
     logger.error('Error saving tag preferences:', error);
   }
@@ -7384,8 +7305,8 @@ function setupTagFilterEventListeners() {
     selectAllBtn.addEventListener('click', (e) => {
       e.stopPropagation(); // Prevent event from bubbling up
       exitTemporaryMode();
-      savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
-      selectedTags = new Set(savedTagSelections);
+      state.savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
+      state.selectedTags = new Set(state.savedTagSelections);
       saveTagPreferences();
       updateTagSelectionStates();
       updateTagCount();
@@ -7397,8 +7318,8 @@ function setupTagFilterEventListeners() {
     deselectAllBtn.addEventListener('click', (e) => {
       e.stopPropagation(); // Prevent event from bubbling up
       exitTemporaryMode();
-      savedTagSelections.clear();
-      selectedTags.clear();
+      state.savedTagSelections.clear();
+      state.selectedTags.clear();
       saveTagPreferences();
       updateTagSelectionStates();
       updateTagCount();
@@ -7408,10 +7329,10 @@ function setupTagFilterEventListeners() {
 }
 
 function updateDiscordPresenceBasedOnState() {
-  if (currentClip) {
-    updateDiscordPresenceForClip(currentClip, !videoPlayer.paused);
+  if (state.currentClip) {
+    updateDiscordPresenceForClip(state.currentClip, !videoPlayer.paused);
   } else {
-    const publicClipCount = currentClipList.filter(clip => !clip.tags.includes('Private')).length;
+    const publicClipCount = state.currentClipList.filter(clip => !clip.tags.includes('Private')).length;
     updateDiscordPresence('Browsing clips', `Total: ${publicClipCount}`);
   }
 }
@@ -7425,7 +7346,7 @@ function formatTime(seconds) {
 }
 
 function updateDiscordPresence(details, state = null) {
-  if (settings && settings.enableDiscordRPC) {
+  if (state.settings && state.settings.enableDiscordRPC) {
     ipcRenderer.invoke('update-discord-presence', details, state);
   }
 }
@@ -7438,50 +7359,50 @@ async function toggleDiscordRPC(enable) {
 }
 
 document.addEventListener('mousemove', () => {
-  lastActivityTime = Date.now();
+  state.lastActivityTime = Date.now();
 });
 
 document.addEventListener('keydown', () => {
-  lastActivityTime = Date.now();
+  state.lastActivityTime = Date.now();
 });
 
 setInterval(() => {
-  if (Date.now() - lastActivityTime > IDLE_TIMEOUT && !videoPlayer.playing) {
+  if (Date.now() - state.lastActivityTime > IDLE_TIMEOUT && !videoPlayer.playing) {
     ipcRenderer.invoke('clear-discord-presence');
   }
 }, 60000); // Check every minute
 
 ipcRenderer.on('check-activity-state', () => {
-  if (Date.now() - lastActivityTime <= IDLE_TIMEOUT || videoPlayer.playing) {
+  if (Date.now() - state.lastActivityTime <= IDLE_TIMEOUT || videoPlayer.playing) {
     updateDiscordPresenceBasedOnState();
   }
 });
 
 function updateDiscordPresenceForClip(clip, isPlaying = true) {
-  if (settings && settings.enableDiscordRPC) {
-    clearInterval(discordPresenceInterval);
+  if (state.settings && state.settings.enableDiscordRPC) {
+    clearInterval(state.discordPresenceInterval);
     
     if (clip.tags && clip.tags.includes('Private')) {
       logger.info('Private clip detected. Clearing presence');
       updateDiscordPresence('Download Clip Library now!', '');
     } else {
       if (isPlaying) {
-        clipStartTime = Date.now() - (elapsedTime * 1000);
+        state.clipStartTime = Date.now() - (state.elapsedTime * 1000);
       }
       
       const updatePresence = () => {
         if (isPlaying) {
-          elapsedTime = Math.floor((Date.now() - clipStartTime) / 1000);
+          state.elapsedTime = Math.floor((Date.now() - state.clipStartTime) / 1000);
         }
         const totalDuration = Math.floor(videoPlayer.duration);
-        const timeString = `${formatTime(elapsedTime)}/${formatTime(totalDuration)}`;
+        const timeString = `${formatTime(state.elapsedTime)}/${formatTime(totalDuration)}`;
         updateDiscordPresence(`${clip.customName}`, `${timeString}`);
       };
 
       updatePresence(); // Initial update
       
       if (isPlaying) {
-        discordPresenceInterval = setInterval(updatePresence, 1000); // Update every second
+        state.discordPresenceInterval = setInterval(updatePresence, 1000); // Update every second
       }
     }
   }
@@ -7610,7 +7531,7 @@ function handleClipSelection(clipItem, event) {
         if (i >= 0 && i < clipItems.length) {
           const clip = clipItems[i];
           if (isClipSelectable(clip)) {
-            selectedClips.add(clip.dataset.originalName);
+            state.selectedClips.add(clip.dataset.originalName);
             clip.classList.add('selected');
           }
         }
@@ -7626,9 +7547,9 @@ function handleClipSelection(clipItem, event) {
         clearSelection(false);
       }
       
-      if (selectedClips.has(originalName) && (event.ctrlKey || event.metaKey)) {
+      if (state.selectedClips.has(originalName) && (event.ctrlKey || event.metaKey)) {
         // Deselect if already selected and using Ctrl/Cmd
-        selectedClips.delete(originalName);
+        state.selectedClips.delete(originalName);
         clipItem.classList.remove('selected');
         
         // Update lastSelectedClip to the previous selected clip if exists
@@ -7636,7 +7557,7 @@ function handleClipSelection(clipItem, event) {
         lastSelectedClip = selectedElements[selectedElements.length - 1] || null;
       } else {
         // Select the clip
-        selectedClips.add(originalName);
+        state.selectedClips.add(originalName);
         clipItem.classList.add('selected');
         lastSelectedClip = clipItem;
       }
@@ -7651,7 +7572,7 @@ function clearSelection(resetLastSelected = true) {
   document.querySelectorAll('.clip-item.selected').forEach(clip => {
     clip.classList.remove('selected');
   });
-  selectedClips.clear();
+  state.selectedClips.clear();
   if (resetLastSelected) {
     lastSelectedClip = null;
   }
@@ -7675,7 +7596,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && isInTemporaryMode) {
+  if (e.key === 'Escape' && state.isInTemporaryMode) {
     exitTemporaryMode();
     updateTagSelectionUI();
     filterClips();
@@ -7686,9 +7607,9 @@ function updateSelectionUI() {
   const selectionActions = document.getElementById('selection-actions');
   const selectionCount = document.getElementById('selection-count');
 
-  if (selectedClips.size > 0) {
+  if (state.selectedClips.size > 0) {
     selectionActions.classList.remove('hidden');
-    selectionCount.textContent = `${selectedClips.size} clip${selectedClips.size !== 1 ? 's' : ''} selected`;
+    selectionCount.textContent = `${state.selectedClips.size} clip${state.selectedClips.size !== 1 ? 's' : ''} selected`;
   } else {
     selectionActions.classList.add('hidden');
   }
@@ -7698,35 +7619,35 @@ function clearSelection() {
   document.querySelectorAll('.clip-item.selected').forEach(clip => {
     clip.classList.remove('selected');
   });
-  selectedClips.clear();
-  selectionStartIndex = -1;
+  state.selectedClips.clear();
+  state.selectionStartIndex = -1;
   updateSelectionUI();
 }
 
 // Add keyboard handler for Escape
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && selectedClips.size > 0) {
+  if (e.key === 'Escape' && state.selectedClips.size > 0) {
     clearSelection();
   }
 });
 
 async function deleteSelectedClips() {
-  if (selectedClips.size === 0) return;
+  if (state.selectedClips.size === 0) return;
 
   const isConfirmed = await showCustomConfirm(
-    `Are you sure you want to delete ${selectedClips.size} clip${selectedClips.size !== 1 ? 's' : ''}? This action cannot be undone.`
+    `Are you sure you want to delete ${state.selectedClips.size} clip${state.selectedClips.size !== 1 ? 's' : ''}? This action cannot be undone.`
   );
 
   if (!isConfirmed) return;
 
-  const totalClips = selectedClips.size;
+  const totalClips = state.selectedClips.size;
   let completed = 0;
 
   // Show initial progress
   showDeletionTooltip();
 
   try {
-    const clipsToDelete = Array.from(selectedClips);
+    const clipsToDelete = Array.from(state.selectedClips);
     
     for (const originalName of clipsToDelete) {
       const clipElement = document.querySelector(
@@ -7747,11 +7668,11 @@ async function deleteSelectedClips() {
           }
 
           // Remove from data structures
-          const allClipsIndex = allClips.findIndex(clip => clip.originalName === originalName);
-          const currentClipListIndex = currentClipList.findIndex(clip => clip.originalName === originalName);
+          const allClipsIndex = state.allClips.findIndex(clip => clip.originalName === originalName);
+          const currentClipListIndex = state.currentClipList.findIndex(clip => clip.originalName === originalName);
           
-          if (allClipsIndex > -1) allClips.splice(allClipsIndex, 1);
-          if (currentClipListIndex > -1) currentClipList.splice(currentClipListIndex, 1);
+          if (allClipsIndex > -1) state.allClips.splice(allClipsIndex, 1);
+          if (currentClipListIndex > -1) state.currentClipList.splice(currentClipListIndex, 1);
 
           // Remove from UI
           clipElement.remove();
@@ -7767,7 +7688,7 @@ async function deleteSelectedClips() {
     }
   } finally {
     clearSelection();
-    updateClipCounter(currentClipList.length);
+    updateClipCounter(state.currentClipList.length);
     hideDeletionTooltip();
     
     // Update new clips indicators after bulk deletion
@@ -7784,9 +7705,9 @@ async function deleteSelectedClips() {
 
 // Update deletion tooltip to show progress
 function updateDeletionProgress(completed, total) {
-  const deletionTooltip = document.querySelector('.deletion-tooltip');
-  if (deletionTooltip) {
-    deletionTooltip.textContent = `Deleting clips... ${completed}/${total}`;
+  state.deletionTooltip = document.querySelector('.deletion-tooltip');
+  if (state.deletionTooltip) {
+    state.deletionTooltip.textContent = `Deleting clips... ${completed}/${total}`;
   }
 }
 
@@ -8174,8 +8095,8 @@ window.updateNotificationTest = {
 
 window.loadingScreenTest = {
   show: () => {
-    const loadingScreen = document.getElementById('loading-screen');
-    if (!loadingScreen) {
+    state.loadingScreen = document.getElementById('loading-screen');
+    if (!state.loadingScreen) {
       // Create the loading screen if it doesn't exist
       const newLoadingScreen = document.createElement('div');
       newLoadingScreen.id = 'loading-screen';
@@ -8192,24 +8113,24 @@ window.loadingScreenTest = {
       newLoadingScreen.offsetHeight;
       
     } else {
-      loadingScreen.style.display = 'flex';
-      loadingScreen.style.opacity = '1';
+      state.loadingScreen.style.display = 'flex';
+      state.loadingScreen.style.opacity = '1';
     }
   },
   
   hide: () => {
-    const loadingScreen = document.getElementById('loading-screen');
-    if (loadingScreen) {
-      loadingScreen.style.opacity = '0';
+    state.loadingScreen = document.getElementById('loading-screen');
+    if (state.loadingScreen) {
+      state.loadingScreen.style.opacity = '0';
       setTimeout(() => {
-        loadingScreen.style.display = 'none';
+        state.loadingScreen.style.display = 'none';
       }, 1000);
     }
   },
   
   toggle: () => {
-    const loadingScreen = document.getElementById('loading-screen');
-    if (loadingScreen && (loadingScreen.style.display === 'none' || loadingScreen.style.opacity === '0')) {
+    state.loadingScreen = document.getElementById('loading-screen');
+    if (state.loadingScreen && (state.loadingScreen.style.display === 'none' || state.loadingScreen.style.opacity === '0')) {
       window.loadingScreenTest.show();
     } else {
       window.loadingScreenTest.hide();
@@ -8227,39 +8148,39 @@ document.addEventListener('keydown', (e) => {
 
 function initializeVolumeControls() {
   // Create elements if they don't exist
-  if (!volumeStartElement) {
-    volumeStartElement = document.createElement('div');
-    volumeStartElement.className = 'volume-start';
+  if (!state.volumeStartElement) {
+    state.volumeStartElement = document.createElement('div');
+    state.volumeStartElement.className = 'volume-start';
   }
   
-  if (!volumeEndElement) {
-    volumeEndElement = document.createElement('div');
-    volumeEndElement.className = 'volume-end';
+  if (!state.volumeEndElement) {
+    state.volumeEndElement = document.createElement('div');
+    state.volumeEndElement.className = 'volume-end';
   }
   
-  if (!volumeRegionElement) {
-    volumeRegionElement = document.createElement('div');
-    volumeRegionElement.className = 'volume-region';
+  if (!state.volumeRegionElement) {
+    state.volumeRegionElement = document.createElement('div');
+    state.volumeRegionElement.className = 'volume-region';
   }
 
-  if (!volumeDragControl) {
-    volumeDragControl = document.createElement('div');
-    volumeDragControl.className = 'volume-drag-control';
+  if (!state.volumeDragControl) {
+    state.volumeDragControl = document.createElement('div');
+    state.volumeDragControl.className = 'volume-drag-control';
     const volumeInput = document.createElement('input');
     volumeInput.type = 'range';
     volumeInput.min = '0';
     volumeInput.max = '1';
     volumeInput.step = '0.1';
     volumeInput.value = '0';
-    volumeDragControl.appendChild(volumeInput);
+    state.volumeDragControl.appendChild(volumeInput);
   }
   
   const progressBarContainer = document.getElementById('progress-bar-container');
-  if (!progressBarContainer.contains(volumeStartElement)) {
-    progressBarContainer.appendChild(volumeStartElement);
-    progressBarContainer.appendChild(volumeEndElement);
-    progressBarContainer.appendChild(volumeRegionElement);
-    progressBarContainer.appendChild(volumeDragControl);
+  if (!progressBarContainer.contains(state.volumeStartElement)) {
+    progressBarContainer.appendChild(state.volumeStartElement);
+    progressBarContainer.appendChild(state.volumeEndElement);
+    progressBarContainer.appendChild(state.volumeRegionElement);
+    progressBarContainer.appendChild(state.volumeDragControl);
   }
 
   hideVolumeControls();
@@ -8267,16 +8188,16 @@ function initializeVolumeControls() {
 }
 
 const debouncedSaveVolumeLevel = debounce(async () => {
-  if (!currentClip || !isVolumeControlsVisible) return;
+  if (!state.currentClip || !state.isVolumeControlsVisible) return;
   
   const volumeData = {
-    start: volumeStartTime,
-    end: volumeEndTime,
-    level: volumeLevel || 0
+    start: state.volumeStartTime,
+    end: state.volumeEndTime,
+    level: state.volumeLevel || 0
   };
   
   try {
-    await ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData);
+    await ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData);
     logger.info('Volume data saved with new level:', volumeData);
   } catch (error) {
     logger.error('Error saving volume data:', error);
@@ -8285,15 +8206,15 @@ const debouncedSaveVolumeLevel = debounce(async () => {
 
 function setupVolumeControlListeners() {
   // Clean up existing listeners first
-  volumeStartElement.removeEventListener('mousedown', handleVolumeStartDrag);
-  volumeEndElement.removeEventListener('mousedown', handleVolumeEndDrag);
+  state.volumeStartElement.removeEventListener('mousedown', handleVolumeStartDrag);
+  state.volumeEndElement.removeEventListener('mousedown', handleVolumeEndDrag);
   document.removeEventListener('mousemove', handleVolumeDrag);
   document.removeEventListener('mouseup', endVolumeDrag);
 
   function handleVolumeStartDrag(e) {
     if (e.button !== 0) return; // Only handle left mouse button
     e.stopPropagation();
-    isVolumeDragging = 'start';
+    state.isVolumeDragging = 'start';
     showVolumeDragControl(e);
     document.addEventListener('mousemove', handleVolumeDrag);
     document.addEventListener('mouseup', endVolumeDrag);
@@ -8302,38 +8223,38 @@ function setupVolumeControlListeners() {
   function handleVolumeEndDrag(e) {
     if (e.button !== 0) return; // Only handle left mouse button
     e.stopPropagation();
-    isVolumeDragging = 'end';
+    state.isVolumeDragging = 'end';
     showVolumeDragControl(e);
     document.addEventListener('mousemove', handleVolumeDrag);
     document.addEventListener('mouseup', endVolumeDrag);
   }
 
-  volumeDragControl.querySelector('input').addEventListener('input', (e) => {
+  state.volumeDragControl.querySelector('input').addEventListener('input', (e) => {
     e.stopPropagation();
-    volumeLevel = parseFloat(e.target.value);
+    state.volumeLevel = parseFloat(e.target.value);
     debouncedSaveVolumeLevel();
   });
 
-  volumeDragControl.querySelector('input').addEventListener('change', (e) => {
+  state.volumeDragControl.querySelector('input').addEventListener('change', (e) => {
     e.stopPropagation();
-    volumeLevel = parseFloat(e.target.value);
+    state.volumeLevel = parseFloat(e.target.value);
     // Force an immediate save
     debouncedSaveVolumeLevel.flush?.() || debouncedSaveVolumeLevel();
   });
 
-  volumeStartElement.addEventListener('mousedown', handleVolumeStartDrag);
-  volumeEndElement.addEventListener('mousedown', handleVolumeEndDrag);
+  state.volumeStartElement.addEventListener('mousedown', handleVolumeStartDrag);
+  state.volumeEndElement.addEventListener('mousedown', handleVolumeEndDrag);
 
   // Force cleanup if window loses focus
   window.addEventListener('blur', () => {
-    if (isVolumeDragging) {
+    if (state.isVolumeDragging) {
       endVolumeDrag();
     }
   });
 }
 
 function handleVolumeDrag(e) {
-  if (!isVolumeDragging) return;
+  if (!state.isVolumeDragging) return;
 
   document.body.classList.add('dragging');
 
@@ -8342,18 +8263,18 @@ function handleVolumeDrag(e) {
   const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
   const timePosition = (x / rect.width) * videoPlayer.duration;
 
-  if (isVolumeDragging === 'start') {
-    volumeStartTime = Math.min(timePosition, volumeEndTime - 0.1);
-  } else if (isVolumeDragging === 'end') {
-    volumeEndTime = Math.max(timePosition, volumeStartTime + 0.1);
+  if (state.isVolumeDragging === 'start') {
+    state.volumeStartTime = Math.min(timePosition, state.volumeEndTime - 0.1);
+  } else if (state.isVolumeDragging === 'end') {
+    state.volumeEndTime = Math.max(timePosition, state.volumeStartTime + 0.1);
   }
 
   // Keep volume control visible and centered during drag
   updateVolumeControlsPosition();
-  volumeDragControl.style.display = 'flex';
+  state.volumeDragControl.style.display = 'flex';
   
   // Ensure volume input stays visible
-  const volumeInput = volumeDragControl.querySelector('input');
+  const volumeInput = state.volumeDragControl.querySelector('input');
   if (volumeInput) {
     volumeInput.style.display = 'block';
   }
@@ -8362,53 +8283,53 @@ function handleVolumeDrag(e) {
 }
 
 function showVolumeDragControl(e) {
-  if (!isVolumeControlsVisible) return;
+  if (!state.isVolumeControlsVisible) return;
 
   const rect = progressBarContainer.getBoundingClientRect();
-  volumeDragControl.style.display = 'flex';
+  state.volumeDragControl.style.display = 'flex';
 
   // If dragging, use event position
   if (e) {
     const x = e.clientX - rect.left;
-    volumeDragControl.style.left = `${x}px`;
+    state.volumeDragControl.style.left = `${x}px`;
   } else {
     // Otherwise position in middle of volume range
-    const startPercent = (volumeStartTime / videoPlayer.duration) * 100;
-    const endPercent = (volumeEndTime / videoPlayer.duration) * 100;
+    const startPercent = (state.volumeStartTime / videoPlayer.duration) * 100;
+    const endPercent = (state.volumeEndTime / videoPlayer.duration) * 100;
     const middlePercent = (startPercent + endPercent) / 2;
-    volumeDragControl.style.left = `${middlePercent}%`;
+    state.volumeDragControl.style.left = `${middlePercent}%`;
   }
 
   // Ensure input is visible and set to current level
-  const volumeInput = volumeDragControl.querySelector('input');
+  const volumeInput = state.volumeDragControl.querySelector('input');
   if (volumeInput) {
-    volumeInput.value = volumeLevel;
+    volumeInput.value = state.volumeLevel;
     volumeInput.style.display = 'block';
   }
 }
 
 function hideVolumeDragControl() {
-  volumeDragControl.style.display = 'none';
+  state.volumeDragControl.style.display = 'none';
 }
 
 function endVolumeDrag() {
-  if (!isVolumeDragging) return;
+  if (!state.isVolumeDragging) return;
 
   document.body.classList.remove('dragging');
   
   // Save the final position
-  if (currentClip) {
+  if (state.currentClip) {
     const volumeData = {
-      start: volumeStartTime,
-      end: volumeEndTime,
-      level: volumeLevel
+      start: state.volumeStartTime,
+      end: state.volumeEndTime,
+      level: state.volumeLevel
     };
-    ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData)
+    ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData)
       .catch(error => logger.error('Error saving volume data:', error));
   }
 
   // Reset drag state but keep controls visible
-  isVolumeDragging = null;
+  state.isVolumeDragging = null;
   document.removeEventListener('mousemove', handleVolumeDrag);
   document.removeEventListener('mouseup', endVolumeDrag);
 
@@ -8416,61 +8337,61 @@ function endVolumeDrag() {
   updateVolumeControlsPosition();
   
   // Make sure the input stays visible
-  const volumeInput = volumeDragControl.querySelector('input');
+  const volumeInput = state.volumeDragControl.querySelector('input');
   if (volumeInput) {
     volumeInput.style.display = 'block';
   }
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && isVolumeDragging) {
+  if (e.key === 'Escape' && state.isVolumeDragging) {
     endVolumeDrag();
   }
 });
 
 function updateVolumeControlsPosition() {
-  if (!videoPlayer.duration || !isVolumeControlsVisible) return;
+  if (!videoPlayer.duration || !state.isVolumeControlsVisible) return;
 
-  const startPercent = (volumeStartTime / videoPlayer.duration) * 100;
-  const endPercent = (volumeEndTime / videoPlayer.duration) * 100;
+  const startPercent = (state.volumeStartTime / videoPlayer.duration) * 100;
+  const endPercent = (state.volumeEndTime / videoPlayer.duration) * 100;
 
-  volumeStartElement.style.left = `${startPercent}%`;
-  volumeEndElement.style.left = `${endPercent}%`;
-  volumeRegionElement.style.left = `${startPercent}%`;
-  volumeRegionElement.style.width = `${endPercent - startPercent}%`;
+  state.volumeStartElement.style.left = `${startPercent}%`;
+  state.volumeEndElement.style.left = `${endPercent}%`;
+  state.volumeRegionElement.style.left = `${startPercent}%`;
+  state.volumeRegionElement.style.width = `${endPercent - startPercent}%`;
 
   // Update volume drag control position
-  if (volumeDragControl) {
+  if (state.volumeDragControl) {
     const middlePercent = (startPercent + endPercent) / 2;
-    volumeDragControl.style.left = `${middlePercent}%`;
-    volumeDragControl.style.display = 'flex';
+    state.volumeDragControl.style.left = `${middlePercent}%`;
+    state.volumeDragControl.style.display = 'flex';
   }
 }
 
 async function loadVolumeData() {
-  if (!currentClip) {
+  if (!state.currentClip) {
     logger.warn('Attempted to load volume data without current clip');
     return;
   }
   
   try {
-    const volumeData = await ipcRenderer.invoke('get-volume-range', currentClip.originalName);
+    const volumeData = await ipcRenderer.invoke('get-volume-range', state.currentClip.originalName);
     logger.info('Volume data loaded:', volumeData);
 
     if (volumeData && volumeData.start !== undefined && volumeData.end !== undefined) {
-      volumeStartTime = volumeData.start;
-      volumeEndTime = volumeData.end;
-      volumeLevel = volumeData.level || 0;
-      isVolumeControlsVisible = true;
+      state.volumeStartTime = volumeData.start;
+      state.volumeEndTime = volumeData.end;
+      state.volumeLevel = volumeData.level || 0;
+      state.isVolumeControlsVisible = true;
       showVolumeControls();
       updateVolumeControlsPosition();
       logger.info('Volume controls restored with data:', {
-        start: volumeStartTime,
-        end: volumeEndTime,
-        level: volumeLevel
+        start: state.volumeStartTime,
+        end: state.volumeEndTime,
+        level: state.volumeLevel
       });
     } else {
-      logger.info('No valid volume data found for:', currentClip.originalName);
+      logger.info('No valid volume data found for:', state.currentClip.originalName);
       hideVolumeControls();
     }
   } catch (error) {
@@ -8480,17 +8401,17 @@ async function loadVolumeData() {
 }
 
 const debouncedSaveVolumeData = debounce(async () => {
-  if (!currentClip || !isVolumeControlsVisible) return;
+  if (!state.currentClip || !state.isVolumeControlsVisible) return;
   
   const volumeData = {
-    start: volumeStartTime,
-    end: volumeEndTime,
-    level: volumeLevel || 0
+    start: state.volumeStartTime,
+    end: state.volumeEndTime,
+    level: state.volumeLevel || 0
   };
   
   try {
     logger.info('Saving volume data:', volumeData);
-    await ipcRenderer.invoke('save-volume-range', currentClip.originalName, volumeData);
+    await ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData);
     logger.info('Volume data saved successfully');
   } catch (error) {
     logger.error('Error saving volume data:', error);
@@ -8502,27 +8423,27 @@ function saveVolumeData() {
 }
 
 function showVolumeControls() {
-  isVolumeControlsVisible = true;
-  volumeStartElement.style.display = 'block';
-  volumeEndElement.style.display = 'block';
-  volumeRegionElement.style.display = 'block';
+  state.isVolumeControlsVisible = true;
+  state.volumeStartElement.style.display = 'block';
+  state.volumeEndElement.style.display = 'block';
+  state.volumeRegionElement.style.display = 'block';
   updateVolumeControlsPosition();
   showVolumeDragControl();
 }
 
 function hideVolumeControls() {
-  isVolumeControlsVisible = false;
-  volumeStartTime = 0;
-  volumeEndTime = 0;
-  volumeLevel = 0;
-  volumeStartElement.style.display = 'none';
-  volumeEndElement.style.display = 'none';
-  volumeRegionElement.style.display = 'none';
+  state.isVolumeControlsVisible = false;
+  state.volumeStartTime = 0;
+  state.volumeEndTime = 0;
+  state.volumeLevel = 0;
+  state.volumeStartElement.style.display = 'none';
+  state.volumeEndElement.style.display = 'none';
+  state.volumeRegionElement.style.display = 'none';
   hideVolumeDragControl();
   
   // Remove volume data from storage when hiding controls
-  if (currentClip) {
-    ipcRenderer.invoke('save-volume-range', currentClip.originalName, null)
+  if (state.currentClip) {
+    ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, null)
       .catch(error => logger.error('Error removing volume data:', error));
   }
 }
@@ -8530,11 +8451,11 @@ function hideVolumeControls() {
 function toggleVolumeControls() {
   if (!videoPlayer.duration) return;
 
-  if (!isVolumeControlsVisible) {
-    if (volumeStartTime === 0 && volumeEndTime === 0) {
-      volumeStartTime = videoPlayer.duration / 3;
-      volumeEndTime = (videoPlayer.duration / 3) * 2;
-      volumeLevel = 0;
+  if (!state.isVolumeControlsVisible) {
+    if (state.volumeStartTime === 0 && state.volumeEndTime === 0) {
+      state.volumeStartTime = videoPlayer.duration / 3;
+      state.volumeEndTime = (videoPlayer.duration / 3) * 2;
+      state.volumeLevel = 0;
     }
     showVolumeControls();
   } else {
@@ -8544,13 +8465,13 @@ function toggleVolumeControls() {
 
 // Add this to your video timeupdate event listener
 videoPlayer.addEventListener('timeupdate', () => {
-  if (!audioContext || !gainNode || !isVolumeControlsVisible) return;
+  if (!state.audioContext || !state.gainNode || !state.isVolumeControlsVisible) return;
   
   const currentVolume = volumeSlider.value;
-  if (videoPlayer.currentTime >= volumeStartTime && videoPlayer.currentTime <= volumeEndTime) {
-    gainNode.gain.setValueAtTime(volumeLevel * currentVolume, audioContext.currentTime);
+  if (videoPlayer.currentTime >= state.volumeStartTime && videoPlayer.currentTime <= state.volumeEndTime) {
+    state.gainNode.gain.setValueAtTime(state.volumeLevel * currentVolume, state.audioContext.currentTime);
   } else {
-    gainNode.gain.setValueAtTime(currentVolume, audioContext.currentTime);
+    state.gainNode.gain.setValueAtTime(currentVolume, state.audioContext.currentTime);
   }
 });
 
@@ -8622,10 +8543,10 @@ async function logCurrentWatchSession() {
   const durationSeconds = Math.round(currentSessionActiveDuration / 1000);
 
   // Only log if duration is meaningful (e.g., > 1 second)
-  if (durationSeconds > 1 && currentClip) {
+  if (durationSeconds > 1 && state.currentClip) {
     try {
       await ipcRenderer.invoke('log-watch-session', {
-        originalName: currentClip.originalName,
+        originalName: state.currentClip.originalName,
         customName: clipTitle.value, // Use current title value
         durationSeconds: durationSeconds,
       });
@@ -8646,10 +8567,10 @@ function applyIconGreyscale(enabled) {
   });
 }
 
-// inside DOMContentLoaded handler after settings loaded
+// inside DOMContentLoaded handler after state.settings loaded
 loadGlobalTags();
 
-applyIconGreyscale(settings?.iconGreyscale);
+applyIconGreyscale(state.settings?.iconGreyscale);
 
 // ------------------ Keybinding (Shortcuts) Settings UI ------------------
 if (!settingsModal.querySelector('.settings-tab[data-tab="shortcuts"]')) {
