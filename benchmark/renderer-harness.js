@@ -128,11 +128,14 @@ class RendererHarness {
    */
   async benchmarkLoadClips() {
     this.log('Starting loadClips benchmark');
-    
+
+    // Clear collapsed state so ALL groups render expanded (gives realistic full load timing)
+    localStorage.removeItem('clipGroupsCollapsed');
+
     // Clear current clips if any
     const clipGrid = document.getElementById('clip-grid');
     if (clipGrid) clipGrid.innerHTML = '';
-    
+
     // Measure the loadClips function
     const { measurement } = await this.metrics.measure('loadClips', async () => {
       if (this.appFunctions.loadClips) {
@@ -142,16 +145,20 @@ class RendererHarness {
         await ipcRenderer.invoke('get-clips');
       }
     });
-    
+
     // Wait for DOM to update
     await this.waitForClipsLoaded();
-    
-    // Count clips
+
+    // Count clips (all should be rendered since groups are expanded)
     const clipCount = document.querySelectorAll('.clip-item').length;
-    
+    const groupCount = document.querySelectorAll('.clip-group').length;
+
+    this.log(`Rendered ${clipCount} clips in ${groupCount} groups`);
+
     return {
       ...measurement,
       clipCount,
+      groupCount,
       perClip: measurement ? measurement.duration / clipCount : 0
     };
   }

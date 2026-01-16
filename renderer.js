@@ -77,6 +77,40 @@ let contextMenuClip = null;
 const clipDataCache = new Map();
 const CACHE_EXPIRY_MS = 60000; // 1 minute cache
 
+// Cache for thumbnail paths - batch fetched to avoid N individual IPC calls
+const thumbnailPathCache = new Map();
+
+/**
+ * Batch fetch thumbnail paths for multiple clips in a single IPC call
+ */
+async function prefetchThumbnailPaths(clipNames) {
+  if (!clipNames || clipNames.length === 0) return;
+
+  try {
+    const results = await ipcRenderer.invoke("get-thumbnail-paths-batch", clipNames);
+    // Store results in cache
+    for (const [clipName, thumbnailPath] of Object.entries(results)) {
+      thumbnailPathCache.set(clipName, thumbnailPath);
+    }
+  } catch (error) {
+    logger.warn("Failed to batch fetch thumbnail paths:", error.message);
+  }
+}
+
+/**
+ * Get thumbnail path from cache or fetch individually as fallback
+ */
+async function getThumbnailPath(clipName) {
+  // Check cache first
+  if (thumbnailPathCache.has(clipName)) {
+    return thumbnailPathCache.get(clipName);
+  }
+  // Fallback to individual IPC call (for edge cases)
+  const path = await ipcRenderer.invoke("get-thumbnail-path", clipName);
+  thumbnailPathCache.set(clipName, path);
+  return path;
+}
+
 /**
  * Preload clip data on hover for faster opening
  */
@@ -1834,6 +1868,8 @@ async function startThumbnailValidation() {
             
             ipcRenderer.invoke("get-thumbnail-path", clipName).then(thumbnailPath => {
               if (thumbnailPath) {
+                // Update cache with newly generated thumbnail path
+                thumbnailPathCache.set(clipName, thumbnailPath);
                 updateClipThumbnail(clipName, thumbnailPath);
               }
             });
@@ -2454,6 +2490,8 @@ ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
 });
 
 ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
+  // Update cache with newly generated thumbnail
+  thumbnailPathCache.set(clipName, thumbnailPath);
   updateClipThumbnail(clipName, thumbnailPath);
 });
 
@@ -2564,6 +2602,10 @@ async function renderClips(clips) {
   // Remove duplicates
   clips = removeDuplicates(clips);
   logger.info("Clips to render after removing duplicates:", clips.length);
+
+  // Batch prefetch all thumbnail paths in a single IPC call (major perf optimization)
+  const clipNames = clips.map(clip => clip.originalName);
+  await prefetchThumbnailPaths(clipNames);
 
   // Group clips by time period
   const groups = {};
@@ -2720,7 +2762,10 @@ async function renderClips(clips) {
             `;
             content.appendChild(loadingIndicator);
           }
-          
+
+          // Batch prefetch thumbnail paths for this group (single IPC call)
+          await prefetchThumbnailPaths(groupClips.map(c => c.originalName));
+
           // Create clip elements in batches to avoid UI freezing
           const batchSize = 20;
           for (let i = 0; i < groupClips.length; i += batchSize) {
@@ -4643,10 +4688,8 @@ function createClipElement(clip) {
     const contentElement = document.createElement("div");
     contentElement.className = "clip-item-content";
 
-    let thumbnailPath = await ipcRenderer.invoke(
-      "get-thumbnail-path",
-      clip.originalName,
-    );
+    // Use cached thumbnail path (batch prefetched) with fallback to individual IPC
+    let thumbnailPath = await getThumbnailPath(clip.originalName);
 
     const relativeTime = getRelativeTimeString(clip.createdAt);
 
@@ -5607,7 +5650,7 @@ async function openClip(originalName, customName) {
         ipcRenderer.invoke("get-clip-info", originalName),
         ipcRenderer.invoke("get-trim", originalName),
         ipcRenderer.invoke("get-clip-tags", originalName),
-        ipcRenderer.invoke("get-thumbnail-path", originalName)
+        getThumbnailPath(originalName)  // Use cache-aware helper
       ]);
       mark('fetchedClipData');
     } catch (error) {
