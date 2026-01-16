@@ -2,7 +2,7 @@ if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
-const logger = require('./logger');
+const logger = require('./utils/logger');
 
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = process.env.CLIPS_BENCHMARK === '1';
@@ -17,14 +17,14 @@ if (isBenchmarkMode) {
     logger.error('[Benchmark] Failed to load harness:', e);
   }
 }
-const { checkForUpdates } = require('./updater');
+const { checkForUpdates } = require('./main/updater');
 const isDev = !app.isPackaged;
 const path = require("path");
 const fs = require("fs").promises;
-const { loadSettings, saveSettings } = require("./settings-manager");
-const SteelSeriesProcessor = require('./steelseries-processor');
+const { loadSettings, saveSettings } = require("./utils/settings-manager");
+const SteelSeriesProcessor = require('./main/steelseries-processor');
 const readify = require("readify");
-const { logActivity } = require('./activity-tracker');
+const { logActivity } = require('./utils/activity-tracker');
 const { createDiagnosticsBundle } = require('./diagnostics/collector');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const DiscordRPC = require('discord-rpc');
@@ -644,7 +644,7 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
 
 // Get default keybindings from settings-manager
 ipcMain.handle('get-default-keybindings', () => {
-  const { DEFAULT_SETTINGS } = require('./settings-manager');
+  const { DEFAULT_SETTINGS } = require('./utils/settings-manager');
   return DEFAULT_SETTINGS.keybindings;
 });
 

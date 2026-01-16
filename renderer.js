@@ -1,14 +1,14 @@
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
-const logger = require('./logger');
+const logger = require('./utils/logger');
 const fs = require('fs').promises;
 
 // Keybinding manager to centralise shortcuts
-const keybinds = require('./keybinding-manager');
+const keybinds = require('./renderer/keybinding-manager');
 
 // Gamepad manager for controller support
-const GamepadManager = require('./gamepad-manager');
+const GamepadManager = require('./renderer/gamepad-manager');
 
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
@@ -8724,7 +8724,7 @@ function buildCombo(ev){
   const parts=[]; if(ev.ctrlKey||ev.metaKey)parts.push('Ctrl'); if(ev.shiftKey)parts.push('Shift'); if(ev.altKey)parts.push('Alt'); let k=ev.key===' '? 'Space':(ev.key.length===1?ev.key.toUpperCase():ev.key); parts.push(k); return parts.join('+'); }
 
 function populateKeybindingList(){
-  const list=document.getElementById('keybinding-list'); if(!list) return; list.innerHTML=''; const bindings=require('./keybinding-manager').getAll();
+  const list=document.getElementById('keybinding-list'); if(!list) return; list.innerHTML=''; const bindings=require('./renderer/keybinding-manager').getAll();
   Object.entries(ACTION_INFO).forEach(([action,info])=>{ 
     const row=document.createElement('div'); row.className='kb-row'; 
     let displayBinding=bindings[action]||''; if(displayBinding){displayBinding=displayBinding.split('+').map(p=>p.length===1?p.toUpperCase():p).join('+');}
@@ -8746,7 +8746,8 @@ function releaseKey(ev){ if(!captureBox) return; pressed.delete(ev.code); if(pre
     const displayCombo=captureBox.textContent; 
     // Convert the combo to normalized form for storage (single letters as lowercase)
     const normalizedCombo = displayCombo.split('+').map(part => part.length === 1 ? part.toLowerCase() : part).join('+');
-    require('./keybinding-manager').setKeybinding(captureAction, normalizedCombo); 
+    require('./renderer/keybinding-manager').setKeybinding(captureAction, normalizedCombo); 
+
     captureBox.classList.remove('editing');
     document.removeEventListener('keydown', captureKey, true); document.removeEventListener('keyup', releaseKey, true); captureBox=null; captureAction=null; }
 }
@@ -8758,7 +8759,7 @@ document.addEventListener('click', async (e) => {
     if (confirmed) {
       // Get default keybindings from settings-manager via IPC
       const defaultKeybindings = await ipcRenderer.invoke('get-default-keybindings');
-      const keybindManager = require('./keybinding-manager');
+      const keybindManager = require('./renderer/keybinding-manager');
       
       // Reset each keybinding
       for (const [action, defaultCombo] of Object.entries(defaultKeybindings)) {

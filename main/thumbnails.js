@@ -9,7 +9,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
-const logger = require('../logger');
+const logger = require('../utils/logger');
 const { ffmpeg, ffprobeAsync } = require('./ffmpeg');
 
 // Constants

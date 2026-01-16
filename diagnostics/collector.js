@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const archiver = require('archiver');
 const { app } = require('electron');
-const logger = require('../logger');
+const logger = require('../utils/logger');
 
 const fsp = fs.promises;
 

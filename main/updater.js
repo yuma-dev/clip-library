@@ -4,7 +4,7 @@ const semver = require('semver');
 const fs = require('fs');
 const path = require('path');
 const { shell } = require('electron');
-const logger = require('./logger');
+const logger = require('../utils/logger');
 
 const GITHUB_API_URL = 'https://api.github.com/repos/yuma-dev/clip-library/releases/latest';
 
