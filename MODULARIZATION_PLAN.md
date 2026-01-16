@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: IN PROGRESS
+## Status: PHASES 1-3 COMPLETE
 **Last Updated:** 2025-01-16
-**Current Phase:** Phase 3 - Metadata Extraction (NEXT)
+**Current Phase:** Core modularization complete. Future phases (Discord, FileWatcher, Clips) optional.
 
 ---
 
@@ -18,7 +18,7 @@ clip-library/
 ├── main/                   # Main process modules
 │   ├── ffmpeg.js           # ✅ Video/audio encoding, export, FFprobe
 │   ├── thumbnails.js       # ✅ Generation, caching, validation, queue
-│   ├── metadata.js         # ⏳ .clip_metadata file I/O, atomic writes
+│   ├── metadata.js         # ✅ .clip_metadata file I/O, atomic writes, tags
 │   ├── file-watcher.js     # 🔮 Chokidar setup, new clip detection
 │   ├── discord.js          # 🔮 Discord RPC integration
 │   └── clips.js            # 🔮 Clip list management, periodic saves
@@ -78,12 +78,15 @@ main.js
 |-------|--------|-------------|-------|
 | Phase 1: FFmpeg | ✅ COMPLETE | ~290 lines | All exports working |
 | Phase 2: Thumbnails | ✅ COMPLETE | ~420 lines | Queue, validation, caching |
-| Phase 3: Metadata | ⏳ NEXT | ~400 lines (est) | File I/O, atomic writes |
+| Phase 3: Metadata | ✅ COMPLETE | ~450 lines | File I/O, atomic writes, tags |
 
 **Current State:**
-- `main.js`: ~1520 lines (down from ~1940)
-- `main/ffmpeg.js`: ~340 lines
-- `main/thumbnails.js`: ~430 lines (new)
+- `main.js`: ~1070 lines (down from ~2230 original)
+- `main/ffmpeg.js`: ~480 lines
+- `main/thumbnails.js`: ~430 lines
+- `main/metadata.js`: ~680 lines (new)
+
+**Total reduction:** ~1160 lines moved out of main.js (52% reduction)
 
 ---
 
@@ -205,9 +208,9 @@ const { ffmpeg, ffprobeAsync, generateScreenshot } = ffmpegModule;
 
 ---
 
-## Phase 3: Metadata Extraction ⏳ NEXT
+## Phase 3: Metadata Extraction ✅ COMPLETE
 
-### What to Extract
+### What Was Extracted
 - **Lines 956-1007**: `ensureDirectoryExists()`, `writeFileWithRetry()`, `writeFileAtomically()`
 - **Lines 921-937**: `saveCustomNameData()`
 - **Lines 939-954**: `saveTrimData()`
@@ -301,11 +304,11 @@ rm main/metadata.js
 
 ### Quick Start for Next Session
 ```
-1. Read this file first (MODULARIZATION_PLAN.md)
-2. Current phase: Phase 3 - Metadata
-3. main.js is at ~1520 lines, target is ~800-1000 after all phases
+1. Core modularization (Phases 1-3) is COMPLETE
+2. main.js is at ~1070 lines (down 52% from ~2230)
+3. Three modules: ffmpeg.js, thumbnails.js, metadata.js
 4. Pattern established: thin IPC handlers in main.js, logic in modules
-5. Two modules complete: main/ffmpeg.js (~340 lines), main/thumbnails.js (~430 lines)
+5. Optional future phases: Discord RPC, FileWatcher, Clips management
 ```
 
 ### How to Resume
