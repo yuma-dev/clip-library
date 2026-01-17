@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE (+ REORG + FILE WATCHER + DISCORD RPC + CLIPS COMPLETE)
-**Last Updated:** 2026-01-16
-**Current Phase:** Core modularization + repo organization complete.
+## Status: PHASES 1-3 COMPLETE + STATE + VIDEO-PLAYER IN PROGRESS
+**Last Updated:** 2026-01-17
+**Current Phase:** Renderer modularization in progress (video-player.js).
 
 ---
 
@@ -24,13 +24,12 @@ clip-library/
 │   ├── steelseries-processor.js # ✅ Import tool for SteelSeries GG Moments clips
 │   ├── discord.js          # ✅ Discord RPC integration
 │   └── clips.js            # ✅ Clip list management, periodic saves
-├── renderer/               # ✅ Extracted renderer helpers (more optional splitting later)
+├── renderer/               # ✅ Extracted renderer helpers
 │   ├── keybinding-manager.js # ✅ Keyboard shortcut handling
 │   ├── gamepad-manager.js    # ✅ Controller/gamepad input support
-│   ├── video-player.js     # 🔮 Video player, ambient glow
-│   ├── clip-grid.js        # 🔮 Grid display, virtualization
-│   ├── controls.js         # 🔮 Trim, volume, speed controls
-│   └── state.js            # 🔮 Centralized state management
+│   ├── state.js              # ✅ Centralized state management
+│   ├── video-player.js       # ⏳ Video player, controls, ambient glow (IN PROGRESS)
+│   └── clip-grid.js          # 🔮 Grid display, virtualization
 ├── shared/                 # 🔮 Code used by both processes
 │   └── constants.js        # Shared constants, file extensions, etc.
 └── utils/                  # Existing utilities
@@ -60,6 +59,8 @@ clip-library/
 | `utils/activity-tracker.js` | Persistent activity logging |
 | `renderer/keybinding-manager.js` | Renderer-side keybinding mapping + persistence |
 | `renderer/gamepad-manager.js` | Renderer-side gamepad/controller input |
+| `renderer/state.js` | Centralized state variables for renderer process |
+| `renderer/video-player.js` | Video playback, controls (speed/volume/trim), ambient glow |
 
 ### Design Principles (Follow Forever)
 
@@ -88,7 +89,9 @@ main.js
  renderer.js
   ├── utils/logger.js
   ├── renderer/keybinding-manager.js
-  └── renderer/gamepad-manager.js
+  ├── renderer/gamepad-manager.js
+  ├── renderer/state.js
+  └── renderer/video-player.js → depends on renderer/state.js, utils/logger.js
 ```
 
 ---
@@ -362,5 +365,60 @@ rm main/metadata.js
 ### Future Improvements (Not Part of This Plan)
 - Consolidate volume range reading (duplicated in ffmpeg module and main.js)
 - Add TypeScript for type safety
-- Consider splitting renderer.js (~3000 lines) similarly
 - Reduce logging verbosity (mentioned by user - 2800 lines of logs on startup)
+
+---
+
+## Renderer Modularization (Phase 4) ⏳ IN PROGRESS
+
+### Overview
+After completing main.js modularization, we're now splitting renderer.js (~8000+ lines) into focused modules.
+
+### Completed: state.js ✅
+- All state variables moved to `renderer/state.js`
+- Uses getter/setter pattern for mutable access
+- Foundation for other renderer modules
+
+### In Progress: video-player.js ⏳
+**Status:** Module created, partially integrated
+
+**What's Extracted:**
+- `AmbientGlowManager` class - YouTube-style background glow
+- `ClipGlowManager` class - Clip grid hover glow
+- Speed controls: `changeSpeed`, `updateSpeedSlider`, `updateSpeedText`, `showSpeedContainer`, `loadSpeed`
+- Volume controls: `setupAudioContext`, `changeVolume`, `updateVolumeSlider`, `updateVolumeIcon`, `showVolumeContainer`, `loadVolume`
+- Playback controls: `togglePlayPause`, `showControls`, `hideControls`, `hideControlsInstantly`, `resetControlsTimeout`
+- Time display: `updateTimeDisplay`, `formatTime`, `formatDuration`
+- Trim controls: `setTrimPoint`, `updateTrimControls`, `updatePlayhead`, `handleTrimDrag`, `endTrimDrag`
+- Fullscreen: `toggleFullscreen`, `handleFullscreenChange`, `isVideoInFullscreen`
+- Frame stepping: `moveFrame`, `frameStep`
+- Navigation: `skipTime`, `calculateSkipTime`
+- Ambient glow settings: `applyAmbientGlowSettings`
+
+**Event Listeners Handled by Module:**
+- Speed slider (input, button click, mouseenter/leave)
+- Volume slider (input, button click, mouseenter/leave)
+- Video loadedmetadata, timeupdate
+
+**Still in renderer.js (has more complex logic):**
+- progressBarContainer mousedown (calls saveTrimChanges)
+- fullscreenchange (references renderer.js ambientGlowManager)
+- videoClickTarget click
+- Mouse tracking
+- All other complex event handlers
+
+**Integration Pattern:**
+```javascript
+// In renderer.js DOMContentLoaded:
+videoPlayerModule.init({
+  videoPlayer: document.getElementById("video-player"),
+  // ... other DOM elements
+});
+```
+
+### Next: clip-grid.js 🔮
+Will contain:
+- Clip rendering and virtualization
+- Grid display logic
+- Thumbnail lazy loading
+- Selection handling
