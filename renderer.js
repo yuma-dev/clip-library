@@ -13,6 +13,9 @@ const GamepadManager = require('./renderer/gamepad-manager');
 // Centralized state management
 const state = require('./renderer/state');
 
+// Video player module
+const videoPlayerModule = require('./renderer/video-player');
+
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
 let benchmarkHarness = null;
@@ -3749,9 +3752,35 @@ function showExportProgress(current, total, isClipboardExport = false) {
 document.addEventListener('DOMContentLoaded', async () => {
   // Ensure keybindings are loaded before we attach any listeners that use them
   await keybinds.initKeybindings();
-  
+
   // Load state.settings before any initialization that depends on them
   await fetchSettings();
+
+  // Initialize video player module with DOM elements
+  videoPlayerModule.init({
+    videoPlayer: document.getElementById("video-player"),
+    clipTitle: document.getElementById("clip-title"),
+    progressBarContainer: document.getElementById("progress-bar-container"),
+    progressBar: document.getElementById("progress-bar"),
+    trimStart: document.getElementById("trim-start"),
+    trimEnd: document.getElementById("trim-end"),
+    playhead: document.getElementById("playhead"),
+    loadingOverlay: document.getElementById("loading-overlay"),
+    playerOverlay: document.getElementById("player-overlay"),
+    videoClickTarget: document.getElementById("video-click-target"),
+    ambientGlowCanvas: document.getElementById("ambient-glow-canvas"),
+    fullscreenPlayer: document.getElementById("fullscreen-player"),
+    videoControls: document.getElementById("video-controls"),
+    volumeButton: document.getElementById("volume-button"),
+    volumeSlider: document.getElementById("volume-slider"),
+    volumeContainer: document.getElementById("volume-container"),
+    speedButton: document.getElementById("speed-button"),
+    speedSlider: document.getElementById("speed-slider"),
+    speedContainer: document.getElementById("speed-container"),
+    speedText: document.getElementById("speed-text"),
+    currentTimeDisplay: document.getElementById("current-time"),
+    totalTimeDisplay: document.getElementById("total-time"),
+  });
   
   // Initialize state.settings modal and enhanced search
   initializeEnhancedSearch();
@@ -3874,35 +3903,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   setupSearch();
 
-  
-  volumeSlider.addEventListener("input", (e) => {
-    const newVolume = parseFloat(e.target.value);
-    if (!state.audioContext) setupAudioContext();
-    state.gainNode.gain.setValueAtTime(newVolume, state.audioContext.currentTime);
-    updateVolumeSlider(newVolume);
-    updateVolumeIcon(newVolume);
-    
-    if (state.currentClip) {
-      debouncedSaveVolume(state.currentClip.originalName, newVolume);
-    }
-  });
-
-  
-  volumeButton.addEventListener("click", () => {
-    volumeSlider.classList.toggle("collapsed");
-    clearTimeout(volumeContainer.timeout);
-  });
-  
-  volumeContainer.addEventListener("mouseenter", () => {
-    clearTimeout(volumeContainer.timeout);
-    volumeSlider.classList.remove("collapsed");
-  });
-  
-  volumeContainer.addEventListener("mouseleave", () => {
-    volumeContainer.timeout = setTimeout(() => {
-      volumeSlider.classList.add("collapsed");
-    }, 2000);
-  });
+  // Volume event listeners are now handled by videoPlayerModule.init()
 
   setupContextMenu();
   loadGlobalTags();
@@ -4092,26 +4093,7 @@ const debouncedSaveSpeed = debounce(async (clipName, speed) => {
   }
 }, 300);
 
-speedSlider.addEventListener("input", (e) => {
-  const newSpeed = parseFloat(e.target.value);
-  changeSpeed(newSpeed);
-});
-
-speedButton.addEventListener("click", () => {
-  speedSlider.classList.toggle("collapsed");
-  clearTimeout(speedContainer.timeout);
-});
-
-speedContainer.addEventListener("mouseenter", () => {
-  clearTimeout(speedContainer.timeout);
-  speedSlider.classList.remove("collapsed");
-});
-
-speedContainer.addEventListener("mouseleave", () => {
-  speedContainer.timeout = setTimeout(() => {
-    speedSlider.classList.add("collapsed");
-  }, 2000);
-});
+// Speed slider event listeners are now handled by videoPlayerModule.init()
 
 function setupAudioContext() {
   if (state.audioContext) return; // If already set up, don't create a new context
