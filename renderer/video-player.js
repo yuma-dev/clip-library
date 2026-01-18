@@ -602,7 +602,11 @@ function setTrimPoint(point) {
   state.wasLastSeekManual = true;
 
   updateTrimControls();
-  // Note: saveTrimChanges should be called from renderer.js as it needs access to clip data
+
+  // Call the trim change callback for saving
+  if (callbacks.onTrimChange) {
+    callbacks.onTrimChange(state.trimStartTime, state.trimEndTime);
+  }
 }
 
 function updateTrimControls() {
@@ -688,6 +692,11 @@ function handleTrimDrag(e) {
     const newTime = state.isDragging === "start" ? state.trimStartTime : state.trimEndTime;
     state.isAutoResetDisabled = false;
     elements.videoPlayer.currentTime = newTime;
+
+    // Call the trim change callback for saving
+    if (callbacks.onTrimChange) {
+      callbacks.onTrimChange(state.trimStartTime, state.trimEndTime);
+    }
   }
 }
 
@@ -898,11 +907,20 @@ function applyAmbientGlowSettings(glowSettings) {
 }
 
 // ============================================================================
+// CALLBACKS
+// ============================================================================
+let callbacks = {
+  onTrimChange: null,      // Called when trim points change (for saving)
+  onPlayerClose: null,     // Called when player should close
+};
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 
-function init(domElements) {
+function init(domElements, callbackOptions = {}) {
   elements = { ...elements, ...domElements };
+  callbacks = { ...callbacks, ...callbackOptions };
 
   // Create managers
   if (elements.videoPlayer && elements.ambientGlowCanvas) {
@@ -995,17 +1013,68 @@ function setupEventListeners() {
     elements.videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
   }
 
-  // NOTE: The following event listeners are handled by renderer.js which has more
-  // complete logic (e.g., saveTrimChanges, ambient glow manager references).
-  // They are left here as comments for future migration reference:
-  //
-  // - progressBarContainer mousedown (trim dragging with save)
-  // - fullscreenchange (with ambient glow manager)
-  // - fullscreen button click
-  // - videoClickTarget click
-  // - mouse tracking (mousedown/mouseup)
-  //
-  // These will be migrated when renderer.js is further modularized.
+  // Progress bar / trim controls
+  if (elements.progressBarContainer) {
+    elements.progressBarContainer.addEventListener("mousedown", (e) => {
+      const rect = elements.progressBarContainer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const width = rect.width;
+      const clickPercent = x / width;
+
+      state.dragStartX = e.clientX;
+
+      if (Math.abs(clickPercent - state.trimStartTime / elements.videoPlayer.duration) < 0.02) {
+        state.isDragging = "start";
+      } else if (Math.abs(clickPercent - state.trimEndTime / elements.videoPlayer.duration) < 0.02) {
+        state.isDragging = "end";
+      }
+
+      if (state.isDragging) {
+        state.isDraggingTrim = false;
+        document.body.classList.add('dragging');
+        document.addEventListener("mousemove", handleTrimDrag);
+        document.addEventListener("mouseup", endTrimDrag);
+      } else {
+        state.wasLastSeekManual = true;
+        const newTime = clickPercent * elements.videoPlayer.duration;
+
+        if (newTime < state.trimStartTime || newTime > state.trimEndTime) {
+          state.isAutoResetDisabled = true;
+        }
+
+        elements.videoPlayer.currentTime = newTime;
+      }
+    });
+  }
+
+  // Fullscreen events
+  document.addEventListener('fullscreenchange', handleFullscreenChange);
+  document.addEventListener('mouseleave', handleFullscreenMouseLeave);
+
+  // Mouse tracking for drag state
+  document.addEventListener("mousedown", () => {
+    state.isMouseDown = true;
+  });
+
+  document.addEventListener("mouseup", () => {
+    state.isMouseDown = false;
+    state.isDragging = null;
+    state.isDraggingTrim = false;
+  });
+
+  // Fullscreen button
+  const fullscreenButton = document.getElementById("fullscreen-button");
+  if (fullscreenButton) {
+    fullscreenButton.addEventListener("click", toggleFullscreen);
+  }
+
+  // Video click target for play/pause
+  if (elements.videoClickTarget) {
+    elements.videoClickTarget.addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePlayPause();
+    });
+  }
 }
 
 // ============================================================================

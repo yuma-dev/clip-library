@@ -181,4 +181,54 @@ async function saveSettings(newSettings) {
   }
 }
 
-module.exports = { loadSettings, saveSettings, DEFAULT_SETTINGS };
+/**
+ * Get default keybindings
+ * @returns {Object} Default keybindings from DEFAULT_SETTINGS
+ */
+function getDefaultKeybindings() {
+  return DEFAULT_SETTINGS.keybindings;
+}
+
+/**
+ * Update settings and return the new settings
+ * This is a wrapper around saveSettings for IPC handlers
+ * @param {Object} newSettings - The new settings to save
+ * @returns {Promise<Object>} The saved settings
+ */
+async function updateSettings(newSettings) {
+  await saveSettings(newSettings);
+  return newSettings;
+}
+
+/**
+ * Get clip location from settings
+ * @param {Function} getSettings - Function that returns current settings
+ * @returns {Promise<string>} The clip location path
+ */
+async function getClipLocation(getSettings) {
+  const settings = await getSettings();
+  return settings.clipLocation;
+}
+
+/**
+ * Update clip location in settings
+ * @param {Function} getSettings - Function that returns current settings
+ * @param {string} newLocation - The new clip location path
+ * @returns {Promise<string>} The updated clip location
+ */
+async function setClipLocation(getSettings, newLocation) {
+  const settings = await getSettings();
+  settings.clipLocation = newLocation;
+  await saveSettings(settings);
+  return settings.clipLocation;
+}
+
+module.exports = {
+  loadSettings,
+  saveSettings,
+  updateSettings,
+  getDefaultKeybindings,
+  getClipLocation,
+  setClipLocation,
+  DEFAULT_SETTINGS
+};

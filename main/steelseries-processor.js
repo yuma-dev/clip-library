@@ -1,6 +1,8 @@
 const { promises: fs, statSync } = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const logger = require('../utils/logger');
+const { logActivity } = require('../utils/activity-tracker');
 
 class SteelSeriesProcessor {
     constructor(inputFolder, exportFolder, progressCallback, logCallback) {
@@ -358,4 +360,66 @@ class SteelSeriesProcessor {
     }
 }
 
+/**
+ * Import SteelSeries clips from a source folder
+ * @param {string} sourcePath - Source folder containing SteelSeries clips
+ * @param {Function} getSettings - Function to get current settings
+ * @param {Function} getAppPath - Function to get app path (app.getPath.bind(app))
+ * @param {Object} eventSender - Event sender for progress updates
+ * @returns {Promise<Object>} Result object with success status
+ */
+async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, eventSender) {
+  try {
+    const settings = await getSettings();
+    const clipLocation = settings.clipLocation;
+
+    // Add "Imported" to global tags if it doesn't exist
+    let globalTags = [];
+    try {
+      const tagsFilePath = path.join(getAppPath("userData"), "global_tags.json");
+      try {
+        const tagsData = await fs.readFile(tagsFilePath, "utf8");
+        globalTags = JSON.parse(tagsData);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+        // File doesn't exist yet, use empty array
+      }
+
+      if (!globalTags.includes("Imported")) {
+        globalTags.push("Imported");
+        await fs.writeFile(tagsFilePath, JSON.stringify(globalTags));
+      }
+    } catch (error) {
+      logger.error("Error managing global tags:", error);
+    }
+
+    const processor = new SteelSeriesProcessor(
+      sourcePath,
+      clipLocation,
+      (current, total) => {
+        if (eventSender && !eventSender.isDestroyed()) {
+          eventSender.send('steelseries-progress', { current, total });
+        }
+      },
+      (message) => {
+        if (eventSender && !eventSender.isDestroyed()) {
+          eventSender.send('steelseries-log', { type: 'info', message });
+        }
+      }
+    );
+
+    // Log import start
+    logActivity('import_start', { source: 'steelseries', sourcePath });
+
+    await processor.processFolder();
+    return { success: true };
+  } catch (error) {
+    logger.error('SteelSeries import error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 module.exports = SteelSeriesProcessor;
+module.exports.importSteelSeriesClips = importSteelSeriesClips;

@@ -17,15 +17,15 @@ if (isBenchmarkMode) {
     logger.error('[Benchmark] Failed to load harness:', e);
   }
 }
-const { checkForUpdates } = require('./main/updater');
+const updaterModule = require('./main/updater');
 const isDev = !app.isPackaged;
 const path = require("path");
 const fs = require("fs").promises;
-const { loadSettings, saveSettings } = require("./utils/settings-manager");
-const SteelSeriesProcessor = require('./main/steelseries-processor');
+const { loadSettings, saveSettings, updateSettings, getDefaultKeybindings, getClipLocation, setClipLocation } = require("./utils/settings-manager");
+const steelSeriesModule = require('./main/steelseries-processor');
 const readify = require("readify");
 const { logActivity } = require('./utils/activity-tracker');
-const { createDiagnosticsBundle } = require('./diagnostics/collector');
+const diagnosticsModule = require('./diagnostics/collector');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const IDLE_TIMEOUT = 5 * 60 * 1000;
 
@@ -47,6 +47,9 @@ const discordModule = require('./main/discord');
 
 // Clips module
 const clipsModule = require('./main/clips');
+
+// Dialogs Module - handles all Electron dialog interactions
+const dialogsModule = require('./main/dialogs');
 
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
@@ -143,7 +146,7 @@ async function createWindow() {
   if (isDev) {
     try {
       require("electron-reloader")(module, {
-        debug: true,
+        debug: process.env.CLIPS_RELOADER_DEBUG === '1',
         watchRenderer: true,
       });
     } catch (_) {
@@ -187,7 +190,7 @@ async function createWindow() {
 
 async function checkForUpdatesInBackground(mainWindow) {
   try {
-    await checkForUpdates(mainWindow);
+    await updaterModule.checkForUpdates(mainWindow);
   } catch (error) {
     logger.error('Background update check failed:', error);
   }
@@ -258,92 +261,7 @@ ipcMain.handle('get-settings', () => {
 });
 
 ipcMain.handle("get-clips", async () => {
-  const clipsFolder = settings.clipLocation;
-  const metadataFolder = path.join(clipsFolder, ".clip_metadata");
-
-  try {
-    const result = await readify(clipsFolder, {
-      type: "raw",
-      sort: "date",
-      order: "desc",
-    });
-
-    const clipInfoPromises = result.files
-      .filter((file) =>
-        [".mp4", ".avi", ".mov"].includes(
-          path.extname(file.name).toLowerCase(),
-        ),
-      )
-      .map(async (file) => {
-        const fullPath = path.join(clipsFolder, file.name);
-        
-        // Check if file exists before processing
-        try {
-          await fs.access(fullPath);
-        } catch (error) {
-          // File doesn't exist, skip it
-          logger.info(`Skipping non-existent file: ${file.name}`);
-          return null;
-        }
-
-        const customNamePath = path.join(
-          metadataFolder,
-          `${file.name}.customname`,
-        );
-        const trimPath = path.join(metadataFolder, `${file.name}.trim`);
-        const datePath = path.join(metadataFolder, `${file.name}.date`);
-        let customName;
-        let isTrimmed = false;
-        let createdAt = file.date.getTime();
-
-        try {
-          customName = await fs.readFile(customNamePath, "utf8");
-        } catch (error) {
-          if (error.code !== "ENOENT")
-            logger.error("Error reading custom name:", error);
-          customName = path.basename(file.name, path.extname(file.name));
-        }
-
-        try {
-          await fs.access(trimPath);
-          isTrimmed = true;
-        } catch (error) {
-          // If trim file doesn't exist, isTrimmed remains false
-        }
-
-        // Try to read recording timestamp from metadata
-        try {
-          const dateStr = await fs.readFile(datePath, "utf8");
-          // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
-          const recordingDate = new Date(dateStr);
-          if (!isNaN(recordingDate.getTime())) {
-            createdAt = recordingDate.getTime();
-            logger.info(`Using recording timestamp for ${file.name}: ${dateStr}`);
-          }
-        } catch (error) {
-          if (error.code !== "ENOENT") {
-            logger.error("Error reading date metadata:", error);
-          }
-          // If date file doesn't exist or is invalid, keep using the file system date
-        }
-
-        const thumbnailPath = thumbnailsModule.generateThumbnailPath(fullPath);
-
-        return {
-          originalName: file.name,
-          customName: customName,
-          createdAt: createdAt,
-          thumbnailPath: thumbnailPath,
-          isTrimmed: isTrimmed,
-        };
-      });
-
-    const clipInfos = (await Promise.all(clipInfoPromises)).filter(Boolean); // Remove null entries
-    return clipInfos;
-  } catch (error) {
-    logger.error("Error reading directory:", error);
-    return [];
-  }
+  return await clipsModule.getClips(getSettings);
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -351,49 +269,11 @@ ipcMain.handle('get-app-version', () => {
 });
 
 ipcMain.handle('check-for-updates', async () => {
-  try {
-    const result = await checkForUpdates(mainWindow, { silent: true });
-    return result;
-  } catch (error) {
-    logger.error('Manual update check failed:', error);
-    return { updateAvailable: false, error: error.message || 'Check failed' };
-  }
+  return updaterModule.checkForUpdates(mainWindow, { silent: true });
 });
 
 ipcMain.handle('get-new-clip-info', async (event, fileName) => {
-  const filePath = path.join(settings.clipLocation, fileName);
-  const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
-  const datePath = path.join(metadataFolder, `${fileName}.date`);
-  const stats = await fs.stat(filePath);
-  
-  // Default to file system time
-  let createdAt = stats.birthtimeMs || stats.ctimeMs;
-
-  // Try to read recording timestamp from metadata if available
-  try {
-    const dateStr = await fs.readFile(datePath, "utf8");
-    // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
-    const recordingDate = new Date(dateStr);
-    if (!isNaN(recordingDate.getTime())) {
-      createdAt = recordingDate.getTime();
-      logger.info(`Using recording timestamp for new clip ${fileName}: ${dateStr}`);
-    }
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      logger.error("Error reading date metadata for new clip:", error);
-    }
-    // If date file doesn't exist or is invalid, keep using the file system time
-  }
-  
-  // Create bare minimum clip info without any trim data
-  const newClipInfo = {
-    originalName: fileName,
-    customName: path.basename(fileName, path.extname(fileName)),
-    createdAt: createdAt,
-    tags: [] // Initialize with empty tags array
-  };
-
-  return newClipInfo;
+  return await clipsModule.getNewClipInfo(getSettings, fileName);
 });
 
 ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
@@ -407,56 +287,7 @@ ipcMain.handle("save-custom-name", async (event, originalName, customName) => {
 });
 
 ipcMain.handle("get-clip-info", async (event, clipName) => {
-  logger.info(`[main] get-clip-info requested for: ${clipName}`);
-  const clipPath = path.join(settings.clipLocation, clipName);
-  const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
-  
-  try {
-    // Check if file exists first
-    try {
-      await fs.access(clipPath);
-      logger.info(`[main] Clip file exists: ${clipPath}`);
-    } catch (accessError) {
-      logger.error(`[main] Clip file does not exist: ${clipPath}`, accessError);
-      throw new Error(`Clip file not found: ${clipName}`);
-    }
-
-    // Try to get metadata from cache first
-    const metadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath);
-    if (metadata && metadata.duration) {
-      logger.info(`[main] Using cached metadata for ${clipName} - duration: ${metadata.duration}`);
-      return {
-        format: {
-          filename: clipPath,
-          duration: metadata.duration
-        }
-      };
-    }
-
-    logger.info(`[main] No cached metadata found, running ffprobe for: ${clipName}`);
-    // If no cached metadata, get it from ffprobe and cache it
-    return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(clipPath, async (err, info) => {
-        if (err) {
-          logger.error(`[main] ffprobe failed for ${clipName}:`, err);
-          reject(err);
-        } else {
-          logger.info(`[main] ffprobe successful for ${clipName} - duration: ${info.format.duration}`);
-          // Cache the metadata
-          const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
-          await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
-            ...existingMetadata,
-            duration: info.format.duration,
-            timestamp: Date.now()
-          });
-          resolve(info);
-        }
-      });
-    });
-  } catch (error) {
-    logger.error(`[main] Error getting clip info for ${clipName}:`, error);
-    throw error;
-  }
+  return ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule);
 });
 
 ipcMain.handle("get-trim", async (event, clipName) => {
@@ -500,42 +331,11 @@ ipcMain.handle("restore-missing-global-tags", async () => {
 });
 
 ipcMain.handle('show-diagnostics-save-dialog', async () => {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const defaultDirectory = app.getPath('documents');
-  const defaultPath = path.join(defaultDirectory, `clips-diagnostics-${timestamp}.zip`);
-
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Save Diagnostics Zip',
-    defaultPath,
-    buttonLabel: 'Save Diagnostics',
-    filters: [{ name: 'Zip Files', extensions: ['zip'] }]
-  });
-
-  return result.canceled ? null : result.filePath;
+  return dialogsModule.showDiagnosticsSaveDialog(mainWindow);
 });
 
 ipcMain.handle('generate-diagnostics-zip', async (event, targetPath) => {
-  const sender = event.sender;
-
-  if (!targetPath) {
-    return { success: false, error: 'No output path provided' };
-  }
-
-  try {
-    const result = await createDiagnosticsBundle({
-      savePath: targetPath,
-      progressCallback: (progress) => {
-        if (sender && !sender.isDestroyed()) {
-          sender.send('diagnostics-progress', progress);
-        }
-      }
-    });
-
-    return { success: true, ...result };
-  } catch (error) {
-    logger.error('Failed to generate diagnostics package:', error);
-    return { success: false, error: error.message };
-  }
+  return diagnosticsModule.generateDiagnosticsZip(targetPath, event.sender);
 });
 
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {
@@ -546,24 +346,19 @@ ipcMain.handle("update-tag-in-all-clips", async (event, oldTag, newTag) => {
   return metadataModule.updateTagInAllClips(oldTag, newTag, getSettings);
 });
 
-ipcMain.handle("get-clip-location", () => {
-  return settings.clipLocation;
+ipcMain.handle("get-clip-location", async () => {
+  const location = await getClipLocation(getSettings);
+  return location;
 });
 
 ipcMain.handle("set-clip-location", async (event, newLocation) => {
-  settings.clipLocation = newLocation;
-  await saveSettings(settings);
-  return settings.clipLocation;
+  const location = await setClipLocation(getSettings, newLocation);
+  settings.clipLocation = newLocation; // Update cached settings
+  return location;
 });
 
 ipcMain.handle("open-folder-dialog", async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ["openDirectory"],
-  });
-  if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
-  }
-  return null;
+  return dialogsModule.showFolderDialog(mainWindow);
 });
 
 ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
@@ -592,19 +387,18 @@ ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTim
 // In main.js
 ipcMain.handle('save-settings', async (event, newSettings) => {
   try {
-    await saveSettings(newSettings);
-    settings = newSettings; // Update main process settings
-    return newSettings;
+    const updated = await updateSettings(newSettings);
+    settings = updated; // Update main process settings cache
+    return updated;
   } catch (error) {
-    logger.error('Error in save-settings handler:', error); 
+    logger.error('Error in save-settings handler:', error);
     throw error;
   }
 });
 
 // Get default keybindings from settings-manager
 ipcMain.handle('get-default-keybindings', () => {
-  const { DEFAULT_SETTINGS } = require('./utils/settings-manager');
-  return DEFAULT_SETTINGS.keybindings;
+  return getDefaultKeybindings();
 });
 
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
@@ -639,103 +433,16 @@ ipcMain.handle("delete-trim", async (event, clipName) => {
 });
 
 ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
-  const clipPath = path.join(settings.clipLocation, clipName);
-  const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
-  const customNamePath = path.join(metadataFolder, `${clipName}.customname`);
-  const trimDataPath = path.join(metadataFolder, `${clipName}.trim`);
-  const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
-
-  const filesToDelete = [clipPath, customNamePath, trimDataPath, thumbnailPath];
-
-  if (videoPlayer) {
-    videoPlayer.src = "";
-  }
-
-  const maxRetries = 50; // Up to ~5 seconds total retry time
-  const retryDelay = 100; // 0.1 s between attempts
-
-  for (let retry = 0; retry < maxRetries; retry++) {
-    try {
-      // Try deleting immediately; we'll retry quickly if the file is still busy.
-      for (const file of filesToDelete) {
-        try {
-          if (process.platform === 'win32') {
-            // Move the file to the Recycle Bin for a more native deletion behaviour
-            await shell.trashItem(file);
-          } else {
-            // Fallback for non-Windows platforms (should not be hit in our use-case)
-            await fs.unlink(file);
-          }
-        } catch (e) {
-          // If trashing failed because the file is missing, continue silently
-          if (e.code === 'ENOENT') {
-            continue;
-          }
-
-          // If trashing failed for another reason on Windows, fall back to a direct unlink
-          if (process.platform === 'win32') {
-            try {
-              await fs.unlink(file);
-              continue;
-            } catch (e2) {
-              if (e2.code === 'ENOENT') {
-                continue;
-              }
-              throw e2;
-            }
-          }
-
-          // Throw other unexpected errors so the retry logic can handle them
-          throw e;
-        }
-      }
-
-      // Log deletion activity
-      logActivity('delete', { clipName });
-      return { success: true };
-    } catch (error) {
-      if ((error.code === "EBUSY" || error.code === "EPERM") && retry < maxRetries - 1) {
-        // If the file is busy and we haven't reached max retries, wait and try again
-        await delay(retryDelay);
-      } else {
-        logger.error(`Error deleting clip ${clipName}:`, error);
-        return { success: false, error: error.message };
-      }
-    }
-  }
-
-  // If we've exhausted all retries
-  return {
-    success: false,
-    error:
-      "Failed to delete clip after multiple attempts. The file may be in use.",
-  };
+  return clipsModule.deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer);
 });
 
 // Reveal clip in File Explorer
 ipcMain.handle('reveal-clip', async (event, clipName) => {
-  try {
-    const clipPath = path.join(settings.clipLocation, clipName);
-    shell.showItemInFolder(clipPath);
-    return { success: true };
-  } catch (error) {
-    logger.error('Error revealing clip:', error);
-    return { success: false, error: error.message };
-  }
+  return clipsModule.revealClip(clipName, getSettings);
 });
 
 ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => {
-  const extension = type === "audio" ? ".mp3" : ".mp4";
-  const defaultName = (customName || clipName || "clip") + extension;
-  
-  const options = {
-    defaultPath: defaultName,
-    filters: type === "audio" 
-      ? [{ name: "Audio Files", extensions: ["mp3"] }]
-      : [{ name: "Video Files", extensions: ["mp4"] }],
-  };
-  const result = await dialog.showSaveDialog(mainWindow, options);
-  return result.canceled ? null : result.filePath;
+  return dialogsModule.showSaveDialog(mainWindow, type, clipName, customName);
 });
 
 ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
@@ -751,81 +458,24 @@ ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed
 });
 
 ipcMain.handle('get-tag-preferences', async () => {
-  try {
-    const prefsPath = path.join(app.getPath('userData'), 'tagPreferences.json');
-    const prefs = await fs.readFile(prefsPath, 'utf8');
-    return JSON.parse(prefs);
-  } catch (error) {
-    return null;
-  }
+  return metadataModule.getTagPreferences(app.getPath.bind(app));
 });
 
 ipcMain.handle('save-tag-preferences', async (event, preferences) => {
-  try {
-    const prefsPath = path.join(app.getPath('userData'), 'tagPreferences.json');
-    await fs.writeFile(prefsPath, JSON.stringify(preferences));
-    return true;
-  } catch (error) {
-    console.error('Error saving tag preferences:', error);
-    return false;
-  }
+  return metadataModule.saveTagPreferences(preferences, app.getPath.bind(app));
 });
 
 ipcMain.handle('open-folder-dialog-steelseries', async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ['openDirectory'],
-    title: 'Select your SteelSeries Clips Folder'
-  });
-  
-  return result.canceled ? null : result.filePaths[0];
+  return dialogsModule.showSteelSeriesFolderDialog();
 });
 
 ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
-  try {
-    const settings = await loadSettings();
-    const clipLocation = settings.clipLocation;
-
-    // Add "Imported" to global tags if it doesn't exist
-    let globalTags = [];
-    try {
-      const tagsFilePath = path.join(app.getPath("userData"), "global_tags.json");
-      try {
-        const tagsData = await fs.readFile(tagsFilePath, "utf8");
-        globalTags = JSON.parse(tagsData);
-      } catch (error) {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-        // File doesn't exist yet, use empty array
-      }
-
-      if (!globalTags.includes("Imported")) {
-        globalTags.push("Imported");
-        await fs.writeFile(tagsFilePath, JSON.stringify(globalTags));
-      }
-    } catch (error) {
-      logger.error("Error managing global tags:", error);
-    }
-
-    const processor = new SteelSeriesProcessor(
-      sourcePath,
-      clipLocation,
-      (current, total) => {
-        event.sender.send('steelseries-progress', { current, total });
-      },
-      (message) => {
-        event.sender.send('steelseries-log', { type: 'info', message });
-      }
-    );
-
-    // Log import start
-    logActivity('import_start', { source: 'steelseries', sourcePath });
-
-    await processor.processFolder();
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
+  return steelSeriesModule.importSteelSeriesClips(
+    sourcePath,
+    loadSettings,
+    app.getPath.bind(app),
+    event.sender
+  );
 });
 
 ipcMain.handle('save-volume-range', async (event, clipName, volumeData) => {

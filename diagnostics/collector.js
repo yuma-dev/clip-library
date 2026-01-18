@@ -256,7 +256,36 @@ async function createDiagnosticsBundle(options = {}) {
     };
 }
 
+/**
+ * Generate diagnostics zip with IPC integration
+ * @param {string} targetPath - Path where to save the diagnostics zip
+ * @param {Object} eventSender - Event sender for progress updates
+ * @returns {Promise<Object>} Result object with success status
+ */
+async function generateDiagnosticsZip(targetPath, eventSender) {
+    if (!targetPath) {
+        return { success: false, error: 'No output path provided' };
+    }
+
+    try {
+        const result = await createDiagnosticsBundle({
+            savePath: targetPath,
+            progressCallback: (progress) => {
+                if (eventSender && !eventSender.isDestroyed()) {
+                    eventSender.send('diagnostics-progress', progress);
+                }
+            }
+        });
+
+        return { success: true, ...result };
+    } catch (error) {
+        logger.error('Failed to generate diagnostics package:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 module.exports = {
-    createDiagnosticsBundle
+    createDiagnosticsBundle,
+    generateDiagnosticsZip
 };
 

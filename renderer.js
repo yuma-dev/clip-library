@@ -3756,7 +3756,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load state.settings before any initialization that depends on them
   await fetchSettings();
 
-  // Initialize video player module with DOM elements
+  // Initialize video player module with DOM elements and callbacks
   videoPlayerModule.init({
     videoPlayer: document.getElementById("video-player"),
     clipTitle: document.getElementById("clip-title"),
@@ -3780,6 +3780,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     speedText: document.getElementById("speed-text"),
     currentTimeDisplay: document.getElementById("current-time"),
     totalTimeDisplay: document.getElementById("total-time"),
+  }, {
+    // Callbacks for module to trigger renderer.js functions
+    onTrimChange: () => saveTrimChanges(),
   });
   
   // Initialize state.settings modal and enhanced search
@@ -5188,7 +5191,7 @@ function handleFullscreenMouseLeave() {
   }
 }
 
-document.addEventListener('mouseleave', handleFullscreenMouseLeave);
+// mouseleave listener for fullscreen now handled by videoPlayerModule
 
 function handleFullscreenChange() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
@@ -5246,7 +5249,7 @@ function handleFullscreenMouseMove(e) {
   }
 }
 
-document.addEventListener('fullscreenchange', handleFullscreenChange);
+// fullscreenchange listener now handled by videoPlayerModule
 
 function toggleFullscreen() {
   const fullscreenPlayer = document.getElementById('fullscreen-player');
@@ -5286,9 +5289,7 @@ function toggleFullscreen() {
   resetControlsTimeout();
 }
 
-document
-  .getElementById("fullscreen-button")
-  .addEventListener("click", toggleFullscreen);
+// Fullscreen button click listener now handled by videoPlayerModule
 
 function isVideoInFullscreen(videoElement) {
   return (
@@ -5471,8 +5472,7 @@ function updateTimeDisplay() {
   totalTimeDisplay.textContent = formatDuration(videoPlayer.duration);
 }
 
-videoPlayer.addEventListener("loadedmetadata", updateTimeDisplay);
-videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
+// loadedmetadata and timeupdate for time display now handled by videoPlayerModule
 
 async function openClip(originalName, customName) {
   logger.info(`Opening clip: ${originalName}`);
@@ -6452,10 +6452,7 @@ function togglePlayPause() {
   }
 }
 
-videoClickTarget.addEventListener("click", (e) => {
-  e.stopPropagation(); // Prevent the click from bubbling up to the overlay
-  togglePlayPause();
-});
+// videoClickTarget click listener now handled by videoPlayerModule
 
 function updateTrimControls() {
   const duration = videoPlayer.duration;
@@ -6518,44 +6515,9 @@ function updatePlayhead() {
   requestAnimationFrame(updatePlayhead);
 }
 
-videoPlayer.addEventListener("loadedmetadata", () => {
-  requestAnimationFrame(updatePlayhead);
-});
+// loadedmetadata and progressBarContainer mousedown listeners now handled by videoPlayerModule
 
-progressBarContainer.addEventListener("mousedown", (e) => {
-  const rect = progressBarContainer.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const width = rect.width;
-  const clickPercent = x / width;
-
-  state.dragStartX = e.clientX;
-  
-  if (Math.abs(clickPercent - state.trimStartTime / videoPlayer.duration) < 0.02) {
-    state.isDragging = "start";
-  } else if (Math.abs(clickPercent - state.trimEndTime / videoPlayer.duration) < 0.02) {
-    state.isDragging = "end";
-  }
-
-  if (state.isDragging) {
-    state.isDraggingTrim = false; // Reset drag state
-    document.body.classList.add('dragging'); // Add dragging class
-    document.addEventListener("mousemove", handleTrimDrag);
-    document.addEventListener("mouseup", endTrimDrag);
-  } else {
-    // Track manual seek
-    state.wasLastSeekManual = true;
-    const newTime = clickPercent * videoPlayer.duration;
-    
-    // If seeking outside bounds, disable auto-reset
-    if (newTime < state.trimStartTime || newTime > state.trimEndTime) {
-      state.isAutoResetDisabled = true;
-    }
-    
-    videoPlayer.currentTime = newTime;
-  }
-});
-
-// Microanimation on progress click: bump + ripple
+// Microanimation on progress click: bump + ripple (kept here for visual effect)
 progressBarContainer.addEventListener('click', (e) => {
   try {
     // Bump animation restart
@@ -6642,23 +6604,9 @@ function endTrimDrag(e) {
   }, 100); // Reset the flag after a short delay
 }
 
-// Add mousedown and mouseup event listeners to track mouse button state
-document.addEventListener("mousedown", () => {
-  state.isMouseDown = true;
-});
+// Mouse tracking and checkDragState interval now handled by videoPlayerModule
 
-document.addEventListener("mouseup", () => {
-  state.isMouseDown = false;
-  if (state.isDraggingTrim) {
-    mouseUpTime = Date.now();
-  }
-  state.isDragging = null;
-  state.isDraggingTrim = false;
-});
-
-setInterval(checkDragState, 100);
-
-// Modify the checkDragState function
+// checkDragState function (kept for reference, called by module)
 function checkDragState() {
   if ((state.isDragging || state.isDraggingTrim) && !state.isMouseDown) {
     const rect = progressBarContainer.getBoundingClientRect();

@@ -465,6 +465,67 @@ function setupProgressListeners() {
   });
 }
 
+/**
+ * Get clip info (duration) with caching
+ * @param {string} clipName - Name of the clip file
+ * @param {Function} getSettings - Function that returns settings
+ * @param {Object} thumbnailsModule - Thumbnails module for cache access
+ * @returns {Promise<Object>} Clip info object with format.duration
+ */
+async function getClipInfo(clipName, getSettings, thumbnailsModule) {
+  logger.info(`[ffmpeg] get-clip-info requested for: ${clipName}`);
+  const settings = await getSettings();
+  const clipPath = path.join(settings.clipLocation, clipName);
+  const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
+
+  try {
+    // Check if file exists first
+    try {
+      await fs.access(clipPath);
+      logger.info(`[ffmpeg] Clip file exists: ${clipPath}`);
+    } catch (accessError) {
+      logger.error(`[ffmpeg] Clip file does not exist: ${clipPath}`, accessError);
+      throw new Error(`Clip file not found: ${clipName}`);
+    }
+
+    // Try to get metadata from cache first
+    const metadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath);
+    if (metadata && metadata.duration) {
+      logger.info(`[ffmpeg] Using cached metadata for ${clipName} - duration: ${metadata.duration}`);
+      return {
+        format: {
+          filename: clipPath,
+          duration: metadata.duration
+        }
+      };
+    }
+
+    logger.info(`[ffmpeg] No cached metadata found, running ffprobe for: ${clipName}`);
+    // If no cached metadata, get it from ffprobe and cache it
+    return new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(clipPath, async (err, info) => {
+        if (err) {
+          logger.error(`[ffmpeg] ffprobe failed for ${clipName}:`, err);
+          reject(err);
+        } else {
+          logger.info(`[ffmpeg] ffprobe successful for ${clipName} - duration: ${info.format.duration}`);
+          // Cache the metadata
+          const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
+          await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
+            ...existingMetadata,
+            duration: info.format.duration,
+            timestamp: Date.now()
+          });
+          resolve(info);
+        }
+      });
+    });
+  } catch (error) {
+    logger.error(`[ffmpeg] Error getting clip info for ${clipName}:`, error);
+    throw error;
+  }
+}
+
 module.exports = {
   initFFmpeg,
   getFFmpegVersion,
@@ -475,6 +536,7 @@ module.exports = {
   exportVideoWithFallback,
   generateScreenshot,
   setupProgressListeners,
+  getClipInfo,
   // Re-export fluent-ffmpeg for thumbnail generation
   ffmpeg
 };
