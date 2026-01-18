@@ -639,6 +639,45 @@ async function getGameIcon(clipName, getSettings) {
   return response;
 }
 
+// ============================================================================
+// Tag Preferences
+// ============================================================================
+
+/**
+ * Get tag preferences from userData
+ * @param {Function} getAppPath - Function to get app path (app.getPath.bind(app))
+ * @returns {Promise<Object|null>} Tag preferences object or null if not found
+ */
+async function getTagPreferences(getAppPath) {
+  try {
+    const prefsPath = path.join(getAppPath('userData'), 'tagPreferences.json');
+    const prefs = await fs.readFile(prefsPath, 'utf8');
+    return JSON.parse(prefs);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.error('Error reading tag preferences:', error);
+    }
+    return null;
+  }
+}
+
+/**
+ * Save tag preferences to userData
+ * @param {Object} preferences - Tag preferences to save
+ * @param {Function} getAppPath - Function to get app path (app.getPath.bind(app))
+ * @returns {Promise<boolean>} True if saved successfully
+ */
+async function saveTagPreferences(preferences, getAppPath) {
+  try {
+    const prefsPath = path.join(getAppPath('userData'), 'tagPreferences.json');
+    await fs.writeFile(prefsPath, JSON.stringify(preferences));
+    return true;
+  } catch (error) {
+    logger.error('Error saving tag preferences:', error);
+    return false;
+  }
+}
+
 module.exports = {
   // File utilities
   ensureDirectoryExists,
@@ -676,6 +715,10 @@ module.exports = {
   removeTagFromAllClips,
   updateTagInAllClips,
   restoreMissingGlobalTags,
+
+  // Tag preferences
+  getTagPreferences,
+  saveTagPreferences,
 
   // Game info
   getGameIcon
