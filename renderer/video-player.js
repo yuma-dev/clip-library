@@ -224,7 +224,7 @@ class ClipGlowManager {
     this.lastDrawTime = 0;
     this.frameInterval = 1000 / 30;
     this.blendFactor = 0.2;
-    this.glowOverflow = 40;
+    this.glowOverflow = 55;
     this.dynamicBorder = true;
     this.borderOpacity = 0.4;
     this.borderSaturationBoost = 1.4;
@@ -236,7 +236,10 @@ class ClipGlowManager {
 
   init() {
     const grid = document.getElementById('clip-grid');
-    if (!grid || this.canvas) return;
+    if (!grid) return;
+
+    // Check if canvas exists AND is still in the DOM (innerHTML clearing removes it)
+    if (this.canvas && this.canvas.isConnected) return;
 
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'clip-glow-canvas';
@@ -872,6 +875,21 @@ function frameStep(timestamp) {
 // SKIP / NAVIGATION
 // ============================================================================
 
+function updateVideoDisplay() {
+  if (elements.videoPlayer.paused) {
+    const canvas = document.createElement('canvas');
+    canvas.width = elements.videoPlayer.videoWidth;
+    canvas.height = elements.videoPlayer.videoHeight;
+    canvas.getContext('2d').drawImage(elements.videoPlayer, 0, 0, canvas.width, canvas.height);
+    
+    // Force a repaint of the video element
+    elements.videoPlayer.style.display = 'none';
+    // eslint-disable-next-line no-unused-expressions
+    elements.videoPlayer.offsetHeight; // Trigger a reflow
+    elements.videoPlayer.style.display = '';
+  }
+}
+
 function calculateSkipTime(videoDuration) {
   return Math.min(5, videoDuration * 0.05);
 }
@@ -1011,6 +1029,14 @@ function setupEventListeners() {
     });
 
     elements.videoPlayer.addEventListener("timeupdate", updateTimeDisplay);
+
+    elements.videoPlayer.addEventListener('seeked', function() {
+      if (state.pendingFrameStep) {
+        state.lastFrameStepTime = performance.now();
+        state.pendingFrameStep = false;
+        updateVideoDisplay();
+      }
+    });
   }
 
   // Progress bar / trim controls
@@ -1085,6 +1111,9 @@ module.exports = {
   // Initialization
   init,
 
+  // Utility
+  debounce,
+
   // Classes (for external instantiation if needed)
   AmbientGlowManager,
   ClipGlowManager,
@@ -1140,6 +1169,7 @@ module.exports = {
   // Frame stepping
   moveFrame,
   frameStep,
+  updateVideoDisplay,
 
   // Skip / navigation
   calculateSkipTime,

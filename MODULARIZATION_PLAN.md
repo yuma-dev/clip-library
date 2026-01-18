@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE + STATE + VIDEO-PLAYER IN PROGRESS
-**Last Updated:** 2026-01-17
-**Current Phase:** Renderer modularization in progress (video-player.js).
+## Status: PHASES 1-3 COMPLETE + STATE + VIDEO-PLAYER + TAG-MANAGER COMPLETE
+**Last Updated:** 2026-01-18
+**Current Phase:** Renderer modularization in progress (search-manager.js next).
 
 ---
 
@@ -379,8 +379,8 @@ After completing main.js modularization, we're now splitting renderer.js (~8000+
 - Uses getter/setter pattern for mutable access
 - Foundation for other renderer modules
 
-### In Progress: video-player.js ⏳
-**Status:** Module created, partially integrated
+### Completed: video-player.js ✅
+**Status:** Module created and fully integrated
 
 **What's Extracted:**
 - `AmbientGlowManager` class - YouTube-style background glow
@@ -394,18 +394,13 @@ After completing main.js modularization, we're now splitting renderer.js (~8000+
 - Frame stepping: `moveFrame`, `frameStep`
 - Navigation: `skipTime`, `calculateSkipTime`
 - Ambient glow settings: `applyAmbientGlowSettings`
+- `debounce` utility function
 
 **Event Listeners Handled by Module:**
 - Speed slider (input, button click, mouseenter/leave)
 - Volume slider (input, button click, mouseenter/leave)
-- Video loadedmetadata, timeupdate
-
-**Still in renderer.js (has more complex logic):**
-- progressBarContainer mousedown (calls saveTrimChanges)
-- fullscreenchange (references renderer.js ambientGlowManager)
-- videoClickTarget click
-- Mouse tracking
-- All other complex event handlers
+- Video loadedmetadata, timeupdate, seeked, canplay, progress, waiting, playing
+- Fullscreen change, mousemove, mouseleave
 
 **Integration Pattern:**
 ```javascript
@@ -416,9 +411,26 @@ videoPlayerModule.init({
 });
 ```
 
-### Next: clip-grid.js 🔮
+### Completed: tag-manager.js ✅
+**Status:** Module created and fully integrated
+
+**What's Extracted:**
+- Tag management operations: `loadGlobalTags`, `saveGlobalTags`, `addGlobalTag`, `deleteTag`, `updateTag`, `toggleClipTag`, `saveClipTags`, `loadTagPreferences`, `saveTagPreferences`
+- UI Helpers: `updateTagList`, `truncateTag`, `updateClipTags`, `showTooltip`, `hideTooltip`, `setupTagTooltips`, `setupTooltips`
+- Filter Dropdown: `updateFilterDropdown`, `createTagItem`, `handleCtrlClickTag`, `handleRegularClickTag`, `enterTemporaryMode`, `exitTemporaryMode`, `updateTagSelectionUI`, `updateTagSelectionStates`, `updateTagCount`, `setFilterUpdateCallback`, `createTagFilterUI`, `setupTagFilterEventListeners`
+
+**Integration Pattern:**
+```javascript
+// In renderer.js DOMContentLoaded:
+tagManagerModule.createTagFilterUI();
+tagManagerModule.setFilterUpdateCallback(() => filterClips());
+// ... etc for other tag manager functions
+```
+
+### Next: search-manager.js 🔮
 Will contain:
-- Clip rendering and virtualization
-- Grid display logic
-- Thumbnail lazy loading
-- Selection handling
+- Search input setup
+- Search term parsing
+- Filtering clips based on search terms
+- Search display updates
+

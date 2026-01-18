@@ -847,15 +847,28 @@ body.dragging * {
 #clip-glow-canvas {
   position: absolute;
   pointer-events: none;
-  filter: blur(30px) saturate(1.5);
+  filter: blur(45px) saturate(1.6) brightness(1.1);
   opacity: 0;
   z-index: 0; /* Behind clip-items */
-  will-change: transform, opacity, contents;
-  transition: opacity 0.2s ease;
+  will-change: transform, opacity;
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  mix-blend-mode: screen;
+  transform: scale(0.95);
+  /* Rectangular gradient mask - fades linearly from center to edges */
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, black 35%, black 85%, transparent),
+    linear-gradient(to bottom, transparent, black 35%, black 85%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent, black 35%, black 85%, transparent),
+    linear-gradient(to bottom, transparent, black 35%, black 85%, transparent);
+  mask-composite: intersect;
 }
 
 #clip-glow-canvas.visible {
-  opacity: 0.7;
+  opacity: 1;
+  transform: scale(1);
 }
 
 @media (prefers-reduced-motion: reduce) {

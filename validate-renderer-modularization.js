@@ -24,6 +24,7 @@ const walk = require('acorn-walk');
 
 const RENDERER_JS_PATH = path.join(__dirname, 'renderer.js');
 const RENDERER_DIR = path.join(__dirname, 'renderer');
+const SNAPSHOT_FILE = path.join(__dirname, '.modularization-snapshot.json');
 
 // Category definitions with patterns, target modules, and priorities
 const CATEGORIES = {
@@ -150,6 +151,8 @@ class RendererModularizationValidator {
     this.violations = [];
     this.rendererContent = '';
     this.rendererAST = null;
+    this.snapshot = null;
+    this.comparison = null;
   }
 
   // ==========================================================================
@@ -535,6 +538,10 @@ class RendererModularizationValidator {
     console.log(`✅ Found ${this.violations.length} violations\n`);
   }
 
+  toCamelCase(str) {
+    return str.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
+  }
+
   detectDirectCallViolations() {
     // Get all extracted function names
     const extractedFunctions = new Map(); // funcName -> moduleName
@@ -553,17 +560,22 @@ class RendererModularizationValidator {
       try {
         walk.simple(func.body, {
           CallExpression(node) {
-            const calleeName = self.getCalleeName(node.callee);
-            if (calleeName && extractedFunctions.has(calleeName)) {
-              // Check if it's already module-prefixed
-              if (!self.isModulePrefixedCall(node)) {
+            // Only check direct calls (Identifier), ignore method calls (MemberExpression)
+            // e.g. check 'init()', ignore 'manager.init()'
+            if (node.callee.type === 'Identifier') {
+              const calleeName = node.callee.name;
+              
+              if (extractedFunctions.has(calleeName)) {
+                const moduleName = extractedFunctions.get(calleeName);
+                const variableName = self.toCamelCase(moduleName) + 'Module';
+                
                 self.violations.push({
                   type: 'direct_call_to_extracted',
                   functionName: func.name,
                   callee: calleeName,
-                  module: extractedFunctions.get(calleeName),
+                  module: moduleName,
                   line: func.startLine,
-                  fix: `${extractedFunctions.get(calleeName)}Module.${calleeName}()`
+                  fix: `${variableName}.${calleeName}()`
                 });
               }
             }
@@ -643,10 +655,56 @@ class RendererModularizationValidator {
   }
 
   // ==========================================================================
+  // SNAPSHOT & COMPARISON
+  // ==========================================================================
+
+  loadSnapshot() {
+    if (fs.existsSync(SNAPSHOT_FILE)) {
+      try {
+        this.snapshot = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, 'utf8'));
+      } catch (e) {
+        console.warn('⚠️  Could not read previous snapshot, starting fresh.');
+      }
+    }
+  }
+
+  saveSnapshot() {
+    const data = this.generateJSON();
+    fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(data, null, 2));
+  }
+
+  compareWithSnapshot() {
+    if (!this.snapshot) return null;
+
+    const prevFunctions = new Set(this.snapshot.summary.allFunctions || []);
+    const currFunctions = new Set(this.rendererFunctions.map(f => f.name));
+    const allModuleFunctions = new Set();
+    
+    // Collect all functions currently in modules
+    for (const [name, moduleData] of this.modules) {
+      moduleData.functions.forEach(f => allModuleFunctions.add(f));
+    }
+
+    const removedFromRenderer = [...prevFunctions].filter(f => !currFunctions.has(f));
+    const movedToModule = removedFromRenderer.filter(f => allModuleFunctions.has(f));
+    const missing = removedFromRenderer.filter(f => !allModuleFunctions.has(f));
+    const added = [...currFunctions].filter(f => !prevFunctions.has(f));
+
+    return {
+      moved: movedToModule,
+      missing: missing,
+      added: added,
+      violationChange: this.violations.length - this.snapshot.summary.violationCount
+    };
+  }
+
+  // ==========================================================================
   // PHASE 5: REPORT GENERATION
   // ==========================================================================
 
   generateReport(options = {}) {
+    this.comparison = this.compareWithSnapshot();
+
     console.log('📊 Phase 5: Generating report...\n');
     console.log('='.repeat(80));
     console.log('📊 Renderer.js Modularization Report');
@@ -654,6 +712,7 @@ class RendererModularizationValidator {
     console.log();
 
     this.printSummary();
+    this.printComparison();
     this.printModuleProgress();
     this.printCategorizedFunctions(options);
     this.printViolations(options);
@@ -681,6 +740,34 @@ class RendererModularizationValidator {
     console.log(`Already extracted to modules: ${extractedCount} (${percentage}%)`);
     console.log(`Remaining in renderer.js: ${remaining} (${100 - percentage}%)`);
     console.log(`Dependency violations found: ${this.violations.length}`);
+    console.log();
+  }
+
+  printComparison() {
+    if (!this.comparison) return;
+
+    console.log('CHANGES SINCE LAST RUN');
+    console.log('-'.repeat(80));
+    
+    if (this.comparison.moved.length > 0) {
+      console.log(`✅ Successfully moved ${this.comparison.moved.length} functions:`);
+      console.log(`   ${this.comparison.moved.join(', ')}`);
+    }
+
+    if (this.comparison.missing.length > 0) {
+      console.log(`❌ WARNING: ${this.comparison.missing.length} functions removed but NOT found in modules:`);
+      this.comparison.missing.forEach(f => console.log(`   - ${f}`));
+    }
+
+    if (this.comparison.added.length > 0) {
+      console.log(`🆕 Added ${this.comparison.added.length} new functions to renderer.js`);
+    }
+
+    const vChange = this.comparison.violationChange;
+    if (vChange !== 0) {
+      const sign = vChange > 0 ? '+' : '';
+      console.log(`⚠️  Violations change: ${sign}${vChange}`);
+    }
     console.log();
   }
 
@@ -918,7 +1005,8 @@ class RendererModularizationValidator {
         extractedCount,
         remainingCount: totalFunctions - extractedCount,
         extractionPercentage: Math.round((extractedCount / totalFunctions) * 100),
-        violationCount: this.violations.length
+        violationCount: this.violations.length,
+        allFunctions: this.rendererFunctions.map(f => f.name) // Store all function names
       },
       modules: Array.from(this.modules.entries()).map(([name, data]) => ({
         name,
@@ -978,6 +1066,7 @@ function main() {
   // Create validator and run all phases
   const validator = new RendererModularizationValidator();
 
+  validator.loadSnapshot(); // Load previous run data
   validator.parseRenderer();
   validator.scanModules();
   validator.categorizeFunctions();
@@ -988,6 +1077,8 @@ function main() {
   } else {
     validator.generateReport(options);
   }
+  
+  validator.saveSnapshot(); // Save current run data
 }
 
 // Run if called directly
