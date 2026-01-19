@@ -1,4 +1,15 @@
+/**
+ * Gamepad Manager Module
+ *
+ * Handles gamepad/controller input for both grid view and video player modes:
+ * - Button mappings and actions
+ * - Analog stick navigation
+ * - Connection state management
+ * - Customizable mappings
+ */
+
 const { ipcRenderer } = require('electron');
+const logger = require('../utils/logger');
 
 // Default gamepad button mappings (Xbox controller layout)
 const DEFAULT_GAMEPAD_MAPPINGS = {
@@ -52,6 +63,8 @@ class GamepadManager {
     this.pollInterval = null;
     this.onActionCallback = null;
     this.onNavigationCallback = null;
+    this.onRawNavigationCallback = null;
+    this.onConnectionCallback = null;
     
     // Timing for analog stick actions
     this.seekSensitivity = 0.5;  // Seconds per second of stick movement
@@ -64,17 +77,12 @@ class GamepadManager {
   setupEventListeners() {
     // Gamepad connection events
     window.addEventListener('gamepadconnected', (e) => {
-      // Use logger if available, otherwise fallback to console
-      if (typeof logger !== 'undefined' && logger.info) {
-        logger.info('Gamepad connected:', e.gamepad.id);
-      }
+      logger.info('Gamepad connected:', e.gamepad.id);
       this.onGamepadConnected(e.gamepad);
     });
 
     window.addEventListener('gamepaddisconnected', (e) => {
-      if (typeof logger !== 'undefined' && logger.info) {
-        logger.info('Gamepad disconnected:', e.gamepad.id);
-      }
+      logger.info('Gamepad disconnected:', e.gamepad.id);
       this.onGamepadDisconnected(e.gamepad);
     });
   }
@@ -285,5 +293,247 @@ class GamepadManager {
   }
 }
 
+/**
+ * Handle controller button actions
+ * 
+ * @param {string} action - The action identifier from the gamepad mapping
+ */
+function handleControllerAction(action) {
+  logger.info('Controller action:', action);
+  
+  // These will be injected by the renderer during initialization
+  const {
+    videoPlayer,
+    playerOverlay,
+    clipTitle,
+    videoPlayerModule,
+    navigateToVideo,
+    exportAudioWithFileSelection,
+    exportVideoWithFileSelection,
+    exportAudioToClipboard,
+    exportManagerModule,
+    confirmAndDeleteClip,
+    closePlayer,
+    enableGridNavigation,
+    disableGridNavigation,
+    openCurrentGridSelection,
+    moveGridSelection,
+    state
+  } = this.dependencies;
+  
+  // Check if we're in the video player
+  const isPlayerActive = playerOverlay.style.display === "block";
+  
+  if (isPlayerActive) {
+    // Use existing keyboard action handler for consistency
+    const fakeEvent = {
+      preventDefault: () => {},
+      key: '', // We'll use the action directly
+      code: ''
+    };
+    
+    // Map the action to the existing switch case logic
+    switch (action) {
+      case 'closePlayer':
+        // If in fullscreen, exit fullscreen first before closing player
+        if (document.fullscreenElement) {
+          try {
+            if (document.exitFullscreen) {
+              document.exitFullscreen();
+            } else if (document.mozCancelFullScreen) {
+              document.mozCancelFullScreen();
+            } else if (document.webkitExitFullscreen) {
+              document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) {
+              document.msExitFullscreen();
+            }
+            // Small delay to let fullscreen exit complete before closing player
+            setTimeout(() => {
+              closePlayer();
+            }, 100);
+          } catch (error) {
+            logger.error('Error exiting fullscreen before closing player:', error);
+            closePlayer(); // Fallback to just closing
+          }
+        } else {
+          closePlayer();
+        }
+        break;
+      case 'playPause':
+        if (videoPlayer.src) videoPlayerModule.togglePlayPause();
+        break;
+      case 'frameBackward':
+        videoPlayerModule.moveFrame(-1);
+        break;
+      case 'frameForward':
+        videoPlayerModule.moveFrame(1);
+        break;
+      case 'navigatePrev':
+        navigateToVideo(-1);
+        break;
+      case 'navigateNext':
+        navigateToVideo(1);
+        break;
+      case 'skipBackward':
+        videoPlayerModule.skipTime(-1);
+        break;
+      case 'skipForward':
+        videoPlayerModule.skipTime(1);
+        break;
+      case 'volumeUp':
+        videoPlayerModule.changeVolume(0.1);
+        break;
+      case 'volumeDown':
+        videoPlayerModule.changeVolume(-0.1);
+        break;
+      case 'exportAudioFile':
+        exportAudioWithFileSelection();
+        break;
+      case 'exportVideo':
+        exportVideoWithFileSelection();
+        break;
+      case 'exportAudioClipboard':
+        exportAudioToClipboard();
+        break;
+      case 'exportDefault':
+        exportManagerModule.exportTrimmedVideo();
+        break;
+      case 'fullscreen':
+        videoPlayerModule.toggleFullscreen();
+        break;
+      case 'deleteClip':
+        confirmAndDeleteClip();
+        break;
+      case 'setTrimStart':
+        videoPlayerModule.setTrimPoint('start');
+        break;
+      case 'setTrimEnd':
+        videoPlayerModule.setTrimPoint('end');
+        break;
+      case 'focusTitle':
+        clipTitle.focus();
+        break;
+      default:
+        logger.warn('Unknown controller action:', action);
+        break;
+    }
+  } else {
+    // Handle actions when in grid view
+    if (!state.gridNavigationEnabled) {
+      enableGridNavigation();
+    }
+    
+    switch (action) {
+      case 'closePlayer':
+        // Exit grid navigation or open state.settings
+        if (state.gridNavigationEnabled) {
+          disableGridNavigation();
+        }
+        break;
+      case 'playPause':
+        // Open the currently selected clip
+        openCurrentGridSelection();
+        break;
+      case 'exportDefault':
+        // Also open the currently selected clip (alternative action)
+        openCurrentGridSelection();
+        break;
+      case 'volumeUp':
+        // D-pad up - navigate up in grid
+        moveGridSelection('up');
+        break;
+      case 'volumeDown':
+        // D-pad down - navigate down in grid
+        moveGridSelection('down');
+        break;
+      case 'skipBackward':
+        // D-pad left - navigate left in grid
+        moveGridSelection('left');
+        break;
+      case 'skipForward':
+        // D-pad right - navigate right in grid
+        moveGridSelection('right');
+        break;
+      default:
+        // Silently ignore unhandled actions to reduce spam
+        break;
+    }
+  }
+}
+
+/**
+ * Handle controller navigation (analog sticks)
+ * 
+ * @param {string} type - The navigation type ('seek', 'volume', 'navigate')
+ * @param {number} value - The navigation value
+ */
+function handleControllerNavigation(type, value) {
+  // These will be injected by the renderer during initialization
+  const {
+    videoPlayer,
+    playerOverlay,
+    videoPlayerModule,
+    enableGridNavigation,
+    moveGridSelection
+  } = this.dependencies;
+  
+  const isPlayerActive = playerOverlay.style.display === "block";
+  
+  if (isPlayerActive && videoPlayer) {
+    switch (type) {
+      case 'seek':
+        // Right stick X - timeline seeking
+        if (Math.abs(value) > 0.1) { // Minimum threshold
+          const newTime = Math.max(0, Math.min(videoPlayer.currentTime + value, videoPlayer.duration));
+          
+          // If seeking outside bounds, disable auto-reset
+          // Note: This assumes state is available, might need to be injected
+          if (newTime < 0 || newTime > videoPlayer.duration) {
+            // state.isAutoResetDisabled = true;
+          }
+          
+          videoPlayer.currentTime = newTime;
+          videoPlayerModule.showControls();
+        }
+        break;
+        
+      case 'volume':
+        // Right stick Y - volume control
+        if (Math.abs(value) > 0.05) { // Minimum threshold
+          videoPlayerModule.changeVolume(value);
+        }
+        break;
+        
+      case 'navigate':
+        // Left stick - UI navigation in video player
+        logger.info('Navigation direction:', value);
+        break;
+        
+      default:
+        logger.warn('Unknown navigation type:', type);
+        break;
+    }
+  } else {
+    // Handle navigation in grid view
+    switch (type) {
+      case 'navigate':
+        // Left stick - grid navigation
+        if (!this.dependencies.state.gridNavigationEnabled) {
+          enableGridNavigation();
+        }
+        moveGridSelection(value);
+        break;
+        
+      default:
+        // Other navigation types handled by raw navigation
+        break;
+    }
+  }
+}
+
 // Export for use in renderer
-module.exports = GamepadManager; 
+module.exports = {
+  GamepadManager,
+  handleControllerAction,
+  handleControllerNavigation
+};

@@ -75,7 +75,7 @@ const CATEGORIES = {
     complexity: 'low'
   },
   'Clip Grid Management': {
-    patterns: [/\brenderClip/i, /\bcreateClip/i, /\bclipElement\b/i, /\bgrid\b/i, /\bclipGrid\b/i],
+    patterns: [/\brenderClip/i, /\bcreateClip/i, /\bclipElement\b/i, /\bgrid\b/i, /\bclipGrid\b/i, /\bloadClip/i],
     targetModule: 'renderer/clip-grid.js',
     priority: 3,
     complexity: 'high'

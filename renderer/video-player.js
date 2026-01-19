@@ -8,6 +8,9 @@
  * - Fullscreen handling
  * - Ambient glow effects
  * - Keyboard/frame navigation
+ * - Video loading and initialization
+ * - Volume range controls
+ * - Clip preview functionality
  */
 
 const { ipcRenderer } = require('electron');
@@ -925,6 +928,839 @@ function applyAmbientGlowSettings(glowSettings) {
 }
 
 // ============================================================================
+// ADDITIONAL VIDEO PLAYER FUNCTIONS
+// ============================================================================
+
+/**
+ * Pause the video if it's currently playing
+ */
+function pauseVideoIfPlaying() {
+  if (!elements.videoPlayer.paused) {
+    elements.videoPlayer.pause();
+  }
+}
+
+/**
+ * Video load handler - called when video metadata is loaded
+ */
+function loadHandler() {
+  state.isMetadataLoaded = true;
+  logger.info(`[${state.currentClip.originalName}] Video metadata loaded - duration: ${elements.videoPlayer.duration}, readyState: ${elements.videoPlayer.readyState}`);
+  updateTrimControls();
+  
+  logger.info(`[${state.currentClip.originalName}] Attempting to seek to time: ${state.initialPlaybackTime} (duration: ${elements.videoPlayer.duration})`);
+  const oldTime = elements.videoPlayer.currentTime;
+  elements.videoPlayer.currentTime = state.initialPlaybackTime;
+  
+  // Log if the time actually changed
+  setTimeout(() => {
+    logger.info(`[${state.currentClip.originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${elements.videoPlayer.currentTime}, target: ${state.initialPlaybackTime}`);
+  }, 50);
+  
+  elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+  checkComplete();
+}
+
+/**
+ * Video seek handler - called when video seeking is complete
+ */
+function seekHandler() {
+  state.isSeeked = true;
+  logger.info(`[${state.currentClip.originalName}] Video seek completed to time: ${elements.videoPlayer.currentTime}`);
+  elements.videoPlayer.removeEventListener('seeked', seekHandler);
+  checkComplete();
+}
+
+/**
+ * Video error handler - called when there's an error loading the video
+ * 
+ * @param {Event} e - The error event
+ */
+function errorHandler(e) {
+  logger.error(`[${state.currentClip.originalName}] Video error during loading:`, e);
+  if (state.timeoutId) {
+    clearTimeout(state.timeoutId);
+  }
+  elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+  elements.videoPlayer.removeEventListener('seeked', seekHandler);
+  elements.videoPlayer.removeEventListener('error', errorHandler);
+  reject(new Error(`Video error: ${e.message || 'Unknown error'}`));
+}
+
+/**
+ * Video play handler - called when video starts playing
+ */
+function playHandler() {
+  elements.videoPlayer.style.opacity = '1';
+  const thumbnailOverlay = document.getElementById('thumbnail-overlay');
+  if (thumbnailOverlay) {
+    thumbnailOverlay.style.display = 'none';
+  }
+  elements.videoPlayer.removeEventListener('playing', playHandler);
+  if (state.timeoutId) {
+    clearTimeout(state.timeoutId);
+  }
+  logger.info(`[${state.currentClip.originalName}] Video started playing successfully`);
+  resolve();
+}
+
+/**
+ * Handle video seeked event
+ */
+function handleVideoSeeked() {
+  if (state.currentClip) {
+    state.elapsedTime = Math.floor(elements.videoPlayer.currentTime);
+    // Check if the clip is private before updating Discord presence
+    logger.info('Current clip:', state.currentClip.tags);
+    if (!state.currentClip.tags || !state.currentClip.tags.includes('Private')) {
+      updateDiscordPresenceForClip(state.currentClip, !elements.videoPlayer.paused);
+    }
+  }
+}
+
+/**
+ * Handle video canplay event
+ */
+function handleVideoCanPlay() {
+  if (state.isLoading) {
+    state.isLoading = false;
+    hideLoadingOverlay();
+    elements.videoPlayer.currentTime = state.initialPlaybackTime;
+  }
+  // Ensure thumbnail hides when video becomes playable
+  elements.videoPlayer.style.opacity = '1';
+  const thumbnailOverlay = document.getElementById('thumbnail-overlay');
+  if (thumbnailOverlay) {
+    thumbnailOverlay.style.display = 'none';
+  }
+  elements.videoPlayer.removeEventListener('canplay', handleVideoCanPlay);
+}
+
+/**
+ * Update loading progress display
+ */
+function updateLoadingProgress() {
+  if (elements.videoPlayer.buffered.length > 0) {
+    const loadedPercentage =
+      (elements.videoPlayer.buffered.end(0) / elements.videoPlayer.duration) * 100;
+    elements.progressBar.style.backgroundImage = `linear-gradient(to right, #c2c2c2 ${loadedPercentage}%, #3a3a3a ${loadedPercentage}%)`;
+  }
+}
+
+/**
+ * End volume drag operation
+ */
+function endVolumeDrag() {
+  if (!state.isVolumeDragging) return;
+
+  document.body.classList.remove('dragging');
+  
+  // Save the final position
+  if (state.currentClip) {
+    const volumeData = {
+      start: state.volumeStartTime,
+      end: state.volumeEndTime,
+      level: state.volumeLevel
+    };
+    ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData)
+      .catch(error => logger.error('Error saving volume data:', error));
+  }
+
+  // Reset drag state but keep controls visible
+  state.isVolumeDragging = null;
+  document.removeEventListener('mousemove', handleVolumeDrag);
+  document.removeEventListener('mouseup', endVolumeDrag);
+
+  // Don't hide the volume drag control, just update its position
+  updateVolumeControlsPosition();
+  
+  // Make sure the input stays visible
+  const volumeInput = state.volumeDragControl.querySelector('input');
+  if (volumeInput) {
+    volumeInput.style.display = 'block';
+  }
+}
+
+/**
+ * Load volume data for current clip
+ */
+async function loadVolumeData() {
+  if (!state.currentClip) {
+    logger.warn('Attempted to load volume data without current clip');
+    return;
+  }
+  
+  try {
+    const volumeData = await ipcRenderer.invoke('get-volume-range', state.currentClip.originalName);
+    logger.info('Volume data loaded:', volumeData);
+
+    if (volumeData && volumeData.start !== undefined && volumeData.end !== undefined) {
+      state.volumeStartTime = volumeData.start;
+      state.volumeEndTime = volumeData.end;
+      state.volumeLevel = volumeData.level || 0;
+      state.isVolumeControlsVisible = true;
+      showVolumeControls();
+      updateVolumeControlsPosition();
+      logger.info('Volume controls restored with data:', {
+        start: state.volumeStartTime,
+        end: state.volumeEndTime,
+        level: state.volumeLevel
+      });
+    } else {
+      logger.info('No valid volume data found for:', state.currentClip.originalName);
+      hideVolumeControls();
+    }
+  } catch (error) {
+    logger.error('Error loading volume data:', error);
+    hideVolumeControls();
+  }
+}
+
+/**
+ * Hide volume controls
+ */
+function hideVolumeControls() {
+  state.isVolumeControlsVisible = false;
+  state.volumeStartTime = 0;
+  state.volumeEndTime = 0;
+  state.volumeLevel = 0;
+  state.volumeStartElement.style.display = 'none';
+  state.volumeEndElement.style.display = 'none';
+  state.volumeRegionElement.style.display = 'none';
+  hideVolumeDragControl();
+  
+  // Remove volume data from storage when hiding controls
+  if (state.currentClip) {
+    ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, null)
+      .catch(error => logger.error('Error removing volume data:', error));
+  }
+}
+
+/**
+ * Preload clip data on hover for faster opening
+ * 
+ * @param {string} originalName - The original name of the clip
+ * @returns {Promise<Object|null>} The preloaded clip data or null if failed
+ */
+async function preloadClipData(originalName) {
+  // Check if already cached and not expired
+  const cached = state.clipDataCache.get(originalName);
+  if (cached && (Date.now() - cached.timestamp) < state.CACHE_EXPIRY_MS) {
+    return cached.data;
+  }
+
+  try {
+    // Preload in parallel
+    const [clipInfo, trimData, clipTags, thumbnailPath] = await Promise.all([
+      ipcRenderer.invoke("get-clip-info", originalName),
+      ipcRenderer.invoke("get-trim", originalName),
+      ipcRenderer.invoke("get-clip-tags", originalName),
+      ipcRenderer.invoke("get-thumbnail-path", originalName)
+    ]);
+
+    const data = { clipInfo, trimData, clipTags, thumbnailPath };
+    state.clipDataCache.set(originalName, { data, timestamp: Date.now() });
+
+    // Limit cache size
+    if (state.clipDataCache.size > 50) {
+      const oldestKey = state.clipDataCache.keys().next().value;
+      state.clipDataCache.delete(oldestKey);
+    }
+
+    return data;
+  } catch (error) {
+    logger.warn(`[Preload] Failed to preload ${originalName}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Handle mouse enter event on clip elements
+ * 
+ * @param {Object} clip - The clip object
+ * @param {HTMLElement} clipElement - The clip element
+ */
+async function handleMouseEnter(clip, clipElement) {
+  // OPTIMIZATION: Preload clip data on hover for faster opening
+  preloadClipData(clip.originalName).catch(() => {});
+
+  // Show ambient glow behind clip
+  const clipGlowManager = getClipGlowManager();
+  if (clipGlowManager) {
+    clipGlowManager.show(clipElement);
+  }
+
+  if (clipElement.classList.contains("video-preview-disabled")) return;
+
+  // Clear any existing preview immediately
+  cleanupVideoPreview();
+
+  // Store the current preview context
+  const currentPreviewContext = {};
+  state.activePreview = currentPreviewContext;
+
+  // Set a small delay before creating the preview
+  state.previewCleanupTimeout = setTimeout(async () => {
+    // Check if this preview is still the active one
+    if (state.activePreview !== currentPreviewContext) return;
+
+    try {
+      const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+      const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
+      
+      // Check again if this preview is still active
+      if (state.activePreview !== currentPreviewContext) return;
+
+      let startTime;
+      if (trimData) {
+        startTime = trimData.start;
+      } else {
+        startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
+      }
+
+      // Final check before creating video element
+      if (state.activePreview !== currentPreviewContext) return;
+
+      // Get the current preview volume setting
+      const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? state.settings?.previewVolume ?? 0.1;
+
+      videoElement = document.createElement("video");
+      videoElement.src = `file://${path.join(state.clipLocation, clip.originalName)}`;
+      videoElement.volume = currentPreviewVolume;
+      videoElement.loop = true;
+      videoElement.preload = "metadata";
+      videoElement.style.zIndex = "1";
+
+      const mediaContainer = clipElement.querySelector(".clip-item-media-container");
+      const imgElement = mediaContainer.querySelector("img");
+      
+      // Set the video poster to the current thumbnail
+      videoElement.poster = imgElement.src;
+
+      // Store video element in the preview
+      currentPreviewContext.videoElement = videoElement;
+
+      // Add loadedmetadata event listener
+      videoElement.addEventListener('loadedmetadata', () => {
+        // Final check before playing
+        if (state.activePreview !== currentPreviewContext || !clipElement.matches(':hover')) {
+          cleanupVideoPreview();
+          return;
+        }
+
+        imgElement.style.display = "none";
+        videoElement.currentTime = startTime;
+        videoElement.play().then(() => {
+          // Update glow to sample from video instead of thumbnail
+          const clipGlowManager = getClipGlowManager();
+          if (clipGlowManager) {
+            clipGlowManager.updateSource(videoElement);
+          }
+        }).catch((error) => {
+          if (error.name !== "AbortError") {
+            logger.error("Error playing video:", error);
+          }
+          cleanupVideoPreview();
+        });
+      });
+
+      mediaContainer.appendChild(videoElement);
+    } catch (error) {
+      logger.error("Error setting up preview:", error);
+      cleanupVideoPreview();
+    }
+  }, 100);
+}
+
+/**
+ * Export clip from context menu
+ * 
+ * @param {Object} clip - The clip object to export
+ */
+async function exportClipFromContextMenu(clip) {
+  try {
+    const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
+    const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
+    const start = trimData ? trimData.start : 0;
+    const end = trimData ? trimData.end : clipInfo.format.duration;
+    const volume = await loadVolume(clip.originalName);
+    const speed = await loadSpeed(clip.originalName);
+
+    showExportProgress(0, 100); // Show initial progress
+
+    const result = await ipcRenderer.invoke(
+      "export-trimmed-video",
+      clip.originalName,
+      start,
+      end,
+      volume,
+      speed
+    );
+    if (result.success) {
+      logger.info("Clip exported successfully:", result.path);
+      showExportProgress(100, 100, true); // Always clipboard export for context menu
+    } else {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    logger.error("Error exporting clip:", error);
+    await showCustomAlert(`Failed to export clip. Error: ${error.message}`);
+  }
+}
+
+/**
+ * Open a clip for playback
+ * 
+ * @param {string} originalName - The original name of the clip
+ * @param {string} customName - The custom name of the clip
+ */
+async function openClip(originalName, customName) {
+  logger.info(`Opening clip: ${originalName}`);
+  
+  // Performance timing for benchmark mode
+  const timings = {};
+  const startTime = performance.now();
+  const mark = (name) => {
+    timings[name] = performance.now() - startTime;
+    if (isBenchmarkMode) {
+      logger.info(`[TIMING] ${name}: ${timings[name].toFixed(1)}ms`);
+    }
+  };
+  mark('start');
+  
+  state.elapsedTime = 0;
+
+  // Reset auto-seek behavior for new clip
+  state.isAutoResetDisabled = false;
+  state.wasLastSeekManual = false;
+
+  // Log the previous session if one was active
+  await logCurrentWatchSession();
+  mark('logSession');
+
+  if (state.currentCleanup) {
+    state.currentCleanup();
+    state.currentCleanup = null;
+  }
+
+  // Remove last-opened class from any previously highlighted clip
+  document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
+    clip.classList.remove('last-opened');
+  });
+
+  initializeVolumeControls();
+  elements.loadingOverlay.style.display = "none";
+
+  // Create or get thumbnail overlay
+  let thumbnailOverlay = document.getElementById('thumbnail-overlay');
+  if (!thumbnailOverlay) {
+    thumbnailOverlay = document.createElement('img');
+    thumbnailOverlay.id = 'thumbnail-overlay';
+    thumbnailOverlay.style.position = 'absolute';
+    thumbnailOverlay.style.top = '0';
+    thumbnailOverlay.style.left = '0';
+    thumbnailOverlay.style.width = '100%';
+    thumbnailOverlay.style.height = '100%';
+    thumbnailOverlay.style.objectFit = 'contain';
+    elements.videoPlayer.parentElement.appendChild(thumbnailOverlay);
+  }
+
+  logger.info(`[${originalName}] Setting up thumbnail overlay`);
+  // Hide video and show thumbnail
+  elements.videoPlayer.style.opacity = '0';
+  
+  // OPTIMIZATION: Show player overlay IMMEDIATELY with thumbnail
+  // This gives instant visual feedback while video loads in background
+  elements.playerOverlay.style.display = "block";
+  elements.fullscreenPlayer.style.display = "block";
+  mark('playerVisibleEarly');
+  
+  // OPTIMIZATION: Check if data was preloaded on hover
+  let clipInfo, trimData, clipTags, thumbnailPath;
+  const cachedData = await getCachedClipData(originalName);
+  
+  if (cachedData) {
+    // Use cached data - much faster!
+    clipInfo = cachedData.clipInfo;
+    trimData = cachedData.trimData;
+    clipTags = cachedData.clipTags;
+    thumbnailPath = cachedData.thumbnailPath;
+    mark('usedCachedData');
+    logger.info(`[${originalName}] Using preloaded cached data`);
+  } else {
+    // No cache - load fresh (parallel fetch for speed)
+    logger.info(`[${originalName}] Loading clip data (not cached)...`);
+    try {
+      [clipInfo, trimData, clipTags, thumbnailPath] = await Promise.all([
+        ipcRenderer.invoke("get-clip-info", originalName),
+        ipcRenderer.invoke("get-trim", originalName),
+        ipcRenderer.invoke("get-clip-tags", originalName),
+        getThumbnailPath(originalName)  // Use cache-aware helper
+      ]);
+      mark('fetchedClipData');
+    } catch (error) {
+      logger.error(`[${originalName}] Error loading clip data:`, error);
+      return;
+    }
+  }
+  mark('getClipData');
+  
+  // Set up thumbnail
+  if (thumbnailPath) {
+    thumbnailOverlay.src = `file://${thumbnailPath}`;
+    thumbnailOverlay.style.display = 'block';
+    logger.info(`[${originalName}] Thumbnail loaded: ${thumbnailPath}`);
+  } else {
+    logger.warn(`[${originalName}] No thumbnail path found`);
+  }
+
+  // Add cleanup for previous video element
+  if(elements.videoPlayer.src) {
+    logger.info(`[${originalName}] Cleaning up previous video`);
+    elements.videoPlayer.pause();
+    elements.videoPlayer.removeAttribute('src');
+    elements.videoPlayer.load();
+  }
+  mark('cleanupPrevious');
+  
+  logger.info(`[${originalName}] Clip data ready. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
+
+  state.currentClip = { originalName, customName, tags: clipTags };
+
+  // Set up trim points before video loads
+  if (trimData) {
+    state.trimStartTime = trimData.start;
+    state.trimEndTime = trimData.end;
+    state.initialPlaybackTime = trimData.start;
+    logger.info(`[${originalName}] Using trim data - Start: ${state.trimStartTime}, End: ${state.trimEndTime}, Initial: ${state.initialPlaybackTime}`);
+  } else {
+    state.trimStartTime = 0;
+    state.trimEndTime = clipInfo.format.duration;
+    state.initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
+    logger.info(`[${originalName}] No trim data - Start: ${state.trimStartTime}, End: ${state.trimEndTime}, Initial: ${state.initialPlaybackTime}`);
+  }
+
+  logger.info(`[${originalName}] Setting up video load promise...`);
+  // Create a promise to handle video loading and seeking
+  const videoLoadPromise = new Promise((resolve, reject) => {
+    let isMetadataLoaded = false;
+    let isSeeked = false;
+    let timeoutId;
+
+    const checkComplete = () => {
+      if (isMetadataLoaded && isSeeked) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        logger.info(`[${originalName}] Video load promise resolved - metadata and seek complete`);
+        resolve();
+      }
+    };
+
+    const loadHandler = () => {
+      isMetadataLoaded = true;
+      logger.info(`[${originalName}] Video metadata loaded - duration: ${elements.videoPlayer.duration}, readyState: ${elements.videoPlayer.readyState}`);
+      updateTrimControls();
+      
+      logger.info(`[${originalName}] Attempting to seek to time: ${state.initialPlaybackTime} (duration: ${elements.videoPlayer.duration})`);
+      const oldTime = elements.videoPlayer.currentTime;
+      elements.videoPlayer.currentTime = state.initialPlaybackTime;
+      
+      // Log if the time actually changed
+      setTimeout(() => {
+        logger.info(`[${originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${elements.videoPlayer.currentTime}, target: ${state.initialPlaybackTime}`);
+      }, 50);
+      
+      elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      checkComplete();
+    };
+
+    const seekHandler = () => {
+      isSeeked = true;
+      logger.info(`[${originalName}] Video seek completed to time: ${elements.videoPlayer.currentTime}`);
+      elements.videoPlayer.removeEventListener('seeked', seekHandler);
+      checkComplete();
+    };
+
+    const errorHandler = (e) => {
+      logger.error(`[${originalName}] Video error during loading:`, e);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      elements.videoPlayer.removeEventListener('seeked', seekHandler);
+      elements.videoPlayer.removeEventListener('error', errorHandler);
+      reject(new Error(`Video error: ${e.message || 'Unknown error'}`));
+    };
+
+    // Add timeout to catch hung promises
+    timeoutId = setTimeout(() => {
+      logger.error(`[${originalName}] Video load timeout after 15 seconds`);
+      elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      elements.videoPlayer.removeEventListener('seeked', seekHandler);
+      elements.videoPlayer.removeEventListener('error', errorHandler);
+      elements.videoPlayer.removeEventListener('playing', playHandler);
+      reject(new Error('Video load timeout'));
+    }, 15000);
+
+    // Set up event listeners
+    elements.videoPlayer.addEventListener('loadedmetadata', loadHandler);
+    elements.videoPlayer.addEventListener('seeked', seekHandler);
+    elements.videoPlayer.addEventListener('error', errorHandler);
+    
+    // Set video source
+    elements.videoPlayer.src = `file://${path.join(state.clipLocation, originalName)}`;
+    
+    // If video was already loaded, we can resolve immediately
+    if (elements.videoPlayer.readyState >= 2) {
+      logger.info(`[${originalName}] Video already ready, skipping load/seek handlers`);
+      elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+      elements.videoPlayer.removeEventListener('seeked', seekHandler);
+      elements.videoPlayer.removeEventListener('error', errorHandler);
+      clearTimeout(timeoutId);
+      resolve();
+    }
+  });
+
+  // Play promise handles actually playing the video
+  const playPromise = new Promise((resolve, reject) => {
+    let timeoutId;
+    
+    const playHandler = () => {
+      elements.videoPlayer.style.opacity = '1';
+      thumbnailOverlay.style.display = 'none';
+      elements.videoPlayer.removeEventListener('playing', playHandler);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      logger.info(`[${originalName}] Video started playing successfully`);
+      resolve();
+    };
+    
+    const errorHandlerPlay = (e) => {
+      logger.error(`[${originalName}] Video play error:`, e);
+      elements.videoPlayer.removeEventListener('playing', playHandler);
+      elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      reject(new Error(`Video play error: ${e.message || 'Unknown error'}`));
+    };
+    
+    // Add timeout for play promise as well
+    timeoutId = setTimeout(() => {
+      logger.error(`[${originalName}] Video play timeout after 5 seconds`);
+      elements.videoPlayer.removeEventListener('playing', playHandler);
+      elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+      reject(new Error('Video play timeout'));
+    }, 5000);
+
+    elements.videoPlayer.addEventListener('playing', playHandler);
+    elements.videoPlayer.addEventListener('error', errorHandlerPlay);
+  });
+  
+  try {
+    mark('beforeLoadPromise');
+    await videoLoadPromise;
+    mark('afterLoadPromise');
+    
+    // Load volume and speed
+    const [loadedVolume, loadedSpeed] = await Promise.all([
+      loadVolume(originalName),
+      loadSpeed(originalName)
+    ]);
+    
+    // Set up volume if loaded
+    if (loadedVolume !== 1) {
+      setupAudioContext();
+      state.gainNode.gain.setValueAtTime(loadedVolume, state.audioContext.currentTime);
+      updateVolumeSlider(loadedVolume);
+      updateVolumeIcon(loadedVolume);
+    }
+    
+    // Set up speed if loaded
+    if (loadedSpeed !== 1) {
+      changeSpeed(loadedSpeed);
+    }
+    
+    mark('afterVolumeSpeed');
+    
+    // Check for volume range data to show volume controls
+    await loadVolumeData();
+    mark('afterVolumeData');
+    
+    // Start playhead updates
+    requestAnimationFrame(updatePlayhead);
+
+    // Apply ambient glow if enabled
+    if (state.settings?.ambientGlowEnabled && ambientGlowManager) {
+      logger.info(`[${originalName}] Starting ambient glow`);
+      ambientGlowManager.start();
+    }
+
+    // Update Discord presence
+    logger.info('Clip tags before Discord update:', clipTags);
+    if (!clipTags || !clipTags.includes('Private')) {
+      updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, true);
+    }
+
+    // Update last opened clip and navigation buttons
+    const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === originalName);
+    if (currentIndex !== -1) {
+      // Add a special class to the last-opened clip
+      const lastOpenedElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+      if (lastOpenedElement) {
+        lastOpenedElement.classList.add('last-opened');
+      }
+      
+      updateNavigationButtons();
+    }
+
+    // Handle initial playback time for trim data
+    if (trimData && !isNaN(state.initialPlaybackTime)) {
+      elements.videoPlayer.currentTime = state.initialPlaybackTime;
+    }
+    
+    // Show video and play when ready
+    mark('beforePlayPromise');
+    await playPromise;
+    mark('afterPlayPromise');
+    
+    logger.info(`[${originalName}] Clip opened successfully!`);
+    mark('end');
+    
+    if (isBenchmarkMode) {
+      logger.info(`[PERF] Total: ${timings.end.toFixed(1)}ms`);
+    }
+  } catch (error) {
+    logger.error(`[${originalName}] Error during clip opening:`, error);
+    
+    // Hide player overlay on error
+    elements.playerOverlay.style.display = "none";
+    elements.fullscreenPlayer.style.display = "none";
+    
+    if (!isBenchmarkMode) {
+      showCustomAlert(`Error opening clip: ${error.message}`);
+    }
+  }
+}
+
+/**
+ * Save trim changes for current clip
+ */
+async function saveTrimChanges() {
+  const clipToUpdate = state.currentClip ? { ...state.currentClip } : null;
+  
+  if (!clipToUpdate) {
+    logger.info("No clip to save trim data for");
+    return;
+  }
+
+  if (saveTrimTimeout) {
+    clearTimeout(saveTrimTimeout);
+  }
+
+  saveTrimTimeout = setTimeout(async () => {
+    try {
+      // Save trim data
+      await ipcRenderer.invoke(
+        "save-trim",
+        clipToUpdate.originalName,
+        state.trimStartTime,
+        state.trimEndTime
+      );
+      logger.info("Trim data saved successfully");
+
+      // Invalidate cache so next open gets fresh data
+      state.clipDataCache.delete(clipToUpdate.originalName);
+
+      // Regenerate thumbnail at new start point
+      const result = await ipcRenderer.invoke(
+        "regenerate-thumbnail-for-trim",
+        clipToUpdate.originalName,
+        state.trimStartTime
+      );
+
+      if (result.success) {
+        // Just update the thumbnail image
+        const clipElement = document.querySelector(
+          `.clip-item[data-original-name="${clipToUpdate.originalName}"]`
+        );
+        
+        if (clipElement) {
+          const imgElement = clipElement.querySelector(".clip-item-media-container img");
+          if (imgElement) {
+            // Update the thumbnail source with cache busting
+            imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
+          }
+        }
+      }
+
+      if (state.currentClip) {
+        updateDiscordPresence('Editing a clip', state.currentClip.customName);
+      }
+    } catch (error) {
+      logger.error("Error saving trim data:", error);
+      showCustomAlert(`Error saving trim: ${error.message}`);
+    }
+  }, 500);
+}
+
+/**
+ * Reset clip trim times
+ * 
+ * @param {Object} clip - The clip object to reset trim times for
+ */
+async function resetClipTrimTimes(clip) {
+  try {
+    const isConfirmed = await showCustomConfirm(`Reset trim times for "${clip.customName}"? This will remove any custom start/end points.`);
+    
+    if (!isConfirmed) return;
+
+    // Delete trim data for the clip
+    await ipcRenderer.invoke("delete-trim", clip.originalName);
+    logger.info("Trim data reset successfully for:", clip.originalName);
+
+    // Invalidate cache so next open gets fresh data
+    state.clipDataCache.delete(clip.originalName);
+
+    // If this is the currently playing clip, reset the UI trim times
+    if (state.currentClip && state.currentClip.originalName === clip.originalName) {
+      state.trimStartTime = 0;
+      state.trimEndTime = elements.videoPlayer.duration;
+      updateTrimControls();
+    }
+
+    // Regenerate thumbnail to default (start of video)
+    const result = await ipcRenderer.invoke(
+      "regenerate-thumbnail-for-trim",
+      clip.originalName,
+      0
+    );
+
+    if (result.success) {
+      // Update the thumbnail image
+      const clipElement = document.querySelector(
+        `.clip-item[data-original-name="${clip.originalName}"]`
+      );
+      
+      if (clipElement) {
+        const imgElement = clipElement.querySelector(".clip-item-media-container img");
+        if (imgElement) {
+          // Update the thumbnail source with cache busting
+          imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
+        }
+      }
+    }
+
+    await showCustomAlert("Trim times have been reset successfully.");
+  } catch (error) {
+    logger.error("Error resetting trim data:", error);
+    await showCustomAlert(`Error resetting trim times: ${error.message}`);
+  }
+}
+
+// ============================================================================
 // CALLBACKS
 // ============================================================================
 let callbacks = {
@@ -1177,6 +2013,25 @@ module.exports = {
 
   // Ambient glow
   applyAmbientGlowSettings,
+
+  // Additional functions
+  pauseVideoIfPlaying,
+  loadHandler,
+  seekHandler,
+  errorHandler,
+  playHandler,
+  handleVideoSeeked,
+  handleVideoCanPlay,
+  updateLoadingProgress,
+  endVolumeDrag,
+  loadVolumeData,
+  hideVolumeControls,
+  preloadClipData,
+  handleMouseEnter,
+  exportClipFromContextMenu,
+  openClip,
+  saveTrimChanges,
+  resetClipTrimTimes,
 
   // Volume icons (for external use)
   volumeIcons,
