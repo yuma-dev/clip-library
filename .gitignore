@@ -14,9 +14,7 @@ __pycache__
 # Ignore files (and directories) starting with tmpclaude
 tmpclaude*
 package-lock.json
-CLAUDE.md
 nul
-AGENT.md
 fix-state-issues.js
 STATE-VALIDATION.md
 validate-state-smart.js

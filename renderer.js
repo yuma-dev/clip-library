@@ -19,6 +19,15 @@ const videoPlayerModule = require('./renderer/video-player');
 // Tag manager module
 const tagManagerModule = require('./renderer/tag-manager');
 
+// Search manager module
+const searchManagerModule = require('./renderer/search-manager');
+
+// Export manager module
+const exportManagerModule = require('./renderer/export-manager');
+
+// Settings manager module
+const settingsManagerUiModule = require('./renderer/settings-manager-ui');
+
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
 let benchmarkHarness = null;
@@ -524,7 +533,7 @@ function handleControllerAction(action) {
         exportAudioToClipboard();
         break;
       case 'exportDefault':
-        exportTrimmedVideo();
+        exportManagerModule.exportTrimmedVideo();
         break;
       case 'fullscreen':
         videoPlayerModule.toggleFullscreen();
@@ -2336,83 +2345,6 @@ async function renderClips(clips) {
   state.isRendering = false;
 }
 
-function setupSearch() {
-  const searchInput = document.getElementById("search-input");
-  searchInput.addEventListener("input", videoPlayerModule.debounce(performSearch, 300));
-}
-
-function performSearch() {
-  const searchDisplay = document.getElementById('search-display');
-  if (!searchDisplay) return;
-
-  const searchText = searchDisplay.innerText.trim().toLowerCase();
-  const searchTerms = parseSearchTerms(searchText);
-  
-  // Start with all clips
-  let filteredClips = [...state.allClips];
-  
-  // Apply search terms if they exist
-  if (searchTerms.tags.length > 0 || searchTerms.text.length > 0) {
-    filteredClips = filteredClips.filter(clip => {
-      // Check tag matches
-      const hasMatchingTags = searchTerms.tags.length === 0 || 
-        searchTerms.tags.every(searchTag => 
-          clip.tags.some(clipTag => 
-            clipTag.toLowerCase().includes(searchTag.toLowerCase().substring(1))
-          )
-        );
-
-      // Check text matches
-      const hasMatchingText = searchTerms.text.length === 0 ||
-        searchTerms.text.every(word =>
-          clip.customName.toLowerCase().includes(word) ||
-          clip.originalName.toLowerCase().includes(word)
-        );
-
-      return hasMatchingTags && hasMatchingText;
-    });
-  }
-  
-  // Apply tag filter from dropdown
-  if (state.selectedTags.size > 0) {
-    filteredClips = filteredClips.filter(clip => {
-      if (state.selectedTags.has('Untagged')) {
-        if (!clip.tags || clip.tags.length === 0) {
-          return true;
-        }
-      }
-      return clip.tags && clip.tags.some(tag => state.selectedTags.has(tag));
-    });
-  }
-
-  // Remove duplicates
-  state.currentClipList = filteredClips.filter((clip, index, self) =>
-    index === self.findIndex((t) => t.originalName === clip.originalName)
-  );
-
-  // Sort by creation date
-  state.currentClipList.sort((a, b) => b.createdAt - a.createdAt);
-
-  renderClips(state.currentClipList);
-  updateClipCounter(state.currentClipList.length);
-
-  if (state.currentClip) {
-    updateNavigationButtons();
-  }
-}
-
-function parseSearchTerms(searchText) {
-  const terms = searchText.split(/\s+/).filter(term => term.length > 0);
-  return {
-    // Get all terms that start with @ (tags)
-    tags: terms.filter(term => term.startsWith('@')),
-    // Get all other terms (regular search)
-    text: terms.filter(term => !term.startsWith('@'))
-  };
-}
-
-
-
 function setupContextMenu() {
   const contextMenu = document.getElementById("context-menu");
   const contextMenuExport = document.getElementById("context-menu-export");
@@ -2533,191 +2465,8 @@ function setupContextMenu() {
   });
 }
 
-document.getElementById('manageTagsBtn').addEventListener('click', openTagManagement);
+document.getElementById('manageTagsBtn').addEventListener('click', searchManagerModule.openTagManagement);
 
-let isTagManagementOpen = false;
-
-function openTagManagement() {
-  if (isTagManagementOpen) {
-    logger.info("Tag management modal is already open");
-    return;
-  }
-
-  const existingModal = document.getElementById('tagManagementModal');
-  if (existingModal) {
-    existingModal.remove();
-  }
-
-  const container = document.querySelector('.cet-container') || document.body;
-  const modal = document.createElement('div');
-  modal.id = 'tagManagementModal';
-  modal.className = 'tagManagement-modal';
-
-  modal.innerHTML = `
-    <div class="tagManagement-content">
-      <div class="tagManagement-header">
-        <h2 class="tagManagement-title">Tag Management</h2>
-      </div>
-      
-      <div class="tagManagement-search">
-        <input type="text" 
-               class="tagManagement-searchInput" 
-               placeholder="Search tags..."
-               id="tagManagementSearch">
-      </div>
-
-      <div class="tagManagement-list" id="tagManagementList">
-        ${tagManagerModule.getGlobalTags().length === 0 ? 
-          '<div class="tagManagement-noTags">No tags created yet. Add your first tag below!</div>' : 
-          ''}
-      </div>
-
-      <div class="tagManagement-footer">
-        <button class="tagManagement-addBtn" id="tagManagementAddBtn">
-          Add New Tag
-        </button>
-        <button class="tagManagement-closeBtn" id="tagManagementCloseBtn">
-          Close
-        </button>
-      </div>
-    </div>
-  `;
-
-  container.appendChild(modal);
-  modal.style.display = 'block';
-  isTagManagementOpen = true;
-
-  // Render initial tags
-  renderTagList(tagManagerModule.getGlobalTags());
-
-  // Setup event listeners
-  const searchInput = document.getElementById('tagManagementSearch');
-  const closeBtn = document.getElementById('tagManagementCloseBtn');
-  const addBtn = document.getElementById('tagManagementAddBtn');
-
-  searchInput.addEventListener('input', (e) => {
-    const searchTerm = e.target.value.toLowerCase();
-    const filteredTags = tagManagerModule.getGlobalTags().filter(tag => 
-      tag.toLowerCase().includes(searchTerm)
-    );
-    renderTagList(filteredTags);
-  });
-
-  addBtn.addEventListener('click', async () => {
-    await addNewTag();
-  });
-
-  closeBtn.addEventListener('click', closeTagManagement);
-
-  // Close on click outside
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) {
-      closeTagManagement();
-    }
-  });
-
-  // Close on Escape key
-  document.addEventListener('keydown', handleEscapeKey);
-}
-
-function renderTagList(tags) {
-  const listElement = document.getElementById('tagManagementList');
-  if (!listElement) return;
-
-  listElement.innerHTML = tags.length === 0 ? 
-    '<div class="tagManagement-noTags">No tags found</div>' :
-    tags.map(tag => `
-      <div class="tagManagement-item" data-tag="${tag}">
-        <input type="text" 
-               class="tagManagement-input" 
-               value="${tag}" 
-               data-original="${tag}">
-        <button class="tagManagement-deleteBtn">Delete</button>
-      </div>
-    `).join('');
-
-  // Add event listeners for input changes and delete buttons
-  document.querySelectorAll('.tagManagement-input').forEach(input => {
-    input.addEventListener('change', handleTagRename);
-  });
-
-  const deleteButtons = document.querySelectorAll('.tagManagement-deleteBtn');
-  logger.info(`Setting up ${deleteButtons.length} delete button event listeners`);
-  deleteButtons.forEach((btn, index) => {
-    btn.addEventListener('click', handleTagDelete);
-    logger.info(`Delete button ${index + 1} event listener attached`);
-  });
-}
-
-function handleTagRename(e) {
-  const input = e.target;
-  const originalTag = input.dataset.original;
-  const newTag = input.value.trim();
-
-  if (newTag && newTag !== originalTag) {
-    tagManagerModule.updateTag(originalTag, newTag);
-  }
-}
-
-async function handleTagDelete(e) {
-  const item = e.target.closest('.tagManagement-item');
-  const tag = item.dataset.tag;
-
-  if (tag) {
-    logger.info(`Starting deletion of tag: "${tag}"`);
-    try {
-      await tagManagerModule.deleteTag(tag);
-      logger.info(`Successfully deleted tag: "${tag}"`);
-      item.remove();
-
-      // Show no tags message if no tags left
-      const listElement = document.getElementById('tagManagementList');
-      if (listElement.children.length === 0) {
-        listElement.innerHTML = '<div class="tagManagement-noTags">No tags found</div>';
-      }
-    } catch (error) {
-      logger.error(`Error deleting tag "${tag}":`, error);
-    }
-  } else {
-    logger.warn('No tag found for deletion');
-  }
-}
-
-async function addNewTag() {
-  const searchInput = document.getElementById('tagManagementSearch');
-  const newTagName = searchInput.value.trim();
-
-  if (newTagName && !tagManagerModule.getGlobalTags().includes(newTagName)) {
-    await tagManagerModule.addGlobalTag(newTagName);
-    
-    // Automatically enable the new tag
-    state.selectedTags.add(newTagName);
-    await tagManagerModule.saveTagPreferences();
-    
-    searchInput.value = '';
-    renderTagList(tagManagerModule.getGlobalTags());
-    tagManagerModule.updateFilterDropdown();
-    filterClips();
-  }
-}
-
-function handleEscapeKey(e) {
-  if (e.key === 'Escape' && isTagManagementOpen) {
-    closeTagManagement();
-  }
-}
-
-function closeTagManagement() {
-  const modal = document.getElementById('tagManagementModal');
-  if (modal) {
-    modal.style.opacity = '0';
-    setTimeout(() => {
-      modal.remove();
-      document.removeEventListener('keydown', handleEscapeKey);
-    }, 300);
-  }
-  isTagManagementOpen = false;
-}
 
 
 
@@ -2864,16 +2613,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Callbacks for module to trigger renderer.js functions
     onTrimChange: () => saveTrimChanges(),
   });
-  
+
+  // Initialize search manager with dependencies
+  searchManagerModule.init({
+    state: state,
+    renderClips: renderClips,
+    updateClipCounter: updateClipCounter,
+    updateNavigationButtons: updateNavigationButtons,
+    filterClips: filterClips,
+    tagManagerModule: tagManagerModule,
+    videoPlayerModule: videoPlayerModule
+  });
+
+  // Initialize export manager with dependencies
+  exportManagerModule.init({
+    videoPlayerModule: videoPlayerModule,
+    showExportProgress: showExportProgress,
+    showCustomAlert: showCustomAlert,
+    getFfmpegVersion: getFfmpegVersion
+  });
+
+  // Initialize settings manager with dependencies
+  settingsManagerUiModule.init({
+    videoPlayerModule: videoPlayerModule,
+    searchManagerModule: searchManagerModule,
+    fetchSettings: fetchSettings,
+    updateSettingValue: updateSettingValue,
+    toggleDiscordRPC: toggleDiscordRPC,
+    applyIconGreyscale: applyIconGreyscale,
+    renderClips: renderClips,
+    updateVersionDisplay: updateVersionDisplay,
+    changeClipLocation: changeClipLocation,
+    updateAllPreviewVolumes: updateAllPreviewVolumes,
+    populateKeybindingList: populateKeybindingList
+  });
+
   // Initialize state.settings modal and enhanced search
-  initializeEnhancedSearch();
-  await initializeSettingsModal();
+  searchManagerModule.initializeEnhancedSearch();
+  await settingsManagerUiModule.initializeSettingsModal();
   
   // Initialize gamepad manager
   await initializeGamepadManager();
   const settingsButton = document.getElementById("settingsButton");
   if (settingsButton) {
-    settingsButton.addEventListener("click", openSettingsModal);
+    settingsButton.addEventListener("click", settingsManagerUiModule.openSettingsModal);
   } else {
     logger.error("Settings button not found");
   }
@@ -2889,14 +2672,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (manageTagsBtn) {
-    manageTagsBtn.addEventListener("click", openTagManagement);
+    manageTagsBtn.addEventListener("click", searchManagerModule.openTagManagement);
     logger.info("Manage Tags button listener added");
   } else {
     logger.error("Manage Tags button not found");
   }
 
   if (closeSettingsBtn) {
-    closeSettingsBtn.addEventListener("click", closeSettingsModal);
+    closeSettingsBtn.addEventListener("click", settingsManagerUiModule.closeSettingsModal);
   } else {
     logger.error("Close Settings button not found");
   }
@@ -2984,7 +2767,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     loadClips();
   }
-  setupSearch();
+  searchManagerModule.setupSearch();
 
   // Volume event listeners are now handled by videoPlayerModule.init()
 
@@ -3121,327 +2904,6 @@ async function changeClipLocation() {
   }
 }
 
-async function initializeSettingsModal() {
-  const settingsModal = document.getElementById('settingsModal');
-  const tabs = document.querySelectorAll('.settings-tab');
-  const tabContents = document.querySelectorAll('.settings-tab-content');
-
-  // Tab switching
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      const targetTab = tab.dataset.tab;
-      
-      // Update active states
-      tabs.forEach(t => t.classList.remove('active'));
-      tabContents.forEach(c => c.classList.remove('active'));
-      
-      tab.classList.add('active');
-      document.querySelector(`.settings-tab-content[data-tab="${targetTab}"]`).classList.add('active');
-      if (typeof populateKeybindingList === 'function' && targetTab === 'shortcuts') {
-        populateKeybindingList();
-      }
-    });
-  });
-
-  // Preview volume slider
-  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
-  const previewVolumeValue = document.getElementById('previewVolumeValue');
-
-  previewVolumeSlider.addEventListener('input', (e) => {
-    const value = parseFloat(e.target.value);
-    previewVolumeValue.textContent = `${Math.round(value * 100)}%`;
-    updateAllPreviewVolumes(value);
-  });
-  
-  previewVolumeSlider.addEventListener('change', async (e) => {
-    try {
-      await updateSettingValue('previewVolume', parseFloat(e.target.value));
-    } catch (error) {
-      logger.error('Error saving preview volume:', error);
-    }
-  });
-
-  // Settings controls event handlers
-  document.getElementById('closeSettingsBtn').addEventListener('click', closeSettingsModal);
-  document.getElementById('changeLocationBtn').addEventListener('click', changeClipLocation);
-  document.getElementById('manageTagsBtn').addEventListener('click', () => {
-    closeSettingsModal();
-    openTagManagement();
-  });
-  
-  // Escape key handler to close state.settings modal
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && settingsModal.style.display === 'block') {
-      closeSettingsModal();
-    }
-  });
-
-  // Export quality change handler
-  document.getElementById('exportQuality').addEventListener('change', async (e) => {
-    try {
-      await updateSettingValue('exportQuality', e.target.value);
-    } catch (error) {
-      logger.error('Error saving export quality:', error);
-      e.target.value = state.settings.exportQuality;
-    }
-  });
-
-  // Discord RPC toggle handler
-  const discordRPCToggle = document.getElementById('enableDiscordRPC');
-  discordRPCToggle.addEventListener('change', async (e) => {
-    try {
-      await toggleDiscordRPC(e.target.checked);
-      await updateSettingValue('enableDiscordRPC', e.target.checked);
-    } catch (error) {
-      logger.error('Error toggling Discord RPC:', error);
-      e.target.checked = !e.target.checked;
-    }
-  });
-
-  // Greyscale icons toggle
-  const greyscaleToggle = document.getElementById('greyscaleIcons');
-  if (greyscaleToggle) {
-    greyscaleToggle.checked = Boolean(state.settings.iconGreyscale);
-    greyscaleToggle.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('iconGreyscale', e.target.checked);
-        applyIconGreyscale(e.target.checked);
-      } catch (error) {
-        logger.error('Error toggling Greyscale Icons:', error);
-        e.target.checked = !e.target.checked;
-      }
-    });
-  }
-
-  // New clips indicators toggle
-  const newClipsIndicatorsToggle = document.getElementById('showNewClipsIndicators');
-  if (newClipsIndicatorsToggle) {
-    newClipsIndicatorsToggle.checked = Boolean(state.settings.showNewClipsIndicators ?? true);
-    newClipsIndicatorsToggle.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('showNewClipsIndicators', e.target.checked);
-        // Re-render clips to show/hide indicators instantly
-        if (state.currentClipList) {
-          renderClips(state.currentClipList);
-        }
-      } catch (error) {
-        logger.error('Error toggling New Clips Indicators:', error);
-        e.target.checked = !e.target.checked;
-      }
-    });
-  }
-
-  // Ambient Glow state.settings
-  const ambientGlowEnabled = document.getElementById('ambientGlowEnabled');
-  const ambientGlowSmoothing = document.getElementById('ambientGlowSmoothing');
-  const ambientGlowSmoothingValue = document.getElementById('ambientGlowSmoothingValue');
-  const ambientGlowFps = document.getElementById('ambientGlowFps');
-  const ambientGlowBlur = document.getElementById('ambientGlowBlur');
-  const ambientGlowBlurValue = document.getElementById('ambientGlowBlurValue');
-  const ambientGlowOpacity = document.getElementById('ambientGlowOpacity');
-  const ambientGlowOpacityValue = document.getElementById('ambientGlowOpacityValue');
-
-  // Initialize ambient glow state.settings from saved values
-  const glowSettings = state.settings?.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-  
-  if (ambientGlowEnabled) {
-    ambientGlowEnabled.checked = glowSettings.enabled;
-    ambientGlowEnabled.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('ambientGlow.enabled', e.target.checked);
-        videoPlayerModule.applyAmbientGlowSettings(state.settings.ambientGlow);
-      } catch (error) {
-        logger.error('Error toggling Ambient Glow:', error);
-        e.target.checked = !e.target.checked;
-      }
-    });
-  }
-
-  if (ambientGlowSmoothing) {
-    ambientGlowSmoothing.value = glowSettings.smoothing;
-    ambientGlowSmoothingValue.textContent = glowSettings.smoothing.toFixed(1);
-    ambientGlowSmoothing.addEventListener('input', (e) => {
-      ambientGlowSmoothingValue.textContent = parseFloat(e.target.value).toFixed(1);
-    });
-    ambientGlowSmoothing.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('ambientGlow.smoothing', parseFloat(e.target.value));
-        videoPlayerModule.applyAmbientGlowSettings(state.settings.ambientGlow);
-      } catch (error) {
-        logger.error('Error saving Ambient Glow smoothing:', error);
-      }
-    });
-  }
-
-  if (ambientGlowFps) {
-    ambientGlowFps.value = glowSettings.fps.toString();
-    ambientGlowFps.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('ambientGlow.fps', parseInt(e.target.value));
-        videoPlayerModule.applyAmbientGlowSettings(state.settings.ambientGlow);
-      } catch (error) {
-        logger.error('Error saving Ambient Glow FPS:', error);
-      }
-    });
-  }
-
-  if (ambientGlowBlur) {
-    ambientGlowBlur.value = glowSettings.blur;
-    ambientGlowBlurValue.textContent = `${glowSettings.blur}px`;
-    ambientGlowBlur.addEventListener('input', (e) => {
-      ambientGlowBlurValue.textContent = `${e.target.value}px`;
-    });
-    ambientGlowBlur.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('ambientGlow.blur', parseInt(e.target.value));
-        videoPlayerModule.applyAmbientGlowSettings(state.settings.ambientGlow);
-      } catch (error) {
-        logger.error('Error saving Ambient Glow blur:', error);
-      }
-    });
-  }
-
-  if (ambientGlowOpacity) {
-    ambientGlowOpacity.value = glowSettings.opacity;
-    ambientGlowOpacityValue.textContent = `${Math.round(glowSettings.opacity * 100)}%`;
-    ambientGlowOpacity.addEventListener('input', (e) => {
-      ambientGlowOpacityValue.textContent = `${Math.round(e.target.value * 100)}%`;
-    });
-    ambientGlowOpacity.addEventListener('change', async (e) => {
-      try {
-        await updateSettingValue('ambientGlow.opacity', parseFloat(e.target.value));
-        videoPlayerModule.applyAmbientGlowSettings(state.settings.ambientGlow);
-      } catch (error) {
-        logger.error('Error saving Ambient Glow opacity:', error);
-      }
-    });
-  }
-}
-
-async function openSettingsModal() {
-  logger.debug('Opening state.settings modal. Current state.settings:', state.settings);
-  
-  // Fetch fresh state.settings
-  state.settings = await fetchSettings();
-  logger.debug('Fresh state.settings fetched:', state.settings);
-  
-  const settingsModal = document.getElementById('settingsModal');
-  if (settingsModal) {
-    settingsModal.style.display = 'block';
-    
-    // Update version display
-    updateVersionDisplay();
-    
-    // Update clip location
-    const currentClipLocation = document.getElementById('currentClipLocation');
-    if (currentClipLocation) {
-      currentClipLocation.textContent = state.clipLocation || 'Not set';
-    }
-    
-    // Set control values from state.settings
-    const enableDiscordRPCToggle = document.getElementById('enableDiscordRPC');
-    const exportQualitySelect = document.getElementById('exportQuality');
-    const previewVolumeSlider = document.getElementById('previewVolumeSlider');
-    const previewVolumeValue = document.getElementById('previewVolumeValue');
-
-    logger.debug('Setting controls with values:', {
-      enableDiscordRPC: state.settings.enableDiscordRPC,
-      exportQuality: state.settings.exportQuality,
-      previewVolume: state.settings.previewVolume
-    });
-
-    if (enableDiscordRPCToggle) {
-      enableDiscordRPCToggle.checked = Boolean(state.settings.enableDiscordRPC);
-    }
-    
-    if (exportQualitySelect) {
-      exportQualitySelect.value = state.settings.exportQuality || 'discord';
-    }
-
-    // Refresh greyscale toggle to reflect persisted value
-    const greyscaleToggleEl = document.getElementById('greyscaleIcons');
-    if (greyscaleToggleEl) {
-      greyscaleToggleEl.checked = Boolean(state.settings.iconGreyscale);
-    }
-
-    // Refresh new clips indicators toggle to reflect persisted value
-    const newClipsIndicatorsToggleEl = document.getElementById('showNewClipsIndicators');
-    if (newClipsIndicatorsToggleEl) {
-      newClipsIndicatorsToggleEl.checked = Boolean(state.settings.showNewClipsIndicators ?? true);
-    }
-
-    if (previewVolumeSlider && previewVolumeValue) {
-      const savedVolume = state.settings.previewVolume ?? 0.1;
-      previewVolumeSlider.value = savedVolume;
-      previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
-    }
-
-    // Refresh ambient glow state.settings to reflect persisted values
-    const glowSettings = state.settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
-    
-    const ambientGlowEnabledEl = document.getElementById('ambientGlowEnabled');
-    if (ambientGlowEnabledEl) {
-      ambientGlowEnabledEl.checked = Boolean(glowSettings.enabled);
-    }
-    
-    const ambientGlowSmoothingEl = document.getElementById('ambientGlowSmoothing');
-    const ambientGlowSmoothingValueEl = document.getElementById('ambientGlowSmoothingValue');
-    if (ambientGlowSmoothingEl && ambientGlowSmoothingValueEl) {
-      ambientGlowSmoothingEl.value = glowSettings.smoothing;
-      ambientGlowSmoothingValueEl.textContent = glowSettings.smoothing.toFixed(1);
-    }
-    
-    const ambientGlowFpsEl = document.getElementById('ambientGlowFps');
-    if (ambientGlowFpsEl) {
-      ambientGlowFpsEl.value = glowSettings.fps.toString();
-    }
-    
-    const ambientGlowBlurEl = document.getElementById('ambientGlowBlur');
-    const ambientGlowBlurValueEl = document.getElementById('ambientGlowBlurValue');
-    if (ambientGlowBlurEl && ambientGlowBlurValueEl) {
-      ambientGlowBlurEl.value = glowSettings.blur;
-      ambientGlowBlurValueEl.textContent = `${glowSettings.blur}px`;
-    }
-    
-    const ambientGlowOpacityEl = document.getElementById('ambientGlowOpacity');
-    const ambientGlowOpacityValueEl = document.getElementById('ambientGlowOpacityValue');
-    if (ambientGlowOpacityEl && ambientGlowOpacityValueEl) {
-      ambientGlowOpacityEl.value = glowSettings.opacity;
-      ambientGlowOpacityValueEl.textContent = `${Math.round(glowSettings.opacity * 100)}%`;
-    }
-
-    // Set initial active tab
-    const defaultTab = document.querySelector('.settings-tab[data-tab="general"]');
-    if (defaultTab) {
-      defaultTab.click();
-    }
-  }
-}
-
-function closeSettingsModal() {
-  const settingsModal = document.getElementById('settingsModal');
-  if (settingsModal) {
-    // Add fade-out animation
-    settingsModal.style.opacity = '0';
-    setTimeout(() => {
-      settingsModal.style.display = 'none';
-      settingsModal.style.opacity = '1';
-    }, 300);
-  }
-  
-  // Save state.settings state
-  updateSettings();
-  
-  // Update preview volumes
-  const previewVolumeSlider = document.getElementById('previewVolumeSlider');
-  if (previewVolumeSlider) {
-    updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
-  }
-}
-
-async function updateSettings() {
-  state.settings = await ipcRenderer.invoke('get-settings');
-}
 
 function updateAllPreviewVolumes(newVolume) {
   // Find all video elements inside clip-item elements
@@ -3453,8 +2915,8 @@ function updateAllPreviewVolumes(newVolume) {
 
 document
   .getElementById("settingsButton")
-  .addEventListener("click", openSettingsModal);
-closeSettingsBtn.addEventListener("click", closeSettingsModal);
+  .addEventListener("click", settingsManagerUiModule.openSettingsModal);
+closeSettingsBtn.addEventListener("click", settingsManagerUiModule.closeSettingsModal);
 document
   .getElementById("changeLocationBtn")
   .addEventListener("click", changeClipLocation);
@@ -3465,7 +2927,7 @@ document.addEventListener('click', (e) => {
   if (settingsModal && settingsModal.style.display !== 'none') {
     // Check if we clicked on the modal background (settingsModal div) and not inside the content
     if (e.target.id === 'settingsModal' && !e.target.closest('.settings-modal-content')) {
-      closeSettingsModal();
+      settingsManagerUiModule.closeSettingsModal();
     }
   }
 });
@@ -3867,7 +3329,7 @@ exportButton.addEventListener("click", (e) => {
   } else if (e.shiftKey) {
     exportAudioToClipboard();
   } else {
-    exportTrimmedVideo();
+    exportManagerModule.exportTrimmedVideo();
   }
 });
 
@@ -4101,7 +3563,7 @@ async function exportVideoWithFileSelection() {
   if (!state.currentClip) return;
   const savePath = await ipcRenderer.invoke("open-save-dialog", "video", state.currentClip.originalName, state.currentClip.customName);
   if (savePath) {
-    await exportVideo(savePath);
+    await exportManagerModule.exportVideo(savePath);
   }
 }
 
@@ -4109,122 +3571,15 @@ async function exportAudioWithFileSelection() {
   if (!state.currentClip) return;
   const savePath = await ipcRenderer.invoke("open-save-dialog", "audio", state.currentClip.originalName, state.currentClip.customName);
   if (savePath) {
-    await exportAudio(savePath);
+    await exportManagerModule.exportAudio(savePath);
   }
 }
 
 async function exportAudioToClipboard() {
   if (!state.currentClip) return;
-  await exportAudio();
+  await exportManagerModule.exportAudio();
 }
 
-async function exportVideo(savePath = null) {
-  try {
-    const volume = await videoPlayerModule.loadVolume(state.currentClip.originalName);
-    const speed = videoPlayer.playbackRate;
-    const result = await ipcRenderer.invoke(
-      "export-video",
-      state.currentClip.originalName,
-      state.trimStartTime,
-      state.trimEndTime,
-      volume,
-      speed,
-      savePath
-    );
-    if (result.success) {
-      logger.info("Video exported successfully:", result.path);
-      showExportProgress(100, 100, !savePath); // Pass true for clipboard export when no savePath
-    } else {
-      throw new Error(result.error);
-    }
-  } catch (error) {
-    logger.error("Error exporting video:", error);
-    showCustomAlert("Export failed: " + error.message);
-  }
-}
-
-ipcRenderer.on('show-fallback-notice', () => {
-  showFallbackNotice();
-});
-
-function showFallbackNotice() {
-  const notice = document.createElement('div');
-  notice.className = 'fallback-notice';
-  notice.innerHTML = `
-    <p>Your video is being exported using software encoding, which may be slower.</p>
-    <p>For faster exports, consider installing NVIDIA CUDA Runtime and updated graphics drivers.</p>
-    <button id="close-notice">Close</button>
-  `;
-  document.body.appendChild(notice);
-
-  document.getElementById('close-notice').addEventListener('click', () => {
-    notice.remove();
-  });
-}
-
-async function exportAudio(savePath = null) {
-  try {
-    const volume = await videoPlayerModule.loadVolume(state.currentClip.originalName);
-    const speed = videoPlayer.playbackRate;
-    const result = await ipcRenderer.invoke(
-      "export-audio",
-      state.currentClip.originalName,
-      state.trimStartTime,
-      state.trimEndTime,
-      volume,
-      speed,
-      savePath
-    );
-    if (result.success) {
-      logger.info("Audio exported successfully:", result.path);
-      showExportProgress(100, 100, !savePath); // Pass true for clipboard export when no savePath
-    } else {
-      throw new Error(result.error);
-    }
-  } catch (error) {
-    logger.error("Error exporting audio:", error);
-    showCustomAlert("Audio export failed: " + error.message);
-  }
-}
-
-ipcRenderer.on('ffmpeg-error', (event, message) => {
-  logger.error('FFmpeg Error:', message);
-});
-
-async function exportTrimmedVideo() {
-  if (!state.currentClip) return;
-
-  try {
-    await getFfmpegVersion();
-    const volume = await videoPlayerModule.loadVolume(state.currentClip.originalName);
-    const speed = videoPlayer.playbackRate;
-    logger.info(`Exporting video: ${state.currentClip.originalName}`);
-    logger.info(`Trim start: ${state.trimStartTime}, Trim end: ${state.trimEndTime}`);
-    logger.info(`Volume: ${volume}, Speed: ${speed}`);
-
-    showExportProgress(0, 100, true); // Show initial progress
-
-    const result = await ipcRenderer.invoke(
-      "export-trimmed-video",
-      state.currentClip.originalName,
-      state.trimStartTime,
-      state.trimEndTime,
-      volume,
-      speed
-    );
-
-    if (result.success) {
-      logger.info("Trimmed video exported successfully:", result.path);
-      showExportProgress(100, 100, true); // Always clipboard export for trimmed video
-    } else {
-      throw new Error(result.error);
-    }
-  } catch (error) {
-    logger.error("Error exporting video:", error);
-    logger.error("Error details:", error.stack);
-    await showCustomAlert(`Export failed: ${error.message}. Please check the console for more details.`);
-  }
-}
 
 async function exportClipFromContextMenu(clip) {
   try {
@@ -5066,7 +4421,7 @@ function handleKeyPress(e) {
         exportAudioToClipboard();
         break;
       case 'exportDefault':
-        exportTrimmedVideo();
+        exportManagerModule.exportTrimmedVideo();
         break;
       case 'fullscreen':
         videoPlayerModule.toggleFullscreen();
@@ -5854,149 +5209,10 @@ document.getElementById('clear-selection')?.addEventListener('click', clearSelec
 
 // Add these helper functions to renderer.js
 
-function styleSearchText(text) {
-  // Split by @mentions while preserving spaces
-  return text.split(/(@\S+)/).map(part => {
-    if (part.startsWith('@')) {
-      return `<span class="tag-highlight">${part}</span>`;
-    }
-    // Preserve spaces
-    return part;
-  }).join('');
-}
 
-function createSearchDisplay() {
-  const searchContainer = document.getElementById('search-container');
-  const searchInput = document.getElementById('search-input');
-  
-  if (!searchContainer || !searchInput) {
-    logger.error('Search container or input not found');
-    return null;
-  }
-  
-  // Create display element if it doesn't exist
-  let searchDisplay = document.getElementById('search-display');
-  if (!searchDisplay) {
-    searchDisplay = document.createElement('div');
-    searchDisplay.id = 'search-display';
-    searchDisplay.contentEditable = true;
-    searchDisplay.className = 'search-display';
-    searchDisplay.setAttribute('role', 'textbox');
-    searchDisplay.setAttribute('aria-label', 'Search input');
-    searchDisplay.setAttribute('tabindex', '0');
-    
-    // Replace input with display
-    searchInput.style.display = 'none';
-    searchContainer.appendChild(searchDisplay);
-    // Mirror placeholder focus effect on initial focus when user clicks in
-    searchDisplay.addEventListener('focus', () => {
-      searchDisplay.classList.add('focused');
-    });
-    searchDisplay.addEventListener('blur', () => {
-      searchDisplay.classList.remove('focused');
-    });
-  }
-  
-  return searchDisplay;
-}
 
-function updateSearchDisplay() {
-  const searchInput = document.getElementById('search-input');
-  const searchDisplay = document.getElementById('search-display');
-  
-  if (!searchDisplay || !searchInput) return;
-  
-  // Store cursor position if there is a selection
-  let savedSelection = null;
-  if (window.getSelection && window.getSelection().rangeCount > 0) {
-    const selection = window.getSelection();
-    const range = selection.getRangeAt(0);
-    savedSelection = {
-      node: range.startContainer,
-      offset: range.startOffset
-    };
-  }
-  
-  // Update display
-  const text = searchDisplay.innerText;
-  searchDisplay.innerHTML = styleSearchText(text);
-  
-  // Update hidden input value for search functionality
-  searchInput.value = text;
-  
-  // Trigger search
-  performSearch();
-  
-  // Restore cursor position if we had one
-  if (savedSelection) {
-    const selection = window.getSelection();
-    const newRange = document.createRange();
-    
-    // Find the appropriate text node to place the cursor
-    const textNodes = [];
-    const walker = document.createTreeWalker(
-      searchDisplay,
-      NodeFilter.SHOW_TEXT,
-      null,
-      false
-    );
-    
-    let node;
-    while (node = walker.nextNode()) {
-      textNodes.push(node);
-    }
-    
-    if (textNodes.length > 0) {
-      // Place cursor at the end if we can't find the exact position
-      const lastNode = textNodes[textNodes.length - 1];
-      newRange.setStart(lastNode, lastNode.length);
-      newRange.collapse(true);
-      
-      selection.removeAllRanges();
-      selection.addRange(newRange);
-    }
-  }
-}
 
-// Add event listeners for the search display
-function setupEnhancedSearch() {
-  const searchDisplay = createSearchDisplay();
-  
-  if (!searchDisplay) {
-    logger.error('Failed to create search display');
-    return;
-  }
-  
-  searchDisplay.addEventListener('input', () => {
-    updateSearchDisplay();
-  });
-  
-  searchDisplay.addEventListener('paste', (e) => {
-    e.preventDefault();
-    const text = e.clipboardData.getData('text/plain');
-    document.execCommand('insertText', false, text);
-  });
-  
-  searchDisplay.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-    }
-  });
-  
-  // Initialize with empty content
-  searchDisplay.innerHTML = '';
-}
 
-// Initialize enhanced search when DOM is ready
-function initializeEnhancedSearch() {
-  if (document.getElementById('search-container')) {
-    setupEnhancedSearch();
-  } else {
-    logger.warn('Search container not found, waiting for DOM...');
-    // Try again in a short moment
-    setTimeout(initializeEnhancedSearch, 100);
-  }
-}
 
 async function updateVersionDisplay() {
   try {

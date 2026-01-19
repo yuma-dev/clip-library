@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE + STATE + VIDEO-PLAYER + TAG-MANAGER COMPLETE
-**Last Updated:** 2026-01-18
-**Current Phase:** Renderer modularization in progress (search-manager.js next).
+## Status: PHASES 1-3 COMPLETE + RENDERER MODULARIZATION IN PROGRESS
+**Last Updated:** 2026-01-19
+**Current Phase:** Renderer modularization in progress (export-manager.js and settings-manager-ui.js completed).
 
 ---
 
@@ -28,7 +28,11 @@ clip-library/
 │   ├── keybinding-manager.js # ✅ Keyboard shortcut handling
 │   ├── gamepad-manager.js    # ✅ Controller/gamepad input support
 │   ├── state.js              # ✅ Centralized state management
-│   ├── video-player.js       # ⏳ Video player, controls, ambient glow (IN PROGRESS)
+│   ├── video-player.js       # ✅ Video player, controls, ambient glow
+│   ├── tag-manager.js        # ✅ Tag management operations
+│   ├── search-manager.js     # ✅ Search and filtering operations
+│   ├── export-manager.js     # ✅ Export operations
+│   ├── settings-manager-ui.js # ✅ Settings UI and controls
 │   └── clip-grid.js          # 🔮 Grid display, virtualization
 ├── shared/                 # 🔮 Code used by both processes
 │   └── constants.js        # Shared constants, file extensions, etc.
@@ -61,6 +65,10 @@ clip-library/
 | `renderer/gamepad-manager.js` | Renderer-side gamepad/controller input |
 | `renderer/state.js` | Centralized state variables for renderer process |
 | `renderer/video-player.js` | Video playback, controls (speed/volume/trim), ambient glow |
+| `renderer/tag-manager.js` | Tag management operations and UI |
+| `renderer/search-manager.js` | Search functionality and filtering |
+| `renderer/export-manager.js` | Video and audio export operations |
+| `renderer/settings-manager-ui.js` | Settings UI management and controls |
 
 ### Design Principles (Follow Forever)
 
@@ -91,7 +99,11 @@ main.js
   ├── renderer/keybinding-manager.js
   ├── renderer/gamepad-manager.js
   ├── renderer/state.js
-  └── renderer/video-player.js → depends on renderer/state.js, utils/logger.js
+  ├── renderer/video-player.js → depends on renderer/state.js, utils/logger.js
+  ├── renderer/tag-manager.js → depends on renderer/state.js, utils/logger.js
+  ├── renderer/search-manager.js → depends on renderer/state.js, renderer/tag-manager.js
+  ├── renderer/export-manager.js → depends on renderer/video-player.js
+  └── renderer/settings-manager-ui.js → depends on renderer/search-manager.js, renderer/video-player.js
 ```
 
 ---
@@ -427,10 +439,145 @@ tagManagerModule.setFilterUpdateCallback(() => filterClips());
 // ... etc for other tag manager functions
 ```
 
-### Next: search-manager.js 🔮
+### Completed: search-manager.js ✅
+**Status:** Module created and fully integrated
+
+**What's Extracted:**
+- Search input setup and event handling
+- Search term parsing with @mention support
+- Filtering clips based on search terms and tags
+- Enhanced search display with tag highlighting
+- Tag management UI (modal, add/delete/rename tags)
+
+**Integration Pattern:**
+```javascript
+// In renderer.js DOMContentLoaded:
+searchManagerModule.init({
+  state: state,
+  renderClips: renderClips,
+  updateClipCounter: updateClipCounter,
+  updateNavigationButtons: updateNavigationButtons,
+  filterClips: filterClips,
+  tagManagerModule: tagManagerModule,
+  videoPlayerModule: videoPlayerModule
+});
+```
+
+### Completed: export-manager.js ✅
+**Status:** Module created and fully integrated (2026-01-19)
+
+**What's Extracted:**
+- Video export operations: `exportVideo`, `exportTrimmedVideo`
+- Audio export operations: `exportAudio`
+- Export progress tracking and UI feedback
+- Fallback notice handling for software encoding
+
+**Integration Pattern:**
+```javascript
+// In renderer.js DOMContentLoaded:
+exportManagerModule.init({
+  videoPlayerModule: videoPlayerModule,
+  showExportProgress: showExportProgress,
+  showCustomAlert: showCustomAlert,
+  getFfmpegVersion: getFfmpegVersion
+});
+```
+
+### Completed: settings-manager-ui.js ✅
+**Status:** Module created and fully integrated (2026-01-19)
+
+**What's Extracted:**
+- Settings modal initialization and management
+- All settings controls event handling
+- Settings persistence and UI updates
+- Integration with Discord RPC, ambient glow, and other features
+
+**Integration Pattern:**
+```javascript
+// In renderer.js DOMContentLoaded:
+settingsManagerUiModule.init({
+  videoPlayerModule: videoPlayerModule,
+  searchManagerModule: searchManagerModule,
+  fetchSettings: fetchSettings,
+  updateSettingValue: updateSettingValue,
+  toggleDiscordRPC: toggleDiscordRPC,
+  applyIconGreyscale: applyIconGreyscale,
+  renderClips: renderClips,
+  updateVersionDisplay: updateVersionDisplay,
+  changeClipLocation: changeClipLocation,
+  updateAllPreviewVolumes: updateAllPreviewVolumes,
+  populateKeybindingList: populateKeybindingList
+});
+```
+
+### Next: grid-navigation.js 🔮
 Will contain:
-- Search input setup
-- Search term parsing
-- Filtering clips based on search terms
-- Search display updates
+- Grid navigation functions: `moveGridSelection`
+- Controller/gamepad navigation support
+- Focus management for clip grid
+
+### Next: clip-grid.js 🔮
+Will contain:
+- Clip grid management: `renderClips`, `createClipElement`
+- Context menu handling: `showContextMenu`
+- Clip deletion: `confirmAndDeleteClip`
+- Clip name updates: `updateClipNameInLibrary`
+- Clip list validation: `validateClipLists`
+- Thumbnail management: `prefetchThumbnailPaths`, `getThumbnailPath`, `startThumbnailValidation`, `addNewClipToLibrary`
+
+### Current State:
+**Progress Summary**
+| Phase | Status | Lines Moved | Notes |
+|-------|--------|-------------|-------|
+| Phase 1: FFmpeg | ✅ COMPLETE | ~290 lines | All exports working |
+| Phase 2: Thumbnails | ✅ COMPLETE | ~420 lines | Queue, validation, caching |
+| Phase 3: Metadata | ✅ COMPLETE | ~450 lines | File I/O, atomic writes, tags |
+| Renderer: State | ✅ COMPLETE | ~150 lines | Centralized state management |
+| Renderer: Video Player | ✅ COMPLETE | ~500 lines | Playback controls, UI |
+| Renderer: Tag Manager | ✅ COMPLETE | ~200 lines | Tag operations, UI |
+| Renderer: Search Manager | ✅ COMPLETE | ~150 lines | Search, filtering, tag UI |
+| Renderer: Export Manager | ✅ COMPLETE | ~80 lines | Export operations |
+| Renderer: Settings Manager UI | ✅ COMPLETE | ~300 lines | Settings UI, controls |
+
+**Current State:**
+- `main.js`: ~1070 lines (down from ~2230 original)
+- `renderer.js`: ~6065 lines (down from ~8000+ original)
+- **Total reduction:** ~1930 lines moved out of main.js and renderer.js (combined ~68% reduction)
+
+**Modules Created:**
+- `main/ffmpeg.js`: ~480 lines
+- `main/thumbnails.js`: ~430 lines
+- `main/metadata.js`: ~680 lines
+- `renderer/state.js`: ~150 lines
+- `renderer/video-player.js`: ~500 lines
+- `renderer/tag-manager.js`: ~200 lines
+- `renderer/search-manager.js`: ~150 lines
+- `renderer/export-manager.js`: ~80 lines
+- `renderer/settings-manager-ui.js`: ~300 lines
+
+## Validation Process and Error Handling
+
+### Critical Process for Handling Issues
+
+When issues arise during modularization, **ALWAYS follow this strict process**:
+
+1. **First Step - Fix the Validation Script**: If any issues slip through the validation script and appear in the application, the **FIRST priority** is to update the validation script to properly detect these issues. This ensures the script becomes more robust and prevents similar issues in the future.
+
+2. **Second Step - Validate the Fix**: After updating the validation script, run it to confirm it now properly detects the issues that were previously missed.
+
+3. **Third Step - Fix the Actual Issues**: Only after the validation script is confirmed to be working correctly should you proceed to fix the actual issues in the code.
+
+This process ensures that:
+- The validation script continuously improves and becomes more reliable
+- Future developers benefit from better automated detection
+- Issues are less likely to recur
+- The modularization process maintains high quality standards
+
+### Example Workflow
+When the validation script failed to detect direct function calls in event listeners:
+1. We first updated `validate-renderer-modularization.js` to check for function references in event listener registrations
+2. We verified the updated script now detected the violations
+3. We then fixed the actual calls in `renderer.js` to use proper module references
+
+This approach ensures our tooling improves alongside our code quality.
 

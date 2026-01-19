@@ -585,6 +585,30 @@ class RendererModularizationValidator {
         // Ignore walk errors
       }
     });
+
+    // Also check for function references in event listener registrations
+    // Look for patterns like: addEventListener("click", functionName)
+    const lines = this.rendererContent.split('\n');
+    lines.forEach((line, lineIndex) => {
+      // Match addEventListener calls with function references
+      const eventListenerMatch = line.match(/addEventListener\s*\(\s*["'][^"']*["']\s*,\s*(\w+)\s*\)/);
+      if (eventListenerMatch) {
+        const funcName = eventListenerMatch[1];
+        if (extractedFunctions.has(funcName)) {
+          const moduleName = extractedFunctions.get(funcName);
+          const variableName = self.toCamelCase(moduleName) + 'Module';
+          
+          self.violations.push({
+            type: 'direct_call_to_extracted',
+            functionName: 'event listener registration',
+            callee: funcName,
+            module: moduleName,
+            line: lineIndex + 1,
+            fix: `${variableName}.${funcName}`
+          });
+        }
+      }
+    });
   }
 
   getCalleeName(node) {
