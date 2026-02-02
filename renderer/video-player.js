@@ -14,6 +14,7 @@
  */
 
 const { ipcRenderer } = require('electron');
+const path = require('path');
 const logger = require('../utils/logger');
 const state = require('./state');
 
@@ -58,6 +59,15 @@ const volumeIcons = {
 // ============================================================================
 let ambientGlowManager = null;
 let clipGlowManager = null;
+let saveTrimTimeout = null;
+
+function getClipGlowManager() {
+  return clipGlowManager;
+}
+
+function getAmbientGlowManager() {
+  return ambientGlowManager;
+}
 
 // ============================================================================
 // AMBIENT GLOW MANAGER CLASS
@@ -609,10 +619,8 @@ function setTrimPoint(point) {
 
   updateTrimControls();
 
-  // Call the trim change callback for saving
-  if (callbacks.onTrimChange) {
-    callbacks.onTrimChange(state.trimStartTime, state.trimEndTime);
-  }
+  // Save trim changes directly
+  saveTrimChanges();
 }
 
 function updateTrimControls() {
@@ -699,10 +707,8 @@ function handleTrimDrag(e) {
     state.isAutoResetDisabled = false;
     elements.videoPlayer.currentTime = newTime;
 
-    // Call the trim change callback for saving
-    if (callbacks.onTrimChange) {
-      callbacks.onTrimChange(state.trimStartTime, state.trimEndTime);
-    }
+    // Save trim changes directly
+    saveTrimChanges();
   }
 }
 
@@ -943,66 +949,6 @@ function pauseVideoIfPlaying() {
 /**
  * Video load handler - called when video metadata is loaded
  */
-function loadHandler() {
-  state.isMetadataLoaded = true;
-  logger.info(`[${state.currentClip.originalName}] Video metadata loaded - duration: ${elements.videoPlayer.duration}, readyState: ${elements.videoPlayer.readyState}`);
-  updateTrimControls();
-  
-  logger.info(`[${state.currentClip.originalName}] Attempting to seek to time: ${state.initialPlaybackTime} (duration: ${elements.videoPlayer.duration})`);
-  const oldTime = elements.videoPlayer.currentTime;
-  elements.videoPlayer.currentTime = state.initialPlaybackTime;
-  
-  // Log if the time actually changed
-  setTimeout(() => {
-    logger.info(`[${state.currentClip.originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${elements.videoPlayer.currentTime}, target: ${state.initialPlaybackTime}`);
-  }, 50);
-  
-  elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
-  checkComplete();
-}
-
-/**
- * Video seek handler - called when video seeking is complete
- */
-function seekHandler() {
-  state.isSeeked = true;
-  logger.info(`[${state.currentClip.originalName}] Video seek completed to time: ${elements.videoPlayer.currentTime}`);
-  elements.videoPlayer.removeEventListener('seeked', seekHandler);
-  checkComplete();
-}
-
-/**
- * Video error handler - called when there's an error loading the video
- * 
- * @param {Event} e - The error event
- */
-function errorHandler(e) {
-  logger.error(`[${state.currentClip.originalName}] Video error during loading:`, e);
-  if (state.timeoutId) {
-    clearTimeout(state.timeoutId);
-  }
-  elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
-  elements.videoPlayer.removeEventListener('seeked', seekHandler);
-  elements.videoPlayer.removeEventListener('error', errorHandler);
-  reject(new Error(`Video error: ${e.message || 'Unknown error'}`));
-}
-
-/**
- * Video play handler - called when video starts playing
- */
-function playHandler() {
-  elements.videoPlayer.style.opacity = '1';
-  const thumbnailOverlay = document.getElementById('thumbnail-overlay');
-  if (thumbnailOverlay) {
-    thumbnailOverlay.style.display = 'none';
-  }
-  elements.videoPlayer.removeEventListener('playing', playHandler);
-  if (state.timeoutId) {
-    clearTimeout(state.timeoutId);
-  }
-  logger.info(`[${state.currentClip.originalName}] Video started playing successfully`);
-  resolve();
-}
 
 /**
  * Handle video seeked event
@@ -1013,27 +959,23 @@ function handleVideoSeeked() {
     // Check if the clip is private before updating Discord presence
     logger.info('Current clip:', state.currentClip.tags);
     if (!state.currentClip.tags || !state.currentClip.tags.includes('Private')) {
-      updateDiscordPresenceForClip(state.currentClip, !elements.videoPlayer.paused);
+      if (callbacks.updateDiscordPresenceForClip) {
+        callbacks.updateDiscordPresenceForClip(state.currentClip, !elements.videoPlayer.paused);
+      }
     }
   }
 }
 
 /**
- * Handle video canplay event
+ * Handle video canplay event - DO NOT hide thumbnail here!
+ * Thumbnail should only be hidden when 'playing' event fires.
  */
 function handleVideoCanPlay() {
   if (state.isLoading) {
     state.isLoading = false;
     hideLoadingOverlay();
-    elements.videoPlayer.currentTime = state.initialPlaybackTime;
   }
-  // Ensure thumbnail hides when video becomes playable
-  elements.videoPlayer.style.opacity = '1';
-  const thumbnailOverlay = document.getElementById('thumbnail-overlay');
-  if (thumbnailOverlay) {
-    thumbnailOverlay.style.display = 'none';
-  }
-  elements.videoPlayer.removeEventListener('canplay', handleVideoCanPlay);
+  // DO NOT show video or hide thumbnail here - wait for 'playing' event
 }
 
 /**
@@ -1072,7 +1014,9 @@ function endVolumeDrag() {
   document.removeEventListener('mouseup', endVolumeDrag);
 
   // Don't hide the volume drag control, just update its position
-  updateVolumeControlsPosition();
+  if (callbacks.updateVolumeControlsPosition) {
+    callbacks.updateVolumeControlsPosition();
+  }
   
   // Make sure the input stays visible
   const volumeInput = state.volumeDragControl.querySelector('input');
@@ -1099,8 +1043,12 @@ async function loadVolumeData() {
       state.volumeEndTime = volumeData.end;
       state.volumeLevel = volumeData.level || 0;
       state.isVolumeControlsVisible = true;
-      showVolumeControls();
-      updateVolumeControlsPosition();
+      if (callbacks.showVolumeControls) {
+        callbacks.showVolumeControls();
+      }
+      if (callbacks.updateVolumeControlsPosition) {
+        callbacks.updateVolumeControlsPosition();
+      }
       logger.info('Volume controls restored with data:', {
         start: state.volumeStartTime,
         end: state.volumeEndTime,
@@ -1113,6 +1061,12 @@ async function loadVolumeData() {
   } catch (error) {
     logger.error('Error loading volume data:', error);
     hideVolumeControls();
+  }
+}
+
+function hideVolumeDragControl() {
+  if (state.volumeDragControl) {
+    state.volumeDragControl.style.display = 'none';
   }
 }
 
@@ -1239,6 +1193,7 @@ async function handleMouseEnter(clip, clipElement) {
 
       // Store video element in the preview
       currentPreviewContext.videoElement = videoElement;
+      currentPreviewContext.imgElement = imgElement; // Store imgElement for restoration
 
       // Add loadedmetadata event listener
       videoElement.addEventListener('loadedmetadata', () => {
@@ -1286,7 +1241,9 @@ async function exportClipFromContextMenu(clip) {
     const volume = await loadVolume(clip.originalName);
     const speed = await loadSpeed(clip.originalName);
 
-    showExportProgress(0, 100); // Show initial progress
+    if (callbacks.showExportProgress) {
+      callbacks.showExportProgress(0, 100); // Show initial progress
+    }
 
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
@@ -1298,13 +1255,17 @@ async function exportClipFromContextMenu(clip) {
     );
     if (result.success) {
       logger.info("Clip exported successfully:", result.path);
-      showExportProgress(100, 100, true); // Always clipboard export for context menu
+      if (callbacks.showExportProgress) {
+        callbacks.showExportProgress(100, 100, true); // Always clipboard export for context menu
+      }
     } else {
       throw new Error(result.error);
     }
   } catch (error) {
     logger.error("Error exporting clip:", error);
-    await showCustomAlert(`Failed to export clip. Error: ${error.message}`);
+    if (callbacks.showCustomAlert) {
+      await callbacks.showCustomAlert(`Failed to export clip. Error: ${error.message}`);
+    }
   }
 }
 
@@ -1322,11 +1283,14 @@ async function openClip(originalName, customName) {
   const startTime = performance.now();
   const mark = (name) => {
     timings[name] = performance.now() - startTime;
-    if (isBenchmarkMode) {
+    if (callbacks.isBenchmarkMode) {
       logger.info(`[TIMING] ${name}: ${timings[name].toFixed(1)}ms`);
     }
   };
   mark('start');
+  
+  // Cleanup any active preview
+  cleanupVideoPreview();
   
   state.elapsedTime = 0;
 
@@ -1335,7 +1299,9 @@ async function openClip(originalName, customName) {
   state.wasLastSeekManual = false;
 
   // Log the previous session if one was active
-  await logCurrentWatchSession();
+  if (callbacks.logCurrentWatchSession) {
+    await callbacks.logCurrentWatchSession();
+  }
   mark('logSession');
 
   if (state.currentCleanup) {
@@ -1348,7 +1314,9 @@ async function openClip(originalName, customName) {
     clip.classList.remove('last-opened');
   });
 
-  initializeVolumeControls();
+  if (callbacks.initializeVolumeControls) {
+    callbacks.initializeVolumeControls();
+  }
   elements.loadingOverlay.style.display = "none";
 
   // Create or get thumbnail overlay
@@ -1377,7 +1345,7 @@ async function openClip(originalName, customName) {
   
   // OPTIMIZATION: Check if data was preloaded on hover
   let clipInfo, trimData, clipTags, thumbnailPath;
-  const cachedData = await getCachedClipData(originalName);
+  const cachedData = callbacks.getCachedClipData ? await callbacks.getCachedClipData(originalName) : null;
   
   if (cachedData) {
     // Use cached data - much faster!
@@ -1395,7 +1363,7 @@ async function openClip(originalName, customName) {
         ipcRenderer.invoke("get-clip-info", originalName),
         ipcRenderer.invoke("get-trim", originalName),
         ipcRenderer.invoke("get-clip-tags", originalName),
-        getThumbnailPath(originalName)  // Use cache-aware helper
+        callbacks.getThumbnailPath ? callbacks.getThumbnailPath(originalName) : ipcRenderer.invoke("get-thumbnail-path", originalName)
       ]);
       mark('fetchedClipData');
     } catch (error) {
@@ -1418,14 +1386,21 @@ async function openClip(originalName, customName) {
   if(elements.videoPlayer.src) {
     logger.info(`[${originalName}] Cleaning up previous video`);
     elements.videoPlayer.pause();
+    // Don't call load() after removing src - it causes MEDIA_ERR_SRC_NOT_SUPPORTED
+    // Just remove the src, we'll set a new one below
     elements.videoPlayer.removeAttribute('src');
-    elements.videoPlayer.load();
   }
   mark('cleanupPrevious');
   
   logger.info(`[${originalName}] Clip data ready. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
 
   state.currentClip = { originalName, customName, tags: clipTags };
+
+  // Set clip title
+  if (elements.clipTitle) {
+    elements.clipTitle.value = customName || path.basename(originalName, path.extname(originalName));
+    elements.clipTitle.dataset.originalName = originalName;
+  }
 
   // Set up trim points before video loads
   if (trimData) {
@@ -1483,14 +1458,26 @@ async function openClip(originalName, customName) {
     };
 
     const errorHandler = (e) => {
-      logger.error(`[${originalName}] Video error during loading:`, e);
+      // Get actual error from the video element
+      const mediaError = elements.videoPlayer.error;
+      const errorCode = mediaError ? mediaError.code : 'unknown';
+      const errorMessage = mediaError ? mediaError.message : 'Unknown error';
+
+      // Ignore MEDIA_ERR_ABORTED (code 1) - this happens when we intentionally abort loading
+      // e.g., when switching clips or closing the player
+      if (errorCode === 1) {
+        logger.info(`[${originalName}] Video loading aborted (intentional)`);
+        return;
+      }
+
+      logger.error(`[${originalName}] Video error during loading - Code: ${errorCode}, Message: ${errorMessage}`);
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
       elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
       elements.videoPlayer.removeEventListener('seeked', seekHandler);
       elements.videoPlayer.removeEventListener('error', errorHandler);
-      reject(new Error(`Video error: ${e.message || 'Unknown error'}`));
+      reject(new Error(`Video error (code ${errorCode}): ${errorMessage}`));
     };
 
     // Add timeout to catch hung promises
@@ -1507,58 +1494,20 @@ async function openClip(originalName, customName) {
     elements.videoPlayer.addEventListener('loadedmetadata', loadHandler);
     elements.videoPlayer.addEventListener('seeked', seekHandler);
     elements.videoPlayer.addEventListener('error', errorHandler);
-    
+
     // Set video source
+    logger.info(`[${originalName}] Setting video source: ${path.join(state.clipLocation, originalName)}`);
     elements.videoPlayer.src = `file://${path.join(state.clipLocation, originalName)}`;
     
-    // If video was already loaded, we can resolve immediately
+    // Check if video is already ready (if loaded from cache or fast load)
     if (elements.videoPlayer.readyState >= 2) {
-      logger.info(`[${originalName}] Video already ready, skipping load/seek handlers`);
-      elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
-      elements.videoPlayer.removeEventListener('seeked', seekHandler);
-      elements.videoPlayer.removeEventListener('error', errorHandler);
-      clearTimeout(timeoutId);
-      resolve();
+       logger.info(`[${originalName}] Video ready state is ${elements.videoPlayer.readyState}, forcing events manually`);
+       // Manually trigger load handler if metadata is already there
+       if (!isMetadataLoaded) loadHandler();
     }
+    
   });
 
-  // Play promise handles actually playing the video
-  const playPromise = new Promise((resolve, reject) => {
-    let timeoutId;
-    
-    const playHandler = () => {
-      elements.videoPlayer.style.opacity = '1';
-      thumbnailOverlay.style.display = 'none';
-      elements.videoPlayer.removeEventListener('playing', playHandler);
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      logger.info(`[${originalName}] Video started playing successfully`);
-      resolve();
-    };
-    
-    const errorHandlerPlay = (e) => {
-      logger.error(`[${originalName}] Video play error:`, e);
-      elements.videoPlayer.removeEventListener('playing', playHandler);
-      elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      reject(new Error(`Video play error: ${e.message || 'Unknown error'}`));
-    };
-    
-    // Add timeout for play promise as well
-    timeoutId = setTimeout(() => {
-      logger.error(`[${originalName}] Video play timeout after 5 seconds`);
-      elements.videoPlayer.removeEventListener('playing', playHandler);
-      elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
-      reject(new Error('Video play timeout'));
-    }, 5000);
-
-    elements.videoPlayer.addEventListener('playing', playHandler);
-    elements.videoPlayer.addEventListener('error', errorHandlerPlay);
-  });
-  
   try {
     mark('beforeLoadPromise');
     await videoLoadPromise;
@@ -1601,7 +1550,9 @@ async function openClip(originalName, customName) {
     // Update Discord presence
     logger.info('Clip tags before Discord update:', clipTags);
     if (!clipTags || !clipTags.includes('Private')) {
-      updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, true);
+      if (callbacks.updateDiscordPresenceForClip) {
+        callbacks.updateDiscordPresenceForClip({ originalName, customName, tags: clipTags }, true);
+      }
     }
 
     // Update last opened clip and navigation buttons
@@ -1612,8 +1563,10 @@ async function openClip(originalName, customName) {
       if (lastOpenedElement) {
         lastOpenedElement.classList.add('last-opened');
       }
-      
-      updateNavigationButtons();
+
+      if (callbacks.updateNavigationButtons) {
+        callbacks.updateNavigationButtons();
+      }
     }
 
     // Handle initial playback time for trim data
@@ -1623,13 +1576,76 @@ async function openClip(originalName, customName) {
     
     // Show video and play when ready
     mark('beforePlayPromise');
+    logger.info(`[${originalName}] Calling videoPlayer.play()`);
+    
+    // Create a promise for playing
+    const playPromise = new Promise((resolve, reject) => {
+        let playTimeoutId = setTimeout(() => {
+            logger.error(`[${originalName}] Play promise timeout - video did not start playing`);
+            elements.videoPlayer.removeEventListener('playing', playHandler);
+            elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+            reject(new Error('Play promise timeout'));
+        }, 5000);
+
+        const playHandler = () => {
+            // NOW show the video and hide thumbnail when playing actually starts
+            // This prevents seeing the first frame before jumping to the trim start
+            elements.videoPlayer.style.opacity = '1';
+            const thumbnailOverlay = document.getElementById('thumbnail-overlay');
+            if (thumbnailOverlay) {
+                thumbnailOverlay.style.display = 'none';
+            }
+
+            elements.videoPlayer.removeEventListener('playing', playHandler);
+            elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+            clearTimeout(playTimeoutId);
+            logger.info(`[${originalName}] Video started playing successfully`);
+            resolve();
+        };
+
+        const errorHandlerPlay = (e) => {
+             // Get actual error from the video element
+             const mediaError = elements.videoPlayer.error;
+             const errorCode = mediaError ? mediaError.code : 'unknown';
+             const errorMessage = mediaError ? mediaError.message : 'Unknown error';
+
+             // Ignore MEDIA_ERR_ABORTED (code 1) - this happens when we intentionally abort
+             if (errorCode === 1) {
+                 logger.info(`[${originalName}] Video play aborted (intentional)`);
+                 elements.videoPlayer.removeEventListener('playing', playHandler);
+                 elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+                 clearTimeout(playTimeoutId);
+                 return;
+             }
+
+             logger.error(`[${originalName}] Video play error - Code: ${errorCode}, Message: ${errorMessage}`);
+             elements.videoPlayer.removeEventListener('playing', playHandler);
+             elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+             clearTimeout(playTimeoutId);
+             reject(new Error(`Video play error (code ${errorCode}): ${errorMessage}`));
+        };
+
+        elements.videoPlayer.addEventListener('playing', playHandler);
+        elements.videoPlayer.addEventListener('error', errorHandlerPlay);
+        
+        // Actually call play
+        elements.videoPlayer.play().catch(e => {
+            // Handle promise rejection from .play() itself (e.g. AbortError)
+            if (e.name !== 'AbortError') {
+                 logger.error(`[${originalName}] videoPlayer.play() rejected:`, e);
+                 // We don't reject the main promise here, we let the timeout or error event handle it
+                 // unless it's a fatal error
+            }
+        });
+    });
+
     await playPromise;
     mark('afterPlayPromise');
     
     logger.info(`[${originalName}] Clip opened successfully!`);
     mark('end');
-    
-    if (isBenchmarkMode) {
+
+    if (callbacks.isBenchmarkMode) {
       logger.info(`[PERF] Total: ${timings.end.toFixed(1)}ms`);
     }
   } catch (error) {
@@ -1638,9 +1654,11 @@ async function openClip(originalName, customName) {
     // Hide player overlay on error
     elements.playerOverlay.style.display = "none";
     elements.fullscreenPlayer.style.display = "none";
-    
-    if (!isBenchmarkMode) {
-      showCustomAlert(`Error opening clip: ${error.message}`);
+
+    if (!callbacks.isBenchmarkMode) {
+      if (callbacks.showCustomAlert) {
+        callbacks.showCustomAlert(`Error opening clip: ${error.message}`);
+      }
     }
   }
 }
@@ -1696,12 +1714,14 @@ async function saveTrimChanges() {
         }
       }
 
-      if (state.currentClip) {
-        updateDiscordPresence('Editing a clip', state.currentClip.customName);
+      if (state.currentClip && callbacks.updateDiscordPresence) {
+        callbacks.updateDiscordPresence('Editing a clip', state.currentClip.customName);
       }
     } catch (error) {
       logger.error("Error saving trim data:", error);
-      showCustomAlert(`Error saving trim: ${error.message}`);
+      if (callbacks.showCustomAlert) {
+        callbacks.showCustomAlert(`Error saving trim: ${error.message}`);
+      }
     }
   }, 500);
 }
@@ -1713,8 +1733,10 @@ async function saveTrimChanges() {
  */
 async function resetClipTrimTimes(clip) {
   try {
-    const isConfirmed = await showCustomConfirm(`Reset trim times for "${clip.customName}"? This will remove any custom start/end points.`);
-    
+    if (!callbacks.showCustomConfirm) return;
+
+    const isConfirmed = await callbacks.showCustomConfirm(`Reset trim times for "${clip.customName}"? This will remove any custom start/end points.`);
+
     if (!isConfirmed) return;
 
     // Delete trim data for the clip
@@ -1753,10 +1775,14 @@ async function resetClipTrimTimes(clip) {
       }
     }
 
-    await showCustomAlert("Trim times have been reset successfully.");
+    if (callbacks.showCustomAlert) {
+      await callbacks.showCustomAlert("Trim times have been reset successfully.");
+    }
   } catch (error) {
     logger.error("Error resetting trim data:", error);
-    await showCustomAlert(`Error resetting trim times: ${error.message}`);
+    if (callbacks.showCustomAlert) {
+      await callbacks.showCustomAlert(`Error resetting trim times: ${error.message}`);
+    }
   }
 }
 
@@ -1764,8 +1790,20 @@ async function resetClipTrimTimes(clip) {
 // CALLBACKS
 // ============================================================================
 let callbacks = {
-  onTrimChange: null,      // Called when trim points change (for saving)
-  onPlayerClose: null,     // Called when player should close
+  onPlayerClose: null,                   // Called when player should close
+  logCurrentWatchSession: null,          // Called to log watch session
+  initializeVolumeControls: null,        // Called to initialize volume controls
+  getCachedClipData: null,               // Called to get cached clip data
+  getThumbnailPath: null,                // Called to get thumbnail path
+  updateDiscordPresenceForClip: null,    // Called to update Discord presence
+  updateNavigationButtons: null,         // Called to update navigation buttons
+  showCustomAlert: null,                 // Called to show custom alert
+  showVolumeControls: null,              // Called to show volume controls
+  updateVolumeControlsPosition: null,    // Called to update volume controls position
+  showExportProgress: null,              // Called to show export progress
+  showCustomConfirm: null,               // Called to show custom confirm dialog
+  isBenchmarkMode: false,                // Whether benchmark mode is enabled
+  updateDiscordPresence: null,           // Called to update Discord presence (generic)
 };
 
 // ============================================================================
@@ -1937,6 +1975,60 @@ function setupEventListeners() {
       togglePlayPause();
     });
   }
+
+  // Mouse movement to show controls
+  if (elements.playerOverlay) {
+    elements.playerOverlay.addEventListener("mousemove", resetControlsTimeout);
+  }
+  if (elements.videoControls) {
+    elements.videoControls.addEventListener("mousemove", resetControlsTimeout);
+    
+    // Prevent hiding when interacting with controls
+    elements.videoControls.addEventListener("mouseenter", () => {
+      state.isMouseOverControls = true;
+      showControls();
+      clearTimeout(state.controlsTimeout);
+    });
+    
+    elements.videoControls.addEventListener("mouseleave", () => {
+      state.isMouseOverControls = false;
+      resetControlsTimeout();
+    });
+  }
+}
+
+// ============================================================================
+// CLEANUP
+// ============================================================================
+
+/**
+ * Cleanup function for video preview
+ */
+function cleanupVideoPreview() {
+  // Use state.activePreview to access the current preview context
+  if (state.previewCleanupTimeout) {
+    clearTimeout(state.previewCleanupTimeout);
+    state.previewCleanupTimeout = null;
+  }
+
+  // Check if we have an active preview with a video element
+  if (state.activePreview && state.activePreview.videoElement) {
+    const videoElement = state.activePreview.videoElement;
+    videoElement.pause();
+    videoElement.removeAttribute('src');
+    videoElement.load();
+    videoElement.remove();
+    
+    // Restore thumbnail visibility if we can find the image element
+    // Note: We'd need reference to the image element too if we want to restore it here
+    // or rely on the fact that removing video reveals what's behind
+    if (state.activePreview.imgElement) {
+       state.activePreview.imgElement.style.display = "";
+    }
+  }
+
+  // Reset active preview
+  state.activePreview = null;
 }
 
 // ============================================================================
@@ -1955,8 +2047,8 @@ module.exports = {
   ClipGlowManager,
 
   // Managers (access after init)
-  getAmbientGlowManager: () => ambientGlowManager,
-  getClipGlowManager: () => clipGlowManager,
+  getAmbientGlowManager,
+  getClipGlowManager,
 
   // Speed controls
   changeSpeed,
@@ -2016,16 +2108,13 @@ module.exports = {
 
   // Additional functions
   pauseVideoIfPlaying,
-  loadHandler,
-  seekHandler,
-  errorHandler,
-  playHandler,
   handleVideoSeeked,
-  handleVideoCanPlay,
   updateLoadingProgress,
   endVolumeDrag,
   loadVolumeData,
+  hideVolumeDragControl,
   hideVolumeControls,
+  cleanupVideoPreview,
   preloadClipData,
   handleMouseEnter,
   exportClipFromContextMenu,
