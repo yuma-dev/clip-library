@@ -77,40 +77,97 @@ function moveGridSelection(direction) {
 /**
  * Get clips that are currently visible in the grid
  * 
- * @returns {Array} Array of visible clip objects
+ * @returns {Array} Array of visible clip elements
  */
 function getVisibleClips() {
-  // This function would need to be injected or imported
-  // For now, we'll assume it's available in the state or passed as dependency
-  return state.currentClipList || [];
+  // Get all clip elements that are currently visible in the grid
+  return Array.from(document.querySelectorAll('.clip-item:not(.hidden)'));
 }
 
 /**
  * Find the closest clip in the specified direction
  * 
- * @param {Array} clips - Array of clip objects
+ * @param {Array} clips - Array of clip elements
  * @param {number} currentIndex - Current clip index
- * @param {string} direction - Direction to search ('up' or 'down')
+ * @param {string} direction - Direction to search ('up', 'down', 'left', 'right')
  * @returns {number} Index of the clip in the specified direction
  */
 function findClipInDirection(clips, currentIndex, direction) {
-  // This function would need to be injected or imported
-  // For now, we'll return a simple implementation
-  if (direction === 'up' && currentIndex > 0) {
-    return currentIndex - 1;
-  } else if (direction === 'down' && currentIndex < clips.length - 1) {
-    return currentIndex + 1;
+  if (clips.length === 0) return currentIndex;
+  
+  const gridElement = document.getElementById('clip-grid');
+  if (!gridElement) return currentIndex;
+  
+  if (currentIndex < 0 || currentIndex >= clips.length) return currentIndex;
+  
+  // Get the bounding rectangle of the current clip
+  const currentClip = clips[currentIndex];
+  if (!currentClip) return currentIndex;
+  
+  const currentRect = currentClip.getBoundingClientRect();
+  
+  switch (direction) {
+    case 'up':
+      // Find the clip above the current one
+      for (let i = currentIndex - 1; i >= 0; i--) {
+        const clipRect = clips[i].getBoundingClientRect();
+        // Check if this clip is in the same column (approximately)
+        if (Math.abs(clipRect.left - currentRect.left) < currentRect.width) {
+          return i;
+        }
+      }
+      return currentIndex;
+      
+    case 'down':
+      // Find the clip below the current one
+      for (let i = currentIndex + 1; i < clips.length; i++) {
+        const clipRect = clips[i].getBoundingClientRect();
+        // Check if this clip is in the same column (approximately)
+        if (Math.abs(clipRect.left - currentRect.left) < currentRect.width) {
+          return i;
+        }
+      }
+      return currentIndex;
+      
+    case 'left':
+      // Find the clip to the left
+      if (currentIndex > 0) {
+        return currentIndex - 1;
+      }
+      return currentIndex;
+      
+    case 'right':
+      // Find the clip to the right
+      if (currentIndex < clips.length - 1) {
+        return currentIndex + 1;
+      }
+      return currentIndex;
+      
+    default:
+      return currentIndex;
   }
-  return currentIndex;
 }
 
 /**
  * Update the visual selection in the grid
  */
 function updateGridSelection() {
-  // This function would need to be injected or imported
-  // For now, we'll just log that it should be called
-  logger.info('Grid selection updated to index:', state.currentGridFocusIndex);
+  // Remove focus class from all clips
+  document.querySelectorAll('.clip-item').forEach(clip => {
+    clip.classList.remove('grid-focused');
+  });
+  
+  // Add focus class to the currently selected clip
+  const visibleClips = getVisibleClips();
+  if (visibleClips.length > 0 && state.currentGridFocusIndex < visibleClips.length) {
+    const selectedClip = visibleClips[state.currentGridFocusIndex];
+    if (selectedClip) {
+      selectedClip.classList.add('grid-focused');
+      
+      // Scroll the selected clip into view if needed
+      selectedClip.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    }
+  }
 }
 
 // ============================================================================
