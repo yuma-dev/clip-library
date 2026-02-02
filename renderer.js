@@ -8,7 +8,7 @@ const fs = require('fs').promises;
 const keybinds = require('./renderer/keybinding-manager');
 
 // Gamepad manager for controller support
-const GamepadManager = require('./renderer/gamepad-manager');
+const gamepadManagerModule = require('./renderer/gamepad-manager');
 
 // Centralized state management
 const state = require('./renderer/state');
@@ -24,6 +24,9 @@ const searchManagerModule = require('./renderer/search-manager');
 
 // Export manager module
 const exportManagerModule = require('./renderer/export-manager');
+
+// Grid navigation module
+const gridNavigationModule = require('./renderer/grid-navigation');
 
 // Settings manager module
 const settingsManagerUiModule = require('./renderer/settings-manager-ui');
@@ -158,10 +161,15 @@ function openCurrentGridSelection() {
   
   const originalName = selectedClip.dataset.originalName;
   const customName = selectedClip.dataset.customName || originalName;
-  
+
   if (originalName) {
     disableGridNavigation(); // Disable grid navigation when opening clip
-    openClip(originalName, customName);
+
+    // Add keyboard event listeners for video player controls
+    document.addEventListener("keydown", handleKeyPress);
+    document.addEventListener("keyup", handleKeyRelease);
+
+    videoPlayerModule.openClip(originalName, customName);
   }
 }
 
@@ -231,7 +239,27 @@ function hideControllerSelectionOnKeyboard(e) {
 // Initialize gamepad manager with proper callbacks
 async function initializeGamepadManager() {
   try {
-    state.gamepadManager = new GamepadManager();
+    state.gamepadManager = new gamepadManagerModule.GamepadManager();
+    
+    // Inject dependencies for module functions
+    gamepadManagerModule.dependencies = {
+        videoPlayer: document.getElementById("video-player"),
+        playerOverlay: document.getElementById("player-overlay"),
+        clipTitle: document.getElementById("clip-title"),
+        videoPlayerModule,
+        navigateToVideo,
+        exportAudioWithFileSelection,
+        exportVideoWithFileSelection,
+        exportAudioToClipboard,
+        exportManagerModule,
+        confirmAndDeleteClip,
+        closePlayer,
+        enableGridNavigation,
+        disableGridNavigation,
+        openCurrentGridSelection,
+        moveGridSelection: gridNavigationModule.moveGridSelection,
+        state
+    };
     
     // Get controller state.settings from main state.settings
     const appSettings = await ipcRenderer.invoke('get-settings');
@@ -266,12 +294,12 @@ async function initializeGamepadManager() {
     
     // Set up action callback for button presses
     state.gamepadManager.setActionCallback((action) => {
-      handleControllerAction(action);
+      gamepadManagerModule.handleControllerAction(action);
     });
     
     // Set up navigation callback for analog sticks
     state.gamepadManager.setNavigationCallback((type, value) => {
-      handleControllerNavigation(type, value);
+      gamepadManagerModule.handleControllerNavigation(type, value);
     });
     
     // Set up raw navigation callback for grid scrolling
@@ -2015,7 +2043,7 @@ function setupContextMenu() {
   contextMenuExport.addEventListener("click", () => {
     logger.info("Export clicked for clip:", state.contextMenuClip?.originalName);
     if (state.contextMenuClip) {
-      exportClipFromContextMenu(state.contextMenuClip);
+      videoPlayerModule.exportClipFromContextMenu(state.contextMenuClip);
     }
     contextMenu.style.display = "none";
   });
@@ -2092,7 +2120,7 @@ function setupContextMenu() {
     contextMenuResetTrim.addEventListener("click", async () => {
       logger.info("Reset trim clicked for clip:", state.contextMenuClip?.originalName);
       if (state.contextMenuClip) {
-        await resetClipTrimTimes(state.contextMenuClip);
+        await videoPlayerModule.resetClipTrimTimes(state.contextMenuClip);
       }
       contextMenu.style.display = "none";
     });
@@ -2250,7 +2278,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     totalTimeDisplay: document.getElementById("total-time"),
   }, {
     // Callbacks for module to trigger renderer.js functions
-    onTrimChange: () => saveTrimChanges(),
+    logCurrentWatchSession: logCurrentWatchSession,
+    initializeVolumeControls: initializeVolumeControls,
+    getCachedClipData: getCachedClipData,
+    getThumbnailPath: getThumbnailPath,
+    updateDiscordPresenceForClip: updateDiscordPresenceForClip,
+    updateNavigationButtons: updateNavigationButtons,
+    showCustomAlert: showCustomAlert,
+    showVolumeControls: showVolumeControls,
+    updateVolumeControlsPosition: updateVolumeControlsPosition,
+    showExportProgress: showExportProgress,
+    showCustomConfirm: showCustomConfirm,
+    isBenchmarkMode: isBenchmarkMode,
+    updateDiscordPresence: updateDiscordPresence,
   });
 
   // Initialize search manager with dependencies
@@ -2754,45 +2794,20 @@ function createClipElement(clip) {
       }
     }
 
-    function cleanupVideoPreview() {
-      // Clear the timeout if it exists
-      if (state.previewCleanupTimeout) {
-        clearTimeout(state.previewCleanupTimeout);
-        state.previewCleanupTimeout = null;
-      }
-    
-      // Reset active preview
-      state.activePreview = null;
-    
-      // Clean up video element if it exists
-      if (videoElement) {
-        videoElement.pause();
-        videoElement.removeAttribute('src');
-        videoElement.load();
-        videoElement.remove();
-        videoElement = null;
-    
-        // Restore thumbnail visibility
-        const imgElement = clipElement.querySelector(".clip-item-media-container img");
-        if (imgElement) {
-          imgElement.style.display = "";
-        }
-      }
+  function handleMouseLeave() {
+    // Hide ambient glow
+    const clipGlowManager = videoPlayerModule.getClipGlowManager();
+    if (clipGlowManager) {
+      clipGlowManager.hide();
     }
 
-    function handleMouseLeave() {
-      // Hide ambient glow
-      const clipGlowManager = videoPlayerModule.getClipGlowManager();
-      if (clipGlowManager) {
-        clipGlowManager.hide();
-      }
+    if (clipElement.classList.contains("video-preview-disabled")) return;
+    videoPlayerModule.cleanupVideoPreview();
+  }
 
-      if (clipElement.classList.contains("video-preview-disabled")) return;
-      cleanupVideoPreview();
-    }
-
-    clipElement.handleMouseEnter = handleMouseEnter;
-    clipElement.addEventListener("mouseenter", handleMouseEnter);
+    const onMouseEnter = () => videoPlayerModule.handleMouseEnter(clip, clipElement);
+    clipElement.handleMouseEnter = onMouseEnter;
+    clipElement.addEventListener("mouseenter", onMouseEnter);
     clipElement.addEventListener("mouseleave", handleMouseLeave);
 
     clipElement.addEventListener("click", (e) => handleClipClick(e, clip));
@@ -2804,8 +2819,8 @@ function createClipElement(clip) {
     clipElement.appendChild(contentElement);
 
     clipElement.cleanup = () => {
-      cleanupVideoPreview();
-      clipElement.removeEventListener("mouseenter", handleMouseEnter);
+      videoPlayerModule.cleanupVideoPreview();
+      clipElement.removeEventListener("mouseenter", onMouseEnter);
       clipElement.removeEventListener("mouseleave", handleMouseLeave);
     };
 
@@ -2859,7 +2874,11 @@ function handleClipClick(e, clip) {
   }
 
   // Otherwise, open the clip
-  openClip(clip.originalName, clip.customName);
+  // Add keyboard event listeners for video player controls
+  document.addEventListener("keydown", handleKeyPress);
+  document.addEventListener("keyup", handleKeyRelease);
+
+  videoPlayerModule.openClip(clip.originalName, clip.customName);
 }
 
 
@@ -2887,8 +2906,8 @@ ipcRenderer.on("close-video-player", () => {
   }
   if (videoPlayer) {
     videoPlayer.pause();
-    videoPlayer.src = "";
-    videoPlayer.load();
+    videoPlayer.removeAttribute('src');
+    // Don't call load() with empty src - causes MEDIA_ERR_SRC_NOT_SUPPORTED error
   }
 });
 
@@ -2904,7 +2923,7 @@ function navigateToVideo(direction) {
   const newIndex = currentIndex + direction;
   if (newIndex >= 0 && newIndex < state.currentClipList.length) {
     const nextClip = state.currentClipList[newIndex];
-    openClip(nextClip.originalName, nextClip.customName);
+    videoPlayerModule.openClip(nextClip.originalName, nextClip.customName);
   }
 }
 
@@ -3209,9 +3228,11 @@ function closePlayer() {
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
     saveTitleTimeout = null;
-    document.removeEventListener("keydown", handleKeyPress);
-    document.removeEventListener("keyup", handleKeyRelease);
   }
+
+  // Remove keyboard event listeners for video player controls
+  document.removeEventListener("keydown", handleKeyPress);
+  document.removeEventListener("keyup", handleKeyRelease);
 
   // Capture necessary information before resetting state.currentClip
   const originalName = state.currentClip ? state.currentClip.originalName : null;
@@ -3229,12 +3250,12 @@ function closePlayer() {
     playerOverlay.style.display = "none";
     fullscreenPlayer.style.display = "none";
     videoPlayer.pause();
-    videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
-    videoPlayer.removeEventListener("progress", updateLoadingProgress);
-    videoPlayer.removeEventListener("waiting", videoPlayerModule.showloadingOverlay);
+    videoPlayer.removeEventListener("canplay", videoPlayerModule.handleVideoCanPlay);
+    videoPlayer.removeEventListener("progress", videoPlayerModule.updateLoadingProgress);
+    videoPlayer.removeEventListener("waiting", videoPlayerModule.showLoadingOverlay);
     videoPlayer.removeEventListener("playing", videoPlayerModule.hideLoadingOverlay);
-    videoPlayer.removeEventListener("seeked", handleVideoSeeked);
-    videoPlayer.src = "";
+    videoPlayer.removeEventListener("seeked", videoPlayerModule.handleVideoSeeked);
+    videoPlayer.removeAttribute('src');
 
     clipTitle.removeEventListener("focus", clipTitleFocusHandler);
     clipTitle.removeEventListener("blur", clipTitleBlurHandler);
@@ -4413,7 +4434,7 @@ function initializeVolumeControls() {
     progressBarContainer.appendChild(state.volumeDragControl);
   }
 
-  hideVolumeControls();
+  videoPlayerModule.hideVolumeControls();
   setupVolumeControlListeners();
 }
 
@@ -4439,7 +4460,7 @@ function setupVolumeControlListeners() {
   state.volumeStartElement.removeEventListener('mousedown', handleVolumeStartDrag);
   state.volumeEndElement.removeEventListener('mousedown', handleVolumeEndDrag);
   document.removeEventListener('mousemove', handleVolumeDrag);
-  document.removeEventListener('mouseup', endVolumeDrag);
+  document.removeEventListener('mouseup', videoPlayerModule.endVolumeDrag);
 
   function handleVolumeStartDrag(e) {
     if (e.button !== 0) return; // Only handle left mouse button
@@ -4447,7 +4468,7 @@ function setupVolumeControlListeners() {
     state.isVolumeDragging = 'start';
     showVolumeDragControl(e);
     document.addEventListener('mousemove', handleVolumeDrag);
-    document.addEventListener('mouseup', endVolumeDrag);
+    document.addEventListener('mouseup', videoPlayerModule.endVolumeDrag);
   }
 
   function handleVolumeEndDrag(e) {
@@ -4456,7 +4477,7 @@ function setupVolumeControlListeners() {
     state.isVolumeDragging = 'end';
     showVolumeDragControl(e);
     document.addEventListener('mousemove', handleVolumeDrag);
-    document.addEventListener('mouseup', endVolumeDrag);
+    document.addEventListener('mouseup', videoPlayerModule.endVolumeDrag);
   }
 
   state.volumeDragControl.querySelector('input').addEventListener('input', (e) => {
@@ -4478,7 +4499,7 @@ function setupVolumeControlListeners() {
   // Force cleanup if window loses focus
   window.addEventListener('blur', () => {
     if (state.isVolumeDragging) {
-      endVolumeDrag();
+      videoPlayerModule.endVolumeDrag();
     }
   });
 }
@@ -4540,7 +4561,7 @@ function showVolumeDragControl(e) {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.isVolumeDragging) {
-    endVolumeDrag();
+    videoPlayerModule.endVolumeDrag();
   }
 });
 
@@ -4605,7 +4626,7 @@ function toggleVolumeControls() {
     }
     showVolumeControls();
   } else {
-    hideVolumeControls();
+    videoPlayerModule.hideVolumeControls();
   }
 }
 

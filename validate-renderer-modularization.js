@@ -535,7 +535,60 @@ class RendererModularizationValidator {
     // Type 3: Missing imports
     this.detectMissingImports();
 
+    // Type 4: Undefined module exports
+    this.detectUndefinedModuleExports();
+
     console.log(`✅ Found ${this.violations.length} violations\n`);
+  }
+
+  detectUndefinedModuleExports() {
+    // Map variable names to module names
+    // e.g. videoPlayerModule -> video-player
+    const variableToModule = new Map();
+    for (const [moduleName] of this.modules) {
+      const variableName = this.toCamelCase(moduleName) + 'Module';
+      variableToModule.set(variableName, moduleName);
+    }
+
+    const self = this;
+    
+    // Check inside function bodies
+    this.rendererFunctions.forEach(func => {
+      if (!func.body) return;
+      try {
+        walk.simple(func.body, {
+          CallExpression(node) {
+            if (node.callee.type === 'MemberExpression' &&
+                node.callee.object.type === 'Identifier') {
+                
+                const variableName = node.callee.object.name;
+                if (variableToModule.has(variableName)) {
+                    const moduleName = variableToModule.get(variableName);
+                    // Handle both dot notation and brackets if property has name
+                    const propertyName = node.callee.property.name;
+                    
+                    if (propertyName) {
+                        const moduleData = self.modules.get(moduleName);
+                        // Check if export exists
+                        if (moduleData && !moduleData.exports.includes(propertyName)) {
+                            self.violations.push({
+                                type: 'undefined_module_export',
+                                functionName: func.name,
+                                callee: `${variableName}.${propertyName}`,
+                                module: moduleName,
+                                line: node.loc.start.line,
+                                fix: `Export ${propertyName} from ${moduleName}.js`
+                            });
+                        }
+                    }
+                }
+            }
+          }
+        });
+      } catch (error) {
+        // Ignore walk errors
+      }
+    });
   }
 
   toCamelCase(str) {
@@ -886,7 +939,8 @@ class RendererModularizationValidator {
     const byType = {
       direct_call_to_extracted: [],
       duplicate_definition: [],
-      missing_import: []
+      missing_import: [],
+      undefined_module_export: []
     };
 
     this.violations.forEach(v => {
@@ -933,6 +987,19 @@ class RendererModularizationValidator {
 
       byType.missing_import.forEach((v, idx) => {
         console.log(`${idx + 1}. renderer.js uses ${v.module} but doesn't import it`);
+        console.log(`   Fix: ${v.fix}`);
+        console.log();
+      });
+    }
+
+    if (byType.undefined_module_export.length > 0) {
+      console.log(`⚠️  Undefined Module Exports (${byType.undefined_module_export.length} found)`);
+      console.log();
+
+      byType.undefined_module_export.forEach((v, idx) => {
+        console.log(`${idx + 1}. ${v.callee}() called in ${v.functionName}()`);
+        console.log(`   Line ${v.line} in renderer.js`);
+        console.log(`   Issue: ${v.module}.js does not export '${v.callee.split('.')[1]}'`);
         console.log(`   Fix: ${v.fix}`);
         console.log();
       });
