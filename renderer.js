@@ -150,6 +150,7 @@ function disableGridNavigation() {
 
 
 
+
 function openCurrentGridSelection() {
   if (!state.gridNavigationEnabled) return;
   
@@ -2327,6 +2328,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateKeybindingList: populateKeybindingList
   });
 
+  // Initialize grid navigation module
+  gridNavigationModule.init({});
+
   // Initialize state.settings modal and enhanced search
   searchManagerModule.initializeEnhancedSearch();
   await settingsManagerUiModule.initializeSettingsModal();
@@ -3359,8 +3363,6 @@ function handleKeyPress(e) {
   const isSearching = document.activeElement === document.getElementById("search-input");
   const isPlayerActive = playerOverlay.style.display === "block";
 
-  if (!isPlayerActive) return;
-
   videoPlayerModule.showControls();
 
   // Special handling for Space: hold to 2x while pressed (no metadata/UI update)
@@ -3391,67 +3393,110 @@ function handleKeyPress(e) {
     // Prevent default for handled keys unless explicitly allowed
     e.preventDefault();
 
-    switch (action) {
-      case 'closePlayer':
-        closePlayer();
-        break;
-      case 'playPause':
-        if (videoPlayer.src) videoPlayerModule.togglePlayPause();
-        break;
-      case 'frameBackward':
-        videoPlayerModule.moveFrame(-1);
-        break;
-      case 'frameForward':
-        videoPlayerModule.moveFrame(1);
-        break;
-      case 'navigatePrev':
-        navigateToVideo(-1);
-        break;
-      case 'navigateNext':
-        navigateToVideo(1);
-        break;
-      case 'skipBackward':
-        videoPlayerModule.skipTime(-1);
-        break;
-      case 'skipForward':
-        videoPlayerModule.skipTime(1);
-        break;
-      case 'volumeUp':
-        videoPlayerModule.changeVolume(0.1);
-        break;
-      case 'volumeDown':
-        videoPlayerModule.changeVolume(-0.1);
-        break;
-      case 'exportAudioFile':
-        exportAudioWithFileSelection();
-        break;
-      case 'exportVideo':
-        exportVideoWithFileSelection();
-        break;
-      case 'exportAudioClipboard':
-        exportAudioToClipboard();
-        break;
-      case 'exportDefault':
-        exportManagerModule.exportTrimmedVideo();
-        break;
-      case 'fullscreen':
-        videoPlayerModule.toggleFullscreen();
-        break;
-      case 'deleteClip':
-        confirmAndDeleteClip();
-        break;
-      case 'setTrimStart':
-        videoPlayerModule.setTrimPoint('start');
-        break;
-      case 'setTrimEnd':
-        videoPlayerModule.setTrimPoint('end');
-        break;
-      case 'focusTitle':
-        clipTitle.focus();
-        break;
-      default:
-        // Unknown action - do nothing
-        break;
+    if (isPlayerActive) {
+      // Handle actions when player is active
+      switch (action) {
+        case 'closePlayer':
+          closePlayer();
+          break;
+        case 'playPause':
+          if (videoPlayer.src) videoPlayerModule.togglePlayPause();
+          break;
+        case 'frameBackward':
+          videoPlayerModule.moveFrame(-1);
+          break;
+        case 'frameForward':
+          videoPlayerModule.moveFrame(1);
+          break;
+        case 'navigatePrev':
+          navigateToVideo(-1);
+          break;
+        case 'navigateNext':
+          navigateToVideo(1);
+          break;
+        case 'skipBackward':
+          videoPlayerModule.skipTime(-1);
+          break;
+        case 'skipForward':
+          videoPlayerModule.skipTime(1);
+          break;
+        case 'volumeUp':
+          videoPlayerModule.changeVolume(0.1);
+          break;
+        case 'volumeDown':
+          videoPlayerModule.changeVolume(-0.1);
+          break;
+        case 'exportAudioFile':
+          exportAudioWithFileSelection();
+          break;
+        case 'exportVideo':
+          exportVideoWithFileSelection();
+          break;
+        case 'exportAudioClipboard':
+          exportAudioToClipboard();
+          break;
+        case 'exportDefault':
+          exportManagerModule.exportTrimmedVideo();
+          break;
+        case 'fullscreen':
+          videoPlayerModule.toggleFullscreen();
+          break;
+        case 'deleteClip':
+          confirmAndDeleteClip();
+          break;
+        case 'setTrimStart':
+          videoPlayerModule.setTrimPoint('start');
+          break;
+        case 'setTrimEnd':
+          videoPlayerModule.setTrimPoint('end');
+          break;
+        case 'focusTitle':
+          clipTitle.focus();
+          break;
+        default:
+          // Unknown action - do nothing
+          break;
+      }
+    } else {
+      // Handle actions when player is NOT active (grid view mode)
+      // Enable grid navigation if not already enabled
+      if (!state.gridNavigationEnabled) {
+        enableGridNavigation();
+      }
+      
+      switch (action) {
+        case 'playPause':
+          // In grid view, play/pause opens the selected clip
+          openCurrentGridSelection();
+          break;
+        case 'skipBackward':
+          // Left arrow - navigate left in grid
+          gridNavigationModule.moveGridSelection('left');
+          break;
+        case 'skipForward':
+          // Right arrow - navigate right in grid
+          gridNavigationModule.moveGridSelection('right');
+          break;
+        case 'volumeUp':
+          // Up arrow - navigate up in grid
+          gridNavigationModule.moveGridSelection('up');
+          break;
+        case 'volumeDown':
+          // Down arrow - navigate down in grid
+          gridNavigationModule.moveGridSelection('down');
+          break;
+        case 'closePlayer':
+          // Escape - disable grid navigation
+          disableGridNavigation();
+          break;
+        case 'exportDefault':
+          // 'e' key - open selected clip
+          openCurrentGridSelection();
+          break;
+        default:
+          // Other actions are ignored in grid view
+          break;
+      }
     }
   }
 }

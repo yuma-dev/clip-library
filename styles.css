@@ -164,6 +164,21 @@ body.dragging * {
   background: linear-gradient(135deg, rgba(76, 175, 80, 0.2), rgba(255, 255, 255, 0.1));
 }
 
+.clip-item.grid-focused {
+  transform: scale(1.02);
+  border: 2px solid #2196f3;
+  z-index: 10;
+  box-shadow: 0 0 15px rgba(33, 150, 243, 0.5);
+}
+
+.clip-item.grid-focused .clip-thumbnail {
+  filter: brightness(1.2);
+}
+
+.clip-item.grid-focused .clip-info {
+  background: linear-gradient(135deg, rgba(33, 150, 243, 0.2), rgba(255, 255, 255, 0.1));
+}
+
 #current-time, #total-time {
   color: white;
   font-size: 14px;

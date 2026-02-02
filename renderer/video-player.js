@@ -1542,7 +1542,7 @@ async function openClip(originalName, customName) {
     requestAnimationFrame(updatePlayhead);
 
     // Apply ambient glow if enabled
-    if (state.settings?.ambientGlowEnabled && ambientGlowManager) {
+    if (state.settings?.ambientGlow?.enabled && ambientGlowManager) {
       logger.info(`[${originalName}] Starting ambient glow`);
       ambientGlowManager.start();
     }

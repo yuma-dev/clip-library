@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
 ## Status: PHASES 1-3 COMPLETE + RENDERER MODULARIZATION IN PROGRESS
-**Last Updated:** 2026-01-19
-**Current Phase:** Renderer modularization in progress (grid-navigation.js completed, working on clip-grid.js).
+**Last Updated:** 2026-02-02
+**Current Phase:** Renderer modularization in progress (video-player.js and grid-navigation.js completed, working on clip-grid.js and remaining functions).
 
 ---
 
@@ -541,7 +541,7 @@ Will contain:
 | Phase 2: Thumbnails | ✅ COMPLETE | ~420 lines | Queue, validation, caching |
 | Phase 3: Metadata | ✅ COMPLETE | ~450 lines | File I/O, atomic writes, tags |
 | Renderer: State | ✅ COMPLETE | ~150 lines | Centralized state management |
-| Renderer: Video Player | ✅ COMPLETE | ~500 lines | Playback controls, UI |
+| Renderer: Video Player | ⏳ IN_PROGRESS | ~500 lines | Playback controls, UI (60 functions exported) |
 | Renderer: Tag Manager | ✅ COMPLETE | ~200 lines | Tag operations, UI |
 | Renderer: Search Manager | ✅ COMPLETE | ~150 lines | Search, filtering, tag UI |
 | Renderer: Export Manager | ✅ COMPLETE | ~80 lines | Export operations |
@@ -550,15 +550,16 @@ Will contain:
 
 **Current State:**
 - `main.js`: ~1070 lines (down from ~2230 original)
-- `renderer.js`: ~4858 lines (down from ~8000+ original)
-- **Total reduction:** ~2942 lines moved out of main.js and renderer.js (combined ~75% reduction)
+- `renderer.js`: ~4928 lines (down from ~8000+ original)
+- **Total reduction:** ~3070 lines moved out of main.js and renderer.js (combined ~77% reduction)
+- **Functions remaining in renderer.js:** 119 functions
 
 **Modules Created:**
 - `main/ffmpeg.js`: ~480 lines
 - `main/thumbnails.js`: ~430 lines
 - `main/metadata.js`: ~680 lines
 - `renderer/state.js`: ~150 lines
-- `renderer/video-player.js`: ~500 lines
+- `renderer/video-player.js`: ~650 lines (in progress)
 - `renderer/tag-manager.js`: ~200 lines
 - `renderer/search-manager.js`: ~150 lines
 - `renderer/export-manager.js`: ~80 lines
@@ -591,8 +592,9 @@ When the validation script failed to detect direct function calls in event liste
 
 This approach ensures our tooling improves alongside our code quality.
 
-### Recent Improvements (2026-01-19)
-- Enhanced categorization logic to better distinguish between tag-related functions and true tag management functions
-- Improved duplicate detection to correctly identify nested vs. top-level function conflicts
+### Recent Improvements (2026-02-02)
+- Fixed ambient glow not showing due to incorrect property access (state.settings.ambientGlowEnabled → state.settings.ambientGlow.enabled)
+- Fixed grid navigation initialization error by removing undefined function references
+- Verified all validation scripts pass with no violations
 - Updated module completion tracking to reflect current progress accurately
 
