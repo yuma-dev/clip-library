@@ -33,6 +33,20 @@ body {
   color: #e0e0e0;
 }
 
+#app-content {
+  position: relative;
+}
+
+body.ui-blur #app-content {
+  filter: blur(6px) brightness(0.7);
+  transition: filter 180ms ease;
+  will-change: filter;
+}
+
+body.ui-blur-exit #app-content {
+  transition: none;
+}
+
 body.dragging {
   user-select: none;
   -webkit-user-select: none;
@@ -1373,13 +1387,9 @@ body.dragging * {
 
 #player-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(5px);
-  z-index: 999;
+  inset: 0;
+  z-index: 3000;
+  background-color: rgba(0, 0, 0, 0.6);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1393,10 +1403,13 @@ body.player-open .cet-titlebar {
 }
 
 #player-container {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
+  height: 100%;
 }
 
 /* Responsive adjustments */

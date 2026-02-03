@@ -1539,6 +1539,7 @@ async function closePlayer() {
 elements.playerOverlay.style.display = "none";
 elements.fullscreenPlayer.style.display = "none";
 document.body.classList.remove('player-open');
+if (window.uiBlur) window.uiBlur.disable();
   await releaseVideoElement();
 
   if (callbacks.removeClipTitleEditingListeners) {
@@ -1849,6 +1850,7 @@ async function openClip(originalName, customName) {
 elements.playerOverlay.style.display = "block";
 elements.fullscreenPlayer.style.display = "block";
 document.body.classList.add('player-open');
+if (window.uiBlur) window.uiBlur.enable();
   mark('playerVisibleEarly');
   
   // OPTIMIZATION: Check if data was preloaded on hover
@@ -2163,6 +2165,7 @@ document.body.classList.add('player-open');
     elements.playerOverlay.style.display = "none";
     elements.fullscreenPlayer.style.display = "none";
     document.body.classList.remove('player-open');
+    if (window.uiBlur) window.uiBlur.disable();
 
     if (!callbacks.isBenchmarkMode) {
       if (callbacks.showCustomAlert) {

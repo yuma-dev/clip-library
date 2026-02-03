@@ -255,6 +255,7 @@ async function openSettingsModal() {
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
     settingsModal.style.display = 'block';
+    if (window.uiBlur) window.uiBlur.enable();
     
     // Update version display
     updateVersionDisplay();
@@ -353,6 +354,7 @@ function closeSettingsModal() {
   if (settingsModal) {
     // Add fade-out animation
     settingsModal.style.opacity = '0';
+    if (window.uiBlur) window.uiBlur.disable();
     setTimeout(() => {
       settingsModal.style.display = 'none';
       settingsModal.style.opacity = '1';
