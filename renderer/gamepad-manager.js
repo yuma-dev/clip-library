@@ -79,6 +79,7 @@ function showQuitConfirmModal() {
   modalCancel.textContent = "Cancel (B)";
   modalCancel.style.display = "inline-block";
   modal.style.display = "block";
+  if (window.uiBlur) window.uiBlur.enable();
   modal.dataset.gamepadMode = "quit-confirm";
   modalOk.onclick = () => confirmQuit();
   modalCancel.onclick = () => hideQuitConfirmModal();
@@ -97,6 +98,7 @@ function hideQuitConfirmModal() {
   if (modal.dataset.gamepadMode === "quit-confirm") {
     modal.style.display = "none";
     modal.dataset.gamepadMode = "";
+    if (window.uiBlur) window.uiBlur.disable();
   }
   if (originalConfirmOkText !== null) modalOk.textContent = originalConfirmOkText;
   if (originalConfirmCancelText !== null) modalCancel.textContent = originalConfirmCancelText;

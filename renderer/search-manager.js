@@ -319,6 +319,7 @@ function openTagManagement() {
   container.appendChild(modal);
   modal.style.display = 'block';
   isTagManagementOpen = true;
+  if (window.uiBlur) window.uiBlur.enable();
 
   // Render initial tags
   renderTagList(tagManagerModule.getGlobalTags());
@@ -462,6 +463,7 @@ function closeTagManagement() {
   const modal = document.getElementById('tagManagementModal');
   if (modal) {
     modal.style.opacity = '0';
+    if (window.uiBlur) window.uiBlur.disable();
     setTimeout(() => {
       modal.remove();
       document.removeEventListener('keydown', handleEscapeKey);

@@ -74,6 +74,30 @@ const videoClickTarget = document.getElementById("video-click-target");
 const ambientGlowCanvas = document.getElementById("ambient-glow-canvas");
 const previewElement = document.getElementById('timeline-preview');
 
+// UI blur manager (reference-counted)
+const uiBlur = (() => {
+  let count = 0;
+  return {
+    enable() {
+      count += 1;
+      if (count === 1) {
+        document.body.classList.add('ui-blur');
+      }
+    },
+    disable() {
+      count = Math.max(0, count - 1);
+      if (count === 0) {
+        document.body.classList.add('ui-blur-exit');
+        document.body.classList.remove('ui-blur');
+        requestAnimationFrame(() => {
+          document.body.classList.remove('ui-blur-exit');
+        });
+      }
+    }
+  };
+})();
+window.uiBlur = uiBlur;
+
 // UI constants
 const MAX_FRAME_RATE = 10;
 const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
@@ -1715,9 +1739,11 @@ function showCustomAlert(message) {
     modalMessage.textContent = message;
     modalCancel.style.display = "none";
     modal.style.display = "block";
+    if (window.uiBlur) window.uiBlur.enable();
 
     modalOk.onclick = () => {
       modal.style.display = "none";
+      if (window.uiBlur) window.uiBlur.disable();
       resolve();
     };
   });
@@ -1736,14 +1762,17 @@ function showCustomConfirm(message) {
     modalMessage.textContent = message;
     modalCancel.style.display = "inline-block";
     modal.style.display = "block";
+    if (window.uiBlur) window.uiBlur.enable();
 
     modalOk.onclick = () => {
       modal.style.display = "none";
+      if (window.uiBlur) window.uiBlur.disable();
       resolve(true);
     };
 
     modalCancel.onclick = () => {
       modal.style.display = "none";
+      if (window.uiBlur) window.uiBlur.disable();
       resolve(false);
     };
   });

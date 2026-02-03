@@ -14,6 +14,7 @@
     <div id="secret-overlay" class="secret-overlay" style="display: none;">
       <img src="https://i.pinimg.com/736x/db/95/e1/db95e1ed08f7009ee11afbe79b4857a3.jpg" alt="">
     </div>
+    <div id="app-content">
     <div id="export-toast" class="export-toast">
       <div class="export-toast-content">
         <div class="export-toast-header">
@@ -67,6 +68,32 @@
       </div>
     </div>
     <div id="clip-grid"></div>
+    <div id="custom-modal" class="modal">
+      <div class="modal-content">
+        <p id="modal-message"></p>
+        <div class="modal-buttons">
+          <button id="modal-ok">OK</button>
+          <button id="modal-cancel" style="display: none;">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="context-menu" class="context-menu">
+      <div id="context-menu-export" class="context-menu-item">Export</div>
+      <div id="context-menu-tags" class="context-menu-item">
+        Manage Tags
+        <div id="tags-dropdown" class="tags-dropdown" style="display: none;">
+          <div class="tag-search-container">
+            <input type="text" id="tag-search-input" placeholder="Search tags...">
+            <button id="add-tag-button">+</button>
+          </div>
+          <div id="tag-list" class="tag-list"></div>
+        </div>
+      </div>
+      <div id="context-menu-reset-trim" class="context-menu-item">Reset Trim Times</div>
+      <div id="context-menu-reveal" class="context-menu-item">Reveal in Explorer</div>
+      <div id="context-menu-delete" class="context-menu-item">Delete</div>
+    </div>
+    </div>
       <div id="player-overlay" style="display: none">
         <div id="player-container">
           <button id="prev-video" class="video-nav-button">&lt;</button>
@@ -140,31 +167,6 @@
         </div>
       </div>
     </div>
-    <div id="custom-modal" class="modal">
-      <div class="modal-content">
-        <p id="modal-message"></p>
-        <div class="modal-buttons">
-          <button id="modal-ok">OK</button>
-          <button id="modal-cancel" style="display: none;">Cancel</button>
-        </div>
-      </div>
-    </div>
     <script src="renderer.js"></script>
-    <div id="context-menu" class="context-menu">
-      <div id="context-menu-export" class="context-menu-item">Export</div>
-      <div id="context-menu-tags" class="context-menu-item">
-        Manage Tags
-        <div id="tags-dropdown" class="tags-dropdown" style="display: none;">
-          <div class="tag-search-container">
-            <input type="text" id="tag-search-input" placeholder="Search tags...">
-            <button id="add-tag-button">+</button>
-          </div>
-          <div id="tag-list" class="tag-list"></div>
-        </div>
-      </div>
-      <div id="context-menu-reset-trim" class="context-menu-item">Reset Trim Times</div>
-      <div id="context-menu-reveal" class="context-menu-item">Reveal in Explorer</div>
-      <div id="context-menu-delete" class="context-menu-item">Delete</div>
-    </div>
   </body>
 </html>
