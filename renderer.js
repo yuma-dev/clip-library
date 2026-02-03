@@ -1,3 +1,4 @@
+// Imports
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
@@ -42,7 +43,7 @@ const updateManagerModule = require('./renderer/update-manager');
 // Clip grid module
 const clipGridModule = require('./renderer/clip-grid');
 
-// Benchmark mode detection and harness initialization
+// Benchmark harness
 const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
 let benchmarkHarness = null;
 if (isBenchmarkMode) {
@@ -55,6 +56,7 @@ if (isBenchmarkMode) {
   }
 }
 
+// DOM references
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
 const videoPlayer = document.getElementById("video-player");
@@ -68,6 +70,9 @@ const loadingOverlay = document.getElementById("loading-overlay");
 const playerOverlay = document.getElementById("player-overlay");
 const videoClickTarget = document.getElementById("video-click-target");
 const ambientGlowCanvas = document.getElementById("ambient-glow-canvas");
+const previewElement = document.getElementById('timeline-preview');
+
+// UI constants
 const MAX_FRAME_RATE = 10;
 const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
 const volumeButton = document.getElementById("volume-button");
@@ -79,6 +84,48 @@ const speedContainer = document.getElementById("speed-container");
 const speedText = document.getElementById("speed-text");
 const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
 const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
+
+// Renderer-level state
+let settingsModal = null;
+let currentClipLocationSpan = null;
+let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
+let currentSessionStartTime = null;
+let currentSessionActiveDuration = 0;
+let lastPlayTimestamp = null;
+let lastSelectedClip = null;
+
+// Preview state
+let lastPreviewUpdateTime = 0;
+const PREVIEW_UPDATE_INTERVAL = 100; // Throttle frame updates, not positioning
+let previewHalfWidth = 0;
+let previewNeedsMeasure = true;
+let lastPreviewMoveTime = 0;
+let lastPreviewMoveX = 0;
+let previewFrameTimeout = null;
+let lastPreviewEvent = null;
+const PREVIEW_VELOCITY_THRESHOLD = 1.2; // px/ms (~1200 px/s)
+const PREVIEW_IDLE_DELAY = 90; // ms after last move
+
+// DOM scaffolding
+previewElement.style.display = 'none';
+
+// Create a temporary video element for previews
+const tempVideo = document.createElement('video');
+tempVideo.crossOrigin = 'anonymous';
+tempVideo.preload = 'auto';
+tempVideo.muted = true;
+tempVideo.style.display = 'none'; // Hide the temp video
+document.body.appendChild(tempVideo); // Add to DOM
+
+const selectionActions = document.createElement('div');
+selectionActions.id = 'selection-actions';
+selectionActions.classList.add('hidden');
+selectionActions.innerHTML = `
+  <span id="selection-count"></span>
+  <button id="delete-selected" class="action-button">Delete Selected</button>
+  <button id="clear-selection" class="action-button">Clear Selection</button>
+`;
+document.body.appendChild(selectionActions);
 
 // All state variables moved to renderer/state.js
 // Access via state.getXxx() and state.setXxx() methods
@@ -97,41 +144,7 @@ async function getCachedClipData(originalName) {
 }
 
 
-
-
-
-
-
-
-
-// Grid navigation functions
-
-
-
-// Variables for watch session tracking
-let currentSessionStartTime = null;
-let currentSessionActiveDuration = 0;
-let lastPlayTimestamp = null;
-
-const previewElement = document.getElementById('timeline-preview');
-
-previewElement.style.display = 'none';;
-
-// Create a temporary video element for previews
-const tempVideo = document.createElement('video');
-tempVideo.crossOrigin = 'anonymous';
-tempVideo.preload = 'auto';
-tempVideo.muted = true;
-tempVideo.style.display = 'none'; // Hide the temp video
-document.body.appendChild(tempVideo); // Add to DOM
-
-ipcRenderer.on('log', (event, { type, message }) => {
-  console[type](`[Main Process] ${message}`);
-});
-
-
-let settingsModal = null;
-let currentClipLocationSpan = null;
+// Settings modal
 
 /**
  * Load the settings modal markup from templates/settings-modal.html
@@ -169,6 +182,9 @@ async function loadSettingsModalTemplate() {
 }
 
 
+/**
+ * Load settings from disk and ensure defaults.
+ */
 async function fetchSettings() {
   state.settings = await ipcRenderer.invoke('get-settings');
   logger.info('Fetched settings:', state.settings);  // Log the fetched settings
@@ -207,10 +223,9 @@ async function updateSettingValue(path, value) {
   return state.settings;
 }
 
-let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
-
-
-
+/**
+ * Fade out and hide the loading overlay.
+ */
 function hideLoadingScreen() {
   if (state.loadingScreen) {
     // Add the fade-out class to trigger the animations
@@ -222,6 +237,11 @@ function hideLoadingScreen() {
     }, 1000); // Match this with the animation duration (1s)
   }
 }
+
+// IPC handlers
+ipcRenderer.on('log', (event, { type, message }) => {
+  console[type](`[Main Process] ${message}`);
+});
 
 ipcRenderer.on('new-clip-added', async (event, fileName) => {
   // Wait for state.settings to be loaded if they haven't been yet
@@ -267,6 +287,9 @@ ipcRenderer.on("thumbnail-generation-complete", () => {
   }
 });
 
+/**
+ * Show thumbnail generation progress for large batches.
+ */
 function showThumbnailGenerationText(totalToGenerate) {
   if (totalToGenerate <= 12) return;
   
@@ -305,6 +328,7 @@ function updateClipCounter(count) {
   }
 }
 
+// Thumbnail generation status
 function updateThumbnailGenerationText(remaining) {
   if (!state.isGeneratingThumbnails) return;
   
@@ -348,6 +372,9 @@ function hideThumbnailGenerationText() {
   state.completedThumbnails = 0;
 }
 
+/**
+ * Reposition "new clips" divider indicators within each group.
+ */
 function positionNewClipsIndicators() {
   console.log('Attempting to position new clips indicators...');
   
@@ -483,6 +510,9 @@ function updateIndicatorsOnChange() {
 }
 
 // Function to update new clips indicators when clips are added/removed
+/**
+ * Refresh new-clip indicators after list changes.
+ */
 function updateNewClipsIndicators() {
   // Check if new clips indicators are disabled
   if (state.settings.showNewClipsIndicators === false) {
@@ -521,6 +551,7 @@ window.addEventListener('beforeunload', () => {
 
 // Add window resize listener to reposition indicators
 window.addEventListener('resize', () => {
+  previewNeedsMeasure = true;
   updateIndicatorsOnChange();
 });
 
@@ -832,11 +863,15 @@ function setupContextMenu() {
 
 
 
+// Export progress toast
 const toast = document.getElementById('export-toast');
 const content = toast.querySelector('.export-toast-content');
 const progressText = toast.querySelector('.export-progress-text');
 const title = toast.querySelector('.export-title');
 
+/**
+ * Update the export progress toast.
+ */
 function showExportProgress(current, total, isClipboardExport = false) {
   if (!toast.classList.contains('show')) {
     toast.classList.add('show');
@@ -1649,6 +1684,10 @@ clipTitle.addEventListener("keydown", (e) => {
 });
 
 
+/**
+ * Show a simple alert modal.
+ */
+// Modal dialogs
 function showCustomAlert(message) {
   return new Promise((resolve) => {
     const modal = document.getElementById("custom-modal");
@@ -1667,6 +1706,9 @@ function showCustomAlert(message) {
   });
 }
 
+/**
+ * Show a confirm modal and resolve to true/false.
+ */
 function showCustomConfirm(message) {
   return new Promise((resolve) => {
     const modal = document.getElementById("custom-modal");
@@ -1691,6 +1733,7 @@ function showCustomConfirm(message) {
 }
 
 
+// Clip filtering
 const debouncedFilterClips = videoPlayerModule.debounce((filter) => {
   logger.info("Filtering clips with filter:", filter);
   logger.info("state.allClips length before filtering:", state.allClips.length);
@@ -1724,6 +1767,9 @@ const debouncedFilterClips = videoPlayerModule.debounce((filter) => {
   discordManagerModule.updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${state.currentClipList.length}`);
 }, 300);  // 300ms debounce time
 
+/**
+ * Apply tag/temporary selection filters to build the visible list.
+ */
 function filterClips() {
   if (state.selectedTags.size === 0) {
     state.currentClipList = [];
@@ -1784,7 +1830,9 @@ function filterClips() {
   updateClipCounter(state.currentClipList.length);
 }
 
-// Helper function to remove duplicates
+/**
+ * Remove duplicate clips by original name.
+ */
 function removeDuplicates(clips) {
   const seen = new Map();
   return clips.filter(clip => {
@@ -1796,21 +1844,7 @@ function removeDuplicates(clips) {
 
 
 
-let lastPreviewUpdateTime = 0;
-const PREVIEW_UPDATE_INTERVAL = 100; // Throttle frame updates, not positioning
-let previewHalfWidth = 0;
-let previewNeedsMeasure = true;
-let lastPreviewMoveTime = 0;
-let lastPreviewMoveX = 0;
-let previewFrameTimeout = null;
-let lastPreviewEvent = null;
-const PREVIEW_VELOCITY_THRESHOLD = 1.2; // px/ms (~1200 px/s)
-const PREVIEW_IDLE_DELAY = 90; // ms after last move
-
-window.addEventListener('resize', () => {
-  previewNeedsMeasure = true;
-});
-
+// Preview hover handling
 progressBarContainer.addEventListener('mousemove', (e) => {
   // Add this check - if we're hovering over volume controls, don't show preview
   if (e.target.classList.contains('volume-start') || 
@@ -1879,7 +1913,9 @@ tempVideo.addEventListener('seeked', () => {
   }
 });
 
-// Add this function after tempVideo creation
+/**
+ * Prepare the hidden preview video and canvas sizing.
+ */
 async function initializePreviewVideo(videoSource) {
   return new Promise((resolve) => {
     tempVideo.src = videoSource;
@@ -1915,18 +1951,10 @@ progressBarContainer.addEventListener('mouseleave', () => {
   tempVideo.currentTime = 0;
 });
 
-const selectionActions = document.createElement('div');
-selectionActions.id = 'selection-actions';
-selectionActions.classList.add('hidden');
-selectionActions.innerHTML = `
-  <span id="selection-count"></span>
-  <button id="delete-selected" class="action-button">Delete Selected</button>
-  <button id="clear-selection" class="action-button">Clear Selection</button>
-`;
-document.body.appendChild(selectionActions);
-
-let lastSelectedClip = null;
-
+/**
+ * Apply multi-select rules for a clip item click.
+ */
+// Selection helpers
 function handleClipSelection(clipItem, event) {
   // Get all visible clip items
   const clipItems = Array.from(document.querySelectorAll('.clip-item:not([style*="display: none"])'));
@@ -1983,12 +2011,16 @@ function handleClipSelection(clipItem, event) {
   updateSelectionUI();
 }
 
-// Modified clear selection to optionally preserve lastSelectedClip
+/**
+ * Clear current selection.
+ * @param {boolean} resetLastSelected - Whether to reset the range anchor.
+ */
 function clearSelection(resetLastSelected = true) {
   document.querySelectorAll('.clip-item.selected').forEach(clip => {
     clip.classList.remove('selected');
   });
   state.selectedClips.clear();
+  state.selectionStartIndex = -1;
   if (resetLastSelected) {
     lastSelectedClip = null;
   }
@@ -1997,28 +2029,27 @@ function clearSelection(resetLastSelected = true) {
 
 // Helper function to check if a clip is selectable
 function isClipSelectable(clip) {
-  return clip && 
-         clip.dataset && 
-         clip.dataset.originalName && 
-         !clip.classList.contains('deleting') && 
+  return clip &&
+         clip.dataset &&
+         clip.dataset.originalName &&
+         !clip.classList.contains('deleting') &&
          !clip.classList.contains('video-preview-disabled');
 }
 
-// Add this to your document event listeners
+// Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    clearSelection(true); // Reset lastSelectedClip when using Escape
-  }
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.isInTemporaryMode) {
+  if (e.key !== 'Escape') return;
+  clearSelection(true);
+  if (state.isInTemporaryMode) {
     tagManagerModule.exitTemporaryMode();
     tagManagerModule.updateTagSelectionUI();
     filterClips();
   }
 });
 
+/**
+ * Update the selection action bar UI.
+ */
 function updateSelectionUI() {
   const selectionActions = document.getElementById('selection-actions');
   const selectionCount = document.getElementById('selection-count');
@@ -2031,22 +2062,9 @@ function updateSelectionUI() {
   }
 }
 
-function clearSelection() {
-  document.querySelectorAll('.clip-item.selected').forEach(clip => {
-    clip.classList.remove('selected');
-  });
-  state.selectedClips.clear();
-  state.selectionStartIndex = -1;
-  updateSelectionUI();
-}
-
-// Add keyboard handler for Escape
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.selectedClips.size > 0) {
-    clearSelection();
-  }
-});
-
+/**
+ * Delete all currently selected clips with progress UI.
+ */
 async function deleteSelectedClips() {
   if (state.selectedClips.size === 0) return;
 
@@ -2140,6 +2158,9 @@ document.getElementById('clear-selection')?.addEventListener('click', clearSelec
 
 
 
+/**
+ * Smoothly scroll to the given element if possible.
+ */
 function smoothScrollToElement(element) {
   if (!element) {
     logger.warn('smoothScrollToElement called with no element');
@@ -2164,6 +2185,9 @@ function smoothScrollToElement(element) {
 }
 
 
+/**
+ * Persist the current watch session duration for the active clip.
+ */
 async function logCurrentWatchSession() {
   if (!currentSessionStartTime) {
     return; // No active session to log
@@ -2196,6 +2220,9 @@ async function logCurrentWatchSession() {
   lastPlayTimestamp = null;
 }
 
+/**
+ * Toggle greyscale styling for game icons.
+ */
 function applyIconGreyscale(enabled) {
   document.querySelectorAll('.game-icon').forEach(icon => {
     icon.classList.toggle('greyscale-icon', enabled);
