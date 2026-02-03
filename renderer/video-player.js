@@ -1536,8 +1536,9 @@ async function closePlayer() {
     ambientGlowManager.stop();
   }
 
-  elements.playerOverlay.style.display = "none";
-  elements.fullscreenPlayer.style.display = "none";
+elements.playerOverlay.style.display = "none";
+elements.fullscreenPlayer.style.display = "none";
+document.body.classList.remove('player-open');
   await releaseVideoElement();
 
   if (callbacks.removeClipTitleEditingListeners) {
@@ -1845,8 +1846,9 @@ async function openClip(originalName, customName) {
   
   // OPTIMIZATION: Show player overlay IMMEDIATELY with thumbnail
   // This gives instant visual feedback while video loads in background
-  elements.playerOverlay.style.display = "block";
-  elements.fullscreenPlayer.style.display = "block";
+elements.playerOverlay.style.display = "block";
+elements.fullscreenPlayer.style.display = "block";
+document.body.classList.add('player-open');
   mark('playerVisibleEarly');
   
   // OPTIMIZATION: Check if data was preloaded on hover
@@ -2160,6 +2162,7 @@ async function openClip(originalName, customName) {
     // Hide player overlay on error
     elements.playerOverlay.style.display = "none";
     elements.fullscreenPlayer.style.display = "none";
+    document.body.classList.remove('player-open');
 
     if (!callbacks.isBenchmarkMode) {
       if (callbacks.showCustomAlert) {

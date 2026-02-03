@@ -252,7 +252,7 @@ ipcRenderer.on('new-clip-added', async (event, fileName) => {
     }
   }
   
-  await addNewClipToLibrary(fileName);
+  await clipGridModule.addNewClipToLibrary(fileName);
   tagManagerModule.updateFilterDropdown();
 });
 
@@ -2161,15 +2161,6 @@ function updateDeletionProgress(completed, total) {
 // Add event listeners for the action buttons
 document.getElementById('delete-selected')?.addEventListener('click', deleteSelectedClips);
 document.getElementById('clear-selection')?.addEventListener('click', clearSelection);
-
-// Add these helper functions to renderer.js
-
-
-
-
-
-
-
 
 /**
  * Smoothly scroll to the given element if possible.
