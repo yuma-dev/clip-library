@@ -5,6 +5,7 @@
  * and metadata caching for efficient thumbnail management.
  */
 
+// Imports
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;

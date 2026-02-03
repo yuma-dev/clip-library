@@ -1,3 +1,4 @@
+// Imports
 const { app, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
@@ -6,12 +7,19 @@ const logger = require('../utils/logger');
 const thumbnailsModule = require('./thumbnails');
 const { logActivity } = require('../utils/activity-tracker');
 
+// Module state
 let periodicSaveInterval = null;
 
+/**
+ * Path to the last-clips snapshot file.
+ */
 function getLastClipsFilePath() {
   return path.join(app.getPath('userData'), 'last-clips.json');
 }
 
+/**
+ * Snapshot the current clip list for next-session comparison.
+ */
 async function saveCurrentClipList(getSettings) {
   const LAST_CLIPS_FILE = getLastClipsFilePath();
 

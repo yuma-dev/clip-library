@@ -1,9 +1,11 @@
+// Imports
 const { promises: fs, statSync } = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
 
+// SteelSeries import processor
 class SteelSeriesProcessor {
     constructor(inputFolder, exportFolder, progressCallback, logCallback) {
         this.inputFolder = inputFolder;

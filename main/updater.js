@@ -1,3 +1,4 @@
+// Imports
 const { app, ipcMain } = require('electron');
 const axios = require('axios');
 const semver = require('semver');
@@ -6,8 +7,10 @@ const path = require('path');
 const { shell } = require('electron');
 const logger = require('../utils/logger');
 
+// Constants
 const GITHUB_API_URL = 'https://api.github.com/repos/yuma-dev/clip-library/releases/latest';
 
+// Module state
 // Track if the start-update handler has been registered
 let updateHandlerRegistered = false;
 // Store the latest release data for download
@@ -122,6 +125,7 @@ async function checkForUpdates(mainWindow, options = {}) {
 /**
  * Register the start-update IPC handler (only once)
  */
+// IPC wiring
 function registerUpdateHandler(mainWindow) {
   if (updateHandlerRegistered) {
     return;
@@ -158,6 +162,7 @@ function registerUpdateHandler(mainWindow) {
 /**
  * Handle errors from update check
  */
+// Error handling
 function handleUpdateError(error) {
   // Network-related errors that indicate no/poor connectivity
   const networkErrorCodes = [
@@ -196,6 +201,7 @@ function handleUpdateError(error) {
 /**
  * Download and install update
  */
+// Download/install
 async function downloadUpdate(url, mainWindow) {
   try {
     logger.info('Starting update download...');

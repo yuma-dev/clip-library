@@ -5,6 +5,7 @@
  * These functions show native OS dialogs for user file system interactions.
  */
 
+// Imports
 const { dialog, app } = require('electron');
 const path = require('path');
 
