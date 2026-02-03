@@ -760,6 +760,13 @@ async function confirmAndDeleteClip(clipToDelete = null) {
   const isConfirmed = await showCustomConfirm(`Are you sure you want to delete "${clipInfo.customName}"? This action cannot be undone.`);
 
   if (isConfirmed) {
+    // Ensure preview/glow are released before any deletion attempt
+    videoPlayerModule.cleanupVideoPreview();
+    const clipGlowManager = videoPlayerModule.getClipGlowManager();
+    if (clipGlowManager) {
+      clipGlowManager.hide();
+    }
+
     // Immediately remove the clip from UI
     const clipElement = document.querySelector(`.clip-item[data-original-name="${clipInfo.originalName}"]`);
     if (clipElement) {
@@ -778,7 +785,8 @@ async function confirmAndDeleteClip(clipToDelete = null) {
     try {
       // Close the player if we're deleting the current clip
       if (state.currentClip && state.currentClip.originalName === clipInfo.originalName) {
-        closePlayer();
+        await closePlayer();
+        await videoPlayerModule.releaseVideoElement();
       }
       
       disableVideoThumbnail(clipInfo.originalName);
