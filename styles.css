@@ -1385,6 +1385,13 @@ body.dragging * {
   align-items: center;
 }
 
+/* Blend the custom titlebar during playback without blocking clicks */
+body.player-open .cet-titlebar {
+  background-color: rgba(18, 18, 18, 0.5) !important;
+  backdrop-filter: blur(6px) saturate(1.1);
+  box-shadow: none;
+}
+
 #player-container {
   display: flex;
   align-items: center;
