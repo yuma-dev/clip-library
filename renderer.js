@@ -1400,11 +1400,7 @@ ipcRenderer.on("close-video-player", () => {
   if (ambientGlowManager) {
     ambientGlowManager.stop();
   }
-  if (videoPlayer) {
-    videoPlayer.pause();
-    videoPlayer.removeAttribute('src');
-    // Don't call load() with empty src - causes MEDIA_ERR_SRC_NOT_SUPPORTED error
-  }
+  videoPlayerModule.releaseVideoElement();
 });
 
 /**

@@ -6,6 +6,25 @@
 
 ---
 
+## Update (2026-02-03)
+
+**Status:** ⚠️ Pending testing
+
+### Quick Summary
+- Cleared grid ambient glow when opening clips to prevent stale hover glow.
+- Made `closePlayer()` async and fully unload the video element (`removeAttribute('src')` + `load()`).
+- Deletion flow now awaits `closePlayer()` and clears hover preview/glow before deleting, improving EBUSY reliability.
+- Added hard release for the hidden preview `tempVideo` and hooked `close-video-player` to the release path.
+
+### Files Modified
+- `renderer/video-player.js`
+- `renderer/clip-grid.js`
+
+### Testing
+- Not run (per instructions).
+
+---
+
 ## Quick Summary
 
 Continued renderer modularization after the clip-grid fix. Extracted Discord, diagnostics, and update handling into new renderer modules, completed gamepad-manager extraction, and moved remaining video-player controls (keyboard/close/preview/volume-range) into `renderer/video-player.js`. Validation passes with 0 violations; renderer.js is now down to 66 functions. Also fixed diagnostics button wiring, tuned preview hover throttling, added a gamepad quit-confirm modal in the grid (B opens, X confirms), and made player controls remain visible when a controller is connected. This work has been tested and committed.

@@ -1502,7 +1502,7 @@ function handleKeyPress(e) {
 /**
  * Close the fullscreen player and reset UI state.
  */
-function closePlayer() {
+async function closePlayer() {
   if (window.justFinishedDragging) {
     return;
   }
@@ -1526,59 +1526,57 @@ function closePlayer() {
     ? callbacks.saveTitleChange(originalName, oldCustomName, newCustomName, true)
     : Promise.resolve();
 
-  saveOperation.then(() => {
-    if (ambientGlowManager) {
-      ambientGlowManager.stop();
-    }
+  try {
+    await saveOperation;
+  } catch (error) {
+    logger.error("Error saving title on close:", error);
+  }
 
-    elements.playerOverlay.style.display = "none";
-    elements.fullscreenPlayer.style.display = "none";
-    elements.videoPlayer.pause();
-    elements.videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
-    elements.videoPlayer.removeEventListener("progress", updateLoadingProgress);
-    elements.videoPlayer.removeEventListener("waiting", showLoadingOverlay);
-    elements.videoPlayer.removeEventListener("playing", hideLoadingOverlay);
-    elements.videoPlayer.removeEventListener("seeked", handleVideoSeeked);
-    elements.videoPlayer.removeAttribute('src');
+  if (ambientGlowManager) {
+    ambientGlowManager.stop();
+  }
 
-    if (callbacks.removeClipTitleEditingListeners) {
-      callbacks.removeClipTitleEditingListeners();
-    }
+  elements.playerOverlay.style.display = "none";
+  elements.fullscreenPlayer.style.display = "none";
+  await releaseVideoElement();
 
-    if (elements.clipTitle) {
-      elements.clipTitle.value = "";
-    }
+  if (callbacks.removeClipTitleEditingListeners) {
+    callbacks.removeClipTitleEditingListeners();
+  }
 
-    document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
-      clip.classList.remove('last-opened');
-    });
+  if (elements.clipTitle) {
+    elements.clipTitle.value = "";
+  }
 
-    if (originalName) {
-      if (callbacks.updateClipDisplay) callbacks.updateClipDisplay(originalName);
-      const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
-      if (clipElement) {
-        logger.info('Found clip element to scroll to:', {
-          originalName,
-          elementExists: !!clipElement,
-          elementPosition: clipElement.getBoundingClientRect()
-        });
-
-        clipElement.classList.add('last-opened');
-        
-        setTimeout(() => {
-          if (callbacks.smoothScrollToElement) callbacks.smoothScrollToElement(clipElement);
-        }, 50);
-      } else {
-        logger.warn('Clip element not found for scrolling:', originalName);
-      }
-    }
-
-    state.currentClip = null;
-    if (state.currentCleanup) {
-      state.currentCleanup();
-      state.currentCleanup = null;
-    }
+  document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
+    clip.classList.remove('last-opened');
   });
+
+  if (originalName) {
+    if (callbacks.updateClipDisplay) callbacks.updateClipDisplay(originalName);
+    const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+    if (clipElement) {
+      logger.info('Found clip element to scroll to:', {
+        originalName,
+        elementExists: !!clipElement,
+        elementPosition: clipElement.getBoundingClientRect()
+      });
+
+      clipElement.classList.add('last-opened');
+      
+      setTimeout(() => {
+        if (callbacks.smoothScrollToElement) callbacks.smoothScrollToElement(clipElement);
+      }, 50);
+    } else {
+      logger.warn('Clip element not found for scrolling:', originalName);
+    }
+  }
+
+  state.currentClip = null;
+  if (state.currentCleanup) {
+    state.currentCleanup();
+    state.currentCleanup = null;
+  }
 
   clearInterval(state.discordPresenceInterval);
   if (callbacks.updateDiscordPresence) {
@@ -1793,6 +1791,12 @@ async function openClip(originalName, customName) {
   
   // Cleanup any active preview
   cleanupVideoPreview();
+
+  // Ensure grid glow is cleared when opening a clip
+  const clipGlowManager = getClipGlowManager();
+  if (clipGlowManager) {
+    clipGlowManager.hide();
+  }
   
   state.elapsedTime = 0;
 
@@ -2551,6 +2555,55 @@ function cleanupVideoPreview() {
   state.activePreview = null;
 }
 
+/**
+ * Force release of the main video element's file handle.
+ */
+async function releaseVideoElement() {
+  if (!elements.videoPlayer) return;
+
+  elements.videoPlayer.pause();
+  elements.videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
+  elements.videoPlayer.removeEventListener("progress", updateLoadingProgress);
+  elements.videoPlayer.removeEventListener("waiting", showLoadingOverlay);
+  elements.videoPlayer.removeEventListener("playing", hideLoadingOverlay);
+  elements.videoPlayer.removeEventListener("seeked", handleVideoSeeked);
+
+  elements.videoPlayer.srcObject = null;
+  elements.videoPlayer.removeAttribute('src');
+  elements.videoPlayer.src = '';
+  elements.videoPlayer.load();
+
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      elements.videoPlayer.removeEventListener('emptied', finish);
+      elements.videoPlayer.removeEventListener('abort', finish);
+      elements.videoPlayer.removeEventListener('error', finish);
+      resolve();
+    };
+
+    elements.videoPlayer.addEventListener('emptied', finish, { once: true });
+    elements.videoPlayer.addEventListener('abort', finish, { once: true });
+    elements.videoPlayer.addEventListener('error', finish, { once: true });
+
+    setTimeout(finish, 250);
+  });
+
+  if (elements.tempVideo) {
+    elements.tempVideo.pause();
+    elements.tempVideo.removeAttribute('src');
+    elements.tempVideo.src = '';
+    elements.tempVideo.load();
+    elements.tempVideo.currentTime = 0;
+  }
+
+  if (elements.previewElement) {
+    elements.previewElement.style.display = 'none';
+  }
+}
+
 // ============================================================================
 // EXPORTS
 // ============================================================================
@@ -2635,6 +2688,7 @@ module.exports = {
   hideVolumeDragControl,
   hideVolumeControls,
   cleanupVideoPreview,
+  releaseVideoElement,
   preloadClipData,
   handleMouseEnter,
   exportClipFromContextMenu,

@@ -8,6 +8,28 @@
 
 ## Update (2026-02-03)
 
+**Status:** ⚠️ Pending testing
+
+### What Changed
+- Cleared grid ambient glow when opening clips to avoid stale hover glow.
+- Made `closePlayer()` async and fully unloads the video element to release file handles.
+- Deletion flow now awaits `closePlayer()` and clears hover preview/glow before deleting to reduce EBUSY failures.
+- Added hard release for the hidden preview `tempVideo` and used it in the `close-video-player` IPC path.
+
+### Files Modified
+```
+renderer/video-player.js
+renderer/clip-grid.js
+agents/SESSION_SUMMARY.md
+```
+
+### Testing
+- Not run (per instructions).
+
+---
+
+## Update (2026-02-03)
+
 ### What Changed
 - Added renderer manager modules:
   - `renderer/discord-manager.js`
