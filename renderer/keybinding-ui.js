@@ -42,7 +42,12 @@ function ensureShortcutsTab() {
   shortcutsTab.className = 'settings-tab';
   shortcutsTab.dataset.tab = 'shortcuts';
   shortcutsTab.textContent = 'Shortcuts';
-  tabsContainer.appendChild(shortcutsTab);
+  const aboutTab = tabsContainer.querySelector('.settings-tab[data-tab="about"]');
+  if (aboutTab) {
+    tabsContainer.insertBefore(shortcutsTab, aboutTab);
+  } else {
+    tabsContainer.appendChild(shortcutsTab);
+  }
 
   const contentWrapper = settingsModalRef.querySelector('.settings-modal-content');
   const shortcutsContent = document.createElement('div');

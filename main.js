@@ -3,6 +3,8 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell } = requi
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./utils/logger');
+const consoleBuffer = require('./utils/console-log-buffer');
+consoleBuffer.patchConsole();
 
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = process.env.CLIPS_BENCHMARK === '1';
@@ -26,6 +28,7 @@ const steelSeriesModule = require('./main/steelseries-processor');
 const readify = require("readify");
 const { logActivity } = require('./utils/activity-tracker');
 const diagnosticsModule = require('./diagnostics/collector');
+const logUploader = require('./main/log-uploader');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const IDLE_TIMEOUT = 5 * 60 * 1000;
 
@@ -340,6 +343,10 @@ ipcMain.handle('show-diagnostics-save-dialog', async () => {
 
 ipcMain.handle('generate-diagnostics-zip', async (event, targetPath) => {
   return diagnosticsModule.generateDiagnosticsZip(targetPath, event.sender);
+});
+
+ipcMain.handle('upload-session-logs', async (event, payload) => {
+  return logUploader.uploadSessionLogs(payload);
 });
 
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {

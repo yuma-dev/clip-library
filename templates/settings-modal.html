@@ -3,7 +3,7 @@
     <div class="settings-tab active" data-tab="general">General</div>
     <div class="settings-tab" data-tab="display">Display</div>
     <div class="settings-tab" data-tab="exportImport">Export/Import</div>
-    <div class="settings-tab" data-tab="about">About</div>
+    <div class="settings-tab" data-tab="about">About/Help</div>
   </div>
 
   <div class="settings-tab-content active" data-tab="general">
@@ -225,6 +225,16 @@
         </div>
         <div class="settings-control">
           <button id="generateDiagnosticsBtn" class="settings-button settings-button-secondary">Generate Zip</button>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Upload Session Logs</div>
+          <div class="settings-item-description">Upload current run logs and console output for a shareable link.</div>
+          <div id="uploadLogsStatus" class="settings-item-description diagnostics-status"></div>
+        </div>
+        <div class="settings-control">
+          <button id="uploadLogsBtn" class="settings-button settings-button-secondary">Upload Logs</button>
         </div>
       </div>
     </div>

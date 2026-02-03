@@ -93,6 +93,10 @@ let diagnosticsInProgress = false;
 let diagnosticsStatusEl = null;
 let generateDiagnosticsBtn = null;
 const diagnosticsButtonDefaultLabel = 'Generate Zip';
+let uploadLogsInProgress = false;
+let uploadLogsStatusEl = null;
+let uploadLogsBtn = null;
+const uploadLogsButtonDefaultLabel = 'Upload Logs';
 
 // Preview State
 let activePreview = null;
@@ -130,6 +134,7 @@ module.exports = {
   CACHE_EXPIRY_MS,
   GRID_NAVIGATION_THROTTLE,
   diagnosticsButtonDefaultLabel,
+  uploadLogsButtonDefaultLabel,
 
   // Media & Playback State
   get audioContext() { return audioContext; },
@@ -257,6 +262,12 @@ module.exports = {
   set diagnosticsStatusEl(value) { diagnosticsStatusEl = value; },
   get generateDiagnosticsBtn() { return generateDiagnosticsBtn; },
   set generateDiagnosticsBtn(value) { generateDiagnosticsBtn = value; },
+  get uploadLogsInProgress() { return uploadLogsInProgress; },
+  set uploadLogsInProgress(value) { uploadLogsInProgress = value; },
+  get uploadLogsStatusEl() { return uploadLogsStatusEl; },
+  set uploadLogsStatusEl(value) { uploadLogsStatusEl = value; },
+  get uploadLogsBtn() { return uploadLogsBtn; },
+  set uploadLogsBtn(value) { uploadLogsBtn = value; },
 
   // Preview
   get activePreview() { return activePreview; },

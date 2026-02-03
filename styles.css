@@ -2521,6 +2521,11 @@ body.player-open .cet-titlebar {
   word-break: break-all;
 }
 
+.diagnostics-status a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .diagnostics-status[data-state="progress"] {
   color: #facc15;
 }
