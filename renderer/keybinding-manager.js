@@ -1,3 +1,4 @@
+// Imports
 const { ipcRenderer } = require('electron');
 
 // Default keybindings should match those defined in settings-manager.js
@@ -23,8 +24,12 @@ const DEFAULT_KEYBINDINGS = {
   closePlayer: 'Escape'
 };
 
+// Module state
 let keybindings = { ...DEFAULT_KEYBINDINGS };
 
+/**
+ * Normalize a key combo string for comparison/storage.
+ */
 function normaliseCombo(str) {
   // Normalise string like "ctrl+shift+E" to "Ctrl+Shift+E" for comparison
   return str
@@ -39,6 +44,9 @@ function normaliseCombo(str) {
     .join('+');
 }
 
+/**
+ * Build a normalized combo string from a KeyboardEvent.
+ */
 function buildEventCombo(e) {
   const parts = [];
   if (e.ctrlKey || e.metaKey) parts.push('Ctrl');
@@ -52,6 +60,9 @@ function buildEventCombo(e) {
   return normaliseCombo(parts.join('+'));
 }
 
+/**
+ * Map a key event to the configured action (or null).
+ */
 function getActionFromEvent(e) {
   const combo = buildEventCombo(e);
   for (const [action, binding] of Object.entries(keybindings)) {
@@ -62,10 +73,16 @@ function getActionFromEvent(e) {
   return null;
 }
 
+/**
+ * Get the current combo for an action.
+ */
 function getKey(action) {
   return keybindings[action] || null;
 }
 
+/**
+ * Load keybindings from settings (falls back to defaults).
+ */
 async function initKeybindings() {
   try {
     const settings = await ipcRenderer.invoke('get-settings');
@@ -78,6 +95,9 @@ async function initKeybindings() {
   }
 }
 
+/**
+ * Update a keybinding and persist settings.
+ */
 async function setKeybinding(action, combo) {
   keybindings[action] = normaliseCombo(combo);
   // Persist immediately
@@ -90,6 +110,9 @@ async function setKeybinding(action, combo) {
   }
 }
 
+/**
+ * Get a copy of all keybindings.
+ */
 function getAll() {
   return { ...keybindings };
 }

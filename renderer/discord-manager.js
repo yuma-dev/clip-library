@@ -4,25 +4,32 @@
  * Handles Discord Rich Presence integration and idle tracking.
  */
 
+// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
+// Module state
 let videoPlayer = null;
 let videoPlayerModule = null;
 let idleTimeoutMs = 0;
 let initialized = false;
 
+// Activity tracking
 function handleActivity() {
   state.lastActivityTime = Date.now();
 }
 
+// Presence helpers
 function updateDiscordPresence(details, presenceState = null) {
   if (state.settings && state.settings.enableDiscordRPC) {
     ipcRenderer.invoke('update-discord-presence', details, presenceState);
   }
 }
 
+/**
+ * Update Discord presence based on the active clip and playback state.
+ */
 function updateDiscordPresenceForClip(clip, isPlaying = true) {
   if (!videoPlayer || !videoPlayerModule) return;
   if (state.settings && state.settings.enableDiscordRPC) {
@@ -54,6 +61,9 @@ function updateDiscordPresenceForClip(clip, isPlaying = true) {
   }
 }
 
+/**
+ * Choose presence based on current view (clip vs. grid).
+ */
 function updateDiscordPresenceBasedOnState() {
   if (!videoPlayer) return;
   if (state.currentClip) {
@@ -64,6 +74,9 @@ function updateDiscordPresenceBasedOnState() {
   }
 }
 
+/**
+ * Enable/disable RPC and refresh presence if enabled.
+ */
 async function toggleDiscordRPC(enable) {
   await ipcRenderer.invoke('toggle-discord-rpc', enable);
   if (enable) {
@@ -71,6 +84,7 @@ async function toggleDiscordRPC(enable) {
   }
 }
 
+// Module API
 function init({ videoPlayer: player, videoPlayerModule: playerModule, idleTimeoutMs: idleTimeout } = {}) {
   if (initialized) return;
 

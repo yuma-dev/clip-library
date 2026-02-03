@@ -8,9 +8,11 @@
  * - Customizable mappings
  */
 
+// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 
+// Default mappings
 // Default gamepad button mappings (Xbox controller layout)
 const DEFAULT_GAMEPAD_MAPPINGS = {
   // Face buttons (A, B, X, Y)
@@ -52,11 +54,15 @@ const ANALOG_MAPPINGS = {
   }
 };
 
+// Module state
 let dependencies = null;
 let isQuitConfirmVisible = false;
 let originalConfirmOkText = null;
 let originalConfirmCancelText = null;
 
+/**
+ * Show the quit confirmation modal in gamepad mode.
+ */
 function showQuitConfirmModal() {
   const modal = document.getElementById("custom-modal");
   const modalMessage = document.getElementById("modal-message");
@@ -79,6 +85,9 @@ function showQuitConfirmModal() {
   isQuitConfirmVisible = true;
 }
 
+/**
+ * Hide the quit confirmation modal and restore labels.
+ */
 function hideQuitConfirmModal() {
   const modal = document.getElementById("custom-modal");
   const modalOk = document.getElementById("modal-ok");
@@ -94,11 +103,15 @@ function hideQuitConfirmModal() {
   isQuitConfirmVisible = false;
 }
 
+/**
+ * Confirm quit from the gamepad modal.
+ */
 function confirmQuit() {
   hideQuitConfirmModal();
   ipcRenderer.invoke('quit-app');
 }
 
+// Core manager
 class GamepadManager {
   constructor() {
     this.connectedGamepads = new Map();
@@ -532,6 +545,7 @@ function handleControllerAction(action) {
 /**
  * Handle controller navigation (analog sticks)
  * 
+ * Handle high-level navigation requests (grid/player).
  * @param {string} type - The navigation type ('seek', 'volume', 'navigate')
  * @param {number} value - The navigation value
  */
@@ -605,6 +619,9 @@ function handleControllerNavigation(type, value) {
 }
 
 // Handle raw controller navigation (for grid scrolling)
+/**
+ * Handle raw analog navigation values.
+ */
 function handleControllerRawNavigation(type, value) {
   if (!dependencies || !dependencies.playerOverlay) return;
   const isPlayerActive = dependencies.playerOverlay.style.display === "block";
@@ -632,6 +649,9 @@ function handleControllerRawNavigation(type, value) {
 }
 
 // Handle controller connection/disconnection
+/**
+ * Handle gamepad connect/disconnect updates.
+ */
 function handleControllerConnection(connected, gamepadId) {
   if (!dependencies || !dependencies.playerOverlay) return;
   const indicator = document.getElementById('controller-indicator');
@@ -678,6 +698,9 @@ function handleControllerConnection(connected, gamepadId) {
   }
 }
 
+/**
+ * Initialize the gamepad manager and wire dependencies.
+ */
 async function init(deps) {
   dependencies = deps;
 
@@ -734,6 +757,9 @@ async function init(deps) {
   }
 }
 
+/**
+ * Backwards-compatible init wrapper.
+ */
 async function initializeGamepadManager(deps) {
   return init(deps);
 }

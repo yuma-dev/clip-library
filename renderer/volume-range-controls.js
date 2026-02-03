@@ -1,8 +1,10 @@
 // Volume range UI controls for the player timeline
+// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
+// Module API
 function init({
   videoPlayer,
   progressBarContainer,
@@ -49,6 +51,7 @@ function init({
     progressBarContainer.appendChild(state.volumeDragControl);
   }
 
+  // Persist range volume after slider updates
   const debouncedSaveVolumeLevel = debounce(async () => {
     if (!state.currentClip || !state.isVolumeControlsVisible) return;
 
@@ -66,6 +69,9 @@ function init({
     }
   }, 300);
 
+  /**
+   * Begin dragging the range start marker.
+   */
   function handleVolumeStartDrag(e) {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -75,6 +81,9 @@ function init({
     document.addEventListener('mouseup', endVolumeDrag);
   }
 
+  /**
+   * Begin dragging the range end marker.
+   */
   function handleVolumeEndDrag(e) {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -84,6 +93,7 @@ function init({
     document.addEventListener('mouseup', endVolumeDrag);
   }
 
+  // Slider interactions
   const volumeInput = state.volumeDragControl.querySelector('input');
   volumeInput.addEventListener('input', (e) => {
     e.stopPropagation();
@@ -100,6 +110,7 @@ function init({
   state.volumeStartElement.addEventListener('mousedown', handleVolumeStartDrag);
   state.volumeEndElement.addEventListener('mousedown', handleVolumeEndDrag);
 
+  // Global escape hatches
   window.addEventListener('blur', () => {
     if (state.isVolumeDragging) {
       endVolumeDrag();
@@ -124,6 +135,7 @@ function init({
     }
   });
 
+  // Apply volume envelope during playback
   videoPlayer.addEventListener('timeupdate', () => {
     if (!state.audioContext || !state.gainNode || !state.isVolumeControlsVisible) return;
 
