@@ -6,6 +6,7 @@ const fs = require('fs').promises;
 
 // Keybinding manager to centralise shortcuts
 const keybinds = require('./renderer/keybinding-manager');
+const keybindingUiModule = require('./renderer/keybinding-ui');
 
 // Gamepad manager for controller support
 const gamepadManagerModule = require('./renderer/gamepad-manager');
@@ -30,6 +31,8 @@ const gridNavigationModule = require('./renderer/grid-navigation');
 
 // Settings manager module
 const settingsManagerUiModule = require('./renderer/settings-manager-ui');
+const debugToolsModule = require('./renderer/debug-tools');
+const volumeRangeControlsModule = require('./renderer/volume-range-controls');
 
 // Discord/diagnostics/update managers
 const discordManagerModule = require('./renderer/discord-manager');
@@ -74,12 +77,6 @@ const speedButton = document.getElementById("speed-button");
 const speedSlider = document.getElementById("speed-slider");
 const speedContainer = document.getElementById("speed-container");
 const speedText = document.getElementById("speed-text");
-const volumeIcons = {
-  normal: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-481q0-83-44-151.5T598-735q-15-7-22-21.5t-2-29.5q6-16 21.5-23t31.5 0q97 43 155 131.5T840-481q0 108-58 196.5T627-153q-16 7-31.5 0T574-176q-5-15 2-29.5t22-21.5q74-34 118-102.5T760-481ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm380-120q0 42-19 79.5T591-339q-10 6-20.5.5T560-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
-  muted: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="m720-424-76 76q-11 11-28 11t-28-11q-11-11-11-28t11-28l76-76-76-76q-11-11-11-28t11-28q11-11 28-11t28 11l76 76 76-76q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76 76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11l-76-76Zm-440 64H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
-  low: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M360-360H240q-17 0-28.5-11.5T200-400v-160q0-17 11.5-28.5T240-600h120l132-132q19-19 43.5-8.5T560-703v446q0 27-24.5 37.5T492-228L360-360Zm380-120q0 42-19 79.5T671-339q-10 6-20.5.5T640-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM480-606l-86 86H280v80h114l86 86v-252ZM380-480Z"/></svg>`,
-  high: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-440h-80q-17 0-28.5-11.5T640-480q0-17 11.5-28.5T680-520h80q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440ZM584-288q10-14 26-16t30 8l64 48q14 10 16 26t-8 30q-10 14-26 16t-30-8l-64-48q-14-10-16-26t8-30Zm120-424-64 48q-14 10-30 8t-26-16q-10-14-8-30t16-26l64-48q14-10 30-8t26 16q10 14 8 30t-16 26ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`
-};
 const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
 const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
 
@@ -133,269 +130,42 @@ ipcRenderer.on('log', (event, { type, message }) => {
 });
 
 
-const settingsModal = document.createElement("div");
-settingsModal.id = "settingsModal";
-settingsModal.className = "settings-modal";
-settingsModal.innerHTML = `
-<div class="settings-modal-content">
-    <div class="settings-tabs">
-      <div class="settings-tab active" data-tab="general">General</div>
-      <div class="settings-tab" data-tab="display">Display</div>
-      <div class="settings-tab" data-tab="exportImport">Export/Import</div>
-      <div class="settings-tab" data-tab="about">About</div>
-    </div>
+let settingsModal = null;
+let currentClipLocationSpan = null;
 
-    <div class="settings-tab-content active" data-tab="general">
-      <div class="settings-group">
-        <h3 class="settings-group-title">Clip Library Location</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Current Location</div>
-            <div class="settings-item-description" id="currentClipLocation">Loading...</div>
-          </div>
-          <div class="settings-control">
-            <button id="changeLocationBtn" class="settings-button settings-button-primary">Change Location</button>
-          </div>
-        </div>
-      </div>
+/**
+ * Load the settings modal markup from templates/settings-modal.html
+ * and wire the diagnostics controls once inserted.
+ */
+async function loadSettingsModalTemplate() {
+  const templatePath = path.join(__dirname, 'templates', 'settings-modal.html');
+  let templateHtml = '';
 
+  try {
+    templateHtml = await fs.readFile(templatePath, 'utf8');
+  } catch (error) {
+    logger.error('Failed to load settings modal template:', error);
+    templateHtml = '<div class="settings-modal-content"></div>';
+  }
 
+  settingsModal = document.createElement('div');
+  settingsModal.id = 'settingsModal';
+  settingsModal.className = 'settings-modal';
+  settingsModal.innerHTML = templateHtml;
 
-      <div class="settings-group">
-        <h3 class="settings-group-title">Integration</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Discord Rich Presence</div>
-            <div class="settings-item-description">Show your current activity in Discord</div>
-          </div>
-          <div class="settings-control">
-            <label class="settings-switch">
-              <input type="checkbox" id="enableDiscordRPC">
-              <span class="settings-switch-slider"></span>
-            </label>
-          </div>
-        </div>
-      </div>
+  const container = document.querySelector('.cet-container') || document.body;
+  container.appendChild(settingsModal);
 
-      <div class="settings-group">
-        <h3 class="settings-group-title">Tag Management</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Manage Tags</div>
-            <div class="settings-item-description">Edit and organize your clip tags</div>
-          </div>
-          <div class="settings-control">
-            <button id="manageTagsBtn" class="settings-button settings-button-secondary">Manage Tags</button>
-          </div>
-        </div>
-      </div>
+  currentClipLocationSpan = settingsModal.querySelector('#currentClipLocation');
+  state.generateDiagnosticsBtn = settingsModal.querySelector('#generateDiagnosticsBtn');
+  state.diagnosticsStatusEl = settingsModal.querySelector('#diagnosticsStatus');
 
-    </div>
-
-    <div class="settings-tab-content" data-tab="display">
-      <div class="settings-group">
-        <h3 class="settings-group-title">Visual Indicators</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Show New Clips Indicators</div>
-            <div class="settings-item-description">Display green lines and highlights to show new clips since last session</div>
-          </div>
-          <div class="settings-control">
-            <label class="settings-switch">
-              <input type="checkbox" id="showNewClipsIndicators">
-              <span class="settings-switch-slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Greyscale Icons</div>
-            <div class="settings-item-description">Display clip icons in greyscale</div>
-          </div>
-          <div class="settings-control">
-            <label class="settings-switch">
-              <input type="checkbox" id="greyscaleIcons">
-              <span class="settings-switch-slider"></span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-group">
-        <h3 class="settings-group-title">Playback</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Preview Volume</div>
-            <div class="settings-item-description">Set the default volume for clip previews</div>
-          </div>
-          <div class="settings-control">
-            <input type="range" id="previewVolumeSlider" class="settings-range" min="0" max="1" step="0.01" value="0.1">
-            <span id="previewVolumeValue">10%</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-group">
-        <h3 class="settings-group-title">Ambient Glow</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Enable Ambient Glow</div>
-            <div class="settings-item-description">Show a colorful glow behind the video player that matches the video content</div>
-          </div>
-          <div class="settings-control">
-            <label class="settings-switch">
-              <input type="checkbox" id="ambientGlowEnabled">
-              <span class="settings-switch-slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Smoothing</div>
-            <div class="settings-item-description">How smoothly the glow transitions between colors (lower = smoother)</div>
-          </div>
-          <div class="settings-control">
-            <input type="range" id="ambientGlowSmoothing" class="settings-range" min="0.1" max="1" step="0.1" value="0.5">
-            <span id="ambientGlowSmoothingValue">0.5</span>
-          </div>
-        </div>
-
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Update Rate</div>
-            <div class="settings-item-description">How often the glow updates (higher = smoother but uses more CPU)</div>
-          </div>
-          <div class="settings-control">
-            <select id="ambientGlowFps" class="settings-select">
-              <option value="15">15 fps</option>
-              <option value="24">24 fps</option>
-              <option value="30" selected>30 fps</option>
-              <option value="60">60 fps</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Blur Amount</div>
-            <div class="settings-item-description">How blurry the glow effect appears</div>
-          </div>
-          <div class="settings-control">
-            <input type="range" id="ambientGlowBlur" class="settings-range" min="40" max="120" step="10" value="80">
-            <span id="ambientGlowBlurValue">80px</span>
-          </div>
-        </div>
-
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Opacity</div>
-            <div class="settings-item-description">How visible the glow effect is</div>
-          </div>
-          <div class="settings-control">
-            <input type="range" id="ambientGlowOpacity" class="settings-range" min="0.3" max="1" step="0.1" value="0.7">
-            <span id="ambientGlowOpacityValue">70%</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-tab-content" data-tab="exportImport">
-      <div class="settings-group">
-        <h3 class="settings-group-title">Export Settings</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Export Quality</div>
-            <div class="settings-item-description">Choose the default quality for exported clips</div>
-          </div>
-          <div class="settings-control">
-            <select id="exportQuality" class="settings-select">
-              <option value="discord">Discord (~10MB)</option>
-              <option value="high">High Quality (~30MB)</option>
-              <option value="lossless">Lossless</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-group">
-        <h3 class="settings-group-title">Import Options</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Import from SteelSeries</div>
-            <div class="settings-item-description">Select your SteelSeries Moments folder</div>
-          </div>
-          <div class="settings-control">
-            <button id="importSteelSeriesBtn" class="settings-button settings-button-primary">Import Clips</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-tab-content" data-tab="about">
-      <div class="settings-group">
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Clip Library</div>
-            <div class="settings-item-description">A modern, fast, and efficient way to manage your clip collection.</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-group">
-        <h3 class="settings-group-title">Updates</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Check for Updates</div>
-            <div class="settings-item-description">Manually check if a newer version is available.</div>
-            <div id="updateCheckStatus" class="settings-item-description update-check-status"></div>
-          </div>
-          <div class="settings-control">
-            <button id="checkForUpdatesBtn" class="settings-button settings-button-primary">Check Now</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-group">
-        <h3 class="settings-group-title">Diagnostics</h3>
-        <div class="settings-item">
-          <div class="settings-item-info">
-            <div class="settings-item-title">Generate Diagnostics Zip</div>
-            <div class="settings-item-description">Bundle logs, settings, and system info to share for troubleshooting.</div>
-            <div id="diagnosticsStatus" class="settings-item-description diagnostics-status"></div>
-          </div>
-          <div class="settings-control">
-            <button id="generateDiagnosticsBtn" class="settings-button settings-button-secondary">Generate Zip</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-version">
-        <p>Version: <span id="app-version">Loading...</span></p>
-      </div>
-    </div>
-    <div class="settings-footer">
-      <button id="closeSettingsBtn" class="settings-save-button">
-        Save Settings
-      </button>
-    </div>
-  </div>
-`;
-
-const container = document.querySelector('.cet-container') || document.body;
-container.appendChild(settingsModal);
-
-const closeSettingsBtn = document.getElementById("closeSettingsBtn");
-const currentClipLocationSpan = document.getElementById("currentClipLocation");
-state.generateDiagnosticsBtn = document.getElementById('generateDiagnosticsBtn');
-state.diagnosticsStatusEl = document.getElementById('diagnosticsStatus');
-
-if (state.generateDiagnosticsBtn) {
-  diagnosticsManagerModule.init({
-    generateDiagnosticsBtn: state.generateDiagnosticsBtn,
-    diagnosticsStatusEl: state.diagnosticsStatusEl
-  });
+  if (state.generateDiagnosticsBtn) {
+    diagnosticsManagerModule.init({
+      generateDiagnosticsBtn: state.generateDiagnosticsBtn,
+      diagnosticsStatusEl: state.diagnosticsStatusEl
+    });
+  }
 }
 
 
@@ -1058,15 +828,6 @@ function setupContextMenu() {
   });
 }
 
-document.getElementById('manageTagsBtn').addEventListener('click', searchManagerModule.openTagManagement);
-
-
-
-
-
-
-
-
 
 
 
@@ -1106,6 +867,13 @@ function showExportProgress(current, total, isClipboardExport = false) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await loadSettingsModalTemplate();
+  debugToolsModule.init({ state });
+  keybindingUiModule.init({
+    settingsModal,
+    showCustomConfirm
+  });
+
   // Ensure keybindings are loaded before we attach any listeners that use them
   await keybinds.initKeybindings();
 
@@ -1141,7 +909,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }, {
     // Callbacks for module to trigger renderer.js functions
     logCurrentWatchSession: logCurrentWatchSession,
-    initializeVolumeControls: initializeVolumeControls,
+      initializeVolumeControls: null,
     getCachedClipData: getCachedClipData,
     getThumbnailPath: clipGridModule.getThumbnailPath,
     updateDiscordPresenceForClip: discordManagerModule.updateDiscordPresenceForClip,
@@ -1201,7 +969,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateVersionDisplay: updateManagerModule.updateVersionDisplay,
     changeClipLocation: changeClipLocation,
     updateAllPreviewVolumes: updateAllPreviewVolumes,
-    populateKeybindingList: populateKeybindingList
+    populateKeybindingList: keybindingUiModule.populateKeybindingList
   });
 
   discordManagerModule.init({
@@ -1282,28 +1050,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     logger.error("Settings button not found");
   }
 
-  const changeLocationBtn = document.getElementById("changeLocationBtn");
-  const manageTagsBtn = document.getElementById("manageTagsBtn");
-  const closeSettingsBtn = document.getElementById("closeSettingsBtn");
-
-  if (changeLocationBtn) {
-    changeLocationBtn.addEventListener("click", changeClipLocation);
-  } else {
-    logger.error("Change Location button not found");
-  }
-
-  if (manageTagsBtn) {
-    manageTagsBtn.addEventListener("click", searchManagerModule.openTagManagement);
-    logger.info("Manage Tags button listener added");
-  } else {
-    logger.error("Manage Tags button not found");
-  }
-
-  if (closeSettingsBtn) {
-    closeSettingsBtn.addEventListener("click", settingsManagerUiModule.closeSettingsModal);
-  } else {
-    logger.error("Close Settings button not found");
-  }
 
   document.getElementById('importSteelSeriesBtn').addEventListener('click', async () => {
     try {
@@ -1390,7 +1136,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   searchManagerModule.setupSearch();
 
-  // Volume event listeners are now handled by videoPlayerModule.init()
+  volumeRangeControlsModule.init({
+    videoPlayer,
+    progressBarContainer,
+    volumeSlider,
+    toggleVolumeControls: videoPlayerModule.toggleVolumeControls,
+    showVolumeDragControl: videoPlayerModule.showVolumeDragControl,
+    handleVolumeDrag: videoPlayerModule.handleVolumeDrag,
+    endVolumeDrag: videoPlayerModule.endVolumeDrag,
+    debounce: videoPlayerModule.debounce
+  });
 
   setupContextMenu();
   tagManagerModule.loadGlobalTags();
@@ -1534,13 +1289,6 @@ function updateAllPreviewVolumes(newVolume) {
   });
 }
 
-document
-  .getElementById("settingsButton")
-  .addEventListener("click", settingsManagerUiModule.openSettingsModal);
-closeSettingsBtn.addEventListener("click", settingsManagerUiModule.closeSettingsModal);
-document
-  .getElementById("changeLocationBtn")
-  .addEventListener("click", changeClipLocation);
 
 // Add click-outside-to-close functionality for state.settings modal
 document.addEventListener('click', (e) => {
@@ -2391,194 +2139,6 @@ document.getElementById('clear-selection')?.addEventListener('click', clearSelec
 
 
 
-window.loadingScreenTest = {
-  show: () => {
-    state.loadingScreen = document.getElementById('loading-screen');
-    if (!state.loadingScreen) {
-      // Create the loading screen if it doesn't exist
-      const newLoadingScreen = document.createElement('div');
-      newLoadingScreen.id = 'loading-screen';
-      newLoadingScreen.innerHTML = `
-        <div class="loading-content">
-          <div class="logo-container">
-            <img src="assets/title.png" alt="App Logo and Title" class="app-logo-title">
-          </div>
-        </div>
-      `;
-      document.body.appendChild(newLoadingScreen);
-      
-      // Force a reflow to ensure the animation starts
-      newLoadingScreen.offsetHeight;
-      
-    } else {
-      state.loadingScreen.style.display = 'flex';
-      state.loadingScreen.style.opacity = '1';
-    }
-  },
-  
-  hide: () => {
-    state.loadingScreen = document.getElementById('loading-screen');
-    if (state.loadingScreen) {
-      state.loadingScreen.style.opacity = '0';
-      setTimeout(() => {
-        state.loadingScreen.style.display = 'none';
-      }, 1000);
-    }
-  },
-  
-  toggle: () => {
-    state.loadingScreen = document.getElementById('loading-screen');
-    if (state.loadingScreen && (state.loadingScreen.style.display === 'none' || state.loadingScreen.style.opacity === '0')) {
-      window.loadingScreenTest.show();
-    } else {
-      window.loadingScreenTest.hide();
-    }
-  }
-};
-
-// Optional: Add keyboard shortcut for quick testing
-document.addEventListener('keydown', (e) => {
-  // Ctrl/Cmd + Shift + L to toggle loading screen
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
-    window.loadingScreenTest.toggle();
-  }
-});
-
-function initializeVolumeControls() {
-  // Create elements if they don't exist
-  if (!state.volumeStartElement) {
-    state.volumeStartElement = document.createElement('div');
-    state.volumeStartElement.className = 'volume-start';
-  }
-  
-  if (!state.volumeEndElement) {
-    state.volumeEndElement = document.createElement('div');
-    state.volumeEndElement.className = 'volume-end';
-  }
-  
-  if (!state.volumeRegionElement) {
-    state.volumeRegionElement = document.createElement('div');
-    state.volumeRegionElement.className = 'volume-region';
-  }
-
-  if (!state.volumeDragControl) {
-    state.volumeDragControl = document.createElement('div');
-    state.volumeDragControl.className = 'volume-drag-control';
-    const volumeInput = document.createElement('input');
-    volumeInput.type = 'range';
-    volumeInput.min = '0';
-    volumeInput.max = '1';
-    volumeInput.step = '0.1';
-    volumeInput.value = '0';
-    state.volumeDragControl.appendChild(volumeInput);
-  }
-  
-  const progressBarContainer = document.getElementById('progress-bar-container');
-  if (!progressBarContainer.contains(state.volumeStartElement)) {
-    progressBarContainer.appendChild(state.volumeStartElement);
-    progressBarContainer.appendChild(state.volumeEndElement);
-    progressBarContainer.appendChild(state.volumeRegionElement);
-    progressBarContainer.appendChild(state.volumeDragControl);
-  }
-
-  videoPlayerModule.hideVolumeControls();
-  setupVolumeControlListeners();
-}
-
-const debouncedSaveVolumeLevel = videoPlayerModule.debounce(async () => {
-  if (!state.currentClip || !state.isVolumeControlsVisible) return;
-  
-  const volumeData = {
-    start: state.volumeStartTime,
-    end: state.volumeEndTime,
-    level: state.volumeLevel || 0
-  };
-  
-  try {
-    await ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData);
-    logger.info('Volume data saved with new level:', volumeData);
-  } catch (error) {
-    logger.error('Error saving volume data:', error);
-  }
-}, 300);
-
-function setupVolumeControlListeners() {
-  // Clean up existing listeners first
-  state.volumeStartElement.removeEventListener('mousedown', handleVolumeStartDrag);
-  state.volumeEndElement.removeEventListener('mousedown', handleVolumeEndDrag);
-  document.removeEventListener('mousemove', videoPlayerModule.handleVolumeDrag);
-  document.removeEventListener('mouseup', videoPlayerModule.endVolumeDrag);
-
-  function handleVolumeStartDrag(e) {
-    if (e.button !== 0) return; // Only handle left mouse button
-    e.stopPropagation();
-    state.isVolumeDragging = 'start';
-    videoPlayerModule.showVolumeDragControl(e);
-    document.addEventListener('mousemove', videoPlayerModule.handleVolumeDrag);
-    document.addEventListener('mouseup', videoPlayerModule.endVolumeDrag);
-  }
-
-  function handleVolumeEndDrag(e) {
-    if (e.button !== 0) return; // Only handle left mouse button
-    e.stopPropagation();
-    state.isVolumeDragging = 'end';
-    videoPlayerModule.showVolumeDragControl(e);
-    document.addEventListener('mousemove', videoPlayerModule.handleVolumeDrag);
-    document.addEventListener('mouseup', videoPlayerModule.endVolumeDrag);
-  }
-
-  state.volumeDragControl.querySelector('input').addEventListener('input', (e) => {
-    e.stopPropagation();
-    state.volumeLevel = parseFloat(e.target.value);
-    debouncedSaveVolumeLevel();
-  });
-
-  state.volumeDragControl.querySelector('input').addEventListener('change', (e) => {
-    e.stopPropagation();
-    state.volumeLevel = parseFloat(e.target.value);
-    // Force an immediate save
-    debouncedSaveVolumeLevel.flush?.() || debouncedSaveVolumeLevel();
-  });
-
-  state.volumeStartElement.addEventListener('mousedown', handleVolumeStartDrag);
-  state.volumeEndElement.addEventListener('mousedown', handleVolumeEndDrag);
-
-  // Force cleanup if window loses focus
-  window.addEventListener('blur', () => {
-    if (state.isVolumeDragging) {
-      videoPlayerModule.endVolumeDrag();
-    }
-  });
-}
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.isVolumeDragging) {
-    videoPlayerModule.endVolumeDrag();
-  }
-});
-
-// Add this to your video timeupdate event listener
-videoPlayer.addEventListener('timeupdate', () => {
-  if (!state.audioContext || !state.gainNode || !state.isVolumeControlsVisible) return;
-  
-  const currentVolume = volumeSlider.value;
-  if (videoPlayer.currentTime >= state.volumeStartTime && videoPlayer.currentTime <= state.volumeEndTime) {
-    state.gainNode.gain.setValueAtTime(state.volumeLevel * currentVolume, state.audioContext.currentTime);
-  } else {
-    state.gainNode.gain.setValueAtTime(currentVolume, state.audioContext.currentTime);
-  }
-});
-
-document.addEventListener('keydown', (e) => {
-  const isInputFocused = document.activeElement.tagName === 'INPUT' || 
-                        document.activeElement.tagName === 'TEXTAREA' ||
-                        document.activeElement.isContentEditable;
-                        
-  if (!isInputFocused && (e.key === 'v' || e.key === 'V')) {
-    e.preventDefault();
-    videoPlayerModule.toggleVolumeControls();
-  }
-});
 
 function smoothScrollToElement(element) {
   if (!element) {
@@ -2646,126 +2206,6 @@ function applyIconGreyscale(enabled) {
 tagManagerModule.loadGlobalTags();
 applyIconGreyscale(state.settings?.iconGreyscale);
 
-// ------------------ Keybinding (Shortcuts) Settings UI ------------------
-if (!settingsModal.querySelector('.settings-tab[data-tab="shortcuts"]')) {
-  // Create tab button
-  const tabsContainer = settingsModal.querySelector('.settings-tabs');
-  const shortcutsTab = document.createElement('div');
-  shortcutsTab.className = 'settings-tab';
-  shortcutsTab.dataset.tab = 'shortcuts';
-  shortcutsTab.textContent = 'Shortcuts';
-  tabsContainer.appendChild(shortcutsTab);
-
-  // Create tab content skeleton
-  const contentWrapper = settingsModal.querySelector('.settings-modal-content');
-  const shortcutsContent = document.createElement('div');
-  shortcutsContent.className = 'settings-tab-content';
-  shortcutsContent.dataset.tab = 'shortcuts';
-  shortcutsContent.innerHTML = `
-    <div class="settings-group">
-      <div id="keybinding-list" class="keybinding-list"></div>
-      <p class="kb-hint">Click the key box, then press your new combination.</p>
-      <div style="margin-top: 15px;">
-        <button id="resetKeybindsBtn" class="settings-button settings-button-secondary">Reset to Defaults</button>
-      </div>
-    </div>`;
-
-  // Insert before the footer so the save button stays at the bottom
-  const footer = contentWrapper.querySelector('.settings-footer');
-  contentWrapper.insertBefore(shortcutsContent, footer);
-}
-
-// Friendly labels for displaying actions
-const ACTION_INFO = {
-  playPause:             { t: 'Play / Pause',            d: 'Toggle video playback',                     i: 'play_arrow' },
-  frameBackward:         { t: 'Frame Backward',          d: 'Step one frame back',                       i: 'keyboard_arrow_left' },
-  frameForward:          { t: 'Frame Forward',           d: 'Step one frame forward',                    i: 'keyboard_arrow_right' },
-  skipBackward:          { t: 'Skip Backward',           d: 'Jump back 3% of duration',                 i: 'replay' },
-  skipForward:           { t: 'Skip Forward',            d: 'Jump forward 3% of duration',              i: 'forward_media' },
-  navigatePrev:          { t: 'Previous Clip',           d: 'Open previous clip in list',               i: 'skip_previous' },
-  navigateNext:          { t: 'Next Clip',               d: 'Open next clip in list',                   i: 'skip_next' },
-  volumeUp:              { t: 'Volume Up',               d: 'Increase playback volume',                 i: 'volume_up' },
-  volumeDown:            { t: 'Volume Down',             d: 'Decrease playback volume',                 i: 'volume_down' },
-  exportDefault:         { t: 'Export Trimmed Video',    d: 'Export current trim to clipboard',         i: 'smart_display' },
-  exportVideo:           { t: 'Export Video (file)',     d: 'Export full video to file',                i: 'video_file' },
-  exportAudioFile:       { t: 'Export Audio (file)',     d: 'Export audio to file',                     i: 'audio_file' },
-  exportAudioClipboard:  { t: 'Export Audio (clipboard)',d: 'Copy audio to clipboard',                  i: 'music_video' },
-  fullscreen:            { t: 'Toggle Fullscreen',       d: 'Enter/exit fullscreen player',             i: 'fullscreen' },
-  deleteClip:            { t: 'Delete Clip',             d: 'Delete current clip',                      i: 'delete' },
-  setTrimStart:          { t: 'Set Trim Start',          d: 'Mark trim start at playhead',              i: 'line_start' },
-  setTrimEnd:            { t: 'Set Trim End',            d: 'Mark trim end at playhead',                i: 'line_end' },
-  focusTitle:            { t: 'Focus Title',             d: 'Begin editing title',                      i: 'edit' },
-  closePlayer:           { t: 'Close Player',            d: 'Close the fullscreen player',              i: 'close' }
-};
-
-// Inject minimal CSS for prettier list
-if (false && !document.getElementById('kb-style')) {
-  const s = document.createElement('style');
-  s.id = 'kb-style';
-  s.textContent = `
-    .keybinding-list{display:flex;flex-direction:column;gap:10px;margin-top:8px;}
-    .kb-row{display:flex;justify-content:space-between;align-items:center;background:#1e1e1e;border:1px solid #333;padding:10px 14px;border-radius:6px;}
-    .kb-info{display:flex;flex-direction:column;}
-    .kb-label{font-size:14px;font-weight:600;color:#e8e8e8;}
-    .kb-desc{font-size:12px;color:#9a9a9a;margin-top:2px;}
-    .kb-box{min-width:120px;text-align:center;padding:6px 12px;background:#2b2b2b;color:#e8e8e8;border:1px solid #555;border-radius:4px;cursor:pointer;transition:background 0.2s;}
-    .kb-box:hover{background:#353535;}
-    .kb-box.editing{background:#444;color:#ffa726;border-color:#ffa726;}
-  `;
-  document.head.appendChild(s);
-}
-
-function buildCombo(ev){
-  const parts=[]; if(ev.ctrlKey||ev.metaKey)parts.push('Ctrl'); if(ev.shiftKey)parts.push('Shift'); if(ev.altKey)parts.push('Alt'); let k=ev.key===' '? 'Space':(ev.key.length===1?ev.key.toUpperCase():ev.key); parts.push(k); return parts.join('+'); }
-
-function populateKeybindingList(){
-  const list=document.getElementById('keybinding-list'); if(!list) return; list.innerHTML=''; const bindings=require('./renderer/keybinding-manager').getAll();
-  Object.entries(ACTION_INFO).forEach(([action,info])=>{ 
-    const row=document.createElement('div'); row.className='kb-row'; 
-    let displayBinding=bindings[action]||''; if(displayBinding){displayBinding=displayBinding.split('+').map(p=>p.length===1?p.toUpperCase():p).join('+');}
-    row.innerHTML=`<div class="kb-info"><div class="kb-label"><span class="kb-icon material-symbols-rounded">${info.i}</span>${info.t}</div><div class="kb-desc">${info.d}</div></div><div class="kb-box" tabindex="0" data-action="${action}" id="kb-box-${action}">${displayBinding}</div>`; 
-    list.appendChild(row);
-  });
-  list.querySelectorAll('.kb-box').forEach(box=>box.addEventListener('click', startKeyCapture));
-}
-
-let captureBox=null; let pressed=new Set(); let captureAction=null;
-function startKeyCapture(e){
-  captureBox=e.currentTarget; captureAction=captureBox.dataset.action; pressed.clear(); captureBox.classList.add('editing'); captureBox.textContent='Waiting for keys...';
-  document.addEventListener('keydown', captureKey, true); document.addEventListener('keyup', releaseKey,true);
-}
-
-function captureKey(ev){ if(!captureBox) return; ev.preventDefault(); pressed.add(ev.code); const combo=buildCombo(ev); captureBox.textContent=combo; }
-
-function releaseKey(ev){ if(!captureBox) return; pressed.delete(ev.code); if(pressed.size===0){ // all released
-    const displayCombo=captureBox.textContent; 
-    // Convert the combo to normalized form for storage (single letters as lowercase)
-    const normalizedCombo = displayCombo.split('+').map(part => part.length === 1 ? part.toLowerCase() : part).join('+');
-    require('./renderer/keybinding-manager').setKeybinding(captureAction, normalizedCombo); 
-
-    captureBox.classList.remove('editing');
-    document.removeEventListener('keydown', captureKey, true); document.removeEventListener('keyup', releaseKey, true); captureBox=null; captureAction=null; }
-}
-
-// Add reset keybinds button functionality
-document.addEventListener('click', async (e) => {
-  if (e.target.id === 'resetKeybindsBtn') {
-    const confirmed = await showCustomConfirm('Reset all keyboard shortcuts to default values?');
-    if (confirmed) {
-      // Get default keybindings from settings-manager via IPC
-      const defaultKeybindings = await ipcRenderer.invoke('get-default-keybindings');
-      const keybindManager = require('./renderer/keybinding-manager');
-      
-      // Reset each keybinding
-      for (const [action, defaultCombo] of Object.entries(defaultKeybindings)) {
-        await keybindManager.setKeybinding(action, defaultCombo);
-      }
-      
-      // Refresh the keybinding list display
-      populateKeybindingList();
-    }
-  }
-});
 
 // After initial requires
 if(document && document.fonts){
@@ -2775,13 +2215,3 @@ if(document && document.fonts){
     document.body.classList.add('icons-ready');
   });
 }
-
-// Secret Easter Egg - F6 toggle
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'F6') {
-    const overlay = document.getElementById('secret-overlay');
-    if (overlay) {
-      overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
-    }
-  }
-});
