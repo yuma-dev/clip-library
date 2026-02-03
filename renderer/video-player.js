@@ -63,10 +63,16 @@ let ambientGlowManager = null;
 let clipGlowManager = null;
 let saveTrimTimeout = null;
 
+/**
+ * Get the ambient glow manager for grid clip previews.
+ */
 function getClipGlowManager() {
   return clipGlowManager;
 }
 
+/**
+ * Get the ambient glow manager for the fullscreen player.
+ */
 function getAmbientGlowManager() {
   return ambientGlowManager;
 }
@@ -380,6 +386,9 @@ function debounce(func, delay) {
   return debouncedFn;
 }
 
+/**
+ * Format seconds into mm:ss or hh:mm:ss.
+ */
 function formatTime(seconds) {
   if (isNaN(seconds)) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -387,6 +396,9 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Format a duration for UI display.
+ */
 function formatDuration(seconds) {
   if (isNaN(seconds)) return "0:00";
   const hours = Math.floor(seconds / 3600);
@@ -413,12 +425,18 @@ function changeSpeed(speed) {
   }
 }
 
+/**
+ * Sync the speed slider with current playback speed.
+ */
 function updateSpeedSlider(speed) {
   if (elements.speedSlider) {
     elements.speedSlider.value = speed;
   }
 }
 
+/**
+ * Update speed label text.
+ */
 function updateSpeedText(speed) {
   let displaySpeed;
   if (Number.isInteger(speed)) {
@@ -431,6 +449,9 @@ function updateSpeedText(speed) {
   elements.speedText.textContent = displaySpeed;
 }
 
+/**
+ * Reveal the speed control container temporarily.
+ */
 function showSpeedContainer() {
   elements.speedSlider.classList.remove("collapsed");
 
@@ -449,6 +470,9 @@ const debouncedSaveSpeed = debounce(async (clipName, speed) => {
   }
 }, 300);
 
+/**
+ * Load saved speed for the current clip.
+ */
 async function loadSpeed(clipName) {
   try {
     const speed = await ipcRenderer.invoke("get-speed", clipName);
@@ -473,6 +497,9 @@ function setupAudioContext() {
   state.gainNode.connect(state.audioContext.destination);
 }
 
+/**
+ * Nudge playback volume up/down.
+ */
 function changeVolume(delta) {
   if (!state.audioContext) setupAudioContext();
 
@@ -493,6 +520,9 @@ function changeVolume(delta) {
   showVolumeContainer();
 }
 
+/**
+ * Sync the volume slider with current playback volume.
+ */
 function updateVolumeSlider(volume) {
   elements.volumeSlider.value = volume;
 
@@ -505,6 +535,9 @@ function updateVolumeSlider(volume) {
   updateVolumeIcon(volume);
 }
 
+/**
+ * Update the volume icon based on the current level.
+ */
 function updateVolumeIcon(volume) {
   if (volume === 0) {
     elements.volumeButton.innerHTML = volumeIcons.muted;
@@ -526,6 +559,9 @@ const debouncedSaveVolume = debounce(async (clipName, volume) => {
   }
 }, 300);
 
+/**
+ * Load saved volume for the current clip.
+ */
 async function loadVolume(clipName) {
   try {
     const volume = await ipcRenderer.invoke("get-volume", clipName);
@@ -537,6 +573,9 @@ async function loadVolume(clipName) {
   }
 }
 
+/**
+ * Reveal the volume control container temporarily.
+ */
 function showVolumeContainer() {
   elements.volumeSlider.classList.remove("collapsed");
 
@@ -563,11 +602,17 @@ function togglePlayPause() {
   }
 }
 
+/**
+ * Show player controls (auto-hide later).
+ */
 function showControls() {
   elements.videoControls.style.transition = 'none';
   elements.videoControls.classList.add('visible');
 }
 
+/**
+ * Hide player controls if not hovered.
+ */
 function hideControls() {
   if (state.isGamepadActive) return;
   if (!elements.videoPlayer.paused && !state.isMouseOverControls && !document.activeElement.closest('#video-controls')) {
@@ -576,11 +621,17 @@ function hideControls() {
   }
 }
 
+/**
+ * Hide player controls immediately.
+ */
 function hideControlsInstantly() {
   elements.videoControls.classList.remove("visible");
   clearTimeout(state.controlsTimeout);
 }
 
+/**
+ * Reset the auto-hide timer for controls.
+ */
 function resetControlsTimeout() {
   showControls();
   clearTimeout(state.controlsTimeout);
@@ -590,10 +641,16 @@ function resetControlsTimeout() {
   }, 3000);
 }
 
+/**
+ * Show the video loading overlay.
+ */
 function showLoadingOverlay() {
   elements.loadingOverlay.style.display = "flex";
 }
 
+/**
+ * Hide the video loading overlay.
+ */
 function hideLoadingOverlay() {
   elements.loadingOverlay.style.display = "none";
 }
@@ -627,6 +684,9 @@ function setTrimPoint(point) {
   saveTrimChanges();
 }
 
+/**
+ * Update trim handle positions based on trim times.
+ */
 function updateTrimControls() {
   const duration = elements.videoPlayer.duration;
   const startPercent = (state.trimStartTime / duration) * 100;
@@ -638,6 +698,9 @@ function updateTrimControls() {
   elements.progressBar.style.right = `${100 - endPercent}%`;
 }
 
+/**
+ * Sync playhead position with current time.
+ */
 function updatePlayhead() {
   if (!elements.videoPlayer) return;
 
@@ -680,6 +743,9 @@ function updatePlayhead() {
   requestAnimationFrame(updatePlayhead);
 }
 
+/**
+ * Handle drag updates for trim handles.
+ */
 function handleTrimDrag(e) {
   const dragDistance = Math.abs(e.clientX - state.dragStartX);
 
@@ -716,6 +782,9 @@ function handleTrimDrag(e) {
   }
 }
 
+/**
+ * Finalize trim drag and persist changes.
+ */
 function endTrimDrag(e) {
   if (!state.isDraggingTrim) {
     const clickPercent = (state.dragStartX - elements.progressBarContainer.getBoundingClientRect().left) / elements.progressBarContainer.offsetWidth;
@@ -736,6 +805,9 @@ function endTrimDrag(e) {
   }, 100);
 }
 
+/**
+ * Clear drag state if mouse is released unexpectedly.
+ */
 function checkDragState() {
   if ((state.isDragging || state.isDraggingTrim) && !state.isMouseDown) {
     const rect = elements.progressBarContainer.getBoundingClientRect();
@@ -788,6 +860,9 @@ function toggleFullscreen() {
   resetControlsTimeout();
 }
 
+/**
+ * Handle entering/exiting fullscreen for the player.
+ */
 function handleFullscreenChange() {
   if (!elements.fullscreenPlayer) {
     logger.warn('Fullscreen player element not found');
@@ -821,6 +896,9 @@ function handleFullscreenChange() {
   }
 }
 
+/**
+ * Show controls while moving mouse in fullscreen.
+ */
 function handleFullscreenMouseMove(e) {
   try {
     if (e.clientY >= window.innerHeight - 1) {
@@ -833,12 +911,18 @@ function handleFullscreenMouseMove(e) {
   }
 }
 
+/**
+ * Hide controls after leaving fullscreen window.
+ */
 function handleFullscreenMouseLeave() {
   if (document.fullscreenElement) {
     hideControls();
   }
 }
 
+/**
+ * Check if the video element is currently fullscreen.
+ */
 function isVideoInFullscreen(videoElement) {
   return (
     document.fullscreenElement === videoElement ||
@@ -862,6 +946,9 @@ function moveFrame(direction) {
   }
 }
 
+/**
+ * Step frames while a key is held.
+ */
 function frameStep(timestamp) {
   if (!state.isFrameStepping) {
     state.pendingFrameStep = false;
@@ -903,10 +990,16 @@ function updateVideoDisplay() {
   }
 }
 
+/**
+ * Calculate skip amount based on duration.
+ */
 function calculateSkipTime(videoDuration) {
   return Math.min(5, videoDuration * 0.05);
 }
 
+/**
+ * Skip playback forward/back by a fixed amount.
+ */
 function skipTime(direction) {
   const skipAmount = calculateSkipTime(elements.videoPlayer.duration);
   const newTime = elements.videoPlayer.currentTime + (direction * skipAmount);
@@ -1062,6 +1155,9 @@ async function loadVolumeData() {
   }
 }
 
+/**
+ * Hide the inline volume drag control.
+ */
 function hideVolumeDragControl() {
   if (state.volumeDragControl) {
     state.volumeDragControl.style.display = 'none';
@@ -1106,10 +1202,16 @@ const debouncedSaveVolumeData = debounce(async () => {
   }
 }, 300);
 
+/**
+ * Persist volume range data for the current clip.
+ */
 function saveVolumeData() {
   debouncedSaveVolumeData();
 }
 
+/**
+ * Show volume range controls on the timeline.
+ */
 function showVolumeControls() {
   state.isVolumeControlsVisible = true;
   state.volumeStartElement.style.display = 'block';
@@ -1119,6 +1221,9 @@ function showVolumeControls() {
   showVolumeDragControl();
 }
 
+/**
+ * Toggle volume range controls on/off.
+ */
 function toggleVolumeControls() {
   if (!elements.videoPlayer || !elements.videoPlayer.duration) return;
 
@@ -1134,6 +1239,9 @@ function toggleVolumeControls() {
   }
 }
 
+/**
+ * Position volume range handles based on current times.
+ */
 function updateVolumeControlsPosition() {
   if (!elements.videoPlayer || !elements.videoPlayer.duration || !state.isVolumeControlsVisible) return;
 
@@ -1152,6 +1260,9 @@ function updateVolumeControlsPosition() {
   }
 }
 
+/**
+ * Show the drag UI when adjusting volume range.
+ */
 function showVolumeDragControl(e) {
   if (!state.isVolumeControlsVisible || !elements.progressBarContainer || !elements.videoPlayer) return;
 
@@ -1175,6 +1286,9 @@ function showVolumeDragControl(e) {
   }
 }
 
+/**
+ * Handle drag updates for the volume range controls.
+ */
 function handleVolumeDrag(e) {
   if (!state.isVolumeDragging || !elements.progressBarContainer || !elements.videoPlayer) return;
 
@@ -1226,6 +1340,9 @@ function updatePreview(e, options = {}) {
   }
 }
 
+/**
+ * Handle key release events for playback controls.
+ */
 function handleKeyRelease(e) {
   if (e.key === "," || e.key === ".") {
     state.isFrameStepping = false;
@@ -1254,6 +1371,9 @@ function handleKeyRelease(e) {
   }
 }
 
+/**
+ * Handle key press events for playback and editing.
+ */
 function handleKeyPress(e) {
   const isClipTitleFocused = document.activeElement === elements.clipTitle;
   const isSearching = document.activeElement === document.getElementById("search-input");
@@ -1379,6 +1499,9 @@ function handleKeyPress(e) {
   }
 }
 
+/**
+ * Close the fullscreen player and reset UI state.
+ */
 function closePlayer() {
   if (window.justFinishedDragging) {
     return;
@@ -2225,6 +2348,9 @@ function init(domElements, callbackOptions = {}) {
   logger.info('[VideoPlayer] Module initialized');
 }
 
+/**
+ * Register video player DOM event listeners.
+ */
 function setupEventListeners() {
   // Speed controls
   if (elements.speedSlider) {

@@ -7,11 +7,12 @@
  * - Settings persistence
  */
 
+// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
-// Dependencies that will be injected
+// Dependencies (injected)
 let videoPlayerModule, searchManagerModule, fetchSettings, updateSettingValue, toggleDiscordRPC, 
     applyIconGreyscale, renderClips, updateVersionDisplay, changeClipLocation, updateAllPreviewVolumes,
     populateKeybindingList;
@@ -21,7 +22,7 @@ let videoPlayerModule, searchManagerModule, fetchSettings, updateSettingValue, t
 // ============================================================================
 
 /**
- * Initialize the settings manager with required dependencies
+ * Initialize the settings manager with required dependencies.
  */
 function init(dependencies) {
   videoPlayerModule = dependencies.videoPlayerModule;
@@ -41,6 +42,9 @@ function init(dependencies) {
 // SETTINGS MODAL OPERATIONS
 // ============================================================================
 
+/**
+ * Wire settings modal controls and tab handlers.
+ */
 async function initializeSettingsModal() {
   const settingsModal = document.getElementById('settingsModal');
   const tabs = document.querySelectorAll('.settings-tab');
@@ -238,6 +242,9 @@ async function initializeSettingsModal() {
   }
 }
 
+/**
+ * Open and hydrate the settings modal with current values.
+ */
 async function openSettingsModal() {
   logger.debug('Opening state.settings modal. Current state.settings:', state.settings);
   
@@ -338,6 +345,9 @@ async function openSettingsModal() {
   }
 }
 
+/**
+ * Close the settings modal and persist state.
+ */
 function closeSettingsModal() {
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
@@ -359,6 +369,9 @@ function closeSettingsModal() {
   }
 }
 
+/**
+ * Refresh cached settings from disk.
+ */
 async function updateSettings() {
   state.settings = await ipcRenderer.invoke('get-settings');
 }

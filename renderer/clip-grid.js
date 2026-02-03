@@ -11,6 +11,7 @@
  * - Thumbnail management
  */
 
+// Imports
 const { ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
@@ -20,7 +21,7 @@ const tagManagerModule = require('./tag-manager');
 const videoPlayerModule = require('./video-player');
 const keybinds = require('./keybinding-manager');
 
-// Dependencies that will be injected
+// Dependencies (injected)
 let showCustomConfirm, showCustomAlert, updateClipCounter, getTimeGroup, getGroupOrder,
     loadCollapsedState, saveCollapsedState, removeDuplicates, getRelativeTimeString,
     showDeletionTooltip, hideDeletionTooltip, updateNewClipsIndicators, newClipsInfo,
@@ -34,7 +35,7 @@ let showCustomConfirm, showCustomAlert, updateClipCounter, getTimeGroup, getGrou
 // ============================================================================
 
 /**
- * Initialize the clip grid manager with required dependencies
+ * Initialize the clip grid manager with required dependencies.
  */
 function init(dependencies) {
   showCustomConfirm = dependencies.showCustomConfirm;
@@ -73,6 +74,9 @@ function init(dependencies) {
 // CLIP GRID MANAGEMENT
 // ============================================================================
 
+/**
+ * Load clips from disk and render the initial grid state.
+ */
 async function loadClips() {
   try {
     logger.info("Loading clips...");
@@ -156,6 +160,10 @@ async function loadClips() {
   }
 }
 
+/**
+ * Render the clip list into the grid.
+ * Handles grouping, selection state, and indicator updates.
+ */
 async function renderClips(clips) {
   if (state.isRendering) {
     logger.info("Render already in progress, skipping");
@@ -458,6 +466,10 @@ async function renderClips(clips) {
   state.isRendering = false;
 }
 
+/**
+ * Build a DOM element for a single clip.
+ * Wires dataset fields, click handlers, and preview behavior.
+ */
 function createClipElement(clip) {
   return new Promise(async (resolve) => {
     const clipElement = document.createElement("div");
@@ -590,10 +602,16 @@ function createClipElement(clip) {
     // Setup tooltip events for tags if needed
     tagManagerModule.setupTagTooltips(clipElement);
 
+    /**
+     * Record original title before inline editing.
+     */
     function handleClipTitleFocus(titleElement, clip) {
       titleElement.dataset.originalValue = titleElement.textContent;
     }
     
+    /**
+     * Persist title changes on blur if modified.
+     */
     function handleClipTitleBlur(titleElement, clip) {
       const newTitle = titleElement.textContent.trim();
       if (newTitle !== titleElement.dataset.originalValue) {
@@ -601,6 +619,9 @@ function createClipElement(clip) {
       }
     }
     
+    /**
+     * Commit title on Enter, revert on Escape.
+     */
     function handleClipTitleKeydown(e, titleElement, clip) {
       e.stopPropagation(); // Stop the event from bubbling up
       if (e.key === 'Enter') {
@@ -613,7 +634,10 @@ function createClipElement(clip) {
       }
     }
 
-  function handleMouseLeave() {
+    /**
+     * Hide preview/ambient glow on mouse leave.
+     */
+    function handleMouseLeave() {
     // Hide ambient glow
     const clipGlowManager = videoPlayerModule.getClipGlowManager();
     if (clipGlowManager) {
@@ -673,6 +697,9 @@ function createClipElement(clip) {
   });
 }
 
+/**
+ * Open a clip or update selection based on input modifiers.
+ */
 function handleClipClick(e, clip) {
   // Check if the clicked element is the title or its parent (the clip-info div)
   if (e.target.classList.contains('clip-name') || e.target.classList.contains('clip-info')) {
@@ -700,6 +727,9 @@ function handleClipClick(e, clip) {
   videoPlayerModule.openClip(clip.originalName, clip.customName);
 }
 
+/**
+ * Update group counts or remove empty groups after deletion.
+ */
 function updateGroupAfterDeletion(clipElement) {
   const groupElement = clipElement.closest('.clip-group');
   if (!groupElement) return;
@@ -719,6 +749,9 @@ function updateGroupAfterDeletion(clipElement) {
   }
 }
 
+/**
+ * Confirm and delete a clip (current or specified).
+ */
 async function confirmAndDeleteClip(clipToDelete = null) {
   if (!clipToDelete && !state.currentClip) return;
   
@@ -836,6 +869,9 @@ async function confirmAndDeleteClip(clipToDelete = null) {
   }
 }
 
+/**
+ * Update the clip title shown in the grid and backing state.
+ */
 function updateClipNameInLibrary(originalName, newCustomName) {
   if (!originalName) {
     logger.warn(
@@ -857,6 +893,9 @@ function updateClipNameInLibrary(originalName, newCustomName) {
   }
 }
 
+/**
+ * Validate list consistency between allClips/currentClipList.
+ */
 function validateClipLists() {
   logger.info("Validating clip lists");
   logger.info("state.allClips length:", state.allClips.length);
@@ -874,6 +913,9 @@ function validateClipLists() {
   }
 }
 
+/**
+ * Show the right-click context menu for a clip.
+ */
 function showContextMenu(e, clip) {
   e.preventDefault();
   e.stopPropagation();
@@ -926,6 +968,9 @@ function showContextMenu(e, clip) {
   }
 }
 
+/**
+ * Close the clip context menu if open.
+ */
 function closeContextMenu(e) {
   const contextMenu = document.getElementById("context-menu");
   const tagsDropdown = document.getElementById("tags-dropdown");
@@ -980,6 +1025,9 @@ async function getThumbnailPath(clipName) {
   return path;
 }
 
+/**
+ * Kick off thumbnail validation/generation for the current list.
+ */
 async function startThumbnailValidation() {
   logger.info("Starting thumbnail validation for clips:", state.allClips.length);
   
@@ -1056,6 +1104,9 @@ async function startThumbnailValidation() {
   }
 }
 
+/**
+ * Add a new clip to state and update the grid.
+ */
 async function addNewClipToLibrary(fileName) {
   try {
     // First check if the file exists
@@ -1232,6 +1283,9 @@ function enableGridNavigation() {
   setupMouseKeyboardDetection(); // Set up detection to hide on mouse/keyboard use
 }
 
+/**
+ * Disable grid navigation and clear the focus highlight.
+ */
 function disableGridNavigation() {
   state.gridNavigationEnabled = false;
   // Remove focus from all clips
@@ -1241,6 +1295,9 @@ function disableGridNavigation() {
   removeMouseKeyboardDetection(); // Clean up listeners when disabling
 }
 
+/**
+ * Open the clip currently focused by grid navigation.
+ */
 function openCurrentGridSelection() {
   if (!state.gridNavigationEnabled) return;
   
@@ -1280,6 +1337,9 @@ function setupMouseKeyboardDetection() {
   state.mouseKeyboardListenersSetup = true;
 }
 
+/**
+ * Remove mouse/keyboard detection listeners.
+ */
 function removeMouseKeyboardDetection() {
   if (!state.mouseKeyboardListenersSetup) return;
   
@@ -1290,12 +1350,18 @@ function removeMouseKeyboardDetection() {
   state.mouseKeyboardListenersSetup = false;
 }
 
+/**
+ * Hide controller focus ring after pointer input.
+ */
 function hideControllerSelectionOnInput() {
   if (state.gridNavigationEnabled) {
     disableGridNavigation();
   }
 }
 
+/**
+ * Hide controller focus ring after keyboard input.
+ */
 function hideControllerSelectionOnKeyboard(e) {
   // Don't hide on controller-related keys
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -1307,6 +1373,9 @@ function hideControllerSelectionOnKeyboard(e) {
   }
 }
 
+/**
+ * Update visual focus state for grid navigation.
+ */
 function updateGridSelection() {
   // Remove focus class from all clips
   document.querySelectorAll('.clip-item').forEach(clip => {
@@ -1326,11 +1395,17 @@ function updateGridSelection() {
   }
 }
 
+/**
+ * Return visible clip elements in the grid.
+ */
 function getVisibleClips() {
   // Get all clip elements that are currently visible in the grid
   return Array.from(document.querySelectorAll('.clip-item:not(.hidden)'));
 }
 
+/**
+ * Find the closest clip in a given direction.
+ */
 function findClipInDirection(clips, currentIndex, direction) {
   if (clips.length === 0) return currentIndex;
   

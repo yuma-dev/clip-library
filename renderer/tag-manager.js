@@ -32,6 +32,9 @@ async function loadGlobalTags() {
   }
 }
 
+/**
+ * Persist the current global tags list.
+ */
 async function saveGlobalTags() {
   try {
     const result = await ipcRenderer.invoke("save-global-tags", globalTags);
@@ -43,6 +46,9 @@ async function saveGlobalTags() {
   }
 }
 
+/**
+ * Add a global tag and enable it in filters.
+ */
 async function addGlobalTag(tag) {
   if (!globalTags.includes(tag)) {
     globalTags.push(tag);
@@ -57,6 +63,9 @@ async function addGlobalTag(tag) {
   }
 }
 
+/**
+ * Delete a tag globally and from all clips.
+ */
 async function deleteTag(tag) {
   logger.info(`deleteTag called for: "${tag}"`);
   const index = globalTags.indexOf(tag);
@@ -99,6 +108,9 @@ async function deleteTag(tag) {
   }
 }
 
+/**
+ * Rename a tag globally and on all clips.
+ */
 async function updateTag(originalTag, newTag) {
   if (originalTag === newTag) return; // No change, skip update
 
@@ -150,6 +162,9 @@ async function updateTag(originalTag, newTag) {
   }
 }
 
+/**
+ * Toggle a tag on a single clip and persist.
+ */
 async function toggleClipTag(clip, tag, callbacks = {}) {
   if (!clip.tags) clip.tags = [];
   const index = clip.tags.indexOf(tag);
@@ -227,6 +242,9 @@ async function toggleClipTag(clip, tag, callbacks = {}) {
   updateFilterDropdown();
 }
 
+/**
+ * Save tags for a specific clip.
+ */
 async function saveClipTags(clip) {
   try {
     await ipcRenderer.invoke("save-clip-tags", clip.originalName, clip.tags);
@@ -237,6 +255,9 @@ async function saveClipTags(clip) {
   }
 }
 
+/**
+ * Load tag selection preferences from disk.
+ */
 async function loadTagPreferences() {
   try {
     const savedTags = await ipcRenderer.invoke('get-tag-preferences');
@@ -263,6 +284,9 @@ async function loadTagPreferences() {
   updateFilterDropdown();
 }
 
+/**
+ * Persist current tag selection preferences.
+ */
 async function saveTagPreferences() {
   try {
     await ipcRenderer.invoke('save-tag-preferences', Array.from(state.selectedTags));
@@ -326,11 +350,17 @@ function updateTagList() {
   });
 }
 
+/**
+ * Truncate a tag label for display.
+ */
 function truncateTag(tag, maxLength = 15) {
   if (tag.length <= maxLength) return tag;
   return tag.slice(0, maxLength - 1) + '..';
 }
 
+/**
+ * Update tag list on a clip object and UI.
+ */
 function updateClipTags(clip) {
   const clipElement = document.querySelector(`.clip-item[data-original-name="${clip.originalName}"]`);
   if (clipElement) {
@@ -373,6 +403,9 @@ function updateClipTags(clip) {
   }
 }
 
+/**
+ * Show a tooltip for truncated tags.
+ */
 function showTooltip(event, tooltip) {
   const rect = event.target.getBoundingClientRect();
   tooltip.style.display = 'flex';
@@ -394,6 +427,9 @@ function showTooltip(event, tooltip) {
   document.body.appendChild(tooltip);
 }
 
+/**
+ * Hide a tag tooltip if present.
+ */
 function hideTooltip(tooltip) {
   tooltip.style.display = 'none';
   // Move the tooltip back to its original parent
@@ -405,6 +441,9 @@ function hideTooltip(tooltip) {
   }
 }
 
+/**
+ * Wire tag tooltip handlers for a clip element.
+ */
 function setupTagTooltips(clipElement) {
   const moreTags = clipElement.querySelector('.more-tags');
   if (moreTags) {
@@ -416,6 +455,9 @@ function setupTagTooltips(clipElement) {
   }
 }
 
+/**
+ * Initialize global tooltip handlers.
+ */
 function setupTooltips() {
   document.querySelectorAll('.more-tags').forEach(moreTags => {
     const tooltip = moreTags.querySelector('.tags-tooltip');
@@ -469,6 +511,9 @@ function updateFilterDropdown() {
   });
 }
 
+/**
+ * Build a tag filter UI item.
+ */
 function createTagItem(tag) {
   const tagItem = document.createElement('div');
   tagItem.className = `tagv2-item ${state.savedTagSelections.has(tag) ? 'selected' : ''}`;
@@ -506,10 +551,16 @@ function createTagItem(tag) {
 // Callbacks for filter updates (to be set by renderer.js)
 let onFilterUpdate = () => {};
 
+/**
+ * Register a callback to refresh filtering on tag changes.
+ */
 function setFilterUpdateCallback(callback) {
   onFilterUpdate = callback;
 }
 
+/**
+ * Toggle temporary tag selection (Ctrl mode).
+ */
 function handleCtrlClickTag(tag, tagItem) {
   if (!state.isInTemporaryMode || !state.temporaryTagSelections.has(tag)) {
     // Enter temporary mode or add to temporary selections
@@ -523,6 +574,9 @@ function handleCtrlClickTag(tag, tagItem) {
   onFilterUpdate();
 }
 
+/**
+ * Toggle normal tag selection.
+ */
 function handleRegularClickTag(tag, tagItem) {
   if (state.isInTemporaryMode) {
     // If in temporary mode, regular click exits it
@@ -542,6 +596,9 @@ function handleRegularClickTag(tag, tagItem) {
   onFilterUpdate();
 }
 
+/**
+ * Enter temporary (focus) tag selection mode.
+ */
 function enterTemporaryMode(tag) {
   state.isInTemporaryMode = true;
   state.temporaryTagSelections.clear();
@@ -549,12 +606,18 @@ function enterTemporaryMode(tag) {
   state.selectedTags = state.temporaryTagSelections; // Update the global state.selectedTags
 }
 
+/**
+ * Exit temporary tag selection mode.
+ */
 function exitTemporaryMode() {
   state.isInTemporaryMode = false;
   state.temporaryTagSelections.clear();
   state.selectedTags = new Set(state.savedTagSelections); // Restore saved selections
 }
 
+/**
+ * Refresh tag filter UI selection state.
+ */
 function updateTagSelectionUI() {
   const tagItems = document.querySelectorAll('.tagv2-item');
   tagItems.forEach(item => {
@@ -576,6 +639,9 @@ function updateTagSelectionUI() {
   updateTagCount();
 }
 
+/**
+ * Update tag selection sets from UI state.
+ */
 function updateTagSelectionStates() {
   const tagItems = document.querySelectorAll('.tagv2-item');
   tagItems.forEach(item => {
@@ -584,12 +650,18 @@ function updateTagSelectionStates() {
   });
 }
 
+/**
+ * Update the selected tag count display.
+ */
 function updateTagCount() {
   const tagCount = document.getElementById('tagv2-count');
   const allTags = new Set(['Untagged', ...globalTags]);
   tagCount.textContent = `(${state.selectedTags.size}/${allTags.size})`;
 }
 
+/**
+ * Build the tag filter UI container.
+ */
 function createTagFilterUI() {
   // First remove old filter dropdown if it exists
   const oldDropdown = document.getElementById('filter-dropdown');
@@ -629,6 +701,9 @@ function createTagFilterUI() {
   setupTagFilterEventListeners();
 }
 
+/**
+ * Wire tag filter UI event listeners.
+ */
 function setupTagFilterEventListeners() {
   const tagButton = document.getElementById('tagv2-button');
   const tagDropdown = document.getElementById('tagv2-dropdown');

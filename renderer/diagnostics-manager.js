@@ -4,10 +4,12 @@
  * Handles diagnostics bundle generation and progress reporting.
  */
 
+// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
+// Status labels
 const DIAGNOSTICS_STAGE_LABELS = {
   initializing: 'Preparing workspace',
   'system-info': 'Collecting system info',
@@ -21,6 +23,7 @@ const DIAGNOSTICS_STAGE_LABELS = {
 let diagnosticsButtonDefaultLabel = 'Generate Zip';
 let initialized = false;
 
+// Formatting helpers
 function formatBytes(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '';
@@ -39,12 +42,16 @@ function formatBytes(value) {
   return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
+// UI helpers
 function setDiagnosticsStatusMessage(message, statusState = 'info') {
   if (!state.diagnosticsStatusEl) return;
   state.diagnosticsStatusEl.textContent = message;
   state.diagnosticsStatusEl.dataset.state = statusState;
 }
 
+/**
+ * Update diagnostics status UI based on progress payload.
+ */
 function updateDiagnosticsStatus(progress) {
   if (!state.diagnosticsStatusEl) return;
   const label = DIAGNOSTICS_STAGE_LABELS[progress.stage] || progress.stage;
@@ -65,6 +72,7 @@ function updateDiagnosticsStatus(progress) {
   state.diagnosticsStatusEl.dataset.state = 'progress';
 }
 
+// Action handlers
 async function handleDiagnosticsGeneration() {
   if (state.diagnosticsInProgress) return;
 
@@ -103,6 +111,7 @@ async function handleDiagnosticsGeneration() {
   }
 }
 
+// Module API
 function init({ generateDiagnosticsBtn, diagnosticsStatusEl } = {}) {
   if (initialized) return;
 

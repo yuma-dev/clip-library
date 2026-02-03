@@ -3,9 +3,10 @@
  * Handles search and filtering functionality for the clip library
  */
 
+// Imports
 const logger = require('../utils/logger');
 
-// Dependencies that will be injected
+// Dependencies (injected)
 let state, renderClips, updateClipCounter, updateNavigationButtons, filterClips, tagManagerModule, videoPlayerModule;
 
 /**
@@ -21,8 +22,9 @@ function init(dependencies) {
   videoPlayerModule = dependencies.videoPlayerModule;
 }
 
+// Search input wiring
 /**
- * Set up search input event listeners
+ * Set up search input event listeners.
  */
 function setupSearch() {
   const searchInput = document.getElementById("search-input");
@@ -30,7 +32,7 @@ function setupSearch() {
 }
 
 /**
- * Perform search based on current search text
+ * Perform search based on current search text.
  */
 function performSearch() {
   const searchDisplay = document.getElementById('search-display');
@@ -93,7 +95,7 @@ function performSearch() {
 }
 
 /**
- * Parse search terms into tags and text
+ * Parse search terms into tag and text buckets.
  */
 function parseSearchTerms(searchText) {
   const terms = searchText.split(/\s+/).filter(term => term.length > 0);
@@ -106,7 +108,7 @@ function parseSearchTerms(searchText) {
 }
 
 /**
- * Style search text with tag highlighting
+ * Style search text with tag highlighting.
  */
 function styleSearchText(text) {
   // Split by @mentions while preserving spaces
@@ -120,7 +122,7 @@ function styleSearchText(text) {
 }
 
 /**
- * Create the search display element
+ * Create the search display element.
  */
 function createSearchDisplay() {
   const searchContainer = document.getElementById('search-container');
@@ -158,7 +160,7 @@ function createSearchDisplay() {
 }
 
 /**
- * Update the search display with styled content
+ * Update the search display with styled content.
  */
 function updateSearchDisplay() {
   const searchInput = document.getElementById('search-input');
@@ -219,7 +221,7 @@ function updateSearchDisplay() {
 }
 
 /**
- * Set up enhanced search functionality
+ * Set up enhanced search functionality.
  */
 function setupEnhancedSearch() {
   const searchDisplay = createSearchDisplay();
@@ -250,7 +252,7 @@ function setupEnhancedSearch() {
 }
 
 /**
- * Initialize enhanced search when DOM is ready
+ * Initialize enhanced search when DOM is ready.
  */
 function initializeEnhancedSearch() {
   if (document.getElementById('search-container')) {
@@ -266,7 +268,7 @@ function initializeEnhancedSearch() {
 let isTagManagementOpen = false;
 
 /**
- * Open the tag management modal
+ * Open the tag management modal.
  */
 function openTagManagement() {
   if (isTagManagementOpen) {
@@ -352,7 +354,7 @@ function openTagManagement() {
 }
 
 /**
- * Render the tag list in the management modal
+ * Render the tag list in the management modal.
  */
 function renderTagList(tags) {
   const listElement = document.getElementById('tagManagementList');
@@ -384,7 +386,7 @@ function renderTagList(tags) {
 }
 
 /**
- * Handle tag renaming in the management modal
+ * Handle tag renaming in the management modal.
  */
 function handleTagRename(e) {
   const input = e.target;
@@ -397,7 +399,7 @@ function handleTagRename(e) {
 }
 
 /**
- * Handle tag deletion in the management modal
+ * Handle tag deletion in the management modal.
  */
 async function handleTagDelete(e) {
   const item = e.target.closest('.tagManagement-item');
@@ -424,7 +426,7 @@ async function handleTagDelete(e) {
 }
 
 /**
- * Add a new tag from the tag management modal
+ * Add a new tag from the tag management modal.
  */
 async function addNewTag() {
   const searchInput = document.getElementById('tagManagementSearch');
@@ -445,7 +447,7 @@ async function addNewTag() {
 }
 
 /**
- * Handle escape key for closing tag management
+ * Handle escape key for closing tag management.
  */
 function handleEscapeKey(e) {
   if (e.key === 'Escape' && isTagManagementOpen) {
@@ -454,7 +456,7 @@ function handleEscapeKey(e) {
 }
 
 /**
- * Close the tag management modal
+ * Close the tag management modal.
  */
 function closeTagManagement() {
   const modal = document.getElementById('tagManagementModal');

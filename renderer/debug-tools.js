@@ -1,4 +1,5 @@
 // Debug-only UI helpers (loading screen toggle, Easter egg)
+// Module API
 function init({ state }) {
   if (!state) return;
 

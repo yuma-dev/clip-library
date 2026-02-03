@@ -7,11 +7,12 @@
  * - Export progress tracking
  */
 
+// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
-// Dependencies that will be injected
+// Dependencies (injected)
 let videoPlayerModule, showExportProgress, showCustomAlert, getFfmpegVersion;
 
 // ============================================================================
@@ -57,6 +58,9 @@ async function exportVideo(savePath = null) {
   }
 }
 
+/**
+ * Export audio to file or clipboard.
+ */
 async function exportAudio(savePath = null) {
   try {
     const volume = await videoPlayerModule.loadVolume(state.currentClip.originalName);
@@ -82,6 +86,9 @@ async function exportAudio(savePath = null) {
   }
 }
 
+/**
+ * Export the current trim to clipboard.
+ */
 async function exportTrimmedVideo() {
   if (!state.currentClip) return;
 
@@ -117,6 +124,9 @@ async function exportTrimmedVideo() {
   }
 }
 
+/**
+ * Show a notice when software encoding is used.
+ */
 function showFallbackNotice() {
   const notice = document.createElement('div');
   notice.className = 'fallback-notice';

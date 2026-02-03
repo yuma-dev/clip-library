@@ -7,6 +7,7 @@
  * - Navigation throttling for smooth experience
  */
 
+// Imports
 const logger = require('../utils/logger');
 const state = require('./state');
 
