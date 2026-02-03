@@ -5,8 +5,9 @@
  */
 
 // Imports
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, shell } = require('electron');
 const logger = require('../utils/logger');
+const consoleBuffer = require('../utils/console-log-buffer');
 const state = require('./state');
 
 // Status labels
@@ -21,6 +22,8 @@ const DIAGNOSTICS_STAGE_LABELS = {
 };
 
 let diagnosticsButtonDefaultLabel = 'Generate Zip';
+let uploadLogsButtonDefaultLabel = 'Upload Logs';
+let uploadLogsCopyTimeout = null;
 let initialized = false;
 
 // Formatting helpers
@@ -47,6 +50,54 @@ function setDiagnosticsStatusMessage(message, statusState = 'info') {
   if (!state.diagnosticsStatusEl) return;
   state.diagnosticsStatusEl.textContent = message;
   state.diagnosticsStatusEl.dataset.state = statusState;
+}
+
+function setUploadStatusMessage(message, statusState = 'info') {
+  if (!state.uploadLogsStatusEl) return;
+  state.uploadLogsStatusEl.textContent = message;
+  state.uploadLogsStatusEl.dataset.state = statusState;
+}
+
+function setUploadStatusLink(url) {
+  if (!state.uploadLogsStatusEl) return;
+  state.uploadLogsStatusEl.textContent = '';
+  const link = document.createElement('a');
+  link.href = url;
+  link.textContent = url;
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    shell.openExternal(url);
+  });
+  state.uploadLogsStatusEl.appendChild(document.createTextNode('Uploaded. Share link: '));
+  state.uploadLogsStatusEl.appendChild(link);
+  state.uploadLogsStatusEl.dataset.state = 'success';
+}
+
+async function copyToClipboard(text) {
+  if (!text) return false;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'absolute';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
@@ -111,16 +162,73 @@ async function handleDiagnosticsGeneration() {
   }
 }
 
+async function handleLogsUpload() {
+  if (state.uploadLogsInProgress) return;
+
+  state.uploadLogsInProgress = true;
+  setUploadStatusMessage('Uploading logs...', 'progress');
+
+  if (state.uploadLogsBtn) {
+    state.uploadLogsBtn.disabled = true;
+    state.uploadLogsBtn.textContent = 'Uploading...';
+  }
+
+  try {
+    const rendererConsoleLogs = consoleBuffer.getBufferText();
+    const response = await ipcRenderer.invoke('upload-session-logs', {
+      rendererConsoleLogs
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'Unknown error');
+    }
+
+    if (response.url) {
+      setUploadStatusLink(response.url);
+      const copied = await copyToClipboard(response.url);
+      if (copied && state.uploadLogsBtn) {
+        state.uploadLogsBtn.textContent = 'Link Copied!';
+        if (uploadLogsCopyTimeout) clearTimeout(uploadLogsCopyTimeout);
+        uploadLogsCopyTimeout = setTimeout(() => {
+          if (state.uploadLogsBtn) {
+            state.uploadLogsBtn.textContent = uploadLogsButtonDefaultLabel;
+          }
+        }, 30000);
+      }
+    } else if (response.raw) {
+      setUploadStatusMessage(`Uploaded. Response: ${response.raw}`, 'success');
+    } else {
+      setUploadStatusMessage('Uploaded. Share link not provided.', 'success');
+    }
+  } catch (error) {
+    logger.error('Failed to upload session logs:', error);
+    setUploadStatusMessage(`Upload failed: ${error.message}`, 'error');
+  } finally {
+    state.uploadLogsInProgress = false;
+    if (state.uploadLogsBtn) {
+      state.uploadLogsBtn.disabled = false;
+      state.uploadLogsBtn.textContent = uploadLogsButtonDefaultLabel;
+    }
+  }
+}
+
 // Module API
-function init({ generateDiagnosticsBtn, diagnosticsStatusEl } = {}) {
+function init({ generateDiagnosticsBtn, diagnosticsStatusEl, uploadLogsBtn, uploadLogsStatusEl } = {}) {
   if (initialized) return;
 
   if (generateDiagnosticsBtn) state.generateDiagnosticsBtn = generateDiagnosticsBtn;
   if (diagnosticsStatusEl) state.diagnosticsStatusEl = diagnosticsStatusEl;
+  if (uploadLogsBtn) state.uploadLogsBtn = uploadLogsBtn;
+  if (uploadLogsStatusEl) state.uploadLogsStatusEl = uploadLogsStatusEl;
 
   if (state.generateDiagnosticsBtn) {
     diagnosticsButtonDefaultLabel = state.generateDiagnosticsBtn.textContent || diagnosticsButtonDefaultLabel;
     state.generateDiagnosticsBtn.addEventListener('click', handleDiagnosticsGeneration);
+  }
+
+  if (state.uploadLogsBtn) {
+    uploadLogsButtonDefaultLabel = state.uploadLogsBtn.textContent || uploadLogsButtonDefaultLabel;
+    state.uploadLogsBtn.addEventListener('click', handleLogsUpload);
   }
 
   ipcRenderer.on('diagnostics-progress', (event, progress) => {

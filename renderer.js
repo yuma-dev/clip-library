@@ -3,6 +3,8 @@ const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
 const logger = require('./utils/logger');
+const consoleBuffer = require('./utils/console-log-buffer');
+consoleBuffer.patchConsole();
 const fs = require('fs').promises;
 
 // Keybinding manager to centralise shortcuts
@@ -170,13 +172,15 @@ async function loadSettingsModalTemplate() {
   currentClipLocationSpan = settingsModal.querySelector('#currentClipLocation');
   state.generateDiagnosticsBtn = settingsModal.querySelector('#generateDiagnosticsBtn');
   state.diagnosticsStatusEl = settingsModal.querySelector('#diagnosticsStatus');
+  state.uploadLogsBtn = settingsModal.querySelector('#uploadLogsBtn');
+  state.uploadLogsStatusEl = settingsModal.querySelector('#uploadLogsStatus');
 
-  if (state.generateDiagnosticsBtn) {
-    diagnosticsManagerModule.init({
-      generateDiagnosticsBtn: state.generateDiagnosticsBtn,
-      diagnosticsStatusEl: state.diagnosticsStatusEl
-    });
-  }
+  diagnosticsManagerModule.init({
+    generateDiagnosticsBtn: state.generateDiagnosticsBtn,
+    diagnosticsStatusEl: state.diagnosticsStatusEl,
+    uploadLogsBtn: state.uploadLogsBtn,
+    uploadLogsStatusEl: state.uploadLogsStatusEl
+  });
 }
 
 

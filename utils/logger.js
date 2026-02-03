@@ -129,7 +129,9 @@ class Logger {
 
     formatLogMessage(type, message, data = null, error = null) {
         const timestamp = new Date().toISOString();
-        let formatted = `${timestamp} ${type.padEnd(7)} [${process.type}] `;
+        const caller = this.getCallerLocation();
+        const location = caller ? ` (${caller})` : '';
+        let formatted = `${timestamp} ${type.padEnd(7)} [${process.type}]${location} `;
 
         // Handle message and data
         if (typeof data !== 'undefined' && data !== null) {
@@ -241,6 +243,43 @@ class Logger {
         } catch (error) {
             console.error('Failed to write to log file:', error);
         }
+    }
+
+    getCallerLocation() {
+        const originalPrepare = Error.prepareStackTrace;
+        try {
+            Error.prepareStackTrace = (_, stack) => stack;
+            const err = new Error();
+            Error.captureStackTrace(err, this.getCallerLocation);
+            const stack = err.stack;
+            if (!Array.isArray(stack)) return '';
+
+            for (const callsite of stack) {
+                const fileName = callsite.getFileName();
+                if (!fileName) continue;
+                if (fileName.includes('utils/logger.js')) continue;
+                if (fileName.includes('node:internal') || fileName.includes('internal/')) continue;
+                if (fileName.includes('electron/js2c')) continue;
+                if (fileName.includes('node_modules')) continue;
+
+                const line = callsite.getLineNumber();
+                const column = callsite.getColumnNumber();
+                const normalized = fileName.replace(/\\/g, '/');
+                const cwd = (typeof process !== 'undefined' && process.cwd)
+                    ? process.cwd().replace(/\\/g, '/')
+                    : '';
+                const base = cwd && normalized.startsWith(cwd)
+                    ? normalized.slice(cwd.length + 1)
+                    : normalized;
+                return `${base}:${line}:${column}`;
+            }
+        } catch (_) {
+            return '';
+        } finally {
+            Error.prepareStackTrace = originalPrepare;
+        }
+
+        return '';
     }
 
     getLogPath() {
