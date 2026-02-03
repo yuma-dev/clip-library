@@ -1,8 +1,8 @@
 # Main.js Modularization Plan
 
-## Status: PHASES 1-3 COMPLETE + RENDERER MODULARIZATION IN PROGRESS
+## Status: PHASES 1-3 COMPLETE + RENDERER MODULARIZATION MOSTLY COMPLETE
 **Last Updated:** 2026-02-02
-**Current Phase:** Renderer modularization in progress (video-player.js and grid-navigation.js completed, working on clip-grid.js and remaining functions).
+**Current Phase:** Renderer modularization largely complete; remaining functions are glue/utilities in renderer.js.
 
 ---
 
@@ -25,15 +25,18 @@ clip-library/
 │   ├── discord.js          # ✅ Discord RPC integration
 │   └── clips.js            # ✅ Clip list management, periodic saves
 ├── renderer/               # ✅ Extracted renderer helpers
-│   ├── keybinding-manager.js # ✅ Keyboard shortcut handling
-│   ├── gamepad-manager.js    # ✅ Controller/gamepad input support
-│   ├── state.js              # ✅ Centralized state management
-│   ├── video-player.js       # ✅ Video player, controls, ambient glow
-│   ├── tag-manager.js        # ✅ Tag management operations
-│   ├── search-manager.js     # ✅ Search and filtering operations
-│   ├── export-manager.js     # ✅ Export operations
+│   ├── keybinding-manager.js  # ✅ Keyboard shortcut handling
+│   ├── gamepad-manager.js     # ✅ Controller/gamepad input support
+│   ├── state.js               # ✅ Centralized state management
+│   ├── video-player.js        # ✅ Video player, controls, ambient glow
+│   ├── tag-manager.js         # ✅ Tag management operations
+│   ├── search-manager.js      # ✅ Search and filtering operations
+│   ├── export-manager.js      # ✅ Export operations
 │   ├── settings-manager-ui.js # ✅ Settings UI and controls
-│   └── clip-grid.js          # 🔮 Grid display, virtualization
+│   ├── clip-grid.js           # ✅ Grid display, clips, thumbnails
+│   ├── discord-manager.js     # ✅ Discord RPC + idle tracking
+│   ├── diagnostics-manager.js # ✅ Diagnostics generation + progress
+│   └── update-manager.js      # ✅ Update checks + notifications
 ├── shared/                 # 🔮 Code used by both processes
 │   └── constants.js        # Shared constants, file extensions, etc.
 └── utils/                  # Existing utilities
@@ -572,12 +575,40 @@ The initial modularization by another AI was broken - it gutted the `loadClips()
 | Renderer: Grid Navigation | ✅ COMPLETE | ~210 lines | Grid navigation, focus management |
 | Renderer: Clip Grid | ✅ COMPLETE | ~1425 lines | Grid rendering, clips, thumbnails |
 
+### Added: discord-manager.js ✅
+**Status:** Module created and integrated
+
+**What's Extracted:**
+- Discord presence updates, idle tracking, RPC toggle
+
+### Added: diagnostics-manager.js ✅
+**Status:** Module created and integrated
+
+**What's Extracted:**
+- Diagnostics generation flow, progress UI updates, byte formatting
+
+### Added: update-manager.js ✅
+**Status:** Module created and integrated
+
+**What's Extracted:**
+- Manual update check, version display, update notification UI + test helper
+
+### Completed: gamepad-manager.js ✅
+**Status:** Module extended and integrated
+
+**What's Extracted:**
+- Initialization, connection UI, raw navigation scrolling
+
+### Completed: video-player.js ✅ (additional controls)
+**Status:** Module extended and integrated
+
+**What's Extracted:**
+- close/keyboard handlers, preview hover update, volume-range controls
+
 **Current State:**
 - `main.js`: ~1070 lines (down from ~2230 original)
-- `renderer.js`: ~3714 lines (down from ~4878 lines before clip-grid extraction)
-- **Renderer reduction:** 1164 lines moved to clip-grid.js (24% reduction!)
-- **Total reduction:** ~4230 lines moved out of main.js and renderer.js (combined reduction)
-- **Functions remaining in renderer.js:** 92 functions
+- `renderer.js`: ~2788 lines after continued extraction
+- **Functions remaining in renderer.js:** 66 functions
 - **Validation status:** ✅ 0 violations detected
 
 **Modules Created:**
@@ -640,4 +671,3 @@ This approach ensures our tooling improves alongside our code quality.
 - Reduced renderer.js by 1164 lines (24% reduction from 4878 → 3714 lines)
 - Verified 0 validation violations after fixes
 - **Functions remaining in renderer.js:** 92 (down from ~200+ originally)
-

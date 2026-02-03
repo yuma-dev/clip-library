@@ -268,6 +268,10 @@ ipcMain.handle('get-app-version', () => {
   return app.getVersion();
 });
 
+ipcMain.handle('quit-app', () => {
+  app.quit();
+});
+
 ipcMain.handle('check-for-updates', async () => {
   return updaterModule.checkForUpdates(mainWindow, { silent: true });
 });

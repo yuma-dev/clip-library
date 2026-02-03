@@ -44,6 +44,8 @@ let elements = {
   speedText: null,
   currentTimeDisplay: null,
   totalTimeDisplay: null,
+  previewElement: null,
+  tempVideo: null,
 };
 
 // Volume icons SVG
@@ -567,6 +569,7 @@ function showControls() {
 }
 
 function hideControls() {
+  if (state.isGamepadActive) return;
   if (!elements.videoPlayer.paused && !state.isMouseOverControls && !document.activeElement.closest('#video-controls')) {
     elements.videoControls.style.transition = 'opacity 0.5s';
     elements.videoControls.classList.remove("visible");
@@ -581,6 +584,7 @@ function hideControlsInstantly() {
 function resetControlsTimeout() {
   showControls();
   clearTimeout(state.controlsTimeout);
+  if (state.isGamepadActive) return;
   state.controlsTimeout = setTimeout(() => {
     hideControls();
   }, 3000);
@@ -1014,9 +1018,7 @@ function endVolumeDrag() {
   document.removeEventListener('mouseup', endVolumeDrag);
 
   // Don't hide the volume drag control, just update its position
-  if (callbacks.updateVolumeControlsPosition) {
-    callbacks.updateVolumeControlsPosition();
-  }
+  updateVolumeControlsPosition();
   
   // Make sure the input stays visible
   const volumeInput = state.volumeDragControl.querySelector('input');
@@ -1043,12 +1045,8 @@ async function loadVolumeData() {
       state.volumeEndTime = volumeData.end;
       state.volumeLevel = volumeData.level || 0;
       state.isVolumeControlsVisible = true;
-      if (callbacks.showVolumeControls) {
-        callbacks.showVolumeControls();
-      }
-      if (callbacks.updateVolumeControlsPosition) {
-        callbacks.updateVolumeControlsPosition();
-      }
+      showVolumeControls();
+      updateVolumeControlsPosition();
       logger.info('Volume controls restored with data:', {
         start: state.volumeStartTime,
         end: state.volumeEndTime,
@@ -1087,6 +1085,387 @@ function hideVolumeControls() {
   if (state.currentClip) {
     ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, null)
       .catch(error => logger.error('Error removing volume data:', error));
+  }
+}
+
+const debouncedSaveVolumeData = debounce(async () => {
+  if (!state.currentClip || !state.isVolumeControlsVisible) return;
+  
+  const volumeData = {
+    start: state.volumeStartTime,
+    end: state.volumeEndTime,
+    level: state.volumeLevel || 0
+  };
+  
+  try {
+    logger.info('Saving volume data:', volumeData);
+    await ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData);
+    logger.info('Volume data saved successfully');
+  } catch (error) {
+    logger.error('Error saving volume data:', error);
+  }
+}, 300);
+
+function saveVolumeData() {
+  debouncedSaveVolumeData();
+}
+
+function showVolumeControls() {
+  state.isVolumeControlsVisible = true;
+  state.volumeStartElement.style.display = 'block';
+  state.volumeEndElement.style.display = 'block';
+  state.volumeRegionElement.style.display = 'block';
+  updateVolumeControlsPosition();
+  showVolumeDragControl();
+}
+
+function toggleVolumeControls() {
+  if (!elements.videoPlayer || !elements.videoPlayer.duration) return;
+
+  if (!state.isVolumeControlsVisible) {
+    if (state.volumeStartTime === 0 && state.volumeEndTime === 0) {
+      state.volumeStartTime = elements.videoPlayer.duration / 3;
+      state.volumeEndTime = (elements.videoPlayer.duration / 3) * 2;
+      state.volumeLevel = 0;
+    }
+    showVolumeControls();
+  } else {
+    hideVolumeControls();
+  }
+}
+
+function updateVolumeControlsPosition() {
+  if (!elements.videoPlayer || !elements.videoPlayer.duration || !state.isVolumeControlsVisible) return;
+
+  const startPercent = (state.volumeStartTime / elements.videoPlayer.duration) * 100;
+  const endPercent = (state.volumeEndTime / elements.videoPlayer.duration) * 100;
+
+  state.volumeStartElement.style.left = `${startPercent}%`;
+  state.volumeEndElement.style.left = `${endPercent}%`;
+  state.volumeRegionElement.style.left = `${startPercent}%`;
+  state.volumeRegionElement.style.width = `${endPercent - startPercent}%`;
+
+  if (state.volumeDragControl) {
+    const middlePercent = (startPercent + endPercent) / 2;
+    state.volumeDragControl.style.left = `${middlePercent}%`;
+    state.volumeDragControl.style.display = 'flex';
+  }
+}
+
+function showVolumeDragControl(e) {
+  if (!state.isVolumeControlsVisible || !elements.progressBarContainer || !elements.videoPlayer) return;
+
+  const rect = elements.progressBarContainer.getBoundingClientRect();
+  state.volumeDragControl.style.display = 'flex';
+
+  if (e) {
+    const x = e.clientX - rect.left;
+    state.volumeDragControl.style.left = `${x}px`;
+  } else {
+    const startPercent = (state.volumeStartTime / elements.videoPlayer.duration) * 100;
+    const endPercent = (state.volumeEndTime / elements.videoPlayer.duration) * 100;
+    const middlePercent = (startPercent + endPercent) / 2;
+    state.volumeDragControl.style.left = `${middlePercent}%`;
+  }
+
+  const volumeInput = state.volumeDragControl.querySelector('input');
+  if (volumeInput) {
+    volumeInput.value = state.volumeLevel;
+    volumeInput.style.display = 'block';
+  }
+}
+
+function handleVolumeDrag(e) {
+  if (!state.isVolumeDragging || !elements.progressBarContainer || !elements.videoPlayer) return;
+
+  document.body.classList.add('dragging');
+
+  const rect = elements.progressBarContainer.getBoundingClientRect();
+  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+  const timePosition = (x / rect.width) * elements.videoPlayer.duration;
+
+  if (state.isVolumeDragging === 'start') {
+    state.volumeStartTime = Math.min(timePosition, state.volumeEndTime - 0.1);
+  } else if (state.isVolumeDragging === 'end') {
+    state.volumeEndTime = Math.max(timePosition, state.volumeStartTime + 0.1);
+  }
+
+  updateVolumeControlsPosition();
+  state.volumeDragControl.style.display = 'flex';
+  
+  const volumeInput = state.volumeDragControl.querySelector('input');
+  if (volumeInput) {
+    volumeInput.style.display = 'block';
+  }
+
+  debouncedSaveVolumeData();
+}
+
+// Update preview position and content
+function updatePreview(e, options = {}) {
+  if (!elements.progressBarContainer || !elements.previewElement || !elements.tempVideo || !elements.videoPlayer) return;
+  if (!e) return;
+  const rect = elements.progressBarContainer.getBoundingClientRect();
+  const position = (e.clientX - rect.left) / rect.width;
+  const time = elements.videoPlayer.duration * position;
+  
+  if (!options.skipPosition) {
+    const cursorXRelative = e.clientX - rect.left;
+    const previewWidth = elements.previewElement.offsetWidth;
+    
+    elements.previewElement.style.position = 'absolute';
+    elements.previewElement.style.left = `${cursorXRelative - (previewWidth / 2)}px`;
+    elements.previewElement.style.bottom = '20px';
+  }
+  
+  const previewTimestamp = document.getElementById('preview-timestamp');
+  previewTimestamp.textContent = formatTime(time);
+
+  if (elements.tempVideo.readyState >= 2) {
+    elements.tempVideo.currentTime = time;
+  }
+}
+
+function handleKeyRelease(e) {
+  if (e.key === "," || e.key === ".") {
+    state.isFrameStepping = false;
+    state.frameStepDirection = 0;
+  }
+
+  if (e.key === ' ' || e.code === 'Space') {
+    const isClipTitleFocused = document.activeElement === elements.clipTitle;
+    const isSearching = document.activeElement === document.getElementById("search-input");
+    const isPlayerActive = elements.playerOverlay.style.display === "block";
+    if (!isPlayerActive || isClipTitleFocused || isSearching) return;
+
+    if (state.spaceHoldTimeoutId) {
+      clearTimeout(state.spaceHoldTimeoutId);
+      state.spaceHoldTimeoutId = null;
+    }
+
+    if (state.wasSpaceHoldBoostActive) {
+      elements.videoPlayer.playbackRate = state.speedBeforeSpaceHold;
+    } else {
+      if (elements.videoPlayer.src) togglePlayPause();
+    }
+
+    state.isSpaceHeld = false;
+    state.wasSpaceHoldBoostActive = false;
+  }
+}
+
+function handleKeyPress(e) {
+  const isClipTitleFocused = document.activeElement === elements.clipTitle;
+  const isSearching = document.activeElement === document.getElementById("search-input");
+  const isPlayerActive = elements.playerOverlay.style.display === "block";
+
+  showControls();
+
+  if (!isClipTitleFocused && !isSearching && (e.key === ' ' || e.code === 'Space')) {
+    e.preventDefault();
+    if (!state.isSpaceHeld) {
+      state.isSpaceHeld = true;
+      state.wasSpaceHoldBoostActive = false;
+      state.spaceHoldTimeoutId = setTimeout(() => {
+        if (state.isSpaceHeld && !elements.videoPlayer.paused) {
+          state.wasSpaceHoldBoostActive = true;
+          state.speedBeforeSpaceHold = elements.videoPlayer.playbackRate;
+          elements.videoPlayer.playbackRate = 2;
+        }
+      }, 200);
+    }
+    return;
+  }
+
+  if (!isClipTitleFocused && !isSearching) {
+    const action = callbacks.getActionFromEvent ? callbacks.getActionFromEvent(e) : null;
+    if (!action) return;
+
+    e.preventDefault();
+
+    if (isPlayerActive) {
+      switch (action) {
+        case 'closePlayer':
+          closePlayer();
+          break;
+        case 'playPause':
+          if (elements.videoPlayer.src) togglePlayPause();
+          break;
+        case 'frameBackward':
+          moveFrame(-1);
+          break;
+        case 'frameForward':
+          moveFrame(1);
+          break;
+        case 'navigatePrev':
+          if (callbacks.navigateToVideo) callbacks.navigateToVideo(-1);
+          break;
+        case 'navigateNext':
+          if (callbacks.navigateToVideo) callbacks.navigateToVideo(1);
+          break;
+        case 'skipBackward':
+          skipTime(-1);
+          break;
+        case 'skipForward':
+          skipTime(1);
+          break;
+        case 'volumeUp':
+          changeVolume(0.1);
+          break;
+        case 'volumeDown':
+          changeVolume(-0.1);
+          break;
+        case 'exportAudioFile':
+          if (callbacks.exportAudioWithFileSelection) callbacks.exportAudioWithFileSelection();
+          break;
+        case 'exportVideo':
+          if (callbacks.exportVideoWithFileSelection) callbacks.exportVideoWithFileSelection();
+          break;
+        case 'exportAudioClipboard':
+          if (callbacks.exportAudioToClipboard) callbacks.exportAudioToClipboard();
+          break;
+        case 'exportDefault':
+          if (callbacks.exportDefault) callbacks.exportDefault();
+          break;
+        case 'fullscreen':
+          toggleFullscreen();
+          break;
+        case 'deleteClip':
+          if (callbacks.confirmAndDeleteClip) callbacks.confirmAndDeleteClip();
+          break;
+        case 'setTrimStart':
+          setTrimPoint('start');
+          break;
+        case 'setTrimEnd':
+          setTrimPoint('end');
+          break;
+        case 'focusTitle':
+          elements.clipTitle.focus();
+          break;
+        default:
+          break;
+      }
+    } else {
+      if (!state.gridNavigationEnabled && callbacks.enableGridNavigation) {
+        callbacks.enableGridNavigation();
+      }
+      
+      switch (action) {
+        case 'playPause':
+          if (callbacks.openCurrentGridSelection) callbacks.openCurrentGridSelection();
+          break;
+        case 'skipBackward':
+          if (callbacks.moveGridSelection) callbacks.moveGridSelection('left');
+          break;
+        case 'skipForward':
+          if (callbacks.moveGridSelection) callbacks.moveGridSelection('right');
+          break;
+        case 'volumeUp':
+          if (callbacks.moveGridSelection) callbacks.moveGridSelection('up');
+          break;
+        case 'volumeDown':
+          if (callbacks.moveGridSelection) callbacks.moveGridSelection('down');
+          break;
+        case 'closePlayer':
+          if (callbacks.disableGridNavigation) callbacks.disableGridNavigation();
+          break;
+        case 'exportDefault':
+          if (callbacks.openCurrentGridSelection) callbacks.openCurrentGridSelection();
+          break;
+        default:
+          break;
+      }
+    }
+  }
+}
+
+function closePlayer() {
+  if (window.justFinishedDragging) {
+    return;
+  }
+
+  if (callbacks.logCurrentWatchSession) {
+    callbacks.logCurrentWatchSession();
+  }
+
+  if (callbacks.clearSaveTitleTimeout) {
+    callbacks.clearSaveTitleTimeout();
+  }
+
+  document.removeEventListener("keydown", handleKeyPress);
+  document.removeEventListener("keyup", handleKeyRelease);
+
+  const originalName = state.currentClip ? state.currentClip.originalName : null;
+  const oldCustomName = state.currentClip ? state.currentClip.customName : null;
+  const newCustomName = elements.clipTitle.value;
+
+  const saveOperation = callbacks.saveTitleChange
+    ? callbacks.saveTitleChange(originalName, oldCustomName, newCustomName, true)
+    : Promise.resolve();
+
+  saveOperation.then(() => {
+    if (ambientGlowManager) {
+      ambientGlowManager.stop();
+    }
+
+    elements.playerOverlay.style.display = "none";
+    elements.fullscreenPlayer.style.display = "none";
+    elements.videoPlayer.pause();
+    elements.videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
+    elements.videoPlayer.removeEventListener("progress", updateLoadingProgress);
+    elements.videoPlayer.removeEventListener("waiting", showLoadingOverlay);
+    elements.videoPlayer.removeEventListener("playing", hideLoadingOverlay);
+    elements.videoPlayer.removeEventListener("seeked", handleVideoSeeked);
+    elements.videoPlayer.removeAttribute('src');
+
+    if (callbacks.removeClipTitleEditingListeners) {
+      callbacks.removeClipTitleEditingListeners();
+    }
+
+    if (elements.clipTitle) {
+      elements.clipTitle.value = "";
+    }
+
+    document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
+      clip.classList.remove('last-opened');
+    });
+
+    if (originalName) {
+      if (callbacks.updateClipDisplay) callbacks.updateClipDisplay(originalName);
+      const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+      if (clipElement) {
+        logger.info('Found clip element to scroll to:', {
+          originalName,
+          elementExists: !!clipElement,
+          elementPosition: clipElement.getBoundingClientRect()
+        });
+
+        clipElement.classList.add('last-opened');
+        
+        setTimeout(() => {
+          if (callbacks.smoothScrollToElement) callbacks.smoothScrollToElement(clipElement);
+        }, 50);
+      } else {
+        logger.warn('Clip element not found for scrolling:', originalName);
+      }
+    }
+
+    state.currentClip = null;
+    if (state.currentCleanup) {
+      state.currentCleanup();
+      state.currentCleanup = null;
+    }
+  });
+
+  clearInterval(state.discordPresenceInterval);
+  if (callbacks.updateDiscordPresence) {
+    callbacks.updateDiscordPresence('Browsing clips', `Total: ${state.currentClipList.length}`);
+  }
+
+  if (state.gamepadManager && state.gamepadManager.isGamepadConnected() && callbacks.getVisibleClips && callbacks.getVisibleClips().length > 0) {
+    setTimeout(() => {
+      if (callbacks.enableGridNavigation) callbacks.enableGridNavigation();
+    }, 200);
   }
 }
 
@@ -1798,12 +2177,27 @@ let callbacks = {
   updateDiscordPresenceForClip: null,    // Called to update Discord presence
   updateNavigationButtons: null,         // Called to update navigation buttons
   showCustomAlert: null,                 // Called to show custom alert
-  showVolumeControls: null,              // Called to show volume controls
-  updateVolumeControlsPosition: null,    // Called to update volume controls position
   showExportProgress: null,              // Called to show export progress
   showCustomConfirm: null,               // Called to show custom confirm dialog
   isBenchmarkMode: false,                // Whether benchmark mode is enabled
   updateDiscordPresence: null,           // Called to update Discord presence (generic)
+  getActionFromEvent: null,              // Called to resolve keybinding action
+  navigateToVideo: null,                 // Called to navigate between clips
+  exportAudioWithFileSelection: null,    // Called to export audio with file picker
+  exportVideoWithFileSelection: null,    // Called to export video with file picker
+  exportAudioToClipboard: null,          // Called to export audio to clipboard
+  exportDefault: null,                   // Called to export using default settings
+  confirmAndDeleteClip: null,            // Called to delete current clip
+  enableGridNavigation: null,            // Called to enable grid navigation
+  disableGridNavigation: null,           // Called to disable grid navigation
+  openCurrentGridSelection: null,        // Called to open selected clip in grid
+  moveGridSelection: null,               // Called to move grid selection
+  saveTitleChange: null,                 // Called to save clip title changes
+  clearSaveTitleTimeout: null,           // Called to clear pending title save timeout
+  removeClipTitleEditingListeners: null, // Called to remove clip title listeners
+  updateClipDisplay: null,               // Called to update clip display in grid
+  smoothScrollToElement: null,           // Called to scroll to a clip element
+  getVisibleClips: null                  // Called to get visible clips
 };
 
 // ============================================================================
@@ -2121,6 +2515,16 @@ module.exports = {
   openClip,
   saveTrimChanges,
   resetClipTrimTimes,
+  closePlayer,
+  handleKeyPress,
+  handleKeyRelease,
+  updatePreview,
+  handleVolumeDrag,
+  showVolumeDragControl,
+  updateVolumeControlsPosition,
+  toggleVolumeControls,
+  showVolumeControls,
+  saveVolumeData,
 
   // Volume icons (for external use)
   volumeIcons,
