@@ -1,0 +1,241 @@
+<div class="settings-modal-content">
+  <div class="settings-tabs">
+    <div class="settings-tab active" data-tab="general">General</div>
+    <div class="settings-tab" data-tab="display">Display</div>
+    <div class="settings-tab" data-tab="exportImport">Export/Import</div>
+    <div class="settings-tab" data-tab="about">About</div>
+  </div>
+
+  <div class="settings-tab-content active" data-tab="general">
+    <div class="settings-group">
+      <h3 class="settings-group-title">Clip Library Location</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Current Location</div>
+          <div class="settings-item-description" id="currentClipLocation">Loading...</div>
+        </div>
+        <div class="settings-control">
+          <button id="changeLocationBtn" class="settings-button settings-button-primary">Change Location</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Integration</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Discord Rich Presence</div>
+          <div class="settings-item-description">Show your current activity in Discord</div>
+        </div>
+        <div class="settings-control">
+          <label class="settings-switch">
+            <input type="checkbox" id="enableDiscordRPC">
+            <span class="settings-switch-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Tag Management</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Manage Tags</div>
+          <div class="settings-item-description">Edit and organize your clip tags</div>
+        </div>
+        <div class="settings-control">
+          <button id="manageTagsBtn" class="settings-button settings-button-secondary">Manage Tags</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-tab-content" data-tab="display">
+    <div class="settings-group">
+      <h3 class="settings-group-title">Visual Indicators</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Show New Clips Indicators</div>
+          <div class="settings-item-description">Display green lines and highlights to show new clips since last session</div>
+        </div>
+        <div class="settings-control">
+          <label class="settings-switch">
+            <input type="checkbox" id="showNewClipsIndicators">
+            <span class="settings-switch-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Greyscale Icons</div>
+          <div class="settings-item-description">Display clip icons in greyscale</div>
+        </div>
+        <div class="settings-control">
+          <label class="settings-switch">
+            <input type="checkbox" id="greyscaleIcons">
+            <span class="settings-switch-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Playback</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Preview Volume</div>
+          <div class="settings-item-description">Set the default volume for clip previews</div>
+        </div>
+        <div class="settings-control">
+          <input type="range" id="previewVolumeSlider" class="settings-range" min="0" max="1" step="0.01" value="0.1">
+          <span id="previewVolumeValue">10%</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Ambient Glow</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Enable Ambient Glow</div>
+          <div class="settings-item-description">Show a colorful glow behind the video player that matches the video content</div>
+        </div>
+        <div class="settings-control">
+          <label class="settings-switch">
+            <input type="checkbox" id="ambientGlowEnabled">
+            <span class="settings-switch-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Smoothing</div>
+          <div class="settings-item-description">How smoothly the glow transitions between colors (lower = smoother)</div>
+        </div>
+        <div class="settings-control">
+          <input type="range" id="ambientGlowSmoothing" class="settings-range" min="0.1" max="1" step="0.1" value="0.5">
+          <span id="ambientGlowSmoothingValue">0.5</span>
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Update Rate</div>
+          <div class="settings-item-description">How often the glow updates (higher = smoother but uses more CPU)</div>
+        </div>
+        <div class="settings-control">
+          <select id="ambientGlowFps" class="settings-select">
+            <option value="15">15 fps</option>
+            <option value="24">24 fps</option>
+            <option value="30" selected>30 fps</option>
+            <option value="60">60 fps</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Blur Amount</div>
+          <div class="settings-item-description">How blurry the glow effect appears</div>
+        </div>
+        <div class="settings-control">
+          <input type="range" id="ambientGlowBlur" class="settings-range" min="40" max="120" step="10" value="80">
+          <span id="ambientGlowBlurValue">80px</span>
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Opacity</div>
+          <div class="settings-item-description">How visible the glow effect is</div>
+        </div>
+        <div class="settings-control">
+          <input type="range" id="ambientGlowOpacity" class="settings-range" min="0.3" max="1" step="0.1" value="0.7">
+          <span id="ambientGlowOpacityValue">70%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-tab-content" data-tab="exportImport">
+    <div class="settings-group">
+      <h3 class="settings-group-title">Export Settings</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Export Quality</div>
+          <div class="settings-item-description">Choose the default quality for exported clips</div>
+        </div>
+        <div class="settings-control">
+          <select id="exportQuality" class="settings-select">
+            <option value="discord">Discord (~10MB)</option>
+            <option value="high">High Quality (~30MB)</option>
+            <option value="lossless">Lossless</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Import Options</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Import from SteelSeries</div>
+          <div class="settings-item-description">Select your SteelSeries Moments folder</div>
+        </div>
+        <div class="settings-control">
+          <button id="importSteelSeriesBtn" class="settings-button settings-button-primary">Import Clips</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-tab-content" data-tab="about">
+    <div class="settings-group">
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Clip Library</div>
+          <div class="settings-item-description">A modern, fast, and efficient way to manage your clip collection.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Updates</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Check for Updates</div>
+          <div class="settings-item-description">Manually check if a newer version is available.</div>
+          <div id="updateCheckStatus" class="settings-item-description update-check-status"></div>
+        </div>
+        <div class="settings-control">
+          <button id="checkForUpdatesBtn" class="settings-button settings-button-primary">Check Now</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3 class="settings-group-title">Diagnostics</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Generate Diagnostics Zip</div>
+          <div class="settings-item-description">Bundle logs, settings, and system info to share for troubleshooting.</div>
+          <div id="diagnosticsStatus" class="settings-item-description diagnostics-status"></div>
+        </div>
+        <div class="settings-control">
+          <button id="generateDiagnosticsBtn" class="settings-button settings-button-secondary">Generate Zip</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-version">
+      <p>Version: <span id="app-version">Loading...</span></p>
+    </div>
+  </div>
+  <div class="settings-footer">
+    <button id="closeSettingsBtn" class="settings-save-button">
+      Save Settings
+    </button>
+  </div>
+</div>
