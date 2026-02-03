@@ -110,6 +110,7 @@ let wasLastSeekManual = false; // Track if the last seek was manual
 
 // Gamepad
 let gamepadManager = null;
+let isGamepadActive = false;
 
 // Grid Navigation
 let currentGridFocusIndex = 0; // Currently selected clip index in the grid
@@ -282,6 +283,8 @@ module.exports = {
   // Gamepad
   get gamepadManager() { return gamepadManager; },
   set gamepadManager(value) { gamepadManager = value; },
+  get isGamepadActive() { return isGamepadActive; },
+  set isGamepadActive(value) { isGamepadActive = value; },
 
   // Grid Navigation
   get currentGridFocusIndex() { return currentGridFocusIndex; },

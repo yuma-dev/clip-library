@@ -52,6 +52,53 @@ const ANALOG_MAPPINGS = {
   }
 };
 
+let dependencies = null;
+let isQuitConfirmVisible = false;
+let originalConfirmOkText = null;
+let originalConfirmCancelText = null;
+
+function showQuitConfirmModal() {
+  const modal = document.getElementById("custom-modal");
+  const modalMessage = document.getElementById("modal-message");
+  const modalOk = document.getElementById("modal-ok");
+  const modalCancel = document.getElementById("modal-cancel");
+  if (!modal || !modalMessage || !modalOk || !modalCancel) return;
+  if (isQuitConfirmVisible) return;
+
+  originalConfirmOkText = originalConfirmOkText ?? modalOk.textContent;
+  originalConfirmCancelText = originalConfirmCancelText ?? modalCancel.textContent;
+
+  modalMessage.textContent = "Quit Clip Library?";
+  modalOk.textContent = "Quit (A)";
+  modalCancel.textContent = "Cancel (B)";
+  modalCancel.style.display = "inline-block";
+  modal.style.display = "block";
+  modal.dataset.gamepadMode = "quit-confirm";
+  modalOk.onclick = () => confirmQuit();
+  modalCancel.onclick = () => hideQuitConfirmModal();
+  isQuitConfirmVisible = true;
+}
+
+function hideQuitConfirmModal() {
+  const modal = document.getElementById("custom-modal");
+  const modalOk = document.getElementById("modal-ok");
+  const modalCancel = document.getElementById("modal-cancel");
+  if (!modal || !modalOk || !modalCancel) return;
+
+  if (modal.dataset.gamepadMode === "quit-confirm") {
+    modal.style.display = "none";
+    modal.dataset.gamepadMode = "";
+  }
+  if (originalConfirmOkText !== null) modalOk.textContent = originalConfirmOkText;
+  if (originalConfirmCancelText !== null) modalCancel.textContent = originalConfirmCancelText;
+  isQuitConfirmVisible = false;
+}
+
+function confirmQuit() {
+  hideQuitConfirmModal();
+  ipcRenderer.invoke('quit-app');
+}
+
 class GamepadManager {
   constructor() {
     this.connectedGamepads = new Map();
@@ -65,6 +112,7 @@ class GamepadManager {
     this.onNavigationCallback = null;
     this.onRawNavigationCallback = null;
     this.onConnectionCallback = null;
+    this.lastQuitCombo = false;
     
     // Timing for analog stick actions
     this.seekSensitivity = 0.5;  // Seconds per second of stick movement
@@ -164,6 +212,12 @@ class GamepadManager {
     const index = gamepad.index;
     const lastButtons = this.lastButtonStates.get(index);
     const lastAxes = this.lastAnalogStates.get(index);
+
+    const quitComboPressed = gamepad.buttons[8]?.pressed && gamepad.buttons[9]?.pressed;
+    if (quitComboPressed && !this.lastQuitCombo && this.onActionCallback) {
+      this.onActionCallback('quitApp');
+    }
+    this.lastQuitCombo = quitComboPressed;
     
     // Process button presses (only on press, not hold)
     for (let i = 0; i < gamepad.buttons.length; i++) {
@@ -319,12 +373,17 @@ function handleControllerAction(action) {
     openCurrentGridSelection,
     moveGridSelection,
     state
-  } = this.dependencies;
+  } = dependencies || {};
   
+  if (!playerOverlay) return;
+
   // Check if we're in the video player
   const isPlayerActive = playerOverlay.style.display === "block";
   
   if (isPlayerActive) {
+    if (videoPlayerModule) {
+      videoPlayerModule.showControls();
+    }
     // Use existing keyboard action handler for consistency
     const fakeEvent = {
       preventDefault: () => {},
@@ -418,6 +477,15 @@ function handleControllerAction(action) {
         break;
     }
   } else {
+    if (isQuitConfirmVisible) {
+      if (action === 'playPause') {
+        confirmQuit();
+      } else if (action === 'closePlayer') {
+        hideQuitConfirmModal();
+      }
+      return;
+    }
+
     // Handle actions when in grid view
     if (!state.gridNavigationEnabled) {
       enableGridNavigation();
@@ -425,10 +493,10 @@ function handleControllerAction(action) {
     
     switch (action) {
       case 'closePlayer':
-        // Exit grid navigation or open state.settings
-        if (state.gridNavigationEnabled) {
-          disableGridNavigation();
-        }
+        showQuitConfirmModal();
+        break;
+      case 'quitApp':
+        showQuitConfirmModal();
         break;
       case 'playPause':
         // Open the currently selected clip
@@ -475,11 +543,16 @@ function handleControllerNavigation(type, value) {
     videoPlayerModule,
     enableGridNavigation,
     moveGridSelection
-  } = this.dependencies;
+  } = dependencies || {};
   
+  if (!playerOverlay) return;
+
   const isPlayerActive = playerOverlay.style.display === "block";
   
   if (isPlayerActive && videoPlayer) {
+    if (videoPlayerModule) {
+      videoPlayerModule.showControls();
+    }
     switch (type) {
       case 'seek':
         // Right stick X - timeline seeking
@@ -518,7 +591,7 @@ function handleControllerNavigation(type, value) {
     switch (type) {
       case 'navigate':
         // Left stick - grid navigation
-        if (!this.dependencies.state.gridNavigationEnabled) {
+        if (!dependencies || !dependencies.state.gridNavigationEnabled) {
           enableGridNavigation();
         }
         moveGridSelection(value);
@@ -531,9 +604,147 @@ function handleControllerNavigation(type, value) {
   }
 }
 
+// Handle raw controller navigation (for grid scrolling)
+function handleControllerRawNavigation(type, value) {
+  if (!dependencies || !dependencies.playerOverlay) return;
+  const isPlayerActive = dependencies.playerOverlay.style.display === "block";
+
+  if (!isPlayerActive) {
+    switch (type) {
+      case 'seekRaw':
+        if (Math.abs(value) > 0.3) {
+          const scrollAmount = value * 15;
+          window.scrollBy(scrollAmount, 0);
+        }
+        break;
+
+      case 'volumeRaw':
+        if (Math.abs(value) > 0.3) {
+          const scrollAmount = value * 15;
+          window.scrollBy(0, scrollAmount);
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
+}
+
+// Handle controller connection/disconnection
+function handleControllerConnection(connected, gamepadId) {
+  if (!dependencies || !dependencies.playerOverlay) return;
+  const indicator = document.getElementById('controller-indicator');
+
+  if (connected) {
+    if (dependencies.state) {
+      dependencies.state.isGamepadActive = true;
+    }
+    if (dependencies.videoPlayerModule && dependencies.playerOverlay && dependencies.playerOverlay.style.display === "block") {
+      dependencies.videoPlayerModule.showControls();
+    }
+    if (dependencies.state && dependencies.state.gamepadManager && dependencies.state.gamepadManager.getConnectedGamepads().length === 1) {
+      logger.info(`Controller connected: ${gamepadId}`);
+    }
+
+    if (indicator) {
+      indicator.style.display = 'flex';
+      indicator.classList.add('visible');
+      indicator.title = `Controller Connected: ${gamepadId}`;
+    }
+
+    const isPlayerActive = dependencies.playerOverlay.style.display === "block";
+    if (!isPlayerActive && dependencies.clipGridModule && dependencies.clipGridModule.getVisibleClips().length > 0 && !dependencies.state.gridNavigationEnabled) {
+      setTimeout(() => {
+        dependencies.clipGridModule.enableGridNavigation();
+      }, 500);
+    }
+  } else {
+    if (dependencies.state && dependencies.state.gamepadManager && !dependencies.state.gamepadManager.isGamepadConnected()) {
+      dependencies.state.isGamepadActive = false;
+      logger.info('All controllers disconnected');
+      if (dependencies.videoPlayerModule) {
+        dependencies.videoPlayerModule.resetControlsTimeout();
+      }
+    }
+
+    if (indicator && dependencies.state && dependencies.state.gamepadManager && !dependencies.state.gamepadManager.isGamepadConnected()) {
+      indicator.classList.remove('visible');
+      indicator.title = 'Controller Disconnected';
+      setTimeout(() => {
+        if (!indicator.classList.contains('visible')) indicator.style.display = 'none';
+      }, 250);
+    }
+  }
+}
+
+async function init(deps) {
+  dependencies = deps;
+
+  try {
+    if (!dependencies || !dependencies.state) return;
+
+    dependencies.state.gamepadManager = new GamepadManager();
+
+    const appSettings = await ipcRenderer.invoke('get-settings');
+    const controllerSettings = appSettings?.controller;
+
+    if (controllerSettings) {
+      if (controllerSettings.buttonMappings) {
+        Object.entries(controllerSettings.buttonMappings).forEach(([buttonIndex, action]) => {
+          dependencies.state.gamepadManager.setButtonMapping(parseInt(buttonIndex, 10), action);
+        });
+      }
+
+      if (controllerSettings.seekSensitivity !== undefined) {
+        dependencies.state.gamepadManager.seekSensitivity = controllerSettings.seekSensitivity;
+      }
+      if (controllerSettings.volumeSensitivity !== undefined) {
+        dependencies.state.gamepadManager.volumeSensitivity = controllerSettings.volumeSensitivity;
+      }
+
+      if (controllerSettings.enabled) {
+        dependencies.state.gamepadManager.enable();
+      } else {
+        dependencies.state.gamepadManager.disable();
+      }
+    } else {
+      dependencies.state.gamepadManager.enable();
+    }
+
+    dependencies.state.gamepadManager.setActionCallback((action) => {
+      handleControllerAction(action);
+    });
+
+    dependencies.state.gamepadManager.setNavigationCallback((type, value) => {
+      handleControllerNavigation(type, value);
+    });
+
+    dependencies.state.gamepadManager.setRawNavigationCallback((type, value) => {
+      handleControllerRawNavigation(type, value);
+    });
+
+    dependencies.state.gamepadManager.setConnectionCallback((connected, gamepadId) => {
+      handleControllerConnection(connected, gamepadId);
+    });
+
+    logger.info('Gamepad manager initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize gamepad manager:', error);
+  }
+}
+
+async function initializeGamepadManager(deps) {
+  return init(deps);
+}
+
 // Export for use in renderer
 module.exports = {
   GamepadManager,
   handleControllerAction,
-  handleControllerNavigation
+  handleControllerNavigation,
+  handleControllerRawNavigation,
+  handleControllerConnection,
+  init,
+  initializeGamepadManager
 };

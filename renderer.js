@@ -31,6 +31,11 @@ const gridNavigationModule = require('./renderer/grid-navigation');
 // Settings manager module
 const settingsManagerUiModule = require('./renderer/settings-manager-ui');
 
+// Discord/diagnostics/update managers
+const discordManagerModule = require('./renderer/discord-manager');
+const diagnosticsManagerModule = require('./renderer/diagnostics-manager');
+const updateManagerModule = require('./renderer/update-manager');
+
 // Clip grid module
 const clipGridModule = require('./renderer/clip-grid');
 
@@ -106,159 +111,6 @@ async function getCachedClipData(originalName) {
 
 
 
-// Initialize gamepad manager with proper callbacks
-async function initializeGamepadManager() {
-  try {
-    state.gamepadManager = new gamepadManagerModule.GamepadManager();
-    
-    // Inject dependencies for module functions
-    gamepadManagerModule.dependencies = {
-        videoPlayer: document.getElementById("video-player"),
-        playerOverlay: document.getElementById("player-overlay"),
-        clipTitle: document.getElementById("clip-title"),
-        videoPlayerModule,
-        navigateToVideo,
-        exportAudioWithFileSelection,
-        exportVideoWithFileSelection,
-        exportAudioToClipboard,
-        exportManagerModule,
-        confirmAndDeleteClip: clipGridModule.confirmAndDeleteClip,
-        closePlayer,
-        enableGridNavigation: clipGridModule.enableGridNavigation,
-        disableGridNavigation: clipGridModule.disableGridNavigation,
-        openCurrentGridSelection: clipGridModule.openCurrentGridSelection,
-        moveGridSelection: gridNavigationModule.moveGridSelection,
-        state
-    };
-    
-    // Get controller state.settings from main state.settings
-    const appSettings = await ipcRenderer.invoke('get-settings');
-    const controllerSettings = appSettings?.controller;
-    
-    if (controllerSettings) {
-      // Apply custom mappings if they exist
-      if (controllerSettings.buttonMappings) {
-        Object.entries(controllerSettings.buttonMappings).forEach(([buttonIndex, action]) => {
-          state.gamepadManager.setButtonMapping(parseInt(buttonIndex), action);
-        });
-      }
-      
-      // Apply sensitivity state.settings
-      if (controllerSettings.seekSensitivity !== undefined) {
-        state.gamepadManager.seekSensitivity = controllerSettings.seekSensitivity;
-      }
-      if (controllerSettings.volumeSensitivity !== undefined) {
-        state.gamepadManager.volumeSensitivity = controllerSettings.volumeSensitivity;
-      }
-      
-      // Enable/disable controller based on state.settings
-      if (controllerSettings.enabled) {
-        state.gamepadManager.enable();
-      } else {
-        state.gamepadManager.disable();
-      }
-    } else {
-      // Default: enable controller support
-      state.gamepadManager.enable();
-    }
-    
-    // Set up action callback for button presses
-    state.gamepadManager.setActionCallback((action) => {
-      gamepadManagerModule.handleControllerAction(action);
-    });
-    
-    // Set up navigation callback for analog sticks
-    state.gamepadManager.setNavigationCallback((type, value) => {
-      gamepadManagerModule.handleControllerNavigation(type, value);
-    });
-    
-    // Set up raw navigation callback for grid scrolling
-    state.gamepadManager.setRawNavigationCallback((type, value) => {
-      handleControllerRawNavigation(type, value);
-    });
-    
-    // Set up connection callback for UI updates
-    state.gamepadManager.setConnectionCallback((connected, gamepadId) => {
-      handleControllerConnection(connected, gamepadId);
-    });
-    
-    logger.info('Gamepad manager initialized successfully');
-  } catch (error) {
-    logger.error('Failed to initialize gamepad manager:', error);
-  }
-}
-
-
-
-// Handle raw controller navigation (for grid scrolling)
-function handleControllerRawNavigation(type, value) {
-  const isPlayerActive = playerOverlay.style.display === "block";
-  
-  // Only handle raw navigation in grid view
-  if (!isPlayerActive) {
-    switch (type) {
-      case 'seekRaw':
-        // Right stick X - horizontal scrolling in grid
-        if (Math.abs(value) > 0.3) { // Reasonable threshold for raw values
-          const scrollAmount = value * 15; // Smooth scrolling sensitivity
-          window.scrollBy(scrollAmount, 0);
-        }
-        break;
-        
-      case 'volumeRaw':
-        // Right stick Y - vertical scrolling in grid
-        if (Math.abs(value) > 0.3) { // Reasonable threshold for raw values
-          const scrollAmount = value * 15; // Smooth scrolling sensitivity
-          window.scrollBy(0, scrollAmount);
-        }
-        break;
-        
-      default:
-        // Unknown raw navigation type
-        break;
-    }
-  }
-}
-
-// Handle controller connection/disconnection
-function handleControllerConnection(connected, gamepadId) {
-  const indicator = document.getElementById('controller-indicator');
-  
-  if (connected) {
-    // Only log the first controller connection to reduce spam
-    if (state.gamepadManager && state.gamepadManager.getConnectedGamepads().length === 1) {
-      logger.info(`Controller connected: ${gamepadId}`);
-    }
-    
-    if (indicator) {
-      indicator.style.display = 'flex';
-      indicator.classList.add('visible');
-      indicator.title = `Controller Connected: ${gamepadId}`;
-    }
-    
-    // Enable grid navigation if we're not in video player and have clips
-    // Only do this once to prevent multiple triggers
-    const isPlayerActive = playerOverlay.style.display === "block";
-    if (!isPlayerActive && clipGridModule.getVisibleClips().length > 0 && !state.gridNavigationEnabled) {
-      setTimeout(() => {
-        clipGridModule.enableGridNavigation();
-      }, 500); // Small delay to let everything settle
-    }
-  } else {
-    // Only log when all controllers are disconnected
-    if (state.gamepadManager && !state.gamepadManager.isGamepadConnected()) {
-      logger.info(`All controllers disconnected`);
-    }
-    
-    if (indicator && state.gamepadManager && !state.gamepadManager.isGamepadConnected()) {
-      // Only hide if no controllers are connected
-      indicator.classList.remove('visible');
-      indicator.title = 'Controller Disconnected';
-      setTimeout(() => { if (!indicator.classList.contains('visible')) indicator.style.display = 'none'; }, 250);
-    }
-  }
-}
-
 // Variables for watch session tracking
 let currentSessionStartTime = null;
 let currentSessionActiveDuration = 0;
@@ -280,102 +132,6 @@ ipcRenderer.on('log', (event, { type, message }) => {
   console[type](`[Main Process] ${message}`);
 });
 
-const DIAGNOSTICS_STAGE_LABELS = {
-  initializing: 'Preparing workspace',
-  'system-info': 'Collecting system info',
-  logs: 'Gathering logs',
-  'settings-files': 'Gathering state.settings files',
-  'settings-snapshot': 'Capturing state.settings snapshot',
-  'activity-logs': 'Bundling activity history',
-  complete: 'Complete'
-};
-
-ipcRenderer.on('diagnostics-progress', (event, progress) => {
-  if (!state.diagnosticsInProgress) return;
-  updateDiagnosticsStatus(progress);
-});
-
-function formatBytes(value) {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return '';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let unitIndex = 0;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex++;
-  }
-
-  const digits = unitIndex === 0 ? 0 : 1;
-  return `${size.toFixed(digits)} ${units[unitIndex]}`;
-}
-
-function setDiagnosticsStatusMessage(message, state = 'info') {
-  if (!state.diagnosticsStatusEl) return;
-  state.diagnosticsStatusEl.textContent = message;
-  state.diagnosticsStatusEl.dataset.state = state;
-}
-
-function updateDiagnosticsStatus(progress) {
-  if (!state.diagnosticsStatusEl) return;
-  const label = DIAGNOSTICS_STAGE_LABELS[progress.stage] || progress.stage;
-
-  if (progress.stage === 'complete') {
-    const sizeText = typeof progress.bytes === 'number' ? ` (${formatBytes(progress.bytes)})` : '';
-    state.diagnosticsStatusEl.textContent = `${label}${sizeText}`;
-    state.diagnosticsStatusEl.dataset.state = 'success';
-    return;
-  }
-
-  const total = Number(progress.total) || 0;
-  const completed = Number(progress.completed) || 0;
-  const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-
-  const percentText = percent ? ` (${percent}%)` : '';
-  state.diagnosticsStatusEl.textContent = `${label}${percentText}`;
-  state.diagnosticsStatusEl.dataset.state = 'progress';
-}
-
-async function handleDiagnosticsGeneration() {
-  if (state.diagnosticsInProgress) return;
-
-  const targetPath = await ipcRenderer.invoke('show-diagnostics-save-dialog');
-  if (!targetPath) {
-    setDiagnosticsStatusMessage('Diagnostics generation cancelled.', 'info');
-    return;
-  }
-
-  state.diagnosticsInProgress = true;
-  setDiagnosticsStatusMessage('Preparing diagnostics bundle...', 'progress');
-
-  if (state.generateDiagnosticsBtn) {
-    state.generateDiagnosticsBtn.disabled = true;
-    state.generateDiagnosticsBtn.textContent = 'Generating...';
-  }
-
-  try {
-    const response = await ipcRenderer.invoke('generate-diagnostics-zip', targetPath);
-
-    if (!response?.success) {
-      throw new Error(response?.error || 'Unknown error');
-    }
-
-    const sizeText = typeof response.size === 'number' ? ` (${formatBytes(response.size)})` : '';
-    setDiagnosticsStatusMessage(`Diagnostics saved to: ${response.zipPath}${sizeText}`, 'success');
-  } catch (error) {
-    logger.error('Failed to generate diagnostics bundle:', error);
-    setDiagnosticsStatusMessage(`Failed to generate diagnostics: ${error.message}`, 'error');
-  } finally {
-    state.diagnosticsInProgress = false;
-    if (state.generateDiagnosticsBtn) {
-      state.generateDiagnosticsBtn.disabled = false;
-      state.generateDiagnosticsBtn.textContent = diagnosticsButtonDefaultLabel;
-    }
-  }
-}
 
 const settingsModal = document.createElement("div");
 settingsModal.id = "settingsModal";
@@ -632,75 +388,16 @@ container.appendChild(settingsModal);
 
 const closeSettingsBtn = document.getElementById("closeSettingsBtn");
 const currentClipLocationSpan = document.getElementById("currentClipLocation");
-state.generateDiagnosticsBtn = document.getElementById('state.generateDiagnosticsBtn');
+state.generateDiagnosticsBtn = document.getElementById('generateDiagnosticsBtn');
 state.diagnosticsStatusEl = document.getElementById('diagnosticsStatus');
 
 if (state.generateDiagnosticsBtn) {
-  diagnosticsButtonDefaultLabel = state.generateDiagnosticsBtn.textContent || diagnosticsButtonDefaultLabel;
-  state.generateDiagnosticsBtn.addEventListener('click', handleDiagnosticsGeneration);
+  diagnosticsManagerModule.init({
+    generateDiagnosticsBtn: state.generateDiagnosticsBtn,
+    diagnosticsStatusEl: state.diagnosticsStatusEl
+  });
 }
 
-// Check for Updates button handler
-const checkForUpdatesBtn = document.getElementById('checkForUpdatesBtn');
-const updateCheckStatusEl = document.getElementById('updateCheckStatus');
-
-if (checkForUpdatesBtn) {
-  checkForUpdatesBtn.addEventListener('click', handleManualUpdateCheck);
-}
-
-async function handleManualUpdateCheck() {
-  const btn = document.getElementById('checkForUpdatesBtn');
-  const statusEl = document.getElementById('updateCheckStatus');
-  
-  if (!btn || !statusEl) return;
-  
-  const originalText = btn.textContent;
-  btn.textContent = 'Checking...';
-  btn.disabled = true;
-  statusEl.textContent = '';
-  statusEl.className = 'settings-item-description update-check-status';
-  
-  try {
-    logger.info('Manual update check initiated');
-    const result = await ipcRenderer.invoke('check-for-updates');
-    
-    if (result.updateAvailable) {
-      statusEl.textContent = `Update available: v${result.latestVersion}`;
-      statusEl.classList.add('update-available');
-      
-      // Show the update notification
-      ipcRenderer.emit('show-update-notification', null, {
-        currentVersion: result.currentVersion,
-        latestVersion: result.latestVersion,
-        changelog: result.changelog
-      });
-      logger.info(`Update found: ${result.currentVersion} -> ${result.latestVersion}`);
-    } else if (result.error === 'network_unavailable') {
-      statusEl.textContent = 'Could not connect. Check your internet connection.';
-      statusEl.classList.add('update-error');
-      logger.warn('Update check failed: network unavailable');
-    } else if (result.error === 'rate_limited') {
-      statusEl.textContent = 'Too many requests. Please try again later.';
-      statusEl.classList.add('update-error');
-      logger.warn('Update check failed: rate limited');
-    } else if (result.error) {
-      statusEl.textContent = `Check failed: ${result.error}`;
-      statusEl.classList.add('update-error');
-      logger.error(`Update check failed: ${result.error}`);
-    } else {
-      statusEl.textContent = `You're up to date! (v${result.currentVersion})`;
-      statusEl.classList.add('update-current');
-      logger.info('Application is up to date');
-    }
-  } catch (error) {
-    statusEl.textContent = 'Failed to check for updates';
-    statusEl.classList.add('update-error');
-    logger.error('Update check error:', error);
-  } finally {
-    btn.textContent = originalText;
-    btn.disabled = false;
-  }
-}
 
 async function fetchSettings() {
   state.settings = await ipcRenderer.invoke('get-settings');
@@ -755,19 +452,6 @@ function hideLoadingScreen() {
     }, 1000); // Match this with the animation duration (1s)
   }
 }
-
-async function updateVersionDisplay() {
-  try {
-    const version = await ipcRenderer.invoke('get-app-version');
-    const versionElement = document.getElementById('app-version');
-    if (versionElement) {
-      versionElement.textContent = `Version: ${version}`;
-    }
-  } catch (error) {
-    logger.error('Failed to get app version:', error);
-  }
-}
-
 
 ipcRenderer.on('new-clip-added', async (event, fileName) => {
   // Wait for state.settings to be loaded if they haven't been yet
@@ -1452,21 +1136,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     speedText: document.getElementById("speed-text"),
     currentTimeDisplay: document.getElementById("current-time"),
     totalTimeDisplay: document.getElementById("total-time"),
+    previewElement: previewElement,
+    tempVideo: tempVideo,
   }, {
     // Callbacks for module to trigger renderer.js functions
     logCurrentWatchSession: logCurrentWatchSession,
     initializeVolumeControls: initializeVolumeControls,
     getCachedClipData: getCachedClipData,
     getThumbnailPath: clipGridModule.getThumbnailPath,
-    updateDiscordPresenceForClip: updateDiscordPresenceForClip,
+    updateDiscordPresenceForClip: discordManagerModule.updateDiscordPresenceForClip,
     updateNavigationButtons: updateNavigationButtons,
     showCustomAlert: showCustomAlert,
-    showVolumeControls: showVolumeControls,
-    updateVolumeControlsPosition: updateVolumeControlsPosition,
     showExportProgress: showExportProgress,
     showCustomConfirm: showCustomConfirm,
     isBenchmarkMode: isBenchmarkMode,
-    updateDiscordPresence: updateDiscordPresence,
+    updateDiscordPresence: discordManagerModule.updateDiscordPresence,
+    getActionFromEvent: keybinds.getActionFromEvent,
+    navigateToVideo: navigateToVideo,
+    exportAudioWithFileSelection: exportAudioWithFileSelection,
+    exportVideoWithFileSelection: exportVideoWithFileSelection,
+    exportAudioToClipboard: exportAudioToClipboard,
+    exportDefault: exportManagerModule.exportTrimmedVideo,
+    confirmAndDeleteClip: clipGridModule.confirmAndDeleteClip,
+    enableGridNavigation: clipGridModule.enableGridNavigation,
+    disableGridNavigation: clipGridModule.disableGridNavigation,
+    openCurrentGridSelection: clipGridModule.openCurrentGridSelection,
+    moveGridSelection: gridNavigationModule.moveGridSelection,
+    saveTitleChange: saveTitleChange,
+    clearSaveTitleTimeout: clearSaveTitleTimeout,
+    removeClipTitleEditingListeners: removeClipTitleEditingListeners,
+    updateClipDisplay: updateClipDisplay,
+    smoothScrollToElement: smoothScrollToElement,
+    getVisibleClips: clipGridModule.getVisibleClips
   });
 
   // Initialize search manager with dependencies
@@ -1494,14 +1195,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     searchManagerModule: searchManagerModule,
     fetchSettings: fetchSettings,
     updateSettingValue: updateSettingValue,
-    toggleDiscordRPC: toggleDiscordRPC,
+    toggleDiscordRPC: discordManagerModule.toggleDiscordRPC,
     applyIconGreyscale: applyIconGreyscale,
     renderClips: clipGridModule.renderClips,
-    updateVersionDisplay: updateVersionDisplay,
+    updateVersionDisplay: updateManagerModule.updateVersionDisplay,
     changeClipLocation: changeClipLocation,
     updateAllPreviewVolumes: updateAllPreviewVolumes,
     populateKeybindingList: populateKeybindingList
   });
+
+  discordManagerModule.init({
+    videoPlayer: videoPlayer,
+    videoPlayerModule: videoPlayerModule,
+    idleTimeoutMs: IDLE_TIMEOUT
+  });
+
+  updateManagerModule.init();
 
   // Initialize grid navigation module
   gridNavigationModule.init({});
@@ -1527,9 +1236,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateClipThumbnail: updateClipThumbnail,
     handleClipSelection: handleClipSelection,
     clearSelection: clearSelection,
-    handleKeyPress: handleKeyPress,
-    handleKeyRelease: handleKeyRelease,
-    closePlayer: closePlayer,
+    handleKeyPress: videoPlayerModule.handleKeyPress,
+    handleKeyRelease: videoPlayerModule.handleKeyRelease,
+    closePlayer: videoPlayerModule.closePlayer,
     disableVideoThumbnail: disableVideoThumbnail,
     saveTitleChange: saveTitleChange,
     showContextMenu: clipGridModule.showContextMenu,
@@ -1547,7 +1256,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   await settingsManagerUiModule.initializeSettingsModal();
   
   // Initialize gamepad manager
-  await initializeGamepadManager();
+  await gamepadManagerModule.init({
+    videoPlayer: document.getElementById("video-player"),
+    playerOverlay: document.getElementById("player-overlay"),
+    clipTitle: document.getElementById("clip-title"),
+    videoPlayerModule,
+    navigateToVideo,
+    exportAudioWithFileSelection,
+    exportVideoWithFileSelection,
+    exportAudioToClipboard,
+    exportManagerModule,
+    confirmAndDeleteClip: clipGridModule.confirmAndDeleteClip,
+    closePlayer: videoPlayerModule.closePlayer,
+    enableGridNavigation: clipGridModule.enableGridNavigation,
+    disableGridNavigation: clipGridModule.disableGridNavigation,
+    openCurrentGridSelection: clipGridModule.openCurrentGridSelection,
+    moveGridSelection: gridNavigationModule.moveGridSelection,
+    clipGridModule,
+    state
+  });
   const settingsButton = document.getElementById("settingsButton");
   if (settingsButton) {
     settingsButton.addEventListener("click", settingsManagerUiModule.openSettingsModal);
@@ -1649,7 +1376,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       loadClips,
       renderClips: clipGridModule.renderClips,
       openClip,
-      closePlayer,
+      closePlayer: videoPlayerModule.closePlayer,
       performSearch,
       allClips: () => state.allClips  // Getter function for current clips
     });
@@ -1676,7 +1403,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load initial tag preferences
   await tagManagerModule.loadTagPreferences();
 
-  updateDiscordPresence('Browsing clips', `Total clips: ${state.currentClipList.length}`);
+  discordManagerModule.updateDiscordPresence('Browsing clips', `Total clips: ${state.currentClipList.length}`);
 
   state.loadingScreen = document.getElementById('loading-screen');
 
@@ -2009,7 +1736,7 @@ ipcRenderer.on("export-progress", (event, progress) => {
 // Add this new function to handle overlay clicks
 function handleOverlayClick(e) {
   if (e.target === playerOverlay && !window.justFinishedDragging) {
-    closePlayer();
+    videoPlayerModule.closePlayer();
   }
 }
 
@@ -2024,6 +1751,13 @@ function setupClipTitleEditing() {
   clipTitle.addEventListener("blur", clipTitleBlurHandler);
   clipTitle.addEventListener("keydown", clipTitleKeydownHandler);
   clipTitle.addEventListener("input", clipTitleInputHandler);
+}
+
+function removeClipTitleEditingListeners() {
+  clipTitle.removeEventListener("focus", clipTitleFocusHandler);
+  clipTitle.removeEventListener("blur", clipTitleBlurHandler);
+  clipTitle.removeEventListener("keydown", clipTitleKeydownHandler);
+  clipTitle.removeEventListener("input", clipTitleInputHandler);
 }
 
 function clipTitleInputHandler() {
@@ -2041,7 +1775,7 @@ function clipTitleFocusHandler() {
   isRenamingActive = true;
 
   clipTitle.dataset.originalValue = clipTitle.value;
-  updateDiscordPresence('Editing clip title', state.currentClip.customName);
+  discordManagerModule.updateDiscordPresence('Editing clip title', state.currentClip.customName);
   logger.info(
     "Clip title focused. Original value:",
     clipTitle.dataset.originalValue,
@@ -2067,291 +1801,24 @@ function clipTitleKeydownHandler(e) {
   }
 }
 
-function closePlayer() {
-  if (window.justFinishedDragging) {
-    return; // Don't close the player if we just finished dragging
-  }
-
-  // Log the session before closing
-  logCurrentWatchSession(); // Use await if it becomes async later
-
-  if (saveTitleTimeout) {
-    clearTimeout(saveTitleTimeout);
-    saveTitleTimeout = null;
-  }
-
-  // Remove keyboard event listeners for video player controls
-  document.removeEventListener("keydown", handleKeyPress);
-  document.removeEventListener("keyup", handleKeyRelease);
-
-  // Capture necessary information before resetting state.currentClip
-  const originalName = state.currentClip ? state.currentClip.originalName : null;
-  const oldCustomName = state.currentClip ? state.currentClip.customName : null;
-  const newCustomName = clipTitle.value;
-
-  // Save any pending changes immediately
-  saveTitleChange(originalName, oldCustomName, newCustomName, true).then(() => {
-    // Stop ambient glow effect
-    const ambientGlowManager = videoPlayerModule.getAmbientGlowManager();
-    if (ambientGlowManager) {
-      ambientGlowManager.stop();
-    }
-
-    playerOverlay.style.display = "none";
-    fullscreenPlayer.style.display = "none";
-    videoPlayer.pause();
-    videoPlayer.removeEventListener("canplay", videoPlayerModule.handleVideoCanPlay);
-    videoPlayer.removeEventListener("progress", videoPlayerModule.updateLoadingProgress);
-    videoPlayer.removeEventListener("waiting", videoPlayerModule.showLoadingOverlay);
-    videoPlayer.removeEventListener("playing", videoPlayerModule.hideLoadingOverlay);
-    videoPlayer.removeEventListener("seeked", videoPlayerModule.handleVideoSeeked);
-    videoPlayer.removeAttribute('src');
-
-    clipTitle.removeEventListener("focus", clipTitleFocusHandler);
-    clipTitle.removeEventListener("blur", clipTitleBlurHandler);
-    clipTitle.removeEventListener("keydown", clipTitleKeydownHandler);
-    clipTitle.removeEventListener("input", clipTitleInputHandler);
-
-    playerOverlay.removeEventListener("click", handleOverlayClick);
-
-    const clipTitleElement = document.getElementById("clip-title");
-    if (clipTitleElement) {
-      clipTitleElement.value = "";
-    }
-
-    // Remove last-opened class from any previously highlighted clip
-    document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
-      clip.classList.remove('last-opened');
-    });
-
-    // Update the clip's display in the grid and highlight it
-    if (originalName) {
-      updateClipDisplay(originalName);
-      const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
-      if (clipElement) {
-        logger.info('Found clip element to scroll to:', {
-          originalName,
-          elementExists: !!clipElement,
-          elementPosition: clipElement.getBoundingClientRect()
-        });
-
-        // Add highlight class
-        clipElement.classList.add('last-opened');
-        
-        // Small delay to ensure DOM updates have processed
-        setTimeout(() => {
-          smoothScrollToElement(clipElement);
-        }, 50);
-      } else {
-        logger.warn('Clip element not found for scrolling:', originalName);
-      }
-    }
-
-    // Reset current clip
-    state.currentClip = null;
-    if (state.currentCleanup) {
-      state.currentCleanup();
-      state.currentCleanup = null;
-    }
-  });
-
-  clearInterval(state.discordPresenceInterval);
-  updateDiscordPresence('Browsing clips', `Total: ${state.currentClipList.length}`);
-  
-  // Re-enable grid navigation if controller is connected
-  if (state.gamepadManager && state.gamepadManager.isGamepadConnected() && clipGridModule.getVisibleClips().length > 0) {
-    setTimeout(() => {
-      clipGridModule.enableGridNavigation();
-    }, 200); // Small delay to ensure player overlay is hidden
-  }
-}
-
 // Make sure this event listener is present on the fullscreenPlayer
 fullscreenPlayer.addEventListener("click", (e) => {
   e.stopPropagation();
 });
 
-playerOverlay.addEventListener("click", closePlayer);
-
-function handleKeyRelease(e) {
-  if (e.key === "," || e.key === ".") {
-    state.isFrameStepping = false;
-    state.frameStepDirection = 0;
-  }
-
-  // Handle Space release for temporary speed boost or tap-to-toggle
-  if (e.key === ' ' || e.code === 'Space') {
-    const isClipTitleFocused = document.activeElement === clipTitle;
-    const isSearching = document.activeElement === document.getElementById("search-input");
-    const isPlayerActive = playerOverlay.style.display === "block";
-    if (!isPlayerActive || isClipTitleFocused || isSearching) return;
-
-    if (state.spaceHoldTimeoutId) {
-      clearTimeout(state.spaceHoldTimeoutId);
-      state.spaceHoldTimeoutId = null;
-    }
-
-    if (state.wasSpaceHoldBoostActive) {
-      // Restore previous playback rate without saving/updating UI
-      videoPlayer.playbackRate = state.speedBeforeSpaceHold;
-    } else {
-      // Treat as tap: toggle play/pause
-      if (videoPlayer.src) videoPlayerModule.togglePlayPause();
-    }
-
-    state.isSpaceHeld = false;
-    state.wasSpaceHoldBoostActive = false;
-  }
-}
-
-function handleKeyPress(e) {
-  const isClipTitleFocused = document.activeElement === clipTitle;
-  const isSearching = document.activeElement === document.getElementById("search-input");
-  const isPlayerActive = playerOverlay.style.display === "block";
-
-  videoPlayerModule.showControls();
-
-  // Special handling for Space: hold to 2x while pressed (no metadata/UI update)
-  if (!isClipTitleFocused && !isSearching && (e.key === ' ' || e.code === 'Space')) {
-    e.preventDefault();
-    if (!state.isSpaceHeld) {
-      state.isSpaceHeld = true;
-      state.wasSpaceHoldBoostActive = false;
-      // Start a short delay to distinguish tap vs hold
-      state.spaceHoldTimeoutId = setTimeout(() => {
-        // Only boost if still held and video is playing
-        if (state.isSpaceHeld && !videoPlayer.paused) {
-          state.wasSpaceHoldBoostActive = true;
-          state.speedBeforeSpaceHold = videoPlayer.playbackRate;
-          videoPlayer.playbackRate = 2;
-        }
-      }, 200);
-    }
-    // Do not process further as a keybinding here
-    return;
-  }
-
-  // Resolve action from keybindings
-  if (!isClipTitleFocused && !isSearching) {
-    const action = keybinds.getActionFromEvent(e);
-    if (!action) return;
-
-    // Prevent default for handled keys unless explicitly allowed
-    e.preventDefault();
-
-    if (isPlayerActive) {
-      // Handle actions when player is active
-      switch (action) {
-        case 'closePlayer':
-          closePlayer();
-          break;
-        case 'playPause':
-          if (videoPlayer.src) videoPlayerModule.togglePlayPause();
-          break;
-        case 'frameBackward':
-          videoPlayerModule.moveFrame(-1);
-          break;
-        case 'frameForward':
-          videoPlayerModule.moveFrame(1);
-          break;
-        case 'navigatePrev':
-          navigateToVideo(-1);
-          break;
-        case 'navigateNext':
-          navigateToVideo(1);
-          break;
-        case 'skipBackward':
-          videoPlayerModule.skipTime(-1);
-          break;
-        case 'skipForward':
-          videoPlayerModule.skipTime(1);
-          break;
-        case 'volumeUp':
-          videoPlayerModule.changeVolume(0.1);
-          break;
-        case 'volumeDown':
-          videoPlayerModule.changeVolume(-0.1);
-          break;
-        case 'exportAudioFile':
-          exportAudioWithFileSelection();
-          break;
-        case 'exportVideo':
-          exportVideoWithFileSelection();
-          break;
-        case 'exportAudioClipboard':
-          exportAudioToClipboard();
-          break;
-        case 'exportDefault':
-          exportManagerModule.exportTrimmedVideo();
-          break;
-        case 'fullscreen':
-          videoPlayerModule.toggleFullscreen();
-          break;
-        case 'deleteClip':
-          clipGridModule.confirmAndDeleteClip();
-          break;
-        case 'setTrimStart':
-          videoPlayerModule.setTrimPoint('start');
-          break;
-        case 'setTrimEnd':
-          videoPlayerModule.setTrimPoint('end');
-          break;
-        case 'focusTitle':
-          clipTitle.focus();
-          break;
-        default:
-          // Unknown action - do nothing
-          break;
-      }
-    } else {
-      // Handle actions when player is NOT active (grid view mode)
-      // Enable grid navigation if not already enabled
-      if (!state.gridNavigationEnabled) {
-        clipGridModule.enableGridNavigation();
-      }
-      
-      switch (action) {
-        case 'playPause':
-          // In grid view, play/pause opens the selected clip
-          clipGridModule.openCurrentGridSelection();
-          break;
-        case 'skipBackward':
-          // Left arrow - navigate left in grid
-          gridNavigationModule.moveGridSelection('left');
-          break;
-        case 'skipForward':
-          // Right arrow - navigate right in grid
-          gridNavigationModule.moveGridSelection('right');
-          break;
-        case 'volumeUp':
-          // Up arrow - navigate up in grid
-          gridNavigationModule.moveGridSelection('up');
-          break;
-        case 'volumeDown':
-          // Down arrow - navigate down in grid
-          gridNavigationModule.moveGridSelection('down');
-          break;
-        case 'closePlayer':
-          // Escape - disable grid navigation
-          clipGridModule.disableGridNavigation();
-          break;
-        case 'exportDefault':
-          // 'e' key - open selected clip
-          clipGridModule.openCurrentGridSelection();
-          break;
-        default:
-          // Other actions are ignored in grid view
-          break;
-      }
-    }
-  }
-}
-
+playerOverlay.addEventListener("click", videoPlayerModule.closePlayer);
 async function updateClipDisplay(originalName) {
   return
 }
 
 let saveTitleTimeout = null;
+
+function clearSaveTitleTimeout() {
+  if (saveTitleTimeout) {
+    clearTimeout(saveTitleTimeout);
+    saveTitleTimeout = null;
+  }
+}
 
 async function saveTitleChange(originalName, oldCustomName, newCustomName, immediate = false) {
   if (saveTitleTimeout) {
@@ -2506,7 +1973,7 @@ const debouncedFilterClips = videoPlayerModule.debounce((filter) => {
 
   validateClipLists();
   updateClipCounter(filteredClips.length);
-  updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${state.currentClipList.length}`);
+  discordManagerModule.updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${state.currentClipList.length}`);
 }, 300);  // 300ms debounce time
 
 function filterClips() {
@@ -2581,105 +2048,20 @@ function removeDuplicates(clips) {
 
 
 
-function updateDiscordPresenceBasedOnState() {
-  if (state.currentClip) {
-    updateDiscordPresenceForClip(state.currentClip, !videoPlayer.paused);
-  } else {
-    const publicClipCount = state.currentClipList.filter(clip => !clip.tags.includes('Private')).length;
-    updateDiscordPresence('Browsing clips', `Total: ${publicClipCount}`);
-  }
-}
+let lastPreviewUpdateTime = 0;
+const PREVIEW_UPDATE_INTERVAL = 100; // Throttle frame updates, not positioning
+let previewHalfWidth = 0;
+let previewNeedsMeasure = true;
+let lastPreviewMoveTime = 0;
+let lastPreviewMoveX = 0;
+let previewFrameTimeout = null;
+let lastPreviewEvent = null;
+const PREVIEW_VELOCITY_THRESHOLD = 1.2; // px/ms (~1200 px/s)
+const PREVIEW_IDLE_DELAY = 90; // ms after last move
 
-function updateDiscordPresence(details, state = null) {
-  if (state.settings && state.settings.enableDiscordRPC) {
-    ipcRenderer.invoke('update-discord-presence', details, state);
-  }
-}
-
-async function toggleDiscordRPC(enable) {
-  await ipcRenderer.invoke('toggle-discord-rpc', enable);
-  if (enable) {
-    updateDiscordPresenceBasedOnState();
-  }
-}
-
-document.addEventListener('mousemove', () => {
-  state.lastActivityTime = Date.now();
+window.addEventListener('resize', () => {
+  previewNeedsMeasure = true;
 });
-
-document.addEventListener('keydown', () => {
-  state.lastActivityTime = Date.now();
-});
-
-setInterval(() => {
-  if (Date.now() - state.lastActivityTime > IDLE_TIMEOUT && !videoPlayer.playing) {
-    ipcRenderer.invoke('clear-discord-presence');
-  }
-}, 60000); // Check every minute
-
-ipcRenderer.on('check-activity-state', () => {
-  if (Date.now() - state.lastActivityTime <= IDLE_TIMEOUT || videoPlayer.playing) {
-    updateDiscordPresenceBasedOnState();
-  }
-});
-
-function updateDiscordPresenceForClip(clip, isPlaying = true) {
-  if (state.settings && state.settings.enableDiscordRPC) {
-    clearInterval(state.discordPresenceInterval);
-    
-    if (clip.tags && clip.tags.includes('Private')) {
-      logger.info('Private clip detected. Clearing presence');
-      updateDiscordPresence('Download Clip Library now!', '');
-    } else {
-      if (isPlaying) {
-        state.clipStartTime = Date.now() - (state.elapsedTime * 1000);
-      }
-      
-      const updatePresence = () => {
-        if (isPlaying) {
-          state.elapsedTime = Math.floor((Date.now() - state.clipStartTime) / 1000);
-        }
-        const totalDuration = Math.floor(videoPlayer.duration);
-        const timeString = `${videoPlayerModule.formatTime(state.elapsedTime)}/${videoPlayerModule.formatTime(totalDuration)}`;
-        updateDiscordPresence(`${clip.customName}`, `${timeString}`);
-      };
-
-      updatePresence(); // Initial update
-      
-      if (isPlaying) {
-        state.discordPresenceInterval = setInterval(updatePresence, 1000); // Update every second
-      }
-    }
-  }
-}
-
-// Update preview position and content
-function updatePreview(e) {
-  const rect = progressBarContainer.getBoundingClientRect();
-  const position = (e.clientX - rect.left) / rect.width;
-  const time = videoPlayer.duration * position;
-  
-  // Position directly based on cursor location within progress bar
-  const cursorXRelative = e.clientX - rect.left;
-  const previewWidth = previewElement.offsetWidth;
-  
-  previewElement.style.position = 'absolute';
-  previewElement.style.left = `${cursorXRelative - (previewWidth/2)}px`;
-  previewElement.style.bottom = '20px';
-  
-  // Update timestamp
-  const previewTimestamp = document.getElementById('preview-timestamp');
-  previewTimestamp.textContent = videoPlayerModule.formatTime(time);
-
-  // Update video frame if ready
-  if (tempVideo.readyState >= 2) {
-    tempVideo.currentTime = time;
-  }
-}
-
-// Use a more efficient throttling mechanism
-let lastUpdateTime = 0;
-const UPDATE_INTERVAL = 16; // About 60fps
 
 progressBarContainer.addEventListener('mousemove', (e) => {
   // Add this check - if we're hovering over volume controls, don't show preview
@@ -2690,16 +2072,53 @@ progressBarContainer.addEventListener('mousemove', (e) => {
       e.target.parentElement?.classList.contains('volume-drag-control')) {
     return;
   }
-  
-  const now = performance.now();
-  
-  // Just show the preview initially
+
   previewElement.style.display = 'block';
-  
-  // Only update position and content when throttle interval has passed
-  if (now - lastUpdateTime >= UPDATE_INTERVAL) {
-    lastUpdateTime = now;
-    updatePreview(e);
+  if (!previewElement.style.willChange) {
+    previewElement.style.willChange = 'transform';
+  }
+
+  if (previewNeedsMeasure) {
+    const width = previewElement.offsetWidth;
+    if (width > 0) {
+      previewHalfWidth = width / 2;
+      previewNeedsMeasure = false;
+    }
+  }
+
+  // Position immediately for responsive hover (use transform to avoid layout churn)
+  const rect = progressBarContainer.getBoundingClientRect();
+  const cursorXRelative = e.clientX - rect.left;
+  previewElement.style.position = 'absolute';
+  previewElement.style.left = '0px';
+  previewElement.style.bottom = '20px';
+  previewElement.style.transform = `translate3d(${cursorXRelative - previewHalfWidth}px, 0, 0)`;
+
+  // Throttle preview frame/time updates
+  const now = performance.now();
+  const deltaTime = now - lastPreviewMoveTime;
+  const deltaX = Math.abs(e.clientX - lastPreviewMoveX);
+  const velocity = deltaTime > 0 ? (deltaX / deltaTime) : 0;
+  lastPreviewMoveTime = now;
+  lastPreviewMoveX = e.clientX;
+  lastPreviewEvent = { clientX: e.clientX };
+
+  if (previewFrameTimeout) {
+    clearTimeout(previewFrameTimeout);
+  }
+  previewFrameTimeout = setTimeout(() => {
+    previewFrameTimeout = null;
+    if (lastPreviewEvent) {
+      lastPreviewUpdateTime = performance.now();
+      videoPlayerModule.updatePreview(lastPreviewEvent, { skipPosition: true });
+    }
+  }, PREVIEW_IDLE_DELAY);
+
+  if (now - lastPreviewUpdateTime >= PREVIEW_UPDATE_INTERVAL) {
+    if (velocity <= PREVIEW_VELOCITY_THRESHOLD) {
+      lastPreviewUpdateTime = now;
+      videoPlayerModule.updatePreview(e, { skipPosition: true });
+    }
   }
 });
 
@@ -2719,8 +2138,8 @@ async function initializePreviewVideo(videoSource) {
     tempVideo.addEventListener('loadedmetadata', () => {
       const previewCanvas = document.getElementById('preview-canvas');
       if (previewCanvas) {
-        previewCanvas.width = 160;  // Set fixed preview width
-        previewCanvas.height = 90;  // Set fixed preview height
+        previewCanvas.width = 160;
+        previewCanvas.height = 90;
       }
       resolve();
     }, { once: true });
@@ -2739,6 +2158,10 @@ progressBarContainer.addEventListener('mouseleave', () => {
   const previewElement = document.getElementById('timeline-preview');
   if (previewElement) {
     previewElement.style.display = 'none';
+  }
+  if (previewFrameTimeout) {
+    clearTimeout(previewFrameTimeout);
+    previewFrameTimeout = null;
   }
   // Reset temp video
   tempVideo.currentTime = 0;
@@ -2967,237 +2390,6 @@ document.getElementById('clear-selection')?.addEventListener('click', clearSelec
 
 
 
-async function updateVersionDisplay() {
-  try {
-    const version = await ipcRenderer.invoke('get-app-version');
-    const versionElement = document.getElementById('app-version');
-    if (versionElement) {
-      versionElement.textContent = version;
-    }
-  } catch (error) {
-    logger.error('Failed to get app version:', error);
-  }
-}
-
-// Add this near the other ipcRenderer listeners
-ipcRenderer.on('show-update-notification', (event, data) => {
-  console.log('[UPDATE] show-update-notification received:', data);
-  logger.info('[UPDATE] Received show-update-notification IPC message');
-  
-  try {
-    // Validate incoming data
-    if (!data || typeof data !== 'object') {
-      logger.error('Invalid update notification data received:', data);
-      console.error('[UPDATE] Invalid data:', data);
-      return;
-    }
-    
-    const { currentVersion, latestVersion, changelog } = data;
-    
-    logger.info(`Renderer received update notification: ${currentVersion} -> ${latestVersion}`);
-    
-    // Don't create duplicate notifications
-    if (document.querySelector('.update-notification')) {
-      logger.info('Update notification already exists, skipping');
-      return;
-    }
-    
-    const notification = document.createElement('div');
-    notification.className = 'update-notification';
-    notification.innerHTML = `
-      <div class="update-notification-content">
-        <span class="update-text">Update available (${latestVersion || 'unknown'})</span>
-        <button class="update-close" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-      <div class="changelog-container">
-        <div class="changelog"></div>
-      </div>
-    `;
-
-    // Parse and sanitize markdown (with fallbacks if libraries aren't loaded)
-    const changelogContainer = notification.querySelector('.changelog');
-    if (changelog) {
-      try {
-        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-          const parsed = marked.parse(changelog);
-          changelogContainer.innerHTML = DOMPurify.sanitize(parsed);
-        } else {
-          // Fallback: show raw text
-          changelogContainer.textContent = changelog;
-          logger.warn('marked or DOMPurify not available, showing raw changelog');
-        }
-      } catch (parseError) {
-        logger.error('Error parsing changelog:', parseError);
-        changelogContainer.textContent = changelog;
-      }
-    } else {
-      changelogContainer.textContent = 'No release notes available';
-    }
-    
-    document.body.appendChild(notification);
-    logger.info('Update notification element added to DOM');
-    console.log('[UPDATE] Notification element added to DOM:', notification);
-    console.log('[UPDATE] Notification parent:', notification.parentElement);
-    
-    // Show notification with slight delay
-    setTimeout(() => {
-      notification.classList.add('show');
-      logger.info('Update notification shown');
-      console.log('[UPDATE] .show class added, notification should be visible');
-      console.log('[UPDATE] Notification classList:', notification.className);
-      console.log('[UPDATE] Notification computed style visibility:', window.getComputedStyle(notification).visibility);
-    }, 100);
-
-    // Add event listeners
-    notification.querySelector('.update-close').addEventListener('click', (e) => {
-      e.stopPropagation();
-      notification.classList.remove('show');
-      setTimeout(() => notification.remove(), 300);
-      logger.info('Update notification dismissed');
-    });
-
-    notification.querySelector('.update-notification-content').addEventListener('click', async (e) => {
-      if (e.target.closest('.update-close')) return;
-      
-      const content = e.currentTarget;
-      const updateText = content.querySelector('.update-text');
-      const originalText = updateText.textContent;
-      
-      // Prevent multiple clicks
-      if (content.classList.contains('downloading')) return;
-      
-      // Update text to show downloading state
-      updateText.textContent = 'Downloading update...';
-      
-      // Add progress bar
-      const progressBar = document.createElement('div');
-      progressBar.className = 'download-progress';
-      progressBar.innerHTML = '<div class="progress-fill"></div>';
-      content.appendChild(progressBar);
-      content.classList.add('downloading');
-      
-      // Progress handler
-      const onProgress = (_, progress) => {
-        const roundedProgress = Math.round(progress);
-        progressBar.querySelector('.progress-fill').style.width = `${progress}%`;
-        updateText.textContent = `Downloading update... ${roundedProgress}%`;
-      };
-      
-      // Error handler
-      const onError = (_, errorMessage) => {
-        logger.error('Update download failed:', errorMessage);
-        updateText.textContent = 'Download failed. Click to retry.';
-        content.classList.remove('downloading');
-        progressBar.remove();
-        cleanup();
-      };
-      
-      // Cleanup function
-      const cleanup = () => {
-        ipcRenderer.removeListener('download-progress', onProgress);
-        ipcRenderer.removeListener('update-download-error', onError);
-      };
-      
-      // Listen for progress updates and errors
-      ipcRenderer.on('download-progress', onProgress);
-      ipcRenderer.on('update-download-error', onError);
-    
-      try {
-        // Start update
-        await ipcRenderer.invoke('start-update');
-      } catch (error) {
-        logger.error('Update invocation failed:', error);
-        updateText.textContent = 'Download failed. Click to retry.';
-        content.classList.remove('downloading');
-        progressBar.remove();
-        cleanup();
-      }
-    });
-  } catch (error) {
-    logger.error('Error creating update notification:', error);
-  }
-});
-
-// Test utility for update notification popup
-window.updateNotificationTest = {
-  show: (options = {}) => {
-    const { 
-      currentVersion = '1.0.0', 
-      latestVersion = '2.0.0', 
-      changelog = '## What\'s New\\n- Feature 1\\n- Feature 2\\n- Bug fixes' 
-    } = options;
-    
-    // Remove existing notification if present
-    const existing = document.querySelector('.update-notification');
-    if (existing) existing.remove();
-    
-    // Trigger the show-update-notification event
-    const event = new CustomEvent('test-update-notification');
-    ipcRenderer.emit('show-update-notification', event, { currentVersion, latestVersion, changelog });
-    
-    console.log('Update notification shown. Click on it to simulate downloading.');
-    return 'Update notification displayed';
-  },
-  
-  simulateDownload: (durationMs = 5000) => {
-    const notification = document.querySelector('.update-notification');
-    if (!notification) {
-      console.error('No update notification found. Call updateNotificationTest.show() first.');
-      return;
-    }
-    
-    const content = notification.querySelector('.update-notification-content');
-    if (content.classList.contains('downloading')) {
-      console.log('Already downloading');
-      return;
-    }
-    
-    const updateText = content.querySelector('.update-text');
-    updateText.textContent = 'Downloading update...';
-    
-    // Add progress bar
-    const progressBar = document.createElement('div');
-    progressBar.className = 'download-progress';
-    progressBar.innerHTML = '<div class="progress-fill"></div>';
-    content.appendChild(progressBar);
-    content.classList.add('downloading');
-    
-    // Simulate progress
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.random() * 15;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
-        updateText.textContent = 'Download complete!';
-        setTimeout(() => {
-          notification.classList.remove('show');
-          setTimeout(() => notification.remove(), 300);
-        }, 1500);
-      }
-      progressBar.querySelector('.progress-fill').style.width = `${progress}%`;
-      updateText.textContent = `Downloading update... ${Math.round(progress)}%`;
-    }, durationMs / 10);
-    
-    console.log(`Simulating download over ${durationMs}ms`);
-    return 'Download simulation started';
-  },
-  
-  hide: () => {
-    const notification = document.querySelector('.update-notification');
-    if (notification) {
-      notification.classList.remove('show');
-      setTimeout(() => notification.remove(), 300);
-      return 'Update notification hidden';
-    }
-    return 'No notification to hide';
-  }
-};
 
 window.loadingScreenTest = {
   show: () => {
@@ -3314,15 +2506,15 @@ function setupVolumeControlListeners() {
   // Clean up existing listeners first
   state.volumeStartElement.removeEventListener('mousedown', handleVolumeStartDrag);
   state.volumeEndElement.removeEventListener('mousedown', handleVolumeEndDrag);
-  document.removeEventListener('mousemove', handleVolumeDrag);
+  document.removeEventListener('mousemove', videoPlayerModule.handleVolumeDrag);
   document.removeEventListener('mouseup', videoPlayerModule.endVolumeDrag);
 
   function handleVolumeStartDrag(e) {
     if (e.button !== 0) return; // Only handle left mouse button
     e.stopPropagation();
     state.isVolumeDragging = 'start';
-    showVolumeDragControl(e);
-    document.addEventListener('mousemove', handleVolumeDrag);
+    videoPlayerModule.showVolumeDragControl(e);
+    document.addEventListener('mousemove', videoPlayerModule.handleVolumeDrag);
     document.addEventListener('mouseup', videoPlayerModule.endVolumeDrag);
   }
 
@@ -3330,8 +2522,8 @@ function setupVolumeControlListeners() {
     if (e.button !== 0) return; // Only handle left mouse button
     e.stopPropagation();
     state.isVolumeDragging = 'end';
-    showVolumeDragControl(e);
-    document.addEventListener('mousemove', handleVolumeDrag);
+    videoPlayerModule.showVolumeDragControl(e);
+    document.addEventListener('mousemove', videoPlayerModule.handleVolumeDrag);
     document.addEventListener('mouseup', videoPlayerModule.endVolumeDrag);
   }
 
@@ -3359,131 +2551,11 @@ function setupVolumeControlListeners() {
   });
 }
 
-function handleVolumeDrag(e) {
-  if (!state.isVolumeDragging) return;
-
-  document.body.classList.add('dragging');
-
-  const progressBarContainer = document.getElementById('progress-bar-container');
-  const rect = progressBarContainer.getBoundingClientRect();
-  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-  const timePosition = (x / rect.width) * videoPlayer.duration;
-
-  if (state.isVolumeDragging === 'start') {
-    state.volumeStartTime = Math.min(timePosition, state.volumeEndTime - 0.1);
-  } else if (state.isVolumeDragging === 'end') {
-    state.volumeEndTime = Math.max(timePosition, state.volumeStartTime + 0.1);
-  }
-
-  // Keep volume control visible and centered during drag
-  updateVolumeControlsPosition();
-  state.volumeDragControl.style.display = 'flex';
-  
-  // Ensure volume input stays visible
-  const volumeInput = state.volumeDragControl.querySelector('input');
-  if (volumeInput) {
-    volumeInput.style.display = 'block';
-  }
-
-  debouncedSaveVolumeData();
-}
-
-function showVolumeDragControl(e) {
-  if (!state.isVolumeControlsVisible) return;
-
-  const rect = progressBarContainer.getBoundingClientRect();
-  state.volumeDragControl.style.display = 'flex';
-
-  // If dragging, use event position
-  if (e) {
-    const x = e.clientX - rect.left;
-    state.volumeDragControl.style.left = `${x}px`;
-  } else {
-    // Otherwise position in middle of volume range
-    const startPercent = (state.volumeStartTime / videoPlayer.duration) * 100;
-    const endPercent = (state.volumeEndTime / videoPlayer.duration) * 100;
-    const middlePercent = (startPercent + endPercent) / 2;
-    state.volumeDragControl.style.left = `${middlePercent}%`;
-  }
-
-  // Ensure input is visible and set to current level
-  const volumeInput = state.volumeDragControl.querySelector('input');
-  if (volumeInput) {
-    volumeInput.value = state.volumeLevel;
-    volumeInput.style.display = 'block';
-  }
-}
-
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.isVolumeDragging) {
     videoPlayerModule.endVolumeDrag();
   }
 });
-
-function updateVolumeControlsPosition() {
-  if (!videoPlayer.duration || !state.isVolumeControlsVisible) return;
-
-  const startPercent = (state.volumeStartTime / videoPlayer.duration) * 100;
-  const endPercent = (state.volumeEndTime / videoPlayer.duration) * 100;
-
-  state.volumeStartElement.style.left = `${startPercent}%`;
-  state.volumeEndElement.style.left = `${endPercent}%`;
-  state.volumeRegionElement.style.left = `${startPercent}%`;
-  state.volumeRegionElement.style.width = `${endPercent - startPercent}%`;
-
-  // Update volume drag control position
-  if (state.volumeDragControl) {
-    const middlePercent = (startPercent + endPercent) / 2;
-    state.volumeDragControl.style.left = `${middlePercent}%`;
-    state.volumeDragControl.style.display = 'flex';
-  }
-}
-
-const debouncedSaveVolumeData = videoPlayerModule.debounce(async () => {
-  if (!state.currentClip || !state.isVolumeControlsVisible) return;
-  
-  const volumeData = {
-    start: state.volumeStartTime,
-    end: state.volumeEndTime,
-    level: state.volumeLevel || 0
-  };
-  
-  try {
-    logger.info('Saving volume data:', volumeData);
-    await ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData);
-    logger.info('Volume data saved successfully');
-  } catch (error) {
-    logger.error('Error saving volume data:', error);
-  }
-}, 300); // 300ms debounce time
-
-function saveVolumeData() {
-  debouncedSaveVolumeData();
-}
-
-function showVolumeControls() {
-  state.isVolumeControlsVisible = true;
-  state.volumeStartElement.style.display = 'block';
-  state.volumeEndElement.style.display = 'block';
-  state.volumeRegionElement.style.display = 'block';
-  updateVolumeControlsPosition();
-  showVolumeDragControl();
-}
-
-function toggleVolumeControls() {
-  if (!videoPlayer.duration) return;
-
-  if (!state.isVolumeControlsVisible) {
-    if (state.volumeStartTime === 0 && state.volumeEndTime === 0) {
-      state.volumeStartTime = videoPlayer.duration / 3;
-      state.volumeEndTime = (videoPlayer.duration / 3) * 2;
-      state.volumeLevel = 0;
-    }
-    showVolumeControls();
-  } else {
-    videoPlayerModule.hideVolumeControls();
-  }
-}
 
 // Add this to your video timeupdate event listener
 videoPlayer.addEventListener('timeupdate', () => {
@@ -3504,7 +2576,7 @@ document.addEventListener('keydown', (e) => {
                         
   if (!isInputFocused && (e.key === 'v' || e.key === 'V')) {
     e.preventDefault();
-    toggleVolumeControls();
+    videoPlayerModule.toggleVolumeControls();
   }
 });
 
