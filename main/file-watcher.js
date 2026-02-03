@@ -4,12 +4,15 @@
  * Watches the clip folder and notifies the caller when new clips are added.
  */
 
+// Imports
 const chokidar = require('chokidar');
 const path = require('path');
 const logger = require('../utils/logger');
 
+// Constants
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
 
+// Module state
 let watcher = null;
 
 /**

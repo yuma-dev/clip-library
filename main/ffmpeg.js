@@ -5,6 +5,7 @@
  * Handles progress tracking and clipboard integration.
  */
 
+// Imports
 const { execFile } = require('child_process');
 const { clipboard, ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
@@ -16,6 +17,7 @@ const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar
 const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
 
+// FFmpeg binary paths
 // Configure FFmpeg paths
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
@@ -81,6 +83,7 @@ function ffprobeAsync(filePath) {
  * @param {object|null} options.volumeData - Optional volume range data
  * @returns {Promise<boolean>} True if fallback was used
  */
+// Export helpers
 async function exportVideoWithFallback(options) {
   const { inputPath, outputPath, start, end, volume, speed, quality, volumeData } = options;
   const duration = end - start;
@@ -404,6 +407,7 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
 /**
  * Copy file path to clipboard (platform-specific)
  */
+// Clipboard helpers
 function copyFileToClipboard(filePath) {
   if (process.platform === 'win32') {
     clipboard.writeBuffer('FileNameW', Buffer.from(filePath + '\0', 'ucs2'));
@@ -415,6 +419,7 @@ function copyFileToClipboard(filePath) {
 /**
  * Emit progress to all renderer windows
  */
+// Progress events
 function emitProgress(percent) {
   BrowserWindow.getAllWindows().forEach((window) => {
     window.webContents.send('export-progress', percent);
@@ -437,6 +442,7 @@ function emitFallbackNotice() {
  * @param {string} outputPath - Full path for the output screenshot
  * @returns {Promise<void>}
  */
+// Screenshots
 function generateScreenshot(videoPath, timestamp, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
@@ -455,6 +461,7 @@ function generateScreenshot(videoPath, timestamp, outputPath) {
  * Setup IPC event listeners for progress
  * Called once during app initialization
  */
+// IPC wiring
 function setupProgressListeners() {
   ipcMain.on('ffmpeg-fallback', () => {
     emitFallbackNotice();
@@ -472,6 +479,7 @@ function setupProgressListeners() {
  * @param {Object} thumbnailsModule - Thumbnails module for cache access
  * @returns {Promise<Object>} Clip info object with format.duration
  */
+// Metadata helpers
 async function getClipInfo(clipName, getSettings, thumbnailsModule) {
   logger.info(`[ffmpeg] get-clip-info requested for: ${clipName}`);
   const settings = await getSettings();
