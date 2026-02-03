@@ -129,9 +129,7 @@ document.body.appendChild(selectionActions);
 
 // All state variables moved to renderer/state.js
 // Access via state.getXxx() and state.setXxx() methods
-
-
-
+// Cache helpers
 /**
  * Get cached clip data or load fresh
  */
@@ -287,6 +285,16 @@ ipcRenderer.on("thumbnail-generation-complete", () => {
   }
 });
 
+ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
+  logger.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
+});
+
+ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
+  // Update cache with newly generated thumbnail
+  state.thumbnailPathCache.set(clipName, thumbnailPath);
+  updateClipThumbnail(clipName, thumbnailPath);
+});
+
 /**
  * Show thumbnail generation progress for large batches.
  */
@@ -372,6 +380,7 @@ function hideThumbnailGenerationText() {
   state.completedThumbnails = 0;
 }
 
+// New clips indicators
 /**
  * Reposition "new clips" divider indicators within each group.
  */
@@ -542,6 +551,7 @@ function updateNewClipsIndicators() {
   }
 }
 
+// Window events
 window.addEventListener('beforeunload', () => {
   if (window.thumbnailGenerationTimeout) {
     clearTimeout(window.thumbnailGenerationTimeout);
@@ -549,13 +559,13 @@ window.addEventListener('beforeunload', () => {
   hideThumbnailGenerationText();
 });
 
-// Add window resize listener to reposition indicators
+// Resize: preview + indicator layout
 window.addEventListener('resize', () => {
   previewNeedsMeasure = true;
   updateIndicatorsOnChange();
 });
 
-// Dev console debugging function
+// Dev helpers
 window.setNewClipsCount = function(count) {
   if (!state.allClips || state.allClips.length === 0) {
     console.log('No clips loaded yet');
@@ -642,16 +652,9 @@ console.log('  debugNewClips() - Show current state');
 console.log('  resetNewClips() - Mark all clips as not new');
 console.log('  checkIndicatorData() - Debug data attributes and positioning');
 
-ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
-  logger.error(`Failed to generate thumbnail for ${clipName}: ${error}`);
-});
-
-ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
-  // Update cache with newly generated thumbnail
-  state.thumbnailPathCache.set(clipName, thumbnailPath);
-  updateClipThumbnail(clipName, thumbnailPath);
-});
-
+/**
+ * Trigger FFmpeg version lookup (for UI display).
+ */
 async function getFfmpegVersion() {
   try {
     await ipcRenderer.invoke('get-ffmpeg-version');
@@ -660,6 +663,9 @@ async function getFfmpegVersion() {
   }
 }
 
+/**
+ * Replace a clip's thumbnail image after generation.
+ */
 function updateClipThumbnail(clipName, thumbnailPath) {
   const clipElement = document.querySelector(
     `.clip-item[data-original-name="${clipName}"]`
@@ -683,6 +689,7 @@ function updateClipThumbnail(clipName, thumbnailPath) {
   }
 }
 
+// Time grouping helpers
 function getTimeGroup(timestamp) {
   const now = new Date();
   const date = new Date(timestamp);
@@ -1325,6 +1332,7 @@ function updateAllPreviewVolumes(newVolume) {
 }
 
 
+// Settings modal UI
 // Add click-outside-to-close functionality for state.settings modal
 document.addEventListener('click', (e) => {
   const settingsModal = document.getElementById('settingsModal');
@@ -1336,7 +1344,9 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Add this function to calculate relative time
+/**
+ * Format a timestamp into a relative "time ago" string.
+ */
 function getRelativeTimeString(timestamp) {
   const date = new Date(timestamp);
   const now = new Date();
@@ -1368,6 +1378,7 @@ function getRelativeTimeString(timestamp) {
 
 
 
+// Player navigation / export
 const exportButton = document.getElementById("export-button");
 const deleteButton = document.getElementById("delete-button");
 
@@ -1396,6 +1407,9 @@ ipcRenderer.on("close-video-player", () => {
   }
 });
 
+/**
+ * Enable/disable prev/next buttons based on current clip index.
+ */
 function updateNavigationButtons() {
   const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === state.currentClip.originalName);
   document.getElementById('prev-video').disabled = currentIndex <= 0;
@@ -1403,6 +1417,9 @@ function updateNavigationButtons() {
 }
 
 
+/**
+ * Open the adjacent clip in the current list.
+ */
 function navigateToVideo(direction) {
   const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === state.currentClip.originalName);
   const newIndex = currentIndex + direction;
@@ -1422,7 +1439,7 @@ document.getElementById('next-video').addEventListener('click', (e) => {
   navigateToVideo(1);
 });
 
-
+// Deletion tooltip UI
 function showDeletionTooltip() {
   if (!state.deletionTooltip) {
     state.deletionTooltip = document.createElement('div');
@@ -1510,12 +1527,12 @@ async function exportAudioToClipboard() {
   await exportManagerModule.exportAudio();
 }
 
-
-
+// Export progress IPC
 ipcRenderer.on("export-progress", (event, progress) => {
   showExportProgress(progress, 100);
 });
 
+// Clip title editing
 // Add this new function to handle overlay clicks
 function handleOverlayClick(e) {
   if (e.target === playerOverlay && !window.justFinishedDragging) {
@@ -2229,13 +2246,13 @@ function applyIconGreyscale(enabled) {
   });
 }
 
+// Startup side effects
 // inside DOMContentLoaded handler after state.settings loaded
 tagManagerModule.loadGlobalTags();
 applyIconGreyscale(state.settings?.iconGreyscale);
 
-
 // After initial requires
-if(document && document.fonts){
+if (document && document.fonts) {
   document.fonts.load('24px "Material Symbols Rounded"').then(()=>{
     document.body.classList.add('icons-ready');
   }).catch(()=>{
