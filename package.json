@@ -18,7 +18,12 @@
     "productName": "Clips",
     "files": [
       "assets/**/*",
+      "main/**/*",
+      "renderer/**/*",
+      "utils/**/*",
+      "templates/**/*",
       "*.js",
+      "*.json",
       "diagnostics/**/*.js",
       "*.html",
       "*.css",
