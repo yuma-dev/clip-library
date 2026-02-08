@@ -20,6 +20,7 @@ const state = require('./state');
 const tagManagerModule = require('./tag-manager');
 const videoPlayerModule = require('./video-player');
 const keybinds = require('./keybinding-manager');
+const searchManagerModule = require('./search-manager');
 
 // Dependencies (injected)
 let showCustomConfirm, showCustomAlert, updateClipCounter, getTimeGroup, getGroupOrder,
@@ -1112,6 +1113,120 @@ async function startThumbnailValidation() {
   }
 }
 
+// ============================================================================
+// DYNAMIC LIST HELPERS
+// ============================================================================
+
+function getActiveSearchText() {
+  const searchDisplay = document.getElementById('search-display');
+  if (!searchDisplay) return '';
+  return searchDisplay.innerText.trim().toLowerCase();
+}
+
+function clipMatchesSearchFilters(clip, searchText) {
+  if (!searchText) return true;
+  const searchTerms = searchManagerModule.parseSearchTerms(searchText);
+  const clipTags = clip.tags || [];
+  const hasMatchingTags = searchTerms.tags.length === 0 ||
+    searchTerms.tags.every(searchTag =>
+      clipTags.some(clipTag =>
+        clipTag.toLowerCase().includes(searchTag.toLowerCase().substring(1))
+      )
+    );
+
+  const clipName = (clip.customName || '').toLowerCase();
+  const originalName = (clip.originalName || '').toLowerCase();
+  const hasMatchingText = searchTerms.text.length === 0 ||
+    searchTerms.text.every(word =>
+      clipName.includes(word) || originalName.includes(word)
+    );
+
+  if (!hasMatchingTags || !hasMatchingText) {
+    return false;
+  }
+
+  if (state.selectedTags && state.selectedTags.size > 0) {
+    const isUntagged = clipTags.length === 0;
+    if (state.selectedTags.has('Untagged') && isUntagged) {
+      return true;
+    }
+    return clipTags.some(tag => state.selectedTags.has(tag));
+  }
+
+  return true;
+}
+
+function clipMatchesTagFilters(clip) {
+  if (!state.selectedTags || state.selectedTags.size === 0) {
+    return false;
+  }
+
+  const baseFileName = clip.originalName
+    ? clip.originalName.replace(/\.[^/.]+$/, '')
+    : '';
+  const isUnnamed = clip.customName === baseFileName;
+  const clipTags = clip.tags || [];
+  const isUntagged = clipTags.length === 0;
+
+  let matchesSystemTag = false;
+  if (state.selectedTags.has('Untagged') && isUntagged) {
+    matchesSystemTag = true;
+  }
+  if (state.selectedTags.has('Unnamed') && isUnnamed) {
+    matchesSystemTag = true;
+  }
+
+  if (isUntagged && !state.selectedTags.has('Untagged')) {
+    return false;
+  }
+
+  if (isUnnamed && !state.selectedTags.has('Unnamed')) {
+    return false;
+  }
+
+  if (matchesSystemTag) {
+    return true;
+  }
+
+  if (clipTags.length > 0) {
+    if (state.isInTemporaryMode) {
+      return clipTags.some(tag => state.temporaryTagSelections.has(tag));
+    }
+    return clipTags.every(tag => state.selectedTags.has(tag));
+  }
+
+  return false;
+}
+
+function shouldIncludeClipInCurrentList(clip) {
+  const searchText = getActiveSearchText();
+  if (searchText) {
+    return clipMatchesSearchFilters(clip, searchText);
+  }
+  return clipMatchesTagFilters(clip);
+}
+
+function insertClipIntoCurrentList(clip) {
+  if (!state.currentClipList) return;
+
+  const existingIndex = state.currentClipList.findIndex(
+    (current) => current.originalName === clip.originalName
+  );
+  if (existingIndex !== -1) {
+    state.currentClipList[existingIndex] = clip;
+    return;
+  }
+
+  const insertIndex = state.currentClipList.findIndex(
+    (current) => current.createdAt < clip.createdAt
+  );
+  if (insertIndex === -1) {
+    state.currentClipList.push(clip);
+  } else {
+    state.currentClipList.splice(insertIndex, 0, clip);
+  }
+}
+
 /**
  * Add a new clip to state and update the grid.
  */
@@ -1143,104 +1258,132 @@ async function addNewClipToLibrary(fileName) {
     if (existingClipIndex === -1) {
       // If it doesn't exist, add it to state.allClips
       state.allClips.unshift(newClipInfo);
-      
+
+      const shouldRenderInCurrentView = shouldIncludeClipInCurrentList(newClipInfo);
+      if (shouldRenderInCurrentView) {
+        insertClipIntoCurrentList(newClipInfo);
+      }
+
       // Create clip element with a loading thumbnail first
-      const newClipElement = await createClipElement({
+      const newClipElement = shouldRenderInCurrentView ? await createClipElement({
         ...newClipInfo,
         thumbnailPath: "assets/loading-thumbnail.gif"
-      });
+      }) : null;
 
-      // Find or create the appropriate time group
-      const timeGroup = getTimeGroup(newClipInfo.createdAt);
-      
-      // First try to find an existing group by looking at the header text content
-      let groupElement = Array.from(document.querySelectorAll('.clip-group'))
-        .find(group => {
-          const headerText = group.querySelector('.clip-group-header h2.clip-group-title')?.textContent.trim();
-          return headerText?.startsWith(timeGroup);
-        });
-      let content;
-      
-      if (groupElement) {
-        // Use existing group
-        content = groupElement.querySelector('.clip-group-content');
+      if (shouldRenderInCurrentView) {
+        // Find or create the appropriate time group
+        const timeGroup = getTimeGroup(newClipInfo.createdAt);
         
-        // Update clip count
-        const countElement = groupElement.querySelector('.clip-group-count');
-        const currentCount = parseInt(countElement.textContent);
-        countElement.textContent = `${currentCount + 1} clip${currentCount + 1 !== 1 ? 's' : ''}`;
-      } else {
-        // Create new group if it doesn't exist
-        groupElement = document.createElement('div');
-        groupElement.className = 'clip-group';
-        groupElement.dataset.groupName = timeGroup;
+        // First try to find an existing group by looking at the header text content
+        let groupElement = Array.from(document.querySelectorAll('.clip-group'))
+          .find(group => {
+            const headerText = group.querySelector('.clip-group-header h2.clip-group-title')?.textContent.trim();
+            return headerText?.startsWith(timeGroup);
+          });
+        let content;
         
-        // Create group header
-        const header = document.createElement('div');
-        header.className = 'clip-group-header';
-        header.innerHTML = `
-          <h2 class="clip-group-title">
-            ${timeGroup}
-            <span class="clip-group-count">1 clip</span>
-          </h2>
-          <div class="clip-group-divider"></div>
-        `;
-
-        // Add click handler for collapse/expand
-        const collapsedState = loadCollapsedState();
-        if (collapsedState[timeGroup]) {
-          groupElement.classList.add('collapsed');
-        }
-        
-        header.addEventListener('click', () => {
-          groupElement.classList.toggle('collapsed');
-          const newState = loadCollapsedState();
-          newState[timeGroup] = groupElement.classList.contains('collapsed');
-          saveCollapsedState(newState);
-        });
-
-        // Create group content
-        content = document.createElement('div');
-        content.className = 'clip-group-content';
-        
-        groupElement.appendChild(header);
-        groupElement.appendChild(content);
-
-        // Insert the group in the correct position
-        const groups = Array.from(document.querySelectorAll('.clip-group'));
-        const insertIndex = groups.findIndex(g => 
-          getGroupOrder(g.dataset.groupName) > getGroupOrder(timeGroup)
-        );
-
-        if (insertIndex === -1) {
-          clipGrid.appendChild(groupElement);
+        if (groupElement) {
+          // Use existing group
+          content = groupElement.querySelector('.clip-group-content');
+          
+          // Update clip count
+          const countElement = groupElement.querySelector('.clip-group-count');
+          const currentCount = parseInt(countElement.textContent);
+          countElement.textContent = `${currentCount + 1} clip${currentCount + 1 !== 1 ? 's' : ''}`;
         } else {
-          clipGrid.insertBefore(groupElement, groups[insertIndex]);
-        }
-      }
+          // Create new group if it doesn't exist
+          groupElement = document.createElement('div');
+          groupElement.className = 'clip-group';
+          groupElement.dataset.groupName = timeGroup;
+          
+          // Create group header
+          const header = document.createElement('div');
+          header.className = 'clip-group-header';
+          header.innerHTML = `
+            <h2 class="clip-group-title">
+              ${timeGroup}
+              <span class="clip-group-count">1 clip</span>
+            </h2>
+            <div class="clip-group-divider"></div>
+          `;
 
-      // Add the new clip to the group content at the beginning
-      content.insertBefore(newClipElement, content.firstChild);
-      
-      // Check if this group now contains only new clips and update styling
-      const groupClips = Array.from(content.querySelectorAll('.clip-item')).map(el => {
-        const clipName = el.dataset.originalName;
-        return state.allClips.find(clip => clip.originalName === clipName);
-      }).filter(Boolean);
-      
-      const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession);
-      if (groupIsAllNewClips && state.settings.showNewClipsIndicators !== false) {
-        groupElement.classList.add('new-clips-group');
-        console.log('Debug - Marking dynamically created/updated group as new clips group:', timeGroup);
-      } else {
-        groupElement.classList.remove('new-clips-group');
-      }
-      
-      // Force a clean state for the new clip
-      const clipElement = newClipElement;
-      if (clipElement) {
-        clipElement.dataset.trimStart = undefined;
-        clipElement.dataset.trimEnd = undefined;
+          // Add click handler for collapse/expand
+          const collapsedState = loadCollapsedState();
+          if (collapsedState[timeGroup]) {
+            groupElement.classList.add('collapsed');
+          }
+          
+          header.addEventListener('click', () => {
+            groupElement.classList.toggle('collapsed');
+            const newState = loadCollapsedState();
+            newState[timeGroup] = groupElement.classList.contains('collapsed');
+            saveCollapsedState(newState);
+          });
+
+          // Create group content
+          content = document.createElement('div');
+          content.className = 'clip-group-content';
+          
+          groupElement.appendChild(header);
+          groupElement.appendChild(content);
+
+          // Insert the group in the correct position
+          const groups = Array.from(document.querySelectorAll('.clip-group'));
+          const insertIndex = groups.findIndex(g => 
+            getGroupOrder(g.dataset.groupName) > getGroupOrder(timeGroup)
+          );
+
+          if (insertIndex === -1) {
+            clipGrid.appendChild(groupElement);
+          } else {
+            clipGrid.insertBefore(groupElement, groups[insertIndex]);
+          }
+        }
+
+        // Add the new clip to the group content at the beginning
+        content.insertBefore(newClipElement, content.firstChild);
+        
+        // Check if this group now contains only new clips and update styling
+        const groupClips = Array.from(content.querySelectorAll('.clip-item')).map(el => {
+          const clipName = el.dataset.originalName;
+          return state.allClips.find(clip => clip.originalName === clipName);
+        }).filter(Boolean);
+        
+        const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession);
+        if (groupIsAllNewClips && state.settings.showNewClipsIndicators !== false) {
+          groupElement.classList.add('new-clips-group');
+          console.log('Debug - Marking dynamically created/updated group as new clips group:', timeGroup);
+        } else {
+          groupElement.classList.remove('new-clips-group');
+        }
+
+        if (state.settings.showNewClipsIndicators !== false && !groupIsAllNewClips) {
+          let firstOldIndex = -1;
+          for (let i = 0; i < groupClips.length; i++) {
+            if (!groupClips[i].isNewSinceLastSession) {
+              firstOldIndex = i;
+              break;
+            }
+          }
+
+          if (firstOldIndex > 0) {
+            content.dataset.needsIndicator = 'true';
+            content.dataset.lastNewIndex = String(firstOldIndex - 1);
+            content.dataset.firstOldIndex = String(firstOldIndex);
+          } else {
+            delete content.dataset.needsIndicator;
+            delete content.dataset.lastNewIndex;
+            delete content.dataset.firstOldIndex;
+          }
+        } else {
+          delete content.dataset.needsIndicator;
+          delete content.dataset.lastNewIndex;
+          delete content.dataset.firstOldIndex;
+        }
+        
+        // Force a clean state for the new clip
+        newClipElement.dataset.trimStart = undefined;
+        newClipElement.dataset.trimEnd = undefined;
       }
 
       // Generate thumbnail in the background without waiting
@@ -1255,6 +1398,9 @@ async function addNewClipToLibrary(fileName) {
     } else {
       // If it exists, update the existing clip info
       state.allClips[existingClipIndex] = newClipInfo;
+      if (shouldIncludeClipInCurrentList(newClipInfo)) {
+        insertClipIntoCurrentList(newClipInfo);
+      }
       const existingElement = document.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
       if (existingElement) {
         const updatedElement = await createClipElement(newClipInfo);
@@ -1264,8 +1410,8 @@ async function addNewClipToLibrary(fileName) {
     
     tagManagerModule.updateFilterDropdown();
 
-    // Update new clips indicators after adding clip
-    updateNewClipsIndicators();
+    // Update new clips indicators after adding clip (avoid full re-render)
+    positionNewClipsIndicators();
 
     updateClipCounter(state.currentClipList.length);
 
