@@ -3,12 +3,14 @@ const fsp = fs.promises;
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const { URL } = require('url');
 const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
+const authStore = require('./cliplib-auth-store');
 
 const DEFAULT_SERVER_URL = 'https://friends.cliplib.app';
-const API_TOKEN_REGEX = /^[a-f0-9]{64}$/i;
+const DESKTOP_AUTH_CALLBACK_URL = 'cliplib://auth';
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 const CONNECTION_TIMEOUT_MS = 10000;
 const UPLOAD_TIMEOUT_MS = 180000;
@@ -21,14 +23,102 @@ function normalizeServerUrl(input) {
 }
 
 function sanitizeToken(input) {
-  return typeof input === 'string' ? input.trim() : '';
+  if (typeof input !== 'string') return '';
+  const token = input.trim();
+  if (!token || /[\r\n]/.test(token)) {
+    return '';
+  }
+  return token;
 }
 
-function resolveSharingConfig(settings, overrides = {}) {
+async function resolveSharingConfig(settings, overrides = {}) {
   const sharing = settings?.sharing || {};
-  const serverUrl = normalizeServerUrl(overrides.serverUrl || sharing.serverUrl);
-  const apiToken = sanitizeToken(overrides.apiToken || sharing.apiToken);
+  const serverUrl = normalizeServerUrl(overrides.serverUrl || DEFAULT_SERVER_URL);
+  const overrideToken = sanitizeToken(overrides.apiToken);
+  if (overrideToken) {
+    return { serverUrl, apiToken: overrideToken };
+  }
+
+  const storedToken = sanitizeToken(await authStore.getToken());
+  if (storedToken) {
+    return { serverUrl, apiToken: storedToken };
+  }
+
+  const legacyToken = sanitizeToken(sharing.apiToken);
+  if (legacyToken) {
+    // Seamless migration path from prior plaintext settings token.
+    try {
+      await authStore.setToken(legacyToken);
+    } catch (error) {
+      logger.warn(`Failed to migrate legacy sharing token to secure storage: ${error.message}`);
+    }
+  }
+
+  const apiToken = legacyToken;
   return { serverUrl, apiToken };
+}
+
+function generateDesktopAuthSessionId() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function buildDesktopAuthUrl(serverUrl, sessionId) {
+  const normalizedServerUrl = normalizeServerUrl(serverUrl);
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  if (!normalizedSessionId) {
+    throw new Error('Missing desktop auth session id.');
+  }
+  const authUrl = new URL('/auth/app', normalizedServerUrl);
+  authUrl.searchParams.set('callback', DESKTOP_AUTH_CALLBACK_URL);
+  authUrl.searchParams.set('session', normalizedSessionId);
+  return authUrl.toString();
+}
+
+function parseDesktopAuthCallbackUrl(callbackUrl) {
+  try {
+    const parsed = new URL(callbackUrl);
+    if (parsed.protocol !== 'cliplib:') {
+      return { ok: false, error: 'Invalid protocol for auth callback.' };
+    }
+
+    const target = (parsed.hostname || parsed.pathname.replace(/^\/+/, '')).toLowerCase();
+    if (target !== 'auth') {
+      return { ok: false, error: 'Invalid callback target.' };
+    }
+
+    const token = sanitizeToken(parsed.searchParams.get('token') || '');
+    const session = (parsed.searchParams.get('session') || '').trim();
+    if (!token) {
+      return { ok: false, error: 'Missing token in auth callback.' };
+    }
+    if (!session) {
+      return { ok: false, error: 'Missing session in auth callback.' };
+    }
+
+    return {
+      ok: true,
+      token,
+      session
+    };
+  } catch (_) {
+    return { ok: false, error: 'Malformed auth callback URL.' };
+  }
+}
+
+async function setStoredApiToken(token) {
+  const normalized = sanitizeToken(token);
+  if (!normalized) {
+    throw new Error('Cannot store empty API token.');
+  }
+  await authStore.setToken(normalized);
+}
+
+async function clearStoredApiToken() {
+  await authStore.clearToken();
+}
+
+async function getStoredApiToken() {
+  return sanitizeToken(await authStore.getToken());
 }
 
 function buildErrorMessage(statusCode, bodyJson, bodyText, fallback) {
@@ -66,14 +156,10 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = CONNECTION_TIMEOU
 
 async function testConnection(getSettings, overrides = {}) {
   const settings = await getSettings();
-  const { serverUrl, apiToken } = resolveSharingConfig(settings, overrides);
+  const { serverUrl, apiToken } = await resolveSharingConfig(settings, overrides);
 
   if (!apiToken) {
     return { success: false, connected: false, error: 'API token is not configured.' };
-  }
-
-  if (!API_TOKEN_REGEX.test(apiToken)) {
-    return { success: false, connected: false, error: 'API token must be a 64-character hex string.' };
   }
 
   try {
@@ -93,6 +179,7 @@ async function testConnection(getSettings, overrides = {}) {
       return {
         success: true,
         connected: true,
+        serverUrl,
         displayName,
         user: bodyJson
       };
@@ -297,14 +384,10 @@ async function shareClip(payload, getSettings, ffmpegModule) {
   }
 
   const settings = await getSettings();
-  const { serverUrl, apiToken } = resolveSharingConfig(settings);
+  const { serverUrl, apiToken } = await resolveSharingConfig(settings);
 
   if (!apiToken) {
     return { success: false, status: 401, error: 'API token is not configured.' };
-  }
-
-  if (!API_TOKEN_REGEX.test(apiToken)) {
-    return { success: false, status: 401, error: 'API token must be a 64-character hex string.' };
   }
 
   let exportedPath = null;
@@ -381,6 +464,13 @@ async function shareClip(payload, getSettings, ffmpegModule) {
 
 module.exports = {
   DEFAULT_SERVER_URL,
+  DESKTOP_AUTH_CALLBACK_URL,
+  buildDesktopAuthUrl,
+  parseDesktopAuthCallbackUrl,
+  generateDesktopAuthSessionId,
+  getStoredApiToken,
+  setStoredApiToken,
+  clearStoredApiToken,
   testConnection,
   shareClip
 };

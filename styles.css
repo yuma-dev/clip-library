@@ -2801,39 +2801,119 @@ input:checked + .settings-switch-slider::before {
   gap: 8px;
 }
 
-.connection-dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: #f87171;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+.settings-tab-content[data-tab="general"] {
+  display: flex;
+  flex-direction: column;
 }
 
-.connection-dot[data-state="connected"] {
-  background: #34d399;
+.cliplib-auth-dock {
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  justify-content: center;
 }
 
-.connection-dot[data-state="progress"] {
-  background: #facc15;
+.cliplib-auth-button {
+  width: min(520px, 96%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #20252c 0%, #171b21 100%);
+  color: #f3f4f6;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
 }
 
-.share-connection-status {
+.cliplib-auth-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 12px 22px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.cliplib-auth-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.cliplib-auth-button.is-connected {
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.cliplib-auth-logo-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.cliplib-auth-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cliplib-auth-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cliplib-auth-title {
+  color: #f3f4f6;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cliplib-auth-subtitle {
   color: #9ca3af;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.share-connection-status[data-state="connected"] {
-  color: #34d399;
+.cliplib-auth-button.is-disconnected .cliplib-auth-title {
+  color: #e5e7eb;
 }
 
-.share-connection-status[data-state="progress"] {
-  color: #facc15;
+.cliplib-auth-button.is-busy {
+  filter: brightness(1.05);
 }
 
-.share-connection-status[data-state="disconnected"] {
-  color: #f87171;
+@media (max-width: 900px) {
+  .cliplib-auth-dock {
+    padding-top: 14px;
+  }
+
+  .cliplib-auth-button {
+    width: 100%;
+  }
+
+  .cliplib-auth-subtitle {
+    white-space: normal;
+  }
 }
 
 /* Version Info */
