@@ -15,7 +15,7 @@ const state = require('./state');
 // Dependencies (injected)
 let videoPlayerModule, searchManagerModule, fetchSettings, updateSettingValue, toggleDiscordRPC, 
     applyIconGreyscale, renderClips, updateVersionDisplay, changeClipLocation, updateAllPreviewVolumes,
-    populateKeybindingList;
+    populateKeybindingList, shareManagerModule;
 
 // ============================================================================
 // INITIALIZATION
@@ -36,6 +36,7 @@ function init(dependencies) {
   changeClipLocation = dependencies.changeClipLocation;
   updateAllPreviewVolumes = dependencies.updateAllPreviewVolumes;
   populateKeybindingList = dependencies.populateKeybindingList;
+  shareManagerModule = dependencies.shareManagerModule;
 }
 
 // ============================================================================
@@ -240,6 +241,10 @@ async function initializeSettingsModal() {
       }
     });
   }
+
+  if (shareManagerModule && typeof shareManagerModule.initializeSettingsControls === 'function') {
+    shareManagerModule.initializeSettingsControls({ updateSettingValue });
+  }
 }
 
 /**
@@ -302,6 +307,10 @@ async function openSettingsModal() {
       const savedVolume = state.settings.previewVolume ?? 0.1;
       previewVolumeSlider.value = savedVolume;
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
+    }
+
+    if (shareManagerModule && typeof shareManagerModule.syncSettingsUiFromState === 'function') {
+      shareManagerModule.syncSettingsUiFromState();
     }
 
     // Refresh ambient glow state.settings to reflect persisted values

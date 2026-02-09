@@ -37,6 +37,43 @@
     </div>
 
     <div class="settings-group">
+      <h3 class="settings-group-title">Sharing</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Server URL</div>
+          <div class="settings-item-description">Clip sharing API server endpoint</div>
+        </div>
+        <div class="settings-control">
+          <input type="text" id="shareServerUrl" class="settings-input" placeholder="https://friends.cliplib.app" />
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">API Token</div>
+          <div class="settings-item-description">Generate this token on friends.cliplib.app in Settings</div>
+        </div>
+        <div class="settings-control settings-inline-controls">
+          <input type="password" id="shareApiToken" class="settings-input" placeholder="64-character API token" />
+          <button id="pasteShareTokenBtn" class="settings-button settings-button-secondary">Paste</button>
+        </div>
+      </div>
+
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Connection Status</div>
+          <div class="settings-item-description">
+            <span id="shareConnectionDot" class="connection-dot" data-state="disconnected"></span>
+            <span id="shareConnectionStatus" class="share-connection-status" data-state="disconnected">Not configured</span>
+          </div>
+        </div>
+        <div class="settings-control">
+          <button id="testShareConnectionBtn" class="settings-button settings-button-primary">Test Connection</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
       <h3 class="settings-group-title">Tag Management</h3>
       <div class="settings-item">
         <div class="settings-item-info">

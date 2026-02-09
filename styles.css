@@ -1257,7 +1257,7 @@ body.dragging * {
   pointer-events: none;
 }
 
-#export-button, #delete-button {
+#export-button, #share-button, #delete-button {
   padding: 5px 15px;
   color: white;
   border: none;
@@ -1273,6 +1273,11 @@ body.dragging * {
   background-color: #4CAF50;
   animation: exportGlow 4s ease-in-out infinite;
   box-shadow: 0 0 10px rgba(76, 175, 80, 0.4);
+}
+
+#share-button {
+  background: linear-gradient(90deg, #9333EA, #C084FC);
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.4);
 }
 
 @keyframes exportGlow {
@@ -1303,6 +1308,40 @@ body.dragging * {
 #export-button:disabled {
   background-color: #2d6a30;
   cursor: not-allowed;
+}
+
+#share-button:disabled {
+  background: #6b21a8;
+  cursor: not-allowed;
+}
+
+#share-button.share-hidden {
+  display: none;
+}
+
+#share-button.is-sharing {
+  cursor: progress;
+  padding-left: 28px;
+}
+
+#share-button.is-sharing::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  transform: translateY(-50%);
+  animation: shareSpin 0.8s linear infinite;
+}
+
+@keyframes shareSpin {
+  to {
+    transform: translateY(-50%) rotate(360deg);
+  }
 }
 
 #progress-bar-container {
@@ -1337,6 +1376,7 @@ body.dragging * {
 
 /* Micro press feedback */
 #export-button:active,
+#share-button:active,
 #delete-button:active,
 #fullscreen-button:active,
 #volume-button:active,
@@ -1805,6 +1845,28 @@ body.player-open .cet-titlebar {
   margin: 0;
   /* Add subtle text shadow */
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.share-toast {
+  position: fixed;
+  right: 16px;
+  top: 72px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(28, 96, 255, 0.95);
+  color: #fff;
+  font-size: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  z-index: 10000;
+}
+
+.share-toast.show {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .button-tooltip-container {
@@ -2714,6 +2776,64 @@ input:checked + .settings-switch-slider::before {
 .settings-select option {
   background-color: #2a2a2a;
   color: #e0e0e0;
+}
+
+.settings-input {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(179, 179, 179, 0.2);
+  border-radius: 6px;
+  color: #e0e0e0;
+  padding: 8px 12px;
+  font-size: 14px;
+  min-width: 240px;
+  transition: all 0.2s ease;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: rgba(147, 51, 234, 0.6);
+  box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.2);
+}
+
+.settings-inline-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connection-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #f87171;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.connection-dot[data-state="connected"] {
+  background: #34d399;
+}
+
+.connection-dot[data-state="progress"] {
+  background: #facc15;
+}
+
+.share-connection-status {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.share-connection-status[data-state="connected"] {
+  color: #34d399;
+}
+
+.share-connection-status[data-state="progress"] {
+  color: #facc15;
+}
+
+.share-connection-status[data-state="disconnected"] {
+  color: #f87171;
 }
 
 /* Version Info */

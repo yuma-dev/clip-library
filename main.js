@@ -29,6 +29,7 @@ const readify = require("readify");
 const { logActivity } = require('./utils/activity-tracker');
 const diagnosticsModule = require('./diagnostics/collector');
 const logUploader = require('./main/log-uploader');
+const shareModule = require('./main/share');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const IDLE_TIMEOUT = 5 * 60 * 1000;
 
@@ -347,6 +348,14 @@ ipcMain.handle('generate-diagnostics-zip', async (event, targetPath) => {
 
 ipcMain.handle('upload-session-logs', async (event, payload) => {
   return logUploader.uploadSessionLogs(payload);
+});
+
+ipcMain.handle('test-share-connection', async (event, overrides) => {
+  return shareModule.testConnection(getSettings, overrides || {});
+});
+
+ipcMain.handle('share-clip', async (event, payload) => {
+  return shareModule.shareClip(payload, getSettings, ffmpegModule);
 });
 
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {

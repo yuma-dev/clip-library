@@ -41,6 +41,7 @@ const volumeRangeControlsModule = require('./renderer/volume-range-controls');
 const discordManagerModule = require('./renderer/discord-manager');
 const diagnosticsManagerModule = require('./renderer/diagnostics-manager');
 const updateManagerModule = require('./renderer/update-manager');
+const shareManagerModule = require('./renderer/share-manager');
 
 // Clip grid module
 const clipGridModule = require('./renderer/clip-grid');
@@ -1027,6 +1028,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     getFfmpegVersion: getFfmpegVersion
   });
 
+  // Initialize share manager (button + auth state + upload flow)
+  shareManagerModule.init({
+    showCustomAlert,
+    getSharePayload: buildSharePayload
+  });
+
+  await shareManagerModule.refreshAuthState({ forceVerify: true });
+
   // Initialize settings manager with dependencies
   settingsManagerUiModule.init({
     videoPlayerModule: videoPlayerModule,
@@ -1039,7 +1048,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateVersionDisplay: updateManagerModule.updateVersionDisplay,
     changeClipLocation: changeClipLocation,
     updateAllPreviewVolumes: updateAllPreviewVolumes,
-    populateKeybindingList: keybindingUiModule.populateKeybindingList
+    populateKeybindingList: keybindingUiModule.populateKeybindingList,
+    shareManagerModule
   });
 
   discordManagerModule.init({
@@ -1529,6 +1539,41 @@ function disableVideoThumbnail(clipName) {
 }
 
 
+
+async function buildSharePayload() {
+  if (!state.currentClip) return null;
+
+  const clipName = state.currentClip.originalName;
+  const titleFromInput = (clipTitle?.value || '').trim();
+  const title = titleFromInput || state.currentClip.customName || '';
+  const tags = Array.isArray(state.currentClip.tags) ? state.currentClip.tags : [];
+
+  let game = null;
+  try {
+    const gameInfo = await ipcRenderer.invoke('get-game-icon', clipName);
+    if (gameInfo && typeof gameInfo.title === 'string' && gameInfo.title.trim()) {
+      game = gameInfo.title.trim();
+    }
+  } catch (error) {
+    logger.warn('Failed to fetch game metadata for sharing:', error);
+  }
+
+  const volume = await videoPlayerModule.loadVolume(clipName);
+  const speed = videoPlayer.playbackRate;
+
+  return {
+    clipName,
+    start: state.trimStartTime,
+    end: state.trimEndTime,
+    volume,
+    speed,
+    metadata: {
+      title,
+      tags,
+      game
+    }
+  };
+}
 
 async function exportVideoWithFileSelection() {
   if (!state.currentClip) return;
