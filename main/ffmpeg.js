@@ -358,6 +358,56 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
 }
 
 /**
+ * Export trimmed video for sharing uploads (no clipboard side effects).
+ */
+async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, getSettings) {
+  const settings = await getSettings();
+  const inputPath = path.join(settings.clipLocation, clipName);
+  const outputPath = path.join(os.tmpdir(), `shared_${Date.now()}_${path.parse(clipName).name}.mp4`);
+
+  const metadataFolder = path.join(path.dirname(inputPath), '.clip_metadata');
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+
+  let volumeData = null;
+  try {
+    const volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
+    volumeData = JSON.parse(volumeDataRaw);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.error('Error reading volume range data:', error);
+    }
+  }
+
+  try {
+    await exportVideoWithFallback({
+      inputPath,
+      outputPath,
+      start,
+      end,
+      volume,
+      speed,
+      quality: settings.exportQuality || 'discord',
+      volumeData
+    });
+
+    logActivity('export', {
+      clipName,
+      format: 'video',
+      destination: 'share_upload',
+      start,
+      end,
+      volume,
+      speed
+    });
+
+    return { success: true, path: outputPath };
+  } catch (error) {
+    logger.error('Error exporting trimmed video for sharing:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Export audio as MP3
  */
 async function exportAudio(clipName, start, end, volume, speed, savePath, getSettings) {
@@ -540,6 +590,7 @@ module.exports = {
   ffprobeAsync,
   exportVideo,
   exportTrimmedVideo,
+  exportTrimmedVideoForShare,
   exportAudio,
   exportVideoWithFallback,
   generateScreenshot,

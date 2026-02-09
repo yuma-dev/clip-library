@@ -11,6 +11,11 @@ const DEFAULT_SETTINGS = {
   ignoredVersion: null,
   previewVolume: 0.1,
   exportQuality: 'discord',
+  // Clip sharing integration settings (friends.cliplib.app)
+  sharing: {
+    serverUrl: 'https://friends.cliplib.app',
+    apiToken: ''
+  },
   // Whether to desaturate game icons in the clip list
   iconGreyscale: false,
   // Whether to show new clips indicators (green lines and group styling)
