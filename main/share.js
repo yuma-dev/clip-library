@@ -232,13 +232,35 @@ function buildMetadataPayload(input = {}) {
     }
   }
 
-  if (typeof input.game === 'string' && input.game.trim()) {
-    output.game = input.game.trim();
-  } else if (input.game === null) {
-    output.game = null;
+  if (Array.isArray(input.mentions)) {
+    const mentions = input.mentions
+      .filter((id) => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+
+    if (mentions.length > 0) {
+      output.mentions = [...new Set(mentions)];
+    }
   }
 
   return Object.keys(output).length > 0 ? output : null;
+}
+
+function normalizeMentionUser(rawUser = {}) {
+  const id = typeof rawUser.id === 'string' ? rawUser.id.trim() : '';
+  if (!id) return null;
+
+  const username = typeof rawUser.username === 'string' ? rawUser.username.trim() : '';
+  const displayNameRaw = typeof rawUser.displayName === 'string' ? rawUser.displayName.trim() : '';
+  const displayName = displayNameRaw || username || id;
+  const avatarUrl = typeof rawUser.avatarUrl === 'string' ? rawUser.avatarUrl.trim() : '';
+
+  return {
+    id,
+    username,
+    displayName,
+    avatarUrl
+  };
 }
 
 function getMimeType(filePath) {
@@ -462,6 +484,55 @@ async function shareClip(payload, getSettings, ffmpegModule) {
   }
 }
 
+async function fetchMentionableUsers(getSettings, overrides = {}) {
+  const settings = await getSettings();
+  const { serverUrl, apiToken } = await resolveSharingConfig(settings, overrides);
+
+  if (!apiToken) {
+    return { success: false, status: 401, error: 'API token is not configured.' };
+  }
+
+  try {
+    const { response, bodyText, bodyJson } = await fetchWithTimeout(
+      `${serverUrl}/api/users?all=true`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiToken}`
+        }
+      },
+      CONNECTION_TIMEOUT_MS
+    );
+
+    if (response.status === 200 && bodyJson && Array.isArray(bodyJson.users)) {
+      const users = bodyJson.users
+        .map(normalizeMentionUser)
+        .filter(Boolean)
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+      return {
+        success: true,
+        users
+      };
+    }
+
+    return {
+      success: false,
+      status: response.status,
+      error: buildErrorMessage(response.status, bodyJson, bodyText, 'Failed to fetch users.')
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { success: false, error: 'Request for users timed out.' };
+    }
+
+    return {
+      success: false,
+      error: `Failed to fetch users: ${error.message}`
+    };
+  }
+}
+
 module.exports = {
   DEFAULT_SERVER_URL,
   DESKTOP_AUTH_CALLBACK_URL,
@@ -472,5 +543,6 @@ module.exports = {
   setStoredApiToken,
   clearStoredApiToken,
   testConnection,
-  shareClip
+  shareClip,
+  fetchMentionableUsers
 };

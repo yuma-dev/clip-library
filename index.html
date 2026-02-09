@@ -132,7 +132,6 @@
               </div>
               <div class="right-controls">
                 <div id="total-time">0:00</div>
-                <button id="share-button" class="share-hidden">Share</button>
                 <div class="button-tooltip-container">
                   <button id="export-button">Export</button>
                   <div class="tooltip">
@@ -142,12 +141,14 @@
                     Ctrl + Shift + Click: Save audio as...
                   </div>
                 </div>
+                <button id="share-button" class="share-hidden" aria-label="Publish" title="Publish">
+                  <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 20v-2h14v2H5Zm6-4V8.83l-3.59 3.58L6 11l6-6 6 6-1.41 1.41L13 8.83V16h-2Z"></path>
+                  </svg>
+                </button>
                 <button id="delete-button" aria-label="Delete">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="3 6 5 6 21 6"></polyline>
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    <line x1="10" y1="11" x2="10" y2="17"></line>
-                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                  <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 21q-.825 0-1.412-.587Q5 19.825 5 19V6H4V4h5V3h6v1h5v2h-1v13q0 .825-.587 1.413Q17.825 21 17 21H7Zm10-15H7v13h10V6ZM9 17h2V8H9v9Zm4 0h2V8h-2v9Z"></path>
                   </svg>
                 </button>
               </div>
