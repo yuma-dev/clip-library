@@ -1031,7 +1031,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize share manager (button + auth state + upload flow)
   shareManagerModule.init({
     showCustomAlert,
-    getSharePayload: buildSharePayload
+    getSharePayload: buildSharePayload,
+    getSharePreviewData: buildSharePreviewData
   });
 
   await shareManagerModule.refreshAuthState({ forceVerify: true });
@@ -1540,23 +1541,43 @@ function disableVideoThumbnail(clipName) {
 
 
 
-async function buildSharePayload() {
+async function buildSharePreviewData() {
   if (!state.currentClip) return null;
 
   const clipName = state.currentClip.originalName;
   const titleFromInput = (clipTitle?.value || '').trim();
   const title = titleFromInput || state.currentClip.customName || '';
-  const tags = Array.isArray(state.currentClip.tags) ? state.currentClip.tags : [];
 
-  let game = null;
+  let thumbnailPath = '';
   try {
-    const gameInfo = await ipcRenderer.invoke('get-game-icon', clipName);
-    if (gameInfo && typeof gameInfo.title === 'string' && gameInfo.title.trim()) {
-      game = gameInfo.title.trim();
-    }
+    thumbnailPath = await ipcRenderer.invoke('get-thumbnail-path', clipName);
   } catch (error) {
-    logger.warn('Failed to fetch game metadata for sharing:', error);
+    logger.warn('Failed to fetch thumbnail for publish preview:', error);
   }
+
+  return {
+    clipName,
+    title,
+    thumbnailPath
+  };
+}
+
+async function buildSharePayload(shareOptions = {}) {
+  if (!state.currentClip) return null;
+
+  const clipName = state.currentClip.originalName;
+  const titleOverride = typeof shareOptions.title === 'string' ? shareOptions.title.trim() : '';
+  const titleFromInput = (clipTitle?.value || '').trim();
+  const title = titleOverride || titleFromInput || state.currentClip.customName || '';
+  const tags = Array.isArray(state.currentClip.tags) ? state.currentClip.tags : [];
+  const mentions = Array.isArray(shareOptions.mentions)
+    ? [...new Set(
+      shareOptions.mentions
+        .filter((id) => typeof id === 'string')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    )]
+    : [];
 
   const volume = await videoPlayerModule.loadVolume(clipName);
   const speed = videoPlayer.playbackRate;
@@ -1570,7 +1591,7 @@ async function buildSharePayload() {
     metadata: {
       title,
       tags,
-      game
+      mentions
     }
   };
 }

@@ -637,6 +637,10 @@ ipcMain.handle('share-clip', async (event, payload) => {
   return shareModule.shareClip(payload, getSettings, ffmpegModule);
 });
 
+ipcMain.handle('get-share-users', async (event, overrides) => {
+  return shareModule.fetchMentionableUsers(getSettings, overrides || {});
+});
+
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {
   return metadataModule.removeTagFromAllClips(tagToRemove, getSettings);
 });
