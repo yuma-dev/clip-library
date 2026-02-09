@@ -16,6 +16,14 @@
   "build": {
     "appId": "com.yuma-dev.clips",
     "productName": "Clips",
+    "protocols": [
+      {
+        "name": "ClipLib",
+        "schemes": [
+          "cliplib"
+        ]
+      }
+    ],
     "files": [
       "assets/**/*",
       "main/**/*",

@@ -32,6 +32,13 @@ const logUploader = require('./main/log-uploader');
 const shareModule = require('./main/share');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const IDLE_TIMEOUT = 5 * 60 * 1000;
+const CLIPLIB_PROTOCOL = 'cliplib';
+const CLIPLIB_AUTH_SESSION_TTL_MS = 10 * 60 * 1000;
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 // FFmpeg module
 const ffmpegModule = require('./main/ffmpeg');
@@ -82,9 +89,194 @@ let idleTimer;
 
 let mainWindow;
 let settings;
+let pendingCliplibAuthSession = null;
+let isProcessingProtocolQueue = false;
+const queuedProtocolUrls = [];
+const queuedCliplibAuthEvents = [];
 
 // Getter for cached settings (used by modules instead of loadSettings which reads from disk)
 const getSettings = async () => settings;
+
+function registerCliplibProtocol() {
+  try {
+    if (process.defaultApp) {
+      if (process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient(CLIPLIB_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+        return;
+      }
+    }
+    app.setAsDefaultProtocolClient(CLIPLIB_PROTOCOL);
+  } catch (error) {
+    logger.warn(`Failed to register ${CLIPLIB_PROTOCOL}:// protocol: ${error.message}`);
+  }
+}
+
+function extractCliplibProtocolUrl(args = []) {
+  if (!Array.isArray(args)) return null;
+  return args.find((arg) => typeof arg === 'string' && arg.toLowerCase().startsWith(`${CLIPLIB_PROTOCOL}://`)) || null;
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function queueCliplibAuthEvent(eventPayload) {
+  if (!eventPayload || typeof eventPayload !== 'object') return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    queuedCliplibAuthEvents.push(eventPayload);
+    return;
+  }
+  const isLoading = typeof mainWindow.webContents.isLoadingMainFrame === 'function'
+    ? mainWindow.webContents.isLoadingMainFrame()
+    : mainWindow.webContents.isLoading();
+  if (isLoading) {
+    queuedCliplibAuthEvents.push(eventPayload);
+    return;
+  }
+  mainWindow.webContents.send('cliplib-auth-event', eventPayload);
+}
+
+function flushCliplibAuthEvents() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  const isLoading = typeof mainWindow.webContents.isLoadingMainFrame === 'function'
+    ? mainWindow.webContents.isLoadingMainFrame()
+    : mainWindow.webContents.isLoading();
+  if (isLoading) {
+    return;
+  }
+  while (queuedCliplibAuthEvents.length > 0) {
+    const payload = queuedCliplibAuthEvents.shift();
+    mainWindow.webContents.send('cliplib-auth-event', payload);
+  }
+}
+
+async function clearLegacySharingToken() {
+  if (!settings?.sharing || typeof settings.sharing !== 'object') return;
+  if (!settings.sharing.apiToken) return;
+
+  settings.sharing.apiToken = '';
+  try {
+    await saveSettings(settings);
+  } catch (error) {
+    logger.warn(`Failed to clear legacy sharing token from settings: ${error.message}`);
+  }
+}
+
+async function migrateLegacySharingTokenIfPresent() {
+  const legacyToken = typeof settings?.sharing?.apiToken === 'string'
+    ? settings.sharing.apiToken.trim()
+    : '';
+  if (!legacyToken) return;
+
+  const existingToken = await shareModule.getStoredApiToken();
+  if (!existingToken) {
+    await shareModule.setStoredApiToken(legacyToken);
+  }
+  await clearLegacySharingToken();
+}
+
+function hasValidPendingCliplibSession() {
+  if (!pendingCliplibAuthSession) return false;
+  return (Date.now() - pendingCliplibAuthSession.createdAt) <= CLIPLIB_AUTH_SESSION_TTL_MS;
+}
+
+async function handleCliplibProtocolUrl(protocolUrl) {
+  const parsed = shareModule.parseDesktopAuthCallbackUrl(protocolUrl);
+  if (!parsed.ok) {
+    queueCliplibAuthEvent({
+      status: 'error',
+      message: parsed.error || 'Invalid ClipLib auth callback.'
+    });
+    return;
+  }
+
+  if (!hasValidPendingCliplibSession()) {
+    pendingCliplibAuthSession = null;
+    queueCliplibAuthEvent({
+      status: 'error',
+      message: 'No active ClipLib login session. Start login again from Settings.'
+    });
+    return;
+  }
+
+  if (parsed.session !== pendingCliplibAuthSession.session) {
+    queueCliplibAuthEvent({
+      status: 'error',
+      message: 'ClipLib login session mismatch. Please retry login.'
+    });
+    return;
+  }
+
+  const expectedServerUrl = pendingCliplibAuthSession.serverUrl;
+  pendingCliplibAuthSession = null;
+
+  try {
+    await shareModule.setStoredApiToken(parsed.token);
+    await clearLegacySharingToken();
+
+    const verify = await shareModule.testConnection(getSettings, {
+      serverUrl: expectedServerUrl,
+      apiToken: parsed.token
+    });
+
+    if (!verify?.success) {
+      await shareModule.clearStoredApiToken();
+      queueCliplibAuthEvent({
+        status: 'error',
+        message: verify?.error || 'ClipLib login succeeded but token verification failed.'
+      });
+      return;
+    }
+
+    queueCliplibAuthEvent({
+      status: 'success',
+      displayName: verify.displayName || 'Unknown user'
+    });
+  } catch (error) {
+    try {
+      await shareModule.clearStoredApiToken();
+    } catch (_) {
+      // ignore cleanup errors
+    }
+    queueCliplibAuthEvent({
+      status: 'error',
+      message: `ClipLib login failed: ${error.message}`
+    });
+  } finally {
+    focusMainWindow();
+  }
+}
+
+async function processQueuedProtocolUrls() {
+  if (isProcessingProtocolQueue || !app.isReady() || !settings) {
+    return;
+  }
+
+  isProcessingProtocolQueue = true;
+  try {
+    while (queuedProtocolUrls.length > 0) {
+      const nextUrl = queuedProtocolUrls.shift();
+      await handleCliplibProtocolUrl(nextUrl);
+    }
+  } finally {
+    isProcessingProtocolQueue = false;
+  }
+}
+
+function queueProtocolUrl(protocolUrl) {
+  if (typeof protocolUrl !== 'string' || !protocolUrl.trim()) {
+    return;
+  }
+  queuedProtocolUrls.push(protocolUrl.trim());
+  processQueuedProtocolUrls().catch((error) => {
+    logger.error('Failed processing queued protocol URLs:', error);
+  });
+}
 
 setupTitlebar();
 
@@ -92,10 +284,38 @@ app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
+const initialProtocolUrl = extractCliplibProtocolUrl(process.argv);
+if (initialProtocolUrl) {
+  queuedProtocolUrls.push(initialProtocolUrl);
+}
+
+app.on('second-instance', (event, commandLine) => {
+  const protocolUrl = extractCliplibProtocolUrl(commandLine);
+  if (protocolUrl) {
+    queueProtocolUrl(protocolUrl);
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow().catch((error) => {
+      logger.error('Failed to create window on second-instance event:', error);
+    });
+  }
+  focusMainWindow();
+});
+
+app.on('open-url', (event, protocolUrl) => {
+  event.preventDefault();
+  queueProtocolUrl(protocolUrl);
+});
+
 async function createWindow() {
   if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
   settings = await loadSettings();
   if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
+  try {
+    await migrateLegacySharingTokenIfPresent();
+  } catch (error) {
+    logger.warn(`Legacy sharing token migration failed: ${error.message}`);
+  }
 
   // Initialize thumbnail cache
   await thumbnailsModule.initThumbnailCache();
@@ -145,6 +365,12 @@ async function createWindow() {
       mainWindow.webContents.toggleDevTools();
       event.preventDefault();
     }
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    flushCliplibAuthEvents();
+    processQueuedProtocolUrls().catch((error) => {
+      logger.error('Failed processing protocol queue after renderer load:', error);
+    });
   });
   
   if (isDev) {
@@ -201,6 +427,12 @@ async function checkForUpdatesInBackground(mainWindow) {
 }
 
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) {
+    return;
+  }
+
+  registerCliplibProtocol();
+
   if (benchmarkHarness) {
     benchmarkHarness.endStartup('moduleLoad');
     benchmarkHarness.recordAppReady();
@@ -230,6 +462,10 @@ app.whenReady().then(async () => {
   
   // Start periodic saves to prevent data loss
   clipsModule.startPeriodicSave(getSettings);
+
+  processQueuedProtocolUrls().catch((error) => {
+    logger.error('Failed processing startup protocol queue:', error);
+  });
 });
 
 app.on("window-all-closed", () => {
@@ -352,6 +588,49 @@ ipcMain.handle('upload-session-logs', async (event, payload) => {
 
 ipcMain.handle('test-share-connection', async (event, overrides) => {
   return shareModule.testConnection(getSettings, overrides || {});
+});
+
+ipcMain.handle('start-cliplib-auth', async (event, overrides) => {
+  const serverUrl = shareModule.DEFAULT_SERVER_URL;
+  const requestedServerUrl = overrides?.serverUrl || serverUrl;
+  const normalizedServerUrl = typeof requestedServerUrl === 'string' ? requestedServerUrl.trim() : serverUrl;
+
+  try {
+    const session = shareModule.generateDesktopAuthSessionId();
+    const authUrl = shareModule.buildDesktopAuthUrl(normalizedServerUrl, session);
+    pendingCliplibAuthSession = {
+      session,
+      serverUrl: normalizedServerUrl,
+      createdAt: Date.now()
+    };
+
+    await shell.openExternal(authUrl);
+    return {
+      success: true
+    };
+  } catch (error) {
+    pendingCliplibAuthSession = null;
+    logger.error('Failed to start ClipLib desktop auth:', error);
+    return {
+      success: false,
+      error: `Unable to open ClipLib login: ${error.message}`
+    };
+  }
+});
+
+ipcMain.handle('disconnect-cliplib-auth', async () => {
+  pendingCliplibAuthSession = null;
+  try {
+    await shareModule.clearStoredApiToken();
+    await clearLegacySharingToken();
+    return { success: true };
+  } catch (error) {
+    logger.error('Failed to disconnect ClipLib auth:', error);
+    return {
+      success: false,
+      error: `Unable to disconnect ClipLib account: ${error.message}`
+    };
+  }
 });
 
 ipcMain.handle('share-clip', async (event, payload) => {

@@ -3,66 +3,46 @@
  *
  * Handles:
  * - Sharing auth status verification
- * - Sharing settings UI controls
+ * - ClipLib one-click connect/disconnect flow
  * - One-click clip sharing flow
  */
 
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
-const state = require('./state');
 
-const DEFAULT_SERVER_URL = 'https://friends.cliplib.app';
+const NOT_CONFIGURED_ERROR = 'API token is not configured.';
+const FALLBACK_AVATAR_SRC = 'icon.ico';
 
 let showCustomAlert = null;
 let getSharePayload = null;
-let updateSettingValue = null;
 
 let shareButton = null;
-let statusDotEl = null;
-let statusTextEl = null;
-let serverUrlInputEl = null;
-let apiTokenInputEl = null;
-let pasteTokenBtnEl = null;
-let testConnectionBtnEl = null;
+let authButtonEl = null;
+let authButtonAvatarEl = null;
+let authButtonTitleEl = null;
+let authButtonSubtitleEl = null;
 
 let isSharing = false;
+let isConnecting = false;
 let shareToastTimeout = null;
 let controlsInitialized = false;
+let ipcListenersInitialized = false;
 
 let authState = {
   configured: false,
   connected: false,
   verifying: false,
-  displayName: '',
+  username: '',
+  avatarUrl: '',
   error: ''
 };
 
-function normalizeServerUrl(input) {
-  const raw = typeof input === 'string' ? input.trim() : '';
-  if (!raw) return DEFAULT_SERVER_URL;
-  return raw.replace(/\/+$/, '');
-}
-
-function resolveSharingSettingsFromState() {
-  const sharing = state.settings?.sharing || {};
-  return {
-    serverUrl: normalizeServerUrl(sharing.serverUrl),
-    apiToken: typeof sharing.apiToken === 'string' ? sharing.apiToken.trim() : ''
-  };
-}
-
-function getStatusElements() {
-  if (!statusDotEl) statusDotEl = document.getElementById('shareConnectionDot');
-  if (!statusTextEl) statusTextEl = document.getElementById('shareConnectionStatus');
-  return { statusDotEl, statusTextEl };
-}
-
 function getSettingsElements() {
-  if (!serverUrlInputEl) serverUrlInputEl = document.getElementById('shareServerUrl');
-  if (!apiTokenInputEl) apiTokenInputEl = document.getElementById('shareApiToken');
-  if (!pasteTokenBtnEl) pasteTokenBtnEl = document.getElementById('pasteShareTokenBtn');
-  if (!testConnectionBtnEl) testConnectionBtnEl = document.getElementById('testShareConnectionBtn');
-  return { serverUrlInputEl, apiTokenInputEl, pasteTokenBtnEl, testConnectionBtnEl };
+  if (!authButtonEl) authButtonEl = document.getElementById('cliplibAuthBtn');
+  if (!authButtonAvatarEl) authButtonAvatarEl = document.getElementById('cliplibAuthBtnAvatar');
+  if (!authButtonTitleEl) authButtonTitleEl = document.getElementById('cliplibAuthBtnTitle');
+  if (!authButtonSubtitleEl) authButtonSubtitleEl = document.getElementById('cliplibAuthBtnSubtitle');
+  return { authButtonEl, authButtonAvatarEl, authButtonTitleEl, authButtonSubtitleEl };
 }
 
 function ensureShareButton() {
@@ -72,21 +52,64 @@ function ensureShareButton() {
   return shareButton;
 }
 
-function setConnectionUi(stateName, message) {
-  const { statusDotEl: dotEl, statusTextEl: textEl } = getStatusElements();
-  if (!dotEl || !textEl) return;
+function firstDefinedString(...values) {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
 
-  dotEl.dataset.state = stateName;
-  textEl.dataset.state = stateName;
-  textEl.textContent = message;
+function buildDiscordAvatarUrl(discordIdRaw, avatarHashRaw) {
+  const discordId = firstDefinedString(discordIdRaw);
+  const avatarHash = firstDefinedString(avatarHashRaw);
+  if (!discordId || !avatarHash) {
+    return '';
+  }
+  const encodedId = encodeURIComponent(discordId);
+  const encodedHash = encodeURIComponent(avatarHash);
+  return `https://cdn.discordapp.com/avatars/${encodedId}/${encodedHash}.webp?size=64`;
+}
+
+function extractProfile(result) {
+  const user = result?.user && typeof result.user === 'object' ? result.user : {};
+  const username = firstDefinedString(
+    user.username,
+    user.displayName,
+    user.name,
+    result?.displayName,
+    user.discordId
+  ) || 'ClipLib User';
+
+  const avatarUrl = buildDiscordAvatarUrl(
+    firstDefinedString(user.discordId, user.discordID, user.discord_id),
+    firstDefinedString(user.avatarHash, user.avatar_hash, user.discordAvatarHash)
+  );
+
+  return { username, avatarUrl };
+}
+
+function setButtonAvatar(url) {
+  const { authButtonAvatarEl } = getSettingsElements();
+  if (!authButtonAvatarEl) return;
+
+  authButtonAvatarEl.onerror = () => {
+    if (authButtonAvatarEl.src.endsWith(FALLBACK_AVATAR_SRC)) return;
+    authButtonAvatarEl.src = FALLBACK_AVATAR_SRC;
+  };
+
+  authButtonAvatarEl.src = url || FALLBACK_AVATAR_SRC;
 }
 
 function updateShareButtonUi() {
   const button = ensureShareButton();
   if (!button) return;
 
-  const visible = authState.connected;
-  button.classList.toggle('share-hidden', !visible);
+  button.classList.toggle('share-hidden', !authState.connected);
 
   if (isSharing) {
     button.disabled = true;
@@ -100,137 +123,88 @@ function updateShareButtonUi() {
   button.textContent = 'Share';
 }
 
-function updateAuthStatusUi() {
-  if (authState.verifying) {
-    setConnectionUi('progress', 'Checking connection...');
-    updateShareButtonUi();
+function updateAuthButtonUi() {
+  const { authButtonEl, authButtonTitleEl, authButtonSubtitleEl } = getSettingsElements();
+  if (!authButtonEl || !authButtonTitleEl || !authButtonSubtitleEl) return;
+
+  authButtonEl.disabled = authState.verifying || isConnecting;
+  authButtonEl.classList.toggle('is-connected', authState.connected && !authState.verifying && !isConnecting);
+  authButtonEl.classList.toggle('is-disconnected', !authState.connected && !authState.verifying && !isConnecting);
+  authButtonEl.classList.toggle('is-busy', authState.verifying || isConnecting);
+
+  if (isConnecting) {
+    authButtonTitleEl.textContent = 'Continue in Browser';
+    authButtonSubtitleEl.textContent = 'Waiting for ClipLib authorization...';
+    setButtonAvatar(FALLBACK_AVATAR_SRC);
     return;
   }
 
-  if (!authState.configured) {
-    setConnectionUi('disconnected', 'Not configured');
-    updateShareButtonUi();
+  if (authState.verifying) {
+    authButtonTitleEl.textContent = 'Checking ClipLib';
+    authButtonSubtitleEl.textContent = 'Validating your session...';
+    setButtonAvatar(authState.avatarUrl || FALLBACK_AVATAR_SRC);
     return;
   }
 
   if (authState.connected) {
-    setConnectionUi('connected', `Connected as ${authState.displayName}`);
-    updateShareButtonUi();
+    authButtonTitleEl.textContent = authState.username || 'ClipLib User';
+    authButtonSubtitleEl.textContent = 'Connected to ClipLib · Click to disconnect';
+    setButtonAvatar(authState.avatarUrl || FALLBACK_AVATAR_SRC);
     return;
   }
 
-  setConnectionUi('disconnected', authState.error || 'Invalid API token');
+  authButtonTitleEl.textContent = 'Continue with ClipLib';
+  authButtonSubtitleEl.textContent = authState.error && authState.error !== NOT_CONFIGURED_ERROR
+    ? authState.error
+    : 'Sign in to share clips';
+  setButtonAvatar(FALLBACK_AVATAR_SRC);
+}
+
+function updateAuthStatusUi() {
+  updateAuthButtonUi();
   updateShareButtonUi();
 }
 
-function setButtonLoading(button, isLoading, loadingText, normalText) {
-  if (!button) return;
-  button.disabled = isLoading;
-  button.textContent = isLoading ? loadingText : normalText;
-}
-
-function ensureSharingDefaults() {
-  if (!state.settings) return;
-  if (!state.settings.sharing || typeof state.settings.sharing !== 'object') {
-    state.settings.sharing = {
-      serverUrl: DEFAULT_SERVER_URL,
-      apiToken: ''
-    };
-  }
-  if (typeof state.settings.sharing.serverUrl !== 'string' || !state.settings.sharing.serverUrl.trim()) {
-    state.settings.sharing.serverUrl = DEFAULT_SERVER_URL;
-  }
-  if (typeof state.settings.sharing.apiToken !== 'string') {
-    state.settings.sharing.apiToken = '';
-  }
-}
-
-async function persistSharingSettings(serverUrl, apiToken) {
-  if (!updateSettingValue) {
-    throw new Error('Share manager is missing updateSettingValue dependency.');
-  }
-
-  const normalizedServerUrl = normalizeServerUrl(serverUrl);
-  const normalizedToken = typeof apiToken === 'string' ? apiToken.trim() : '';
-
-  await updateSettingValue('sharing.serverUrl', normalizedServerUrl);
-  await updateSettingValue('sharing.apiToken', normalizedToken);
-}
-
-function syncSettingsUiFromState() {
-  ensureSharingDefaults();
-  const { serverUrl, apiToken } = resolveSharingSettingsFromState();
-  const { serverUrlInputEl, apiTokenInputEl } = getSettingsElements();
-
-  if (serverUrlInputEl) {
-    serverUrlInputEl.value = serverUrl;
-  }
-  if (apiTokenInputEl) {
-    apiTokenInputEl.value = apiToken;
-  }
-
-  updateAuthStatusUi();
-}
-
-async function refreshAuthState({ forceVerify = false, overrides = null } = {}) {
-  ensureSharingDefaults();
-
-  const fromState = resolveSharingSettingsFromState();
-  const serverUrl = normalizeServerUrl(overrides?.serverUrl || fromState.serverUrl);
-  const apiToken = typeof (overrides?.apiToken ?? fromState.apiToken) === 'string'
-    ? (overrides?.apiToken ?? fromState.apiToken).trim()
-    : '';
-
-  authState.configured = Boolean(apiToken);
-  authState.error = '';
-
-  if (!authState.configured) {
-    authState.connected = false;
-    authState.displayName = '';
-    authState.verifying = false;
-    updateAuthStatusUi();
-    return { ...authState };
-  }
-
-  if (!forceVerify && authState.connected) {
+async function refreshAuthState({ forceVerify = false } = {}) {
+  if (!forceVerify && authState.connected && !authState.error) {
     updateAuthStatusUi();
     return { ...authState };
   }
 
   authState.verifying = true;
+  authState.error = '';
   updateAuthStatusUi();
 
-  if (testConnectionBtnEl) {
-    setButtonLoading(testConnectionBtnEl, true, 'Testing...', 'Test Connection');
-  }
-
   try {
-    const result = await ipcRenderer.invoke('test-share-connection', { serverUrl, apiToken });
+    const result = await ipcRenderer.invoke('test-share-connection');
     authState.verifying = false;
 
     if (result?.success) {
+      const profile = extractProfile(result);
+      authState.configured = true;
       authState.connected = true;
-      authState.displayName = result.displayName || 'Unknown user';
+      authState.username = profile.username;
+      authState.avatarUrl = profile.avatarUrl;
       authState.error = '';
     } else {
       authState.connected = false;
-      authState.displayName = '';
+      authState.username = '';
+      authState.avatarUrl = '';
       authState.error = result?.error || 'Connection failed';
+      authState.configured = authState.error !== NOT_CONFIGURED_ERROR;
     }
 
     updateAuthStatusUi();
     return { ...authState };
   } catch (error) {
     authState.verifying = false;
+    authState.configured = false;
     authState.connected = false;
-    authState.displayName = '';
+    authState.username = '';
+    authState.avatarUrl = '';
     authState.error = `Connection failed: ${error.message}`;
     updateAuthStatusUi();
     return { ...authState };
-  } finally {
-    if (testConnectionBtnEl) {
-      setButtonLoading(testConnectionBtnEl, false, 'Testing...', 'Test Connection');
-    }
   }
 }
 
@@ -260,7 +234,7 @@ async function handleShareClick() {
 
   if (!authState.connected) {
     if (typeof showCustomAlert === 'function') {
-      await showCustomAlert('Sharing is not connected. Configure your API token in Settings > Sharing.');
+      await showCustomAlert('Sharing is not connected. Use Settings > General > Continue with ClipLib.');
     }
     return;
   }
@@ -317,94 +291,109 @@ async function handleShareClick() {
   }
 }
 
-async function handlePasteTokenClick() {
-  const { apiTokenInputEl } = getSettingsElements();
-  if (!apiTokenInputEl) return;
+async function startConnectFlow() {
+  isConnecting = true;
+  updateAuthStatusUi();
 
   try {
-    if (navigator.clipboard?.readText) {
-      const text = await navigator.clipboard.readText();
-      if (typeof text === 'string') {
-        apiTokenInputEl.value = text.trim();
+    const result = await ipcRenderer.invoke('start-cliplib-auth');
+    if (!result?.success) {
+      isConnecting = false;
+      updateAuthStatusUi();
+      if (typeof showCustomAlert === 'function') {
+        await showCustomAlert(result?.error || 'Failed to open ClipLib login.');
       }
     }
   } catch (error) {
-    logger.warn('Paste token failed:', error.message);
+    isConnecting = false;
+    updateAuthStatusUi();
+    logger.error('Failed to start ClipLib login flow:', error);
+    if (typeof showCustomAlert === 'function') {
+      await showCustomAlert(`Failed to start ClipLib login: ${error.message}`);
+    }
   }
 }
 
-async function saveInputsAndVerify() {
-  const { serverUrlInputEl, apiTokenInputEl } = getSettingsElements();
-  if (!serverUrlInputEl || !apiTokenInputEl) return;
+async function startDisconnectFlow() {
+  isConnecting = true;
+  updateAuthStatusUi();
 
-  const serverUrl = normalizeServerUrl(serverUrlInputEl.value);
-  const apiToken = apiTokenInputEl.value.trim();
-
-  serverUrlInputEl.value = serverUrl;
-  apiTokenInputEl.value = apiToken;
-
-  await persistSharingSettings(serverUrl, apiToken);
-  await refreshAuthState({ forceVerify: true });
+  try {
+    const result = await ipcRenderer.invoke('disconnect-cliplib-auth');
+    isConnecting = false;
+    if (!result?.success) {
+      updateAuthStatusUi();
+      if (typeof showCustomAlert === 'function') {
+        await showCustomAlert(result?.error || 'Failed to disconnect ClipLib account.');
+      }
+      return;
+    }
+    await refreshAuthState({ forceVerify: true });
+    showShareToast('ClipLib disconnected');
+  } catch (error) {
+    isConnecting = false;
+    updateAuthStatusUi();
+    logger.error('Failed disconnecting ClipLib auth:', error);
+    if (typeof showCustomAlert === 'function') {
+      await showCustomAlert(`Failed to disconnect ClipLib account: ${error.message}`);
+    }
+  }
 }
 
-function initializeSettingsControls({ updateSettingValue: updateSettingValueFn }) {
-  updateSettingValue = updateSettingValueFn;
-
-  const { serverUrlInputEl, apiTokenInputEl, pasteTokenBtnEl, testConnectionBtnEl } = getSettingsElements();
-  if (!serverUrlInputEl || !apiTokenInputEl || !testConnectionBtnEl) {
+async function handleAuthButtonClick() {
+  if (isConnecting || authState.verifying) return;
+  if (authState.connected) {
+    await startDisconnectFlow();
     return;
   }
+  await startConnectFlow();
+}
+
+async function handleCliplibAuthEvent(event, payload) {
+  if (!payload || typeof payload !== 'object') return;
+
+  isConnecting = false;
+
+  if (payload.status === 'success') {
+    await refreshAuthState({ forceVerify: true });
+    return;
+  }
+
+  await refreshAuthState({ forceVerify: true });
+  if (typeof showCustomAlert === 'function') {
+    await showCustomAlert(payload.message || 'ClipLib login failed.');
+  }
+}
+
+function initializeSettingsControls() {
+  const { authButtonEl } = getSettingsElements();
+  if (!authButtonEl) return;
 
   if (controlsInitialized) {
-    syncSettingsUiFromState();
+    updateAuthStatusUi();
     return;
   }
 
-  serverUrlInputEl.addEventListener('change', async () => {
-    try {
-      await saveInputsAndVerify();
-    } catch (error) {
-      logger.error('Failed saving share server URL:', error);
-    }
-  });
-
-  apiTokenInputEl.addEventListener('change', async () => {
-    try {
-      await saveInputsAndVerify();
-    } catch (error) {
-      logger.error('Failed saving share API token:', error);
-    }
-  });
-
-  if (pasteTokenBtnEl) {
-    pasteTokenBtnEl.addEventListener('click', async () => {
-      await handlePasteTokenClick();
-      try {
-        await saveInputsAndVerify();
-      } catch (error) {
-        logger.error('Failed saving pasted share API token:', error);
-      }
-    });
-  }
-
-  testConnectionBtnEl.addEventListener('click', async () => {
-    try {
-      await saveInputsAndVerify();
-    } catch (error) {
-      logger.error('Failed to test share connection:', error);
-      if (typeof showCustomAlert === 'function') {
-        await showCustomAlert(`Connection test failed: ${error.message}`);
-      }
-    }
+  authButtonEl.addEventListener('click', async () => {
+    await handleAuthButtonClick();
   });
 
   controlsInitialized = true;
-  syncSettingsUiFromState();
+  updateAuthStatusUi();
+}
+
+function syncSettingsUiFromState() {
+  updateAuthStatusUi();
 }
 
 function init(dependencies = {}) {
   showCustomAlert = dependencies.showCustomAlert;
   getSharePayload = dependencies.getSharePayload;
+
+  if (!ipcListenersInitialized) {
+    ipcRenderer.on('cliplib-auth-event', handleCliplibAuthEvent);
+    ipcListenersInitialized = true;
+  }
 
   const button = ensureShareButton();
   if (button) {
