@@ -2801,7 +2801,7 @@ input:checked + .settings-switch-slider::before {
   gap: 8px;
 }
 
-.settings-tab-content[data-tab="general"] {
+.settings-tab-content[data-tab="general"].active {
   display: flex;
   flex-direction: column;
 }
@@ -2814,29 +2814,25 @@ input:checked + .settings-switch-slider::before {
 }
 
 .cliplib-auth-button {
-  width: min(520px, 96%);
+  width: min(500px, 95%);
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 14px;
-  background: linear-gradient(180deg, #20252c 0%, #171b21 100%);
-  color: #f3f4f6;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(22, 22, 26, 0.94);
+  color: #e5e7eb;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow:
-    0 8px 18px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+  box-shadow: 0 0 16px rgba(0, 0, 0, 0.38);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
 .cliplib-auth-button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow:
-    0 12px 22px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.46);
 }
 
 .cliplib-auth-button:active:not(:disabled) {
@@ -2844,7 +2840,7 @@ input:checked + .settings-switch-slider::before {
 }
 
 .cliplib-auth-button.is-connected {
-  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(22, 22, 26, 0.94);
 }
 
 .cliplib-auth-logo-shell {
@@ -2854,8 +2850,8 @@ input:checked + .settings-switch-slider::before {
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background: transparent;
+  box-shadow: none;
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -2864,6 +2860,7 @@ input:checked + .settings-switch-slider::before {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 999px;
 }
 
 .cliplib-auth-copy {
@@ -2899,7 +2896,7 @@ input:checked + .settings-switch-slider::before {
 }
 
 .cliplib-auth-button.is-busy {
-  filter: brightness(1.05);
+  filter: saturate(1.06);
 }
 
 @media (max-width: 900px) {
