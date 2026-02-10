@@ -7,7 +7,7 @@
  * - Clip publish flow with share modal + featuring picker
  */
 
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, shell } = require('electron');
 const { pathToFileURL } = require('url');
 const logger = require('../utils/logger');
 
@@ -29,6 +29,9 @@ let authButtonSubtitleEl = null;
 let isSharing = false;
 let isConnecting = false;
 let shareToastTimeout = null;
+let publishProgressHideTimeout = null;
+let publishProgressResetTimeout = null;
+let latestShareProgressPhase = '';
 let controlsInitialized = false;
 let ipcListenersInitialized = false;
 let mentionUsersCache = null;
@@ -554,6 +557,219 @@ function showShareToast(message) {
   }, 2500);
 }
 
+function ensurePublishProgressToast() {
+  let toast = document.getElementById('publish-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'publish-toast';
+    toast.className = 'publish-toast';
+    toast.innerHTML = `
+      <div class="publish-toast-content">
+        <div class="publish-toast-header">
+          <svg class="publish-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 20v-2h14v2H5Zm6-4V8.83l-3.59 3.58L6 11l6-6 6 6-1.41 1.41L13 8.83V16h-2Z"></path>
+          </svg>
+          <div class="publish-text">
+            <h3 class="publish-title">Publishing...</h3>
+            <p class="publish-progress-text">0%</p>
+          </div>
+        </div>
+        <div class="publish-progress-bar">
+          <div class="publish-progress-fill"></div>
+        </div>
+        <button type="button" class="publish-preview" id="publish-preview" hidden>
+          <img class="publish-preview-thumb" id="publish-preview-thumb" alt="Published clip thumbnail" />
+          <span class="publish-preview-text" id="publish-preview-text">Open clip</span>
+        </button>
+      </div>
+    `;
+    document.body.appendChild(toast);
+  }
+  return toast;
+}
+
+function hidePublishProgressToast({ reset = true } = {}) {
+  const toast = document.getElementById('publish-toast');
+  if (!toast) return;
+
+  if (publishProgressHideTimeout) {
+    clearTimeout(publishProgressHideTimeout);
+    publishProgressHideTimeout = null;
+  }
+
+  toast.classList.remove('show');
+
+  if (!reset) return;
+  if (publishProgressResetTimeout) {
+    clearTimeout(publishProgressResetTimeout);
+  }
+
+  publishProgressResetTimeout = setTimeout(() => {
+    const content = toast.querySelector('.publish-toast-content');
+    const titleEl = toast.querySelector('.publish-title');
+    const progressTextEl = toast.querySelector('.publish-progress-text');
+    const fillEl = toast.querySelector('.publish-progress-fill');
+    const previewEl = toast.querySelector('#publish-preview');
+    const previewThumbEl = toast.querySelector('#publish-preview-thumb');
+    const previewTextEl = toast.querySelector('#publish-preview-text');
+    if (content) {
+      content.classList.remove('complete');
+      content.style.setProperty('--progress', '0%');
+    }
+    if (titleEl) titleEl.textContent = 'Publishing...';
+    if (progressTextEl) progressTextEl.textContent = '0%';
+    if (fillEl) fillEl.style.width = '0%';
+    if (previewEl) {
+      previewEl.hidden = true;
+      previewEl.disabled = false;
+      previewEl.onclick = null;
+    }
+    if (previewThumbEl) previewThumbEl.removeAttribute('src');
+    if (previewTextEl) previewTextEl.textContent = 'Open clip';
+    publishProgressResetTimeout = null;
+  }, 250);
+}
+
+function schedulePublishProgressHide(delayMs = 2200) {
+  if (publishProgressHideTimeout) {
+    clearTimeout(publishProgressHideTimeout);
+  }
+  publishProgressHideTimeout = setTimeout(() => {
+    hidePublishProgressToast({ reset: true });
+    publishProgressHideTimeout = null;
+  }, delayMs);
+}
+
+function updatePublishProgressToast({
+  percent = 0,
+  title = 'Publishing...',
+  complete = false
+} = {}) {
+  const toast = ensurePublishProgressToast();
+  const content = toast.querySelector('.publish-toast-content');
+  const titleEl = toast.querySelector('.publish-title');
+  const progressTextEl = toast.querySelector('.publish-progress-text');
+  const fillEl = toast.querySelector('.publish-progress-fill');
+  const previewEl = toast.querySelector('#publish-preview');
+
+  if (!content || !titleEl || !progressTextEl || !fillEl || !previewEl) return;
+
+  if (publishProgressResetTimeout) {
+    clearTimeout(publishProgressResetTimeout);
+    publishProgressResetTimeout = null;
+  }
+
+  if (publishProgressHideTimeout) {
+    clearTimeout(publishProgressHideTimeout);
+    publishProgressHideTimeout = null;
+  }
+
+  const normalizedPercent = Math.max(0, Math.min(100, Math.round(percent)));
+  toast.classList.add('show');
+  content.style.setProperty('--progress', `${normalizedPercent}%`);
+  titleEl.textContent = title;
+  progressTextEl.textContent = `${normalizedPercent}%`;
+  fillEl.style.width = `${normalizedPercent}%`;
+  content.classList.toggle('complete', complete);
+  previewEl.hidden = true;
+  previewEl.onclick = null;
+}
+
+function showPublishCompletionPreview({ thumbnailPath = '', clipUrl = '' } = {}) {
+  const toast = ensurePublishProgressToast();
+  const content = toast.querySelector('.publish-toast-content');
+  const titleEl = toast.querySelector('.publish-title');
+  const progressTextEl = toast.querySelector('.publish-progress-text');
+  const fillEl = toast.querySelector('.publish-progress-fill');
+  const previewEl = toast.querySelector('#publish-preview');
+  const previewThumbEl = toast.querySelector('#publish-preview-thumb');
+  const previewTextEl = toast.querySelector('#publish-preview-text');
+
+  if (!content || !titleEl || !progressTextEl || !fillEl || !previewEl || !previewThumbEl || !previewTextEl) return;
+
+  const hasClipUrl = typeof clipUrl === 'string' && clipUrl.trim().length > 0;
+  const resolvedThumbSrc = toFileSource(thumbnailPath) || '';
+
+  updatePublishProgressToast({
+    percent: 100,
+    title: hasClipUrl ? 'Published! Click preview to open' : 'Published!',
+    complete: true
+  });
+
+  if (resolvedThumbSrc) {
+    previewThumbEl.src = resolvedThumbSrc;
+    previewThumbEl.onerror = () => {
+      previewThumbEl.removeAttribute('src');
+    };
+  } else {
+    previewThumbEl.removeAttribute('src');
+  }
+
+  previewTextEl.textContent = hasClipUrl ? 'Open clip' : 'Clip published';
+  previewEl.hidden = false;
+  previewEl.disabled = !hasClipUrl;
+  previewEl.onclick = async () => {
+    if (!hasClipUrl) return;
+    try {
+      await shell.openExternal(clipUrl);
+    } catch (error) {
+      logger.warn(`Failed to open published clip URL: ${error.message}`);
+    }
+  };
+}
+
+function handleShareUploadProgress(event, payload) {
+  if (!isSharing) return;
+  if (!payload || typeof payload !== 'object') return;
+
+  const phase = typeof payload.phase === 'string' ? payload.phase : 'uploading';
+  latestShareProgressPhase = phase;
+  const percent = Number.isFinite(payload.percent) ? payload.percent : 0;
+
+  if (phase === 'preparing') {
+    updatePublishProgressToast({
+      percent: 0,
+      title: 'Preparing clip...'
+    });
+    return;
+  }
+
+  if (phase === 'exporting') {
+    const combinedPercent = Math.max(0, Math.min(50, percent * 0.5));
+    updatePublishProgressToast({
+      percent: combinedPercent,
+      title: 'Preparing clip...'
+    });
+    return;
+  }
+
+  if (phase === 'uploading') {
+    const combinedPercent = Math.max(50, Math.min(100, 50 + (percent * 0.5)));
+    updatePublishProgressToast({
+      percent: combinedPercent,
+      title: 'Publishing...'
+    });
+    return;
+  }
+
+  if (phase === 'done') {
+    updatePublishProgressToast({
+      percent: 100,
+      title: 'Finalizing publish...',
+      complete: true
+    });
+    return;
+  }
+
+  if (phase === 'failed') {
+    updatePublishProgressToast({
+      percent: 0,
+      title: 'Publish failed'
+    });
+    schedulePublishProgressHide(1800);
+  }
+}
+
 async function handleShareClick() {
   if (isSharing) return;
 
@@ -613,11 +829,22 @@ async function handleShareClick() {
   }
 
   isSharing = true;
+  latestShareProgressPhase = 'preparing';
   updateShareButtonUi();
+  updatePublishProgressToast({
+    percent: 0,
+    title: 'Preparing clip...'
+  });
 
   try {
     const result = await ipcRenderer.invoke('share-clip', payload);
     if (result?.success) {
+      latestShareProgressPhase = 'done';
+      showPublishCompletionPreview({
+        thumbnailPath: previewData.thumbnailPath,
+        clipUrl: result?.clipUrl || ''
+      });
+      schedulePublishProgressHide(5200);
       showShareToast('Clip published!');
       return;
     }
@@ -636,6 +863,9 @@ async function handleShareClick() {
       await showCustomAlert(`Publish failed: ${error.message}`);
     }
   } finally {
+    if (latestShareProgressPhase !== 'done' && latestShareProgressPhase !== 'failed') {
+      hidePublishProgressToast({ reset: true });
+    }
     isSharing = false;
     updateShareButtonUi();
   }
@@ -745,6 +975,7 @@ function init(dependencies = {}) {
 
   if (!ipcListenersInitialized) {
     ipcRenderer.on('cliplib-auth-event', handleCliplibAuthEvent);
+    ipcRenderer.on('share-upload-progress', handleShareUploadProgress);
     ipcListenersInitialized = true;
   }
 

@@ -634,7 +634,12 @@ ipcMain.handle('disconnect-cliplib-auth', async () => {
 });
 
 ipcMain.handle('share-clip', async (event, payload) => {
-  return shareModule.shareClip(payload, getSettings, ffmpegModule);
+  const sender = event.sender;
+  const progressHandler = (progressPayload) => {
+    if (!sender || sender.isDestroyed()) return;
+    sender.send('share-upload-progress', progressPayload);
+  };
+  return shareModule.shareClip(payload, getSettings, ffmpegModule, progressHandler);
 });
 
 ipcMain.handle('get-share-users', async (event, overrides) => {
