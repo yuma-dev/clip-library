@@ -18,8 +18,10 @@ const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
 const NVENC_STATUS_TTL_MS = 5 * 60 * 1000;
 const DECODER_LIST_TTL_MS = 5 * 60 * 1000;
+const HWACCEL_LIST_TTL_MS = 5 * 60 * 1000;
 const DISCORD_TARGET_BYTES = Math.floor(9.5 * 1024 * 1024);
 const DISCORD_AUDIO_BITRATE_K = 96;
+const UNKNOWN_CODEC_KEY = '__unknown__';
 const CUDA_DECODER_BY_CODEC = {
   h264: 'h264_cuvid',
   hevc: 'hevc_cuvid',
@@ -31,6 +33,8 @@ const CUDA_DECODER_BY_CODEC = {
 };
 let nvencStatusCache = null;
 let decoderListCache = null;
+let hwAccelListCache = null;
+const preferredDecodeModeByCodec = new Map();
 
 // FFmpeg binary paths
 // Configure FFmpeg paths
@@ -203,6 +207,40 @@ async function getDecoderNames(options = {}) {
   return names;
 }
 
+async function getHwAccelNames(options = {}) {
+  const forceRefresh = options.forceRefresh === true;
+  const now = Date.now();
+
+  if (
+    !forceRefresh &&
+    hwAccelListCache &&
+    (now - hwAccelListCache.checkedAt) < HWACCEL_LIST_TTL_MS
+  ) {
+    return new Set(hwAccelListCache.names);
+  }
+
+  const hwAccelResult = await execFileAsync(ffmpegPath, ['-hide_banner', '-hwaccels']);
+  const rawText = `${hwAccelResult.stdout}\n${hwAccelResult.stderr}`;
+  const names = new Set();
+
+  rawText.split(/\r?\n/).forEach((line) => {
+    const normalized = String(line || '').trim().toLowerCase();
+    if (!normalized || normalized.startsWith('hardware acceleration methods')) {
+      return;
+    }
+    if (/^[a-z0-9_]+$/.test(normalized)) {
+      names.add(normalized);
+    }
+  });
+
+  hwAccelListCache = {
+    names: Array.from(names),
+    checkedAt: now
+  };
+
+  return names;
+}
+
 function getCudaDecoderForCodec(codecName, decoderNames) {
   const normalizedCodec = String(codecName || '').toLowerCase();
   const candidate = CUDA_DECODER_BY_CODEC[normalizedCodec];
@@ -210,9 +248,48 @@ function getCudaDecoderForCodec(codecName, decoderNames) {
   return decoderNames.has(candidate) ? candidate : null;
 }
 
+function getCodecPreferenceKey(codecName) {
+  const normalized = String(codecName || '').toLowerCase().trim();
+  return normalized || UNKNOWN_CODEC_KEY;
+}
+
+function buildDecodeModeOrder({ sourceCodec, requestedCudaDecoder, hwAccelNames }) {
+  const modes = [];
+  const addMode = (mode) => {
+    if (!mode || modes.includes(mode)) return;
+    modes.push(mode);
+  };
+
+  const hasCuda = hwAccelNames.has('cuda');
+  const hasD3d11va = hwAccelNames.has('d3d11va');
+  const hasDxva2 = hwAccelNames.has('dxva2');
+  const preferenceKey = getCodecPreferenceKey(sourceCodec);
+  const preferredMode = preferredDecodeModeByCodec.get(preferenceKey);
+
+  if (preferredMode) {
+    addMode(preferredMode);
+  }
+  if (hasCuda && requestedCudaDecoder) {
+    addMode('cuda_cuvid');
+  }
+  if (hasCuda) {
+    addMode('cuda');
+  }
+  if (hasD3d11va) {
+    addMode('d3d11va');
+  }
+  if (hasDxva2) {
+    addMode('dxva2');
+  }
+  addMode('none');
+
+  return modes;
+}
+
 async function getExportAccelerationStatus(options = {}) {
   const nvencStatus = await getNvencStatus(options);
   let cudaDecoders = [];
+  let hwAccels = [];
 
   try {
     const decoderNames = await getDecoderNames(options);
@@ -221,9 +298,17 @@ async function getExportAccelerationStatus(options = {}) {
     logger.warn(`[ffmpeg] Failed to query decoders for acceleration status: ${error.message}`);
   }
 
+  try {
+    const hwAccelNames = await getHwAccelNames(options);
+    hwAccels = Array.from(hwAccelNames);
+  } catch (error) {
+    logger.warn(`[ffmpeg] Failed to query hwaccels for acceleration status: ${error.message}`);
+  }
+
   return {
     ...nvencStatus,
-    cudaDecoders
+    cudaDecoders,
+    hwAccels
   };
 }
 
@@ -353,6 +438,7 @@ async function exportVideoWithFallback(options) {
     volumeData,
     onProgress,
     onFallback,
+    onDecodeFallback,
     allowAudioCopy = true,
     emitGlobalProgress = true
   } = options;
@@ -385,11 +471,25 @@ async function exportVideoWithFallback(options) {
     }
   };
 
+  const notifyDecodeFallback = (payload) => {
+    if (typeof onDecodeFallback === 'function') {
+      try {
+        onDecodeFallback(payload);
+      } catch (error) {
+        logger.warn(`Export decode fallback callback failed: ${error.message}`);
+      }
+    }
+    if (emitGlobalProgress) {
+      emitDecodeFallbackNotice(payload);
+    }
+  };
+
   return new Promise((resolve, reject) => {
     let usingFallback = false;
     let lastProgressTime = Date.now();
     let totalFrames = 0;
     let processedFrames = 0;
+    let decodeFallbackNotified = false;
 
     ffmpeg.ffprobe(inputPath, async (err, metadata) => {
       if (err) {
@@ -412,6 +512,7 @@ async function exportVideoWithFallback(options) {
       const sourcePixelFormat = typeof videoStream?.pix_fmt === 'string'
         ? videoStream.pix_fmt
         : null;
+      const codecPreferenceKey = getCodecPreferenceKey(sourceCodec);
 
       const speedValue = Number(speed);
       const volumeValue = Number(volume);
@@ -631,22 +732,45 @@ async function exportVideoWithFallback(options) {
         return;
       }
 
-      const decodeModes = ['none'];
+      let decodeModes = ['none'];
       if (canAttemptHwDecode) {
-        decodeModes.unshift('dxva2');
-        decodeModes.unshift('d3d11va');
-        decodeModes.unshift('cuda');
+        let decoderNames = new Set();
+        let hwAccelNames = new Set();
+
         try {
-          const decoderNames = await getDecoderNames();
-          requestedCudaDecoder = getCudaDecoderForCodec(sourceCodec, decoderNames);
-          if (requestedCudaDecoder) {
-            decodeModes.unshift('cuda_cuvid');
-            logger.info(`[ffmpeg] CUDA decode enabled with decoder: ${requestedCudaDecoder}`);
-          } else {
-            logger.info(`[ffmpeg] CUDA decode will use generic hwaccel path for source codec "${sourceCodec || 'unknown'}".`);
-          }
+          decoderNames = await getDecoderNames();
         } catch (decoderError) {
-          logger.warn(`[ffmpeg] Failed to query decoder support, continuing with generic CUDA decode: ${decoderError.message}`);
+          logger.warn(`[ffmpeg] Failed to query decoder support: ${decoderError.message}`);
+        }
+
+        try {
+          hwAccelNames = await getHwAccelNames();
+        } catch (hwAccelError) {
+          logger.warn(`[ffmpeg] Failed to query hwaccel support: ${hwAccelError.message}`);
+        }
+
+        requestedCudaDecoder = getCudaDecoderForCodec(sourceCodec, decoderNames);
+        decodeModes = buildDecodeModeOrder({
+          sourceCodec,
+          requestedCudaDecoder,
+          hwAccelNames
+        });
+
+        logger.info(
+          `[ffmpeg] Decode mode order for codec=${sourceCodec || 'unknown'}: ${decodeModes.join(' -> ')}` +
+          `${requestedCudaDecoder ? ` (cudaDecoder=${requestedCudaDecoder})` : ''}`
+        );
+
+        if (decodeModes.length === 1 && decodeModes[0] === 'none') {
+          decodeFallbackNotified = true;
+          notifyDecodeFallback({
+            sourceCodec,
+            requestedCudaDecoder,
+            decodeAttempts: ['none'],
+            decodeErrors: {
+              none: 'No compatible hardware decode backend detected by ffmpeg.'
+            }
+          });
         }
       }
 
@@ -656,6 +780,16 @@ async function exportVideoWithFallback(options) {
         activeDecodeMode = decodeMode;
         hwDecodeEnabled = decodeMode !== 'none';
         attemptedDecodeModes.push(decodeMode);
+
+        if (decodeMode === 'none' && decodeModeIndex > 0 && !decodeFallbackNotified) {
+          decodeFallbackNotified = true;
+          notifyDecodeFallback({
+            sourceCodec,
+            requestedCudaDecoder,
+            decodeAttempts: [...attemptedDecodeModes],
+            decodeErrors: { ...decodeErrors }
+          });
+        }
 
         processedFrames = 0;
         lastProgressTime = Date.now();
@@ -741,6 +875,9 @@ async function exportVideoWithFallback(options) {
               .join(' | ')
               .slice(0, 400);
             decodeErrors[decodeMode] = conciseError || 'unknown decode failure';
+            if (preferredDecodeModeByCodec.get(codecPreferenceKey) === decodeMode) {
+              preferredDecodeModeByCodec.delete(codecPreferenceKey);
+            }
 
             if (decodeModeIndex + 1 < decodeModes.length) {
               const nextDecodeMode = decodeModes[decodeModeIndex + 1];
@@ -766,6 +903,9 @@ async function exportVideoWithFallback(options) {
             runSoftwareEncode();
           })
           .on('end', () => {
+            if (decodeMode !== 'none') {
+              preferredDecodeModeByCodec.set(codecPreferenceKey, decodeMode);
+            }
             reportProgress(100);
             resolve({
               usingFallback,
@@ -810,6 +950,9 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
     const onFallback = typeof progressCallbacks?.onFallback === 'function'
       ? progressCallbacks.onFallback
       : null;
+    const onDecodeFallback = typeof progressCallbacks?.onDecodeFallback === 'function'
+      ? progressCallbacks.onDecodeFallback
+      : null;
     const quality = settings.exportQuality || 'discord';
 
     const exportStartedAt = Date.now();
@@ -824,6 +967,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       volumeData,
       onProgress,
       onFallback,
+      onDecodeFallback,
       allowAudioCopy: !savePath && quality !== 'discord',
       emitGlobalProgress: !onProgress
     });
@@ -915,6 +1059,9 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
     const onFallback = typeof progressCallbacks?.onFallback === 'function'
       ? progressCallbacks.onFallback
       : null;
+    const onDecodeFallback = typeof progressCallbacks?.onDecodeFallback === 'function'
+      ? progressCallbacks.onDecodeFallback
+      : null;
     const quality = settings.exportQuality || 'discord';
 
     const exportStartedAt = Date.now();
@@ -929,6 +1076,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       volumeData,
       onProgress,
       onFallback,
+      onDecodeFallback,
       allowAudioCopy: quality !== 'discord',
       emitGlobalProgress: !onProgress
     });
@@ -1190,6 +1338,15 @@ function emitProgress(percent) {
 function emitFallbackNotice() {
   BrowserWindow.getAllWindows().forEach((window) => {
     window.webContents.send('show-fallback-notice');
+  });
+}
+
+/**
+ * Emit decode fallback notice to all renderer windows
+ */
+function emitDecodeFallbackNotice(payload = {}) {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.webContents.send('show-decode-fallback-notice', payload);
   });
 }
 

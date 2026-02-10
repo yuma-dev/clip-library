@@ -681,6 +681,7 @@ console.log('  debugNewClips() - Show current state');
 console.log('  resetNewClips() - Mark all clips as not new');
 console.log('  checkIndicatorData() - Debug data attributes and positioning');
 console.log('  getExportAccelerationStatus() - Check NVENC and CUDA decode export status');
+console.log('  testDecodeFallbackWarning() - Show decode fallback warning for testing');
 
 window.getExportAccelerationStatus = async () => {
   try {
@@ -691,6 +692,19 @@ window.getExportAccelerationStatus = async () => {
     logger.error('Failed to get export acceleration status:', error);
     return null;
   }
+};
+
+window.testDecodeFallbackWarning = () => {
+  exportManagerModule.showDecodeFallbackNotice({
+    sourceCodec: 'av1',
+    requestedCudaDecoder: 'av1_cuvid',
+    decodeAttempts: ['cuda_cuvid', 'cuda', 'd3d11va', 'dxva2', 'none'],
+    decodeErrors: {
+      cuda_cuvid: 'Test failure from console command',
+      cuda: 'Test failure from console command',
+      d3d11va: 'Test failure from console command'
+    }
+  });
 };
 
 /**
@@ -1647,6 +1661,10 @@ ipcRenderer.on("export-progress", (event, progress) => {
 
 ipcRenderer.on("show-fallback-notice", () => {
   exportManagerModule.showFallbackNotice();
+});
+
+ipcRenderer.on("show-decode-fallback-notice", (event, payload) => {
+  exportManagerModule.showDecodeFallbackNotice(payload);
 });
 
 // Clip title editing
