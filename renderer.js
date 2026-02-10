@@ -2195,6 +2195,8 @@ function isClipSelectable(clip) {
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
+  const shareModal = document.getElementById('clip-share-modal');
+  if (shareModal && shareModal.classList.contains('is-open')) return;
   if (e.key !== 'Escape') return;
   clearSelection(true);
   if (state.isInTemporaryMode) {
