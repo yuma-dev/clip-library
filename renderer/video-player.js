@@ -1344,6 +1344,8 @@ function updatePreview(e, options = {}) {
  * Handle key release events for playback controls.
  */
 function handleKeyRelease(e) {
+  if (isShareModalOpen()) return;
+
   if (e.key === "," || e.key === ".") {
     state.isFrameStepping = false;
     state.frameStepDirection = 0;
@@ -1375,6 +1377,8 @@ function handleKeyRelease(e) {
  * Handle key press events for playback and editing.
  */
 function handleKeyPress(e) {
+  if (isShareModalOpen()) return;
+
   const isClipTitleFocused = document.activeElement === elements.clipTitle;
   const isSearching = document.activeElement === document.getElementById("search-input");
   const isPlayerActive = elements.playerOverlay.style.display === "block";
@@ -1497,6 +1501,14 @@ function handleKeyPress(e) {
       }
     }
   }
+}
+
+/**
+ * Check whether the share modal is currently active.
+ */
+function isShareModalOpen() {
+  const shareModal = document.getElementById('clip-share-modal');
+  return Boolean(shareModal && shareModal.classList.contains('is-open'));
 }
 
 /**
