@@ -40,6 +40,15 @@ function getCurrentPlaybackRate() {
   return 1;
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ============================================================================
 // EXPORT OPERATIONS
 // ============================================================================
@@ -150,7 +159,10 @@ async function exportTrimmedVideo() {
  * Show a notice when software encoding is used.
  */
 function showFallbackNotice() {
+  const existing = document.getElementById('export-fallback-notice');
+  if (existing) existing.remove();
   const notice = document.createElement('div');
+  notice.id = 'export-fallback-notice';
   notice.className = 'fallback-notice';
   notice.innerHTML = `
     <p>Your video is being exported using software encoding, which may be slower.</p>
@@ -162,6 +174,49 @@ function showFallbackNotice() {
   document.getElementById('close-notice').addEventListener('click', () => {
     notice.remove();
   });
+}
+
+/**
+ * Show a notice when hardware decode falls back to software decode.
+ */
+function showDecodeFallbackNotice(payload = {}) {
+  const existing = document.getElementById('decode-fallback-notice');
+  if (existing) existing.remove();
+
+  const sourceCodec = typeof payload.sourceCodec === 'string' && payload.sourceCodec
+    ? payload.sourceCodec.toUpperCase()
+    : 'Unknown';
+  const attempts = Array.isArray(payload.decodeAttempts)
+    ? payload.decodeAttempts.filter((item) => item && item !== 'none')
+    : [];
+  const errors = payload.decodeErrors && typeof payload.decodeErrors === 'object'
+    ? payload.decodeErrors
+    : {};
+  const firstError = Object.values(errors).find((value) => typeof value === 'string' && value.trim().length > 0) || null;
+  const attemptText = attempts.length > 0 ? attempts.join(', ') : 'hardware decode';
+  const shortError = firstError ? String(firstError).slice(0, 180) : null;
+  const safeSourceCodec = escapeHtml(sourceCodec);
+  const safeAttemptText = escapeHtml(attemptText);
+  const safeShortError = shortError ? escapeHtml(shortError) : null;
+
+  const notice = document.createElement('div');
+  notice.id = 'decode-fallback-notice';
+  notice.className = 'fallback-notice';
+  notice.innerHTML = `
+    <p>Hardware decode fallback: using software decode for ${safeSourceCodec} source.</p>
+    <p>Tried: ${safeAttemptText}. Export still works, but may be slower.</p>
+    ${safeShortError ? `<p>Last decode error: ${safeShortError}</p>` : ''}
+    <p>Try updating NVIDIA drivers, keeping Windows GPU drivers up to date, and closing overlays/recorders that hook video decode.</p>
+    <button id="close-decode-notice">Close</button>
+  `;
+  document.body.appendChild(notice);
+
+  const closeButton = document.getElementById('close-decode-notice');
+  if (closeButton) {
+    closeButton.addEventListener('click', () => {
+      notice.remove();
+    });
+  }
 }
 
 // ============================================================================
@@ -176,5 +231,6 @@ module.exports = {
   exportVideo,
   exportAudio,
   exportTrimmedVideo,
-  showFallbackNotice
+  showFallbackNotice,
+  showDecodeFallbackNotice
 };

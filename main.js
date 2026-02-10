@@ -768,6 +768,11 @@ function buildExportProgressCallbacks(event) {
       if (!event?.sender?.isDestroyed()) {
         event.sender.send('show-fallback-notice');
       }
+    },
+    onDecodeFallback: (payload) => {
+      if (!event?.sender?.isDestroyed()) {
+        event.sender.send('show-decode-fallback-notice', payload);
+      }
     }
   };
 }
