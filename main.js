@@ -85,6 +85,10 @@ ipcMain.handle('get-ffmpeg-version', async (event) => {
   }
 });
 
+ipcMain.handle('get-export-acceleration-status', async () => {
+  return ffmpegModule.getExportAccelerationStatus();
+});
+
 let idleTimer;
 
 let mainWindow;
@@ -753,12 +757,29 @@ ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => 
   return dialogsModule.showSaveDialog(mainWindow, type, clipName, customName);
 });
 
+function buildExportProgressCallbacks(event) {
+  return {
+    onProgress: (percent) => {
+      if (!event?.sender?.isDestroyed()) {
+        event.sender.send('export-progress', percent);
+      }
+    },
+    onFallback: () => {
+      if (!event?.sender?.isDestroyed()) {
+        event.sender.send('show-fallback-notice');
+      }
+    }
+  };
+}
+
 ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
-  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, getSettings);
+  const callbacks = buildExportProgressCallbacks(event);
+  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, getSettings, callbacks);
 });
 
 ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
-  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, getSettings);
+  const callbacks = buildExportProgressCallbacks(event);
+  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, callbacks);
 });
 
 ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath) => {

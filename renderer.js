@@ -680,6 +680,18 @@ console.log('  setNewClipsCount(n) - Mark first n clips as new');
 console.log('  debugNewClips() - Show current state');  
 console.log('  resetNewClips() - Mark all clips as not new');
 console.log('  checkIndicatorData() - Debug data attributes and positioning');
+console.log('  getExportAccelerationStatus() - Check NVENC and CUDA decode export status');
+
+window.getExportAccelerationStatus = async () => {
+  try {
+    const status = await ipcRenderer.invoke('get-export-acceleration-status');
+    logger.info('[export] Acceleration status:', status);
+    return status;
+  } catch (error) {
+    logger.error('Failed to get export acceleration status:', error);
+    return null;
+  }
+};
 
 /**
  * Trigger FFmpeg version lookup (for UI display).
@@ -901,14 +913,23 @@ function setupContextMenu() {
 
 // Export progress toast
 const toast = document.getElementById('export-toast');
-const content = toast.querySelector('.export-toast-content');
-const progressText = toast.querySelector('.export-progress-text');
-const title = toast.querySelector('.export-title');
+if (toast && toast.parentElement !== document.body) {
+  // Keep export toast outside blurred app-content so it stays visible over player overlay.
+  document.body.appendChild(toast);
+}
+const content = toast?.querySelector('.export-toast-content');
+const progressText = toast?.querySelector('.export-progress-text');
+const title = toast?.querySelector('.export-title');
 
 /**
  * Update the export progress toast.
  */
 function showExportProgress(current, total, isClipboardExport = false) {
+  if (!toast || !content || !progressText || !title) {
+    logger.warn('Export toast elements missing; cannot show export progress UI.');
+    return;
+  }
+
   if (!toast.classList.contains('show')) {
     toast.classList.add('show');
   }
@@ -1025,7 +1046,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     videoPlayerModule: videoPlayerModule,
     showExportProgress: showExportProgress,
     showCustomAlert: showCustomAlert,
-    getFfmpegVersion: getFfmpegVersion
+    getFfmpegVersion: getFfmpegVersion,
+    getPlaybackRate: () => videoPlayer.playbackRate
   });
 
   // Initialize share manager (button + auth state + upload flow)
@@ -1619,7 +1641,12 @@ async function exportAudioToClipboard() {
 
 // Export progress IPC
 ipcRenderer.on("export-progress", (event, progress) => {
-  showExportProgress(progress, 100);
+  const normalized = Math.max(0, Math.min(100, Number(progress) || 0));
+  showExportProgress(normalized, 100);
+});
+
+ipcRenderer.on("show-fallback-notice", () => {
+  exportManagerModule.showFallbackNotice();
 });
 
 // Clip title editing
