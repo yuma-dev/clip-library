@@ -16,6 +16,15 @@ const CONNECTION_TIMEOUT_MS = 10000;
 const UPLOAD_TIMEOUT_MS = 180000;
 const MAX_REDIRECTS = 5;
 
+function emitShareProgress(onProgress, payload = {}) {
+  if (typeof onProgress !== 'function') return;
+  try {
+    onProgress(payload);
+  } catch (error) {
+    logger.warn(`Share progress callback failed: ${error.message}`);
+  }
+}
+
 function normalizeServerUrl(input) {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) return DEFAULT_SERVER_URL;
@@ -129,6 +138,46 @@ function buildErrorMessage(statusCode, bodyJson, bodyText, fallback) {
     return `HTTP ${statusCode}: ${bodyText.trim().slice(0, 220)}`;
   }
   return fallback;
+}
+
+function toAbsoluteUrlMaybe(serverUrl, value) {
+  if (typeof value !== 'string') return '';
+  const raw = value.trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw, serverUrl).toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+function deriveUploadedClipUrl(serverUrl, bodyJson, clipId) {
+  const json = bodyJson && typeof bodyJson === 'object' ? bodyJson : {};
+  const directCandidates = [
+    json.clipUrl,
+    json.url,
+    json.shareUrl,
+    json.webUrl,
+    json.link
+  ];
+
+  for (const candidate of directCandidates) {
+    const absolute = toAbsoluteUrlMaybe(serverUrl, candidate);
+    if (absolute) return absolute;
+  }
+
+  const token = typeof json.publicToken === 'string'
+    ? json.publicToken.trim()
+    : (typeof json.token === 'string' ? json.token.trim() : '');
+  if (token) {
+    return `${serverUrl}/s/${encodeURIComponent(token)}`;
+  }
+
+  if (typeof clipId === 'string' && clipId.trim()) {
+    return `${serverUrl}/clips/${encodeURIComponent(clipId.trim())}`;
+  }
+
+  return '';
 }
 
 async function parseJsonSafe(text) {
@@ -286,6 +335,7 @@ async function postMultipartClip({
   apiToken,
   filePath,
   metadataJson,
+  onProgress,
   timeoutMs = UPLOAD_TIMEOUT_MS,
   redirectCount = 0
 }) {
@@ -314,6 +364,32 @@ async function postMultipartClip({
     fileStats.size +
     Buffer.byteLength(closingPart, 'utf8');
 
+  const metadataPartBytes = Buffer.byteLength(metadataPart, 'utf8');
+  const filePartHeaderBytes = Buffer.byteLength(filePartHeader, 'utf8');
+  const closingPartBytes = Buffer.byteLength(closingPart, 'utf8');
+  let uploadedBytes = 0;
+  let lastProgressEmitAt = 0;
+  let lastProgressPercent = -1;
+
+  const reportUploadProgress = (force = false) => {
+    const percent = contentLength > 0 ? Math.min((uploadedBytes / contentLength) * 100, 100) : 0;
+    const now = Date.now();
+    const isMeaningfulDelta = Math.abs(percent - lastProgressPercent) >= 0.35;
+    if (!force && percent < 100 && !isMeaningfulDelta && (now - lastProgressEmitAt) < 90) {
+      return;
+    }
+
+    lastProgressEmitAt = now;
+    lastProgressPercent = percent;
+
+    emitShareProgress(onProgress, {
+      phase: 'uploading',
+      uploadedBytes,
+      totalBytes: contentLength,
+      percent
+    });
+  };
+
   const options = {
     method: 'POST',
     hostname: target.hostname,
@@ -327,6 +403,8 @@ async function postMultipartClip({
   };
 
   return new Promise((resolve, reject) => {
+    reportUploadProgress(true);
+
     const req = requestFn(options, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -346,6 +424,7 @@ async function postMultipartClip({
               apiToken,
               filePath,
               metadataJson,
+              onProgress,
               timeoutMs,
               redirectCount: redirectCount + 1
             });
@@ -369,15 +448,32 @@ async function postMultipartClip({
 
     req.on('error', reject);
 
-    req.write(metadataPart);
+    if (metadataPartBytes > 0) {
+      req.write(metadataPart);
+      uploadedBytes += metadataPartBytes;
+      reportUploadProgress();
+    }
+
     req.write(filePartHeader);
+    uploadedBytes += filePartHeaderBytes;
+    reportUploadProgress();
 
     const fileStream = fs.createReadStream(filePath);
     fileStream.on('error', (streamError) => {
       req.destroy(streamError);
     });
+
+    fileStream.on('data', (chunk) => {
+      if (chunk && Number.isFinite(chunk.length)) {
+        uploadedBytes += chunk.length;
+        reportUploadProgress();
+      }
+    });
+
     fileStream.on('end', () => {
       req.write(closingPart);
+      uploadedBytes += closingPartBytes;
+      reportUploadProgress(true);
       req.end();
     });
     fileStream.pipe(req, { end: false });
@@ -395,13 +491,22 @@ async function cleanupTempFile(filePath) {
   }
 }
 
-async function shareClip(payload, getSettings, ffmpegModule) {
+async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
+  emitShareProgress(onProgress, {
+    phase: 'preparing',
+    uploadedBytes: 0,
+    totalBytes: 0,
+    percent: 0
+  });
+
   if (!payload || typeof payload !== 'object') {
+    emitShareProgress(onProgress, { phase: 'failed', percent: 0, error: 'Missing share payload.' });
     return { success: false, error: 'Missing share payload.' };
   }
 
   const { clipName, start, end, volume, speed } = payload;
   if (!clipName) {
+    emitShareProgress(onProgress, { phase: 'failed', percent: 0, error: 'Missing clip name.' });
     return { success: false, error: 'Missing clip name.' };
   }
 
@@ -409,22 +514,36 @@ async function shareClip(payload, getSettings, ffmpegModule) {
   const { serverUrl, apiToken } = await resolveSharingConfig(settings);
 
   if (!apiToken) {
+    emitShareProgress(onProgress, { phase: 'failed', percent: 0, error: 'API token is not configured.' });
     return { success: false, status: 401, error: 'API token is not configured.' };
   }
 
   let exportedPath = null;
 
   try {
+    const exportProgressHandler = (exportPercent) => {
+      emitShareProgress(onProgress, {
+        phase: 'exporting',
+        percent: Math.max(0, Math.min(100, Number(exportPercent) || 0))
+      });
+    };
+
     const exportResult = await ffmpegModule.exportTrimmedVideoForShare(
       clipName,
       start,
       end,
       volume,
       speed,
-      getSettings
+      getSettings,
+      exportProgressHandler
     );
 
     if (!exportResult?.success || !exportResult.path) {
+      emitShareProgress(onProgress, {
+        phase: 'failed',
+        percent: 0,
+        error: exportResult?.error || 'Failed to export clip for sharing.'
+      });
       return { success: false, error: exportResult?.error || 'Failed to export clip for sharing.' };
     }
 
@@ -432,6 +551,11 @@ async function shareClip(payload, getSettings, ffmpegModule) {
 
     const fileStats = await fsp.stat(exportedPath);
     if (fileStats.size > MAX_UPLOAD_BYTES) {
+      emitShareProgress(onProgress, {
+        phase: 'failed',
+        percent: 0,
+        error: `File too large (${formatBytes(fileStats.size)}). Maximum allowed size is 500 MB.`
+      });
       return {
         success: false,
         status: 400,
@@ -446,12 +570,24 @@ async function shareClip(payload, getSettings, ffmpegModule) {
       endpoint: `${serverUrl}/api/clips`,
       apiToken,
       filePath: exportedPath,
-      metadataJson
+      metadataJson,
+      onProgress
     });
 
     const bodyJson = await parseJsonSafe(uploadResponse.bodyText);
 
     if (uploadResponse.statusCode === 202) {
+      const uploadedId = bodyJson?.id || null;
+      const clipUrl = deriveUploadedClipUrl(serverUrl, bodyJson, uploadedId);
+
+      emitShareProgress(onProgress, {
+        phase: 'done',
+        uploadedBytes: fileStats.size,
+        totalBytes: fileStats.size,
+        percent: 100,
+        clipUrl: clipUrl || null
+      });
+
       logActivity('share_clip', {
         clipName,
         remoteId: bodyJson?.id || null,
@@ -461,23 +597,39 @@ async function shareClip(payload, getSettings, ffmpegModule) {
 
       return {
         success: true,
-        id: bodyJson?.id || null,
-        status: bodyJson?.status || 'processing'
+        id: uploadedId,
+        status: bodyJson?.status || 'processing',
+        serverUrl,
+        clipUrl: clipUrl || null
       };
     }
+
+    const uploadError = buildErrorMessage(
+      uploadResponse.statusCode,
+      bodyJson,
+      uploadResponse.bodyText,
+      'Failed to upload clip.'
+    );
+
+    emitShareProgress(onProgress, {
+      phase: 'failed',
+      percent: 0,
+      status: uploadResponse.statusCode,
+      error: uploadError
+    });
 
     return {
       success: false,
       status: uploadResponse.statusCode,
-      error: buildErrorMessage(
-        uploadResponse.statusCode,
-        bodyJson,
-        uploadResponse.bodyText,
-        'Failed to upload clip.'
-      )
+      error: uploadError
     };
   } catch (error) {
     logger.error('Share upload failed:', error);
+    emitShareProgress(onProgress, {
+      phase: 'failed',
+      percent: 0,
+      error: `Share failed: ${error.message}`
+    });
     return { success: false, error: `Share failed: ${error.message}` };
   } finally {
     await cleanupTempFile(exportedPath);

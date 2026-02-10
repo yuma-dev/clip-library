@@ -85,8 +85,33 @@ function ffprobeAsync(filePath) {
  */
 // Export helpers
 async function exportVideoWithFallback(options) {
-  const { inputPath, outputPath, start, end, volume, speed, quality, volumeData } = options;
+  const {
+    inputPath,
+    outputPath,
+    start,
+    end,
+    volume,
+    speed,
+    quality,
+    volumeData,
+    onProgress,
+    emitGlobalProgress = true
+  } = options;
   const duration = end - start;
+
+  const reportProgress = (percent) => {
+    const normalized = Math.max(0, Math.min(100, Number(percent) || 0));
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress(normalized);
+      } catch (error) {
+        logger.warn(`Share export progress callback failed: ${error.message}`);
+      }
+    }
+    if (emitGlobalProgress) {
+      emitProgress(normalized);
+    }
+  };
 
   return new Promise((resolve, reject) => {
     let usingFallback = false;
@@ -179,7 +204,7 @@ async function exportVideoWithFallback(options) {
           // Throttle updates to max 10 per second
           const now = Date.now();
           if (now - lastProgressTime >= 100) {
-            emitProgress(progress);
+            reportProgress(progress);
             lastProgressTime = now;
           }
         }
@@ -219,13 +244,13 @@ async function exportVideoWithFallback(options) {
 
               const now = Date.now();
               if (now - lastProgressTime >= 100) {
-                emitProgress(progress);
+                reportProgress(progress);
                 lastProgressTime = now;
               }
             }
           })
           .on('end', () => {
-            emitProgress(100);
+            reportProgress(100);
             resolve(usingFallback);
           })
           .on('error', (err, stdout, stderr) => {
@@ -237,7 +262,7 @@ async function exportVideoWithFallback(options) {
           .save(outputPath);
       })
       .on('end', () => {
-        emitProgress(100);
+        reportProgress(100);
         resolve(usingFallback);
       })
       .save(outputPath);
@@ -360,7 +385,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
 /**
  * Export trimmed video for sharing uploads (no clipboard side effects).
  */
-async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, getSettings) {
+async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, getSettings, onProgress = null) {
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `shared_${Date.now()}_${path.parse(clipName).name}.mp4`);
@@ -387,7 +412,9 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       volume,
       speed,
       quality: settings.exportQuality || 'discord',
-      volumeData
+      volumeData,
+      onProgress,
+      emitGlobalProgress: false
     });
 
     logActivity('export', {
