@@ -451,119 +451,134 @@ function positionNewClipsIndicators() {
     return;
   }
   
-  // Find all content areas that need indicators
-  const contentAreas = document.querySelectorAll('.clip-group-content[data-needs-indicator="true"]');
-  console.log('Found content areas needing indicators:', contentAreas.length);
-  
-  contentAreas.forEach(content => {
-    const lastNewIndex = parseInt(content.dataset.lastNewIndex);
-    const firstOldIndex = parseInt(content.dataset.firstOldIndex);
-    
-    console.log(`Processing content area - lastNew: ${lastNewIndex}, firstOld: ${firstOldIndex}`);
-    
-    const clipItems = content.querySelectorAll('.clip-item');
-    console.log('Clip items found:', clipItems.length);
-    
-    if (clipItems.length === 0) return;
-    
-    const lastNewClip = clipItems[lastNewIndex];
-    const firstOldClip = firstOldIndex >= 0 ? clipItems[firstOldIndex] : null;
-    
-    if (!lastNewClip) {
-      console.log('Missing lastNewClip');
-      return;
-    }
-    
-    if (firstOldClip) {
-      console.log('Creating indicator between clips:', lastNewClip.dataset.originalName, 'and', firstOldClip.dataset.originalName);
-    } else {
-      console.log('Creating end-of-group indicator after clip:', lastNewClip.dataset.originalName);
-    }
-    
-    // Get positions relative to the container
-    const containerRect = content.getBoundingClientRect();
-    const lastNewRect = lastNewClip.getBoundingClientRect();
-    
-    // Calculate relative positions
-    const lastNewLeft = lastNewRect.left - containerRect.left;
-    const lastNewTop = lastNewRect.top - containerRect.top;
-    const lastNewRight = lastNewLeft + lastNewRect.width;
-    const lastNewBottom = lastNewTop + lastNewRect.height;
-    
-    // Create the indicator
-    const indicator = document.createElement('div');
-    indicator.className = 'new-clips-indicator positioned';
-    
-    if (firstOldClip) {
-      // Normal case: indicator between two clips
-      const firstOldRect = firstOldClip.getBoundingClientRect();
-      const firstOldLeft = firstOldRect.left - containerRect.left;
-      const firstOldTop = firstOldRect.top - containerRect.top;
-      
-      // Determine if clips are on same row or different rows
-      const sameRow = Math.abs(lastNewTop - firstOldTop) < 10; // Allow small differences
-      
-      console.log('Same row?', sameRow, 'Y diff:', Math.abs(lastNewTop - firstOldTop));
-      
-      if (sameRow) {
-        // Vertical line between clips in same row
-        const midX = (lastNewRight + firstOldLeft) / 2;
-        
-        console.log('Creating vertical line at X:', midX);
-        
-        indicator.innerHTML = `<div class="new-clips-line vertical"></div>`;
-        indicator.style.cssText = `
-          position: absolute;
-          left: ${midX - 1}px;
-          top: ${lastNewTop}px;
-          width: 2px;
-          height: ${lastNewRect.height}px;
-          z-index: 10;
-          pointer-events: none;
-        `;
-      } else {
-        // Horizontal line between rows
-        const midY = (lastNewBottom + firstOldTop) / 2;
-        
-        console.log('Creating horizontal line at Y:', midY);
-        
-        indicator.innerHTML = `<div class="new-clips-line horizontal"></div>`;
-        indicator.style.cssText = `
-          position: absolute;
-          left: 0;
-          top: ${midY - 1}px;
-          width: 100%;
-          height: 2px;
-          z-index: 10;
-          pointer-events: none;
-        `;
+  const contentAreas = Array.from(document.querySelectorAll('.clip-group-content'));
+  console.log('Found clip group content areas:', contentAreas.length);
+  if (contentAreas.length === 0) return;
+
+  const clipsByName = new Map();
+  if (Array.isArray(state.currentClipList)) {
+    state.currentClipList.forEach(clip => {
+      clipsByName.set(clip.originalName, clip);
+    });
+  }
+  if (Array.isArray(state.allClips)) {
+    state.allClips.forEach(clip => {
+      if (!clipsByName.has(clip.originalName)) {
+        clipsByName.set(clip.originalName, clip);
       }
-    } else {
-      // End of group case: show line after the last new clip
-      console.log('Creating end-of-group line after last new clip');
-      
-      indicator.innerHTML = `<div class="new-clips-line vertical"></div>`;
-      indicator.style.cssText = `
-        position: absolute;
-        left: ${lastNewRight + 10}px;
-        top: ${lastNewTop}px;
-        width: 2px;
-        height: ${lastNewRect.height}px;
-        z-index: 10;
-        pointer-events: none;
-      `;
+    });
+  }
+
+  const isClipElementNew = (clipElement) => {
+    const originalName = clipElement?.dataset?.originalName;
+    if (!originalName) return false;
+    const clip = clipsByName.get(originalName);
+    return Boolean(clip?.isNewSinceLastSession);
+  };
+
+  let previousClip = null;
+  let boundary = null;
+
+  for (const content of contentAreas) {
+    const clipItems = Array.from(content.querySelectorAll('.clip-item'));
+    if (clipItems.length === 0) continue;
+
+    for (const clipItem of clipItems) {
+      const currentIsNew = isClipElementNew(clipItem);
+      if (previousClip && previousClip.isNew && !currentIsNew) {
+        boundary = {
+          lastNewClip: previousClip.element,
+          lastNewContent: previousClip.content,
+          firstOldClip: clipItem,
+          firstOldContent: content
+        };
+        break;
+      }
+
+      previousClip = {
+        element: clipItem,
+        isNew: currentIsNew,
+        content
+      };
     }
-    
-    // Ensure container has relative positioning and is not part of grid
-    content.style.position = 'relative';
-    
-    // Add indicator to the content but not as a grid item
-    indicator.style.pointerEvents = 'none';
-    indicator.style.position = 'absolute';
-    content.appendChild(indicator);
-    
-    console.log('Indicator created and added to content');
-  });
+
+    if (boundary) break;
+  }
+
+  if (!boundary) {
+    console.log('No new->old boundary found in visible clips');
+    return;
+  }
+
+  const {
+    lastNewClip,
+    lastNewContent,
+    firstOldClip,
+    firstOldContent
+  } = boundary;
+
+  if (!lastNewClip || !firstOldClip || !lastNewContent || !firstOldContent) {
+    console.log('Boundary was incomplete, skipping indicator placement');
+    return;
+  }
+
+  console.log('Creating indicator between clips:', lastNewClip.dataset.originalName, 'and', firstOldClip.dataset.originalName);
+
+  const indicator = document.createElement('div');
+  indicator.className = 'new-clips-indicator positioned';
+  indicator.style.pointerEvents = 'none';
+  indicator.style.position = 'absolute';
+
+  const sameContent = lastNewContent === firstOldContent;
+  const lastNewRect = lastNewClip.getBoundingClientRect();
+  const firstOldRect = firstOldClip.getBoundingClientRect();
+  const targetContent = firstOldContent;
+  const targetRect = targetContent.getBoundingClientRect();
+
+  if (!sameContent) {
+    console.log('Boundary spans multiple groups; skipping indicator placement');
+    return;
+  }
+
+  const lastCenterY = (lastNewRect.top + lastNewRect.bottom) / 2;
+  const firstCenterY = (firstOldRect.top + firstOldRect.bottom) / 2;
+  const rowTolerance = Math.max(4, Math.min(lastNewRect.height, firstOldRect.height) * 0.2);
+  const sameRow = Math.abs(lastCenterY - firstCenterY) <= rowTolerance;
+
+  if (sameRow) {
+    const midX = ((lastNewRect.right + firstOldRect.left) / 2) - targetRect.left;
+    const top = Math.min(lastNewRect.top, firstOldRect.top) - targetRect.top;
+    const bottom = Math.max(lastNewRect.bottom, firstOldRect.bottom) - targetRect.top;
+    const lineHeight = Math.max(2, bottom - top);
+
+    indicator.innerHTML = `<div class="new-clips-line vertical"></div>`;
+    indicator.style.cssText = `
+      position: absolute;
+      left: ${Math.round(midX - 1)}px;
+      top: ${Math.round(top)}px;
+      width: 2px;
+      height: ${Math.round(lineHeight)}px;
+      z-index: 10;
+      pointer-events: none;
+    `;
+  } else {
+    const midY = ((lastNewRect.bottom + firstOldRect.top) / 2) - targetRect.top;
+
+    indicator.innerHTML = `<div class="new-clips-line horizontal"></div>`;
+    indicator.style.cssText = `
+      position: absolute;
+      left: 0;
+      top: ${Math.round(midY - 1)}px;
+      width: 100%;
+      height: 2px;
+      z-index: 10;
+      pointer-events: none;
+    `;
+  }
+
+  targetContent.style.position = 'relative';
+  targetContent.appendChild(indicator);
+  console.log('Indicator created and added to content');
 }
 
 // Call after DOM changes to reposition indicators

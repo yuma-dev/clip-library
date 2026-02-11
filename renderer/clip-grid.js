@@ -373,8 +373,14 @@ async function renderClips(clips) {
               const clipIndex = i + j;
               const clip = batch[j];
               
-              // Mark for indicator positioning in lazy-loaded content
-              if (clipIndex > 0 && !groupClips[clipIndex-1].isNewSinceLastSession && clip.isNewSinceLastSession) {
+              // Mark for indicator positioning in lazy-loaded content.
+              // Indicator belongs at the first new->old transition.
+              if (
+                clipIndex > 0 &&
+                !content.dataset.needsIndicator &&
+                groupClips[clipIndex - 1].isNewSinceLastSession &&
+                !clip.isNewSinceLastSession
+              ) {
                 content.dataset.needsIndicator = 'true';
                 content.dataset.lastNewIndex = clipIndex - 1;
                 content.dataset.firstOldIndex = clipIndex;
