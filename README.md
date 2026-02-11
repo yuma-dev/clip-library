@@ -56,4 +56,4 @@ Need help troubleshooting a tricky issue? Head to **Settings → About** and use
 3. Launch Clip Library and set your clip folder location in the settings.
 4. Start managing your clip collection!
 
-[VirusTotal Scan](https://www.virustotal.com/gui/file/d3bd966c0047e3a05234036c037fec7ee68a472a818e4f72695fda62dac9fc77?nocache=1) (feel free to do your own as I might forget to do one on an update)
+[VirusTotal Scan](https://www.virustotal.com/gui/file/3f0e9493f8529d93b22f976ec11e16905731a6024265c04914223d0fa4abcf38?nocache=1) (feel free to do your own as I might forget to do one on an update)
