@@ -47,6 +47,13 @@ body.ui-blur #app-content {
   will-change: filter;
 }
 
+/* Clip blur bleed so filtered app-content does not expand scrollable viewport. */
+body.ui-blur #app-content,
+body.ui-blur-exit #app-content {
+  overflow: clip;
+  clip-path: inset(0);
+}
+
 body.ui-blur-exit #app-content {
   transition: none;
 }

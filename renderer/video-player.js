@@ -1954,10 +1954,15 @@ async function openClip(originalName, customName) {
   
   // OPTIMIZATION: Show player overlay IMMEDIATELY with thumbnail
   // This gives instant visual feedback while video loads in background
-elements.playerOverlay.style.display = "block";
-elements.fullscreenPlayer.style.display = "block";
-document.body.classList.add('player-open');
-if (window.uiBlur) window.uiBlur.enable();
+  const wasPlayerAlreadyOpen =
+    elements.playerOverlay.style.display === "block" ||
+    document.body.classList.contains('player-open');
+  elements.playerOverlay.style.display = "block";
+  elements.fullscreenPlayer.style.display = "block";
+  document.body.classList.add('player-open');
+  if (!wasPlayerAlreadyOpen && window.uiBlur) {
+    window.uiBlur.enable();
+  }
   mark('playerVisibleEarly');
   
   // OPTIMIZATION: Check if data was preloaded on hover
