@@ -63,6 +63,30 @@ let ambientGlowManager = null;
 let clipGlowManager = null;
 let saveTrimTimeout = null;
 let pendingTrimSave = null;
+let isReleasingVideoElement = false;
+
+function createAbortError(message) {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function isIntentionalSourceResetError(errorCode, errorMessage) {
+  const message = typeof errorMessage === 'string' ? errorMessage.toLowerCase() : '';
+  if (Number(errorCode) !== 4) return false;
+
+  // Chromium reports this when src is intentionally cleared during close/switch.
+  if (message.includes('empty src attribute')) return true;
+
+  const video = elements.videoPlayer;
+  if (!video) return true;
+  const srcAttr = video.getAttribute('src');
+  const srcProp = typeof video.src === 'string' ? video.src.trim() : '';
+  const currentSrc = typeof video.currentSrc === 'string' ? video.currentSrc.trim() : '';
+  const hasNoSource = !srcAttr && !srcProp && !currentSrc;
+
+  return isReleasingVideoElement || hasNoSource;
+}
 
 /**
  * Get the ambient glow manager for grid clip previews.
@@ -2089,6 +2113,25 @@ async function openClip(originalName, customName) {
       // e.g., when switching clips or closing the player
       if (errorCode === 1) {
         logger.info(`[${originalName}] Video loading aborted (intentional)`);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+        elements.videoPlayer.removeEventListener('seeked', seekHandler);
+        elements.videoPlayer.removeEventListener('error', errorHandler);
+        reject(createAbortError('Video loading aborted'));
+        return;
+      }
+
+      if (isIntentionalSourceResetError(errorCode, errorMessage)) {
+        logger.info(`[${originalName}] Ignoring load error from intentional source reset`);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
+        elements.videoPlayer.removeEventListener('seeked', seekHandler);
+        elements.videoPlayer.removeEventListener('error', errorHandler);
+        reject(createAbortError('Video source reset'));
         return;
       }
 
@@ -2237,6 +2280,16 @@ async function openClip(originalName, customName) {
                  elements.videoPlayer.removeEventListener('playing', playHandler);
                  elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
                  clearTimeout(playTimeoutId);
+                 reject(createAbortError('Video play aborted'));
+                 return;
+             }
+
+             if (isIntentionalSourceResetError(errorCode, errorMessage)) {
+                 logger.info(`[${originalName}] Ignoring play error from intentional source reset`);
+                 elements.videoPlayer.removeEventListener('playing', playHandler);
+                 elements.videoPlayer.removeEventListener('error', errorHandlerPlay);
+                 clearTimeout(playTimeoutId);
+                 reject(createAbortError('Video source reset during play'));
                  return;
              }
 
@@ -2271,6 +2324,11 @@ async function openClip(originalName, customName) {
       logger.info(`[PERF] Total: ${timings.end.toFixed(1)}ms`);
     }
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      logger.info(`[${originalName}] Clip open cancelled`);
+      return;
+    }
+
     logger.error(`[${originalName}] Error during clip opening:`, error);
     
     // Hide player overlay on error
@@ -2696,46 +2754,51 @@ function cleanupVideoPreview() {
 async function releaseVideoElement() {
   if (!elements.videoPlayer) return;
 
-  elements.videoPlayer.pause();
-  elements.videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
-  elements.videoPlayer.removeEventListener("progress", updateLoadingProgress);
-  elements.videoPlayer.removeEventListener("waiting", showLoadingOverlay);
-  elements.videoPlayer.removeEventListener("playing", hideLoadingOverlay);
-  elements.videoPlayer.removeEventListener("seeked", handleVideoSeeked);
+  isReleasingVideoElement = true;
+  try {
+    elements.videoPlayer.pause();
+    elements.videoPlayer.removeEventListener("canplay", handleVideoCanPlay);
+    elements.videoPlayer.removeEventListener("progress", updateLoadingProgress);
+    elements.videoPlayer.removeEventListener("waiting", showLoadingOverlay);
+    elements.videoPlayer.removeEventListener("playing", hideLoadingOverlay);
+    elements.videoPlayer.removeEventListener("seeked", handleVideoSeeked);
 
-  elements.videoPlayer.srcObject = null;
-  elements.videoPlayer.removeAttribute('src');
-  elements.videoPlayer.src = '';
-  elements.videoPlayer.load();
+    elements.videoPlayer.srcObject = null;
+    elements.videoPlayer.removeAttribute('src');
+    elements.videoPlayer.src = '';
+    elements.videoPlayer.load();
 
-  await new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      elements.videoPlayer.removeEventListener('emptied', finish);
-      elements.videoPlayer.removeEventListener('abort', finish);
-      elements.videoPlayer.removeEventListener('error', finish);
-      resolve();
-    };
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        elements.videoPlayer.removeEventListener('emptied', finish);
+        elements.videoPlayer.removeEventListener('abort', finish);
+        elements.videoPlayer.removeEventListener('error', finish);
+        resolve();
+      };
 
-    elements.videoPlayer.addEventListener('emptied', finish, { once: true });
-    elements.videoPlayer.addEventListener('abort', finish, { once: true });
-    elements.videoPlayer.addEventListener('error', finish, { once: true });
+      elements.videoPlayer.addEventListener('emptied', finish, { once: true });
+      elements.videoPlayer.addEventListener('abort', finish, { once: true });
+      elements.videoPlayer.addEventListener('error', finish, { once: true });
 
-    setTimeout(finish, 250);
-  });
+      setTimeout(finish, 250);
+    });
 
-  if (elements.tempVideo) {
-    elements.tempVideo.pause();
-    elements.tempVideo.removeAttribute('src');
-    elements.tempVideo.src = '';
-    elements.tempVideo.load();
-    elements.tempVideo.currentTime = 0;
-  }
+    if (elements.tempVideo) {
+      elements.tempVideo.pause();
+      elements.tempVideo.removeAttribute('src');
+      elements.tempVideo.src = '';
+      elements.tempVideo.load();
+      elements.tempVideo.currentTime = 0;
+    }
 
-  if (elements.previewElement) {
-    elements.previewElement.style.display = 'none';
+    if (elements.previewElement) {
+      elements.previewElement.style.display = 'none';
+    }
+  } finally {
+    isReleasingVideoElement = false;
   }
 }
 

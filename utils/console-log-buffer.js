@@ -60,14 +60,15 @@ function getCallerLocation() {
     for (const callsite of stack) {
       const fileName = callsite.getFileName();
       if (!fileName) continue;
-      if (fileName.includes('console-log-buffer.js')) continue;
-      if (fileName.includes('node:internal') || fileName.includes('internal/')) continue;
-      if (fileName.includes('electron/js2c')) continue;
-      if (fileName.includes('node_modules')) continue;
+      const normalizedFileName = fileName.replace(/\\/g, '/');
+      if (normalizedFileName.includes('/utils/console-log-buffer.js')) continue;
+      if (normalizedFileName.includes('node:internal') || normalizedFileName.includes('/internal/')) continue;
+      if (normalizedFileName.includes('electron/js2c')) continue;
+      if (normalizedFileName.includes('/node_modules/')) continue;
 
       const line = callsite.getLineNumber();
       const column = callsite.getColumnNumber();
-      const normalized = fileName.replace(/\\/g, '/');
+      const normalized = normalizedFileName;
       const cwd = (typeof process !== 'undefined' && process.cwd)
         ? process.cwd().replace(/\\/g, '/')
         : '';
@@ -88,10 +89,11 @@ function getCallerLocation() {
     const lines = err.stack.split('\n').slice(1);
     for (const line of lines) {
       if (!line) continue;
-      if (line.includes('console-log-buffer.js')) continue;
-      if (line.includes('node:internal') || line.includes('internal/')) continue;
-      if (line.includes('electron/js2c')) continue;
-      if (line.includes('node_modules')) continue;
+      const normalizedLine = line.replace(/\\/g, '/');
+      if (normalizedLine.includes('/utils/console-log-buffer.js')) continue;
+      if (normalizedLine.includes('node:internal') || normalizedLine.includes('/internal/')) continue;
+      if (normalizedLine.includes('electron/js2c')) continue;
+      if (normalizedLine.includes('/node_modules/')) continue;
       const trimmed = line.trim().replace(/^at\s+/, '');
       const match = trimmed.match(/\(?([A-Za-z]:[^)]+|\S+):(\d+):(\d+)\)?$/);
       if (!match) continue;

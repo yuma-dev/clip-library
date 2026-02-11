@@ -257,14 +257,15 @@ class Logger {
             for (const callsite of stack) {
                 const fileName = callsite.getFileName();
                 if (!fileName) continue;
-                if (fileName.includes('utils/logger.js')) continue;
-                if (fileName.includes('node:internal') || fileName.includes('internal/')) continue;
-                if (fileName.includes('electron/js2c')) continue;
-                if (fileName.includes('node_modules')) continue;
+                const normalizedFileName = fileName.replace(/\\/g, '/');
+                if (normalizedFileName.includes('/utils/logger.js')) continue;
+                if (normalizedFileName.includes('node:internal') || normalizedFileName.includes('/internal/')) continue;
+                if (normalizedFileName.includes('electron/js2c')) continue;
+                if (normalizedFileName.includes('/node_modules/')) continue;
 
                 const line = callsite.getLineNumber();
                 const column = callsite.getColumnNumber();
-                const normalized = fileName.replace(/\\/g, '/');
+                const normalized = normalizedFileName;
                 const cwd = (typeof process !== 'undefined' && process.cwd)
                     ? process.cwd().replace(/\\/g, '/')
                     : '';
