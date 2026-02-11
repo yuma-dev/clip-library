@@ -62,6 +62,7 @@ const volumeIcons = {
 let ambientGlowManager = null;
 let clipGlowManager = null;
 let saveTrimTimeout = null;
+let pendingTrimSave = null;
 
 /**
  * Get the ambient glow manager for grid clip previews.
@@ -374,15 +375,40 @@ class ClipGlowManager {
 // ============================================================================
 
 function debounce(func, delay) {
-  let timeoutId;
+  let timeoutId = null;
+  let lastArgs = null;
+  let lastThis = null;
   const debouncedFn = function(...args) {
+    lastArgs = args;
+    lastThis = this;
     clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => func.apply(this, args), delay);
+    timeoutId = setTimeout(() => {
+      const argsToApply = lastArgs;
+      const contextToApply = lastThis;
+      timeoutId = null;
+      lastArgs = null;
+      lastThis = null;
+      func.apply(contextToApply, argsToApply);
+    }, delay);
   };
   debouncedFn.flush = () => {
+    if (!timeoutId) return;
     clearTimeout(timeoutId);
-    func();
+    timeoutId = null;
+    const argsToApply = lastArgs || [];
+    const contextToApply = lastThis;
+    lastArgs = null;
+    lastThis = null;
+    return func.apply(contextToApply, argsToApply);
   };
+  debouncedFn.cancel = () => {
+    clearTimeout(timeoutId);
+    timeoutId = null;
+    lastArgs = null;
+    lastThis = null;
+  };
+  debouncedFn.hasPending = () => timeoutId !== null;
+  debouncedFn.getPendingArgs = () => lastArgs;
   return debouncedFn;
 }
 
@@ -1176,6 +1202,11 @@ function hideVolumeControls() {
   state.volumeEndElement.style.display = 'none';
   state.volumeRegionElement.style.display = 'none';
   hideVolumeDragControl();
+
+  // Prevent stale debounced writes from re-saving removed range data.
+  if (debouncedSaveVolumeData.cancel) {
+    debouncedSaveVolumeData.cancel();
+  }
   
   // Remove volume data from storage when hiding controls
   if (state.currentClip) {
@@ -1184,18 +1215,12 @@ function hideVolumeControls() {
   }
 }
 
-const debouncedSaveVolumeData = debounce(async () => {
-  if (!state.currentClip || !state.isVolumeControlsVisible) return;
-  
-  const volumeData = {
-    start: state.volumeStartTime,
-    end: state.volumeEndTime,
-    level: state.volumeLevel || 0
-  };
-  
+const debouncedSaveVolumeData = debounce(async (clipName, volumeData) => {
+  if (!clipName || !volumeData) return;
+
   try {
     logger.info('Saving volume data:', volumeData);
-    await ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData);
+    await ipcRenderer.invoke('save-volume-range', clipName, volumeData);
     logger.info('Volume data saved successfully');
   } catch (error) {
     logger.error('Error saving volume data:', error);
@@ -1206,7 +1231,15 @@ const debouncedSaveVolumeData = debounce(async () => {
  * Persist volume range data for the current clip.
  */
 function saveVolumeData() {
-  debouncedSaveVolumeData();
+  if (!state.currentClip || !state.isVolumeControlsVisible) return;
+
+  const volumeData = {
+    start: state.volumeStartTime,
+    end: state.volumeEndTime,
+    level: state.volumeLevel || 0
+  };
+
+  debouncedSaveVolumeData(state.currentClip.originalName, volumeData);
 }
 
 /**
@@ -1312,7 +1345,7 @@ function handleVolumeDrag(e) {
     volumeInput.style.display = 'block';
   }
 
-  debouncedSaveVolumeData();
+  saveVolumeData();
 }
 
 // Update preview position and content
@@ -1512,6 +1545,65 @@ function isShareModalOpen() {
 }
 
 /**
+ * Flush pending debounced saves for a specific clip before switching/closing.
+ */
+async function flushPendingClipEdits({ clipName, oldCustomName, titleValue, flushTitle = true }) {
+  if (!clipName) return;
+
+  const pendingTasks = [];
+
+  if (flushTitle && callbacks.clearSaveTitleTimeout) {
+    callbacks.clearSaveTitleTimeout();
+  }
+
+  if (flushTitle && callbacks.saveTitleChange) {
+    pendingTasks.push(
+      Promise.resolve(
+        callbacks.saveTitleChange(clipName, oldCustomName || "", titleValue || "", true)
+      )
+    );
+  }
+
+  if (debouncedSaveSpeed.hasPending && debouncedSaveSpeed.hasPending()) {
+    const pendingSpeedArgs = debouncedSaveSpeed.getPendingArgs ? debouncedSaveSpeed.getPendingArgs() : null;
+    if (pendingSpeedArgs && pendingSpeedArgs[0] === clipName) {
+      pendingTasks.push(Promise.resolve(debouncedSaveSpeed.flush()));
+    }
+  }
+
+  if (debouncedSaveVolume.hasPending && debouncedSaveVolume.hasPending()) {
+    const pendingVolumeArgs = debouncedSaveVolume.getPendingArgs ? debouncedSaveVolume.getPendingArgs() : null;
+    if (pendingVolumeArgs && pendingVolumeArgs[0] === clipName) {
+      pendingTasks.push(Promise.resolve(debouncedSaveVolume.flush()));
+    }
+  }
+
+  if (debouncedSaveVolumeData.hasPending && debouncedSaveVolumeData.hasPending()) {
+    const pendingVolumeDataArgs = debouncedSaveVolumeData.getPendingArgs ? debouncedSaveVolumeData.getPendingArgs() : null;
+    if (pendingVolumeDataArgs && pendingVolumeDataArgs[0] === clipName) {
+      pendingTasks.push(Promise.resolve(debouncedSaveVolumeData.flush()));
+    }
+  }
+
+  if (saveTrimTimeout && pendingTrimSave && pendingTrimSave.clipName === clipName) {
+    clearTimeout(saveTrimTimeout);
+    saveTrimTimeout = null;
+    const trimSave = pendingTrimSave;
+    pendingTrimSave = null;
+    pendingTasks.push(persistTrimSave(trimSave));
+  }
+
+  if (pendingTasks.length === 0) return;
+
+  const results = await Promise.allSettled(pendingTasks);
+  results.forEach((result) => {
+    if (result.status === 'rejected') {
+      logger.error(`Failed to flush pending edits for ${clipName}:`, result.reason);
+    }
+  });
+}
+
+/**
  * Close the fullscreen player and reset UI state.
  */
 async function closePlayer() {
@@ -1523,10 +1615,6 @@ async function closePlayer() {
     callbacks.logCurrentWatchSession();
   }
 
-  if (callbacks.clearSaveTitleTimeout) {
-    callbacks.clearSaveTitleTimeout();
-  }
-
   document.removeEventListener("keydown", handleKeyPress);
   document.removeEventListener("keyup", handleKeyRelease);
 
@@ -1534,12 +1622,13 @@ async function closePlayer() {
   const oldCustomName = state.currentClip ? state.currentClip.customName : null;
   const newCustomName = elements.clipTitle.value;
 
-  const saveOperation = callbacks.saveTitleChange
-    ? callbacks.saveTitleChange(originalName, oldCustomName, newCustomName, true)
-    : Promise.resolve();
-
   try {
-    await saveOperation;
+    await flushPendingClipEdits({
+      clipName: originalName,
+      oldCustomName,
+      titleValue: newCustomName,
+      flushTitle: true
+    });
   } catch (error) {
     logger.error("Error saving title on close:", error);
   }
@@ -1548,15 +1637,11 @@ async function closePlayer() {
     ambientGlowManager.stop();
   }
 
-elements.playerOverlay.style.display = "none";
-elements.fullscreenPlayer.style.display = "none";
-document.body.classList.remove('player-open');
-if (window.uiBlur) window.uiBlur.disable();
+  elements.playerOverlay.style.display = "none";
+  elements.fullscreenPlayer.style.display = "none";
+  document.body.classList.remove('player-open');
+  if (window.uiBlur) window.uiBlur.disable();
   await releaseVideoElement();
-
-  if (callbacks.removeClipTitleEditingListeners) {
-    callbacks.removeClipTitleEditingListeners();
-  }
 
   if (elements.clipTitle) {
     elements.clipTitle.value = "";
@@ -1802,6 +1887,16 @@ async function openClip(originalName, customName) {
     }
   };
   mark('start');
+
+  const previousClip = state.currentClip ? { ...state.currentClip } : null;
+  if (previousClip && previousClip.originalName !== originalName) {
+    await flushPendingClipEdits({
+      clipName: previousClip.originalName,
+      oldCustomName: previousClip.customName,
+      titleValue: elements.clipTitle ? elements.clipTitle.value : previousClip.customName,
+      flushTitle: true
+    });
+  }
   
   // Cleanup any active preview
   cleanupVideoPreview();
@@ -2190,6 +2285,47 @@ if (window.uiBlur) window.uiBlur.enable();
 /**
  * Save trim changes for current clip
  */
+async function persistTrimSave(trimSave) {
+  await ipcRenderer.invoke(
+    "save-trim",
+    trimSave.clipName,
+    trimSave.trimStartTime,
+    trimSave.trimEndTime
+  );
+  logger.info(`Trim data saved successfully for ${trimSave.clipName}`);
+
+  // Invalidate cache so next open gets fresh data
+  state.clipDataCache.delete(trimSave.clipName);
+
+  // Regenerate thumbnail at new start point
+  const result = await ipcRenderer.invoke(
+    "regenerate-thumbnail-for-trim",
+    trimSave.clipName,
+    trimSave.trimStartTime
+  );
+
+  if (result.success) {
+    const clipElement = document.querySelector(
+      `.clip-item[data-original-name="${trimSave.clipName}"]`
+    );
+
+    if (clipElement) {
+      const imgElement = clipElement.querySelector(".clip-item-media-container img");
+      if (imgElement) {
+        imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
+      }
+    }
+  }
+
+  if (
+    state.currentClip &&
+    state.currentClip.originalName === trimSave.clipName &&
+    callbacks.updateDiscordPresence
+  ) {
+    callbacks.updateDiscordPresence('Editing a clip', state.currentClip.customName);
+  }
+}
+
 async function saveTrimChanges() {
   const clipToUpdate = state.currentClip ? { ...state.currentClip } : null;
   
@@ -2202,45 +2338,21 @@ async function saveTrimChanges() {
     clearTimeout(saveTrimTimeout);
   }
 
+  pendingTrimSave = {
+    clipName: clipToUpdate.originalName,
+    trimStartTime: state.trimStartTime,
+    trimEndTime: state.trimEndTime
+  };
+
   saveTrimTimeout = setTimeout(async () => {
+    const trimSave = pendingTrimSave;
+    pendingTrimSave = null;
+    saveTrimTimeout = null;
+
+    if (!trimSave) return;
+
     try {
-      // Save trim data
-      await ipcRenderer.invoke(
-        "save-trim",
-        clipToUpdate.originalName,
-        state.trimStartTime,
-        state.trimEndTime
-      );
-      logger.info("Trim data saved successfully");
-
-      // Invalidate cache so next open gets fresh data
-      state.clipDataCache.delete(clipToUpdate.originalName);
-
-      // Regenerate thumbnail at new start point
-      const result = await ipcRenderer.invoke(
-        "regenerate-thumbnail-for-trim",
-        clipToUpdate.originalName,
-        state.trimStartTime
-      );
-
-      if (result.success) {
-        // Just update the thumbnail image
-        const clipElement = document.querySelector(
-          `.clip-item[data-original-name="${clipToUpdate.originalName}"]`
-        );
-        
-        if (clipElement) {
-          const imgElement = clipElement.querySelector(".clip-item-media-container img");
-          if (imgElement) {
-            // Update the thumbnail source with cache busting
-            imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
-          }
-        }
-      }
-
-      if (state.currentClip && callbacks.updateDiscordPresence) {
-        callbacks.updateDiscordPresence('Editing a clip', state.currentClip.customName);
-      }
+      await persistTrimSave(trimSave);
     } catch (error) {
       logger.error("Error saving trim data:", error);
       if (callbacks.showCustomAlert) {
