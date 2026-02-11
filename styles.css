@@ -3,6 +3,10 @@ html {
   scroll-behavior: smooth;
 }
 
+:root {
+  --app-font-family: "Segoe UI", Inter, "DM Sans", "Public Sans", "Plus Jakarta Sans", Manrope, "Work Sans", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
 /* Secret Easter Egg Overlay */
 .secret-overlay {
   position: fixed;
@@ -26,7 +30,7 @@ html {
 }
 
 body {
-  font-family: 'Roboto', sans-serif;
+  font-family: var(--app-font-family);
   margin: 0;
   padding: 20px;
   background-color: #1e1e1e;
@@ -211,7 +215,7 @@ body.dragging * {
 }
 
 #thumbnail-generation-text {
-  font-family: 'Roboto', sans-serif;
+  font-family: var(--app-font-family);
   font-size: 14px;
   font-weight: normal;
   background-color: rgba(30, 30, 30, 0.9);
@@ -337,6 +341,26 @@ body.dragging * {
   justify-content: center;
   max-width: 800px;
   margin: 0 auto;
+  width: 100%;
+  gap: 10px;
+}
+
+#search-filter-pill {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 999px;
+}
+
+#search-filter-pill:hover {
+  border-color: #555;
+}
+
+#search-filter-pill:focus-within {
+  border-color: #666;
 }
 
 #settingsButton {
@@ -379,19 +403,21 @@ body.dragging * {
 }
 
 #search-container {
-  flex-grow: 1;
-  margin-right: 20px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 0;
+  display: flex;
 }
 
 #search-input {
   width: 100%;
-  padding: 10px 15px 10px 15px;
+  padding: 10px 15px;
   font-size: 16px;
-  border: 1px solid #444;
-  border-radius: 20px 0px 0px 20px;
-  background-color: #2a2a2a;
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
   color: #e0e0e0;
-  transition: all 0.3s ease;
+  transition: color 0.2s ease;
 }
 
 #search-input:focus {
@@ -2417,22 +2443,25 @@ body.player-open .cet-titlebar {
 
 .tagv2-filter {
   position: relative;
-  display: inline-block;
+  display: flex;
+  flex: 0 0 auto;
 }
 
 .tagv2-button {
-  padding: 11px 15px 10px 15px; /* Match your search input padding */
-  background-color: #2a2a2a;
+  padding: 10px 15px;
+  background-color: transparent;
   color: #e0e0e0;
-  border: 1px solid #444;
-  border-radius: 0px 20px 20px 0px; /* Match your existing radius */
+  border: none;
+  border-left: 1px solid #444;
+  border-radius: 0 999px 999px 0;
   font-size: 16px;
   cursor: pointer;
   transition: background-color 0.2s ease;
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 100%;
+  height: auto;
+  white-space: nowrap;
 }
 
 .tagv2-button:hover {
@@ -2714,13 +2743,14 @@ body.player-open .cet-titlebar {
 
 .search-display {
   width: 100%;
-  padding: 10px 15px 10px 15px;
+  min-height: 100%;
+  padding: 10px 15px;
   font-size: 16px;
-  border: 1px solid #444;
-  border-radius: 20px 0px 0px 20px;
-  background-color: #2a2a2a;
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
   color: #e0e0e0;
-  transition: all 0.3s ease;
+  transition: color 0.2s ease;
   outline: none;
   white-space: nowrap;
   overflow: hidden;
@@ -2997,6 +3027,22 @@ body.player-open .cet-titlebar {
 .settings-item-description {
   color: #888;
   font-size: 13px;
+}
+
+.export-preset-summary {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #888;
+}
+
+#exportPresetCard {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  margin-bottom: 22px;
+  padding-bottom: 20px;
+}
+
+#exportPresetCard .settings-item-title {
+  font-weight: 550;
 }
 
 .diagnostics-status {

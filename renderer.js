@@ -111,6 +111,26 @@ const speedContainer = document.getElementById("speed-container");
 const speedText = document.getElementById("speed-text");
 const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
 const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
+const UI_FONT_DEFAULT = 'modern_ui';
+const UI_FONT_STACKS = {
+  modern_ui: '"Segoe UI", Inter, "DM Sans", "Public Sans", "Plus Jakarta Sans", Manrope, "Work Sans", Roboto, "Helvetica Neue", Arial, sans-serif',
+  segoe_ui: '"Segoe UI", "Segoe UI Variable", "Helvetica Neue", Arial, sans-serif',
+  inter: 'Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  dm_sans: '"DM Sans", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  satoshi: 'Satoshi, Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  mona_sans: '"Mona Sans", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  hubot_sans: '"Hubot Sans", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  public_sans: '"Public Sans", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  switzer: 'Switzer, Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  geist: 'Geist, Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  space_grotesk: '"Space Grotesk", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  figtree: 'Figtree, Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  plus_jakarta_sans: '"Plus Jakarta Sans", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  manrope: 'Manrope, Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  outfit: 'Outfit, Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  work_sans: '"Work Sans", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+  roboto: 'Roboto, "Segoe UI", "Helvetica Neue", Arial, sans-serif'
+};
 
 // Renderer-level state
 let settingsModal = null;
@@ -218,8 +238,14 @@ async function fetchSettings() {
   
   // Set defaults if not present
   if (state.settings.previewVolume === undefined) state.settings.previewVolume = 0.1;
-  if (state.settings.exportQuality === undefined) state.settings.exportQuality = 'discord';
+  if (state.settings.exportQuality === undefined) state.settings.exportQuality = 'high';
+  if (state.settings.exportPreset === undefined) state.settings.exportPreset = 'balanced';
+  if (state.settings.exportSizeGoal === undefined) state.settings.exportSizeGoal = 'medium_50mb';
+  if (state.settings.exportQualityBias === undefined) state.settings.exportQualityBias = 'balanced';
+  if (state.settings.exportSpeedBias === undefined) state.settings.exportSpeedBias = 'balanced';
   if (state.settings.iconGreyscale === undefined) state.settings.iconGreyscale = false;
+  if (state.settings.uiFont === undefined) state.settings.uiFont = UI_FONT_DEFAULT;
+  state.settings.uiFont = applyUiFontSetting(state.settings.uiFont);
   await ipcRenderer.invoke('save-settings', state.settings);
   logger.info('Settings after defaults:', state.settings);  // Log after setting defaults
   return state.settings;
@@ -682,6 +708,8 @@ console.log('  resetNewClips() - Mark all clips as not new');
 console.log('  checkIndicatorData() - Debug data attributes and positioning');
 console.log('  getExportAccelerationStatus() - Check NVENC and CUDA decode export status');
 console.log('  testDecodeFallbackWarning() - Show decode fallback warning for testing');
+console.log('  runAllExportCombinations() - Run every export setting combination on current clip and print benchmark table');
+console.log('  cancelAllExportCombinations() - Request cancellation of the running export combination test');
 
 window.getExportAccelerationStatus = async () => {
   try {
@@ -705,6 +733,278 @@ window.testDecodeFallbackWarning = () => {
       d3d11va: 'Test failure from console command'
     }
   });
+};
+
+const EXPORT_MATRIX_PRESETS = [
+  'discord_fast',
+  'discord_quality',
+  'compact',
+  'balanced',
+  'high_fidelity',
+  'quality_first',
+  'max_quality',
+  'archival_lossless'
+];
+
+const EXPORT_MATRIX_QUALITIES = ['discord', 'high', 'lossless'];
+const EXPORT_MATRIX_SIZE_GOALS = ['auto', 'discord_10mb', 'small_25mb', 'medium_50mb', 'large_100mb', 'unlimited'];
+const EXPORT_MATRIX_QUALITY_BIASES = ['performance', 'balanced', 'quality'];
+const EXPORT_MATRIX_SPEED_BIASES = ['fast', 'balanced', 'best'];
+
+const exportMatrixState = {
+  running: false,
+  cancelRequested: false
+};
+
+function buildAllExportMatrixScenarios() {
+  const scenarios = [];
+
+  EXPORT_MATRIX_PRESETS.forEach((preset) => {
+    scenarios.push({
+      scenarioType: 'preset',
+      exportPreset: preset
+    });
+  });
+
+  EXPORT_MATRIX_QUALITIES.forEach((exportQuality) => {
+    EXPORT_MATRIX_SIZE_GOALS.forEach((exportSizeGoal) => {
+      EXPORT_MATRIX_QUALITY_BIASES.forEach((exportQualityBias) => {
+        EXPORT_MATRIX_SPEED_BIASES.forEach((exportSpeedBias) => {
+          scenarios.push({
+            scenarioType: 'custom',
+            exportPreset: 'custom',
+            exportQuality,
+            exportSizeGoal,
+            exportQualityBias,
+            exportSpeedBias
+          });
+        });
+      });
+    });
+  });
+
+  return scenarios;
+}
+
+function delay(ms) {
+  const waitMs = Math.max(0, Number(ms) || 0);
+  if (waitMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, waitMs));
+}
+
+window.cancelAllExportCombinations = () => {
+  if (!exportMatrixState.running) {
+    console.warn('[export-matrix] No active run to cancel.');
+    return;
+  }
+  exportMatrixState.cancelRequested = true;
+  console.warn('[export-matrix] Cancellation requested. Current export will finish, then stop.');
+};
+
+window.runAllExportCombinations = async (options = {}) => {
+  if (exportMatrixState.running) {
+    throw new Error('An export combination run is already in progress.');
+  }
+
+  if (!state.currentClip || !state.currentClip.originalName) {
+    throw new Error('No clip is currently open. Open a clip first.');
+  }
+
+  const clipName = state.currentClip.originalName;
+  const start = Number(state.trimStartTime);
+  const end = Number(state.trimEndTime);
+  const duration = end - start;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error('Invalid trim range. Set a valid trim start/end first.');
+  }
+
+  const stopOnError = options.stopOnError === true;
+  const delayMs = Math.max(0, Number(options.delayMs) || 0);
+  const includePresets = options.includePresets !== false;
+  const includeCustom = options.includeCustom !== false;
+  const scenarios = buildAllExportMatrixScenarios().filter((scenario) => {
+    if (scenario.scenarioType === 'preset') return includePresets;
+    if (scenario.scenarioType === 'custom') return includeCustom;
+    return false;
+  });
+  if (scenarios.length === 0) {
+    throw new Error('No scenarios selected. Enable includePresets and/or includeCustom.');
+  }
+
+  const originalSettingsRaw = await ipcRenderer.invoke('get-settings');
+  const originalSettings = JSON.parse(JSON.stringify(originalSettingsRaw || {}));
+  let volume = 1;
+  try {
+    const loadedVolume = await videoPlayerModule.loadVolume(clipName);
+    if (Number.isFinite(Number(loadedVolume))) {
+      volume = Number(loadedVolume);
+    }
+  } catch (volumeError) {
+    console.warn('[export-matrix] Failed to load clip volume. Falling back to 1.0.', volumeError);
+  }
+  const speed = Number(videoPlayer.playbackRate) > 0 ? Number(videoPlayer.playbackRate) : 1;
+  const startedAt = Date.now();
+  const rows = [];
+
+  exportMatrixState.running = true;
+  exportMatrixState.cancelRequested = false;
+
+  console.log(
+    `[export-matrix] Starting ${scenarios.length} exports for clip="${clipName}" ` +
+    `trim=${start.toFixed(2)}-${end.toFixed(2)}s duration=${duration.toFixed(2)}s speed=${speed} volume=${Number(volume).toFixed(2)}`
+  );
+
+  try {
+    for (let index = 0; index < scenarios.length; index += 1) {
+      if (exportMatrixState.cancelRequested) {
+        console.warn(`[export-matrix] Stopping early at scenario ${index + 1}/${scenarios.length}.`);
+        break;
+      }
+
+      const scenario = scenarios[index];
+      const runSettings = {
+        ...originalSettings,
+        exportPreset: scenario.exportPreset
+      };
+      if (scenario.scenarioType === 'custom') {
+        runSettings.exportQuality = scenario.exportQuality;
+        runSettings.exportSizeGoal = scenario.exportSizeGoal;
+        runSettings.exportQualityBias = scenario.exportQualityBias;
+        runSettings.exportSpeedBias = scenario.exportSpeedBias;
+      }
+
+      const savedSettings = await ipcRenderer.invoke('save-settings', runSettings);
+      state.settings = savedSettings;
+
+      const prefix = `[export-matrix] (${index + 1}/${scenarios.length})`;
+      console.log(`${prefix} Running`, scenario);
+
+      const runStartedAt = Date.now();
+      let result;
+      let invokeError = null;
+      try {
+        result = await ipcRenderer.invoke(
+          'export-trimmed-video',
+          clipName,
+          start,
+          end,
+          volume,
+          speed
+        );
+      } catch (error) {
+        invokeError = error;
+      }
+
+      const benchmark = result?.benchmark || null;
+      const succeeded = Boolean(result?.success) && !invokeError;
+      const errorMessage = invokeError?.message || (!succeeded ? (result?.error || 'Unknown export error') : null);
+      const row = {
+        index: index + 1,
+        scenarioType: scenario.scenarioType,
+        requestedPreset: scenario.exportPreset,
+        requestedQuality: scenario.exportQuality || null,
+        requestedSizeGoal: scenario.exportSizeGoal || null,
+        requestedQualityBias: scenario.exportQualityBias || null,
+        requestedSpeedBias: scenario.exportSpeedBias || null,
+        success: succeeded,
+        error: errorMessage,
+        encoder: benchmark?.encoder || result?.encoder || null,
+        quality: benchmark?.quality || null,
+        benchmarkRequestedQuality: benchmark?.requestedQuality || null,
+        benchmarkPreset: benchmark?.exportPreset || null,
+        benchmarkSizeGoal: benchmark?.exportSizeGoal || null,
+        benchmarkQualityBias: benchmark?.exportQualityBias || null,
+        benchmarkSpeedBias: benchmark?.exportSpeedBias || null,
+        sourceWidth: benchmark?.sourceWidth || null,
+        sourceHeight: benchmark?.sourceHeight || null,
+        sourceFps: benchmark?.sourceFps || null,
+        sourceCodec: benchmark?.sourceCodec || null,
+        sourcePixelFormat: benchmark?.sourcePixelFormat || null,
+        hwDecodeEnabled: benchmark?.hwDecodeEnabled ?? null,
+        hwDecodeMode: benchmark?.hwDecodeMode || null,
+        requestedCudaDecoder: benchmark?.requestedCudaDecoder || null,
+        decodeAttempts: Array.isArray(benchmark?.decodeAttempts)
+          ? benchmark.decodeAttempts.join(' -> ')
+          : null,
+        decodeErrorKeys: benchmark?.decodeErrors && typeof benchmark.decodeErrors === 'object'
+          ? Object.keys(benchmark.decodeErrors).join(', ')
+          : null,
+        videoFilters: Array.isArray(benchmark?.videoFilters)
+          ? benchmark.videoFilters.join(', ')
+          : null,
+        audioFilters: Array.isArray(benchmark?.audioFilters)
+          ? benchmark.audioFilters.join(', ')
+          : null,
+        clipDurationSeconds: benchmark?.clipDurationSeconds ?? Number(duration.toFixed(2)),
+        elapsedSeconds: benchmark?.elapsedSeconds ?? Number(((Date.now() - runStartedAt) / 1000).toFixed(2)),
+        realtimeFactorX: benchmark?.realtimeFactorX ?? null,
+        outputSizeMB: benchmark?.outputSizeMB ?? null,
+        outputBytes: benchmark?.outputBytes ?? null,
+        targetSizeMB: benchmark?.targetSizeMB ?? null,
+        nominalVideoBitrateKbps: benchmark?.nominalVideoBitrateKbps ?? null,
+        sizeCapVideoBitrateKbps: benchmark?.sizeCapVideoBitrateKbps ?? null,
+        targetVideoBitrateKbps: benchmark?.targetVideoBitrateKbps ?? null,
+        targetAudioBitrateKbps: benchmark?.targetAudioBitrateKbps ?? null,
+        timestamp: benchmark?.timestamp || new Date().toISOString()
+      };
+
+      rows.push(row);
+      if (succeeded) {
+        console.log(
+          `${prefix} OK ` +
+          `encoder=${row.encoder || 'unknown'} decode=${row.hwDecodeMode || 'n/a'} ` +
+          `elapsed=${row.elapsedSeconds}s size=${row.outputSizeMB ?? 'n/a'}MB`
+        );
+      } else {
+        console.error(`${prefix} FAIL ${errorMessage}`);
+        if (stopOnError) {
+          console.error('[export-matrix] stopOnError enabled, aborting run.');
+          break;
+        }
+      }
+
+      if (delayMs > 0) {
+        await delay(delayMs);
+      }
+    }
+  } finally {
+    try {
+      const restored = await ipcRenderer.invoke('save-settings', originalSettings);
+      state.settings = restored;
+    } catch (restoreError) {
+      console.error('[export-matrix] Failed to restore original settings:', restoreError);
+    }
+    exportMatrixState.running = false;
+    exportMatrixState.cancelRequested = false;
+  }
+
+  const totalElapsedSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(2));
+  const successCount = rows.filter((row) => row.success).length;
+  const failCount = rows.length - successCount;
+  const avgRealtimeFactorX = rows
+    .filter((row) => Number.isFinite(row.realtimeFactorX))
+    .reduce((acc, row, _, arr) => acc + (row.realtimeFactorX / arr.length), 0);
+
+  console.log(
+    `[export-matrix] Completed ${rows.length}/${scenarios.length} runs in ${totalElapsedSeconds}s. ` +
+    `success=${successCount}, failed=${failCount}, avgRealtimeFactorX=${Number.isFinite(avgRealtimeFactorX) ? avgRealtimeFactorX.toFixed(2) : 'n/a'}`
+  );
+  console.table(rows);
+  console.log('[export-matrix] Full rows:', rows);
+
+  return {
+    clipName,
+    trimStart: start,
+    trimEnd: end,
+    durationSeconds: Number(duration.toFixed(2)),
+    totalScenarios: scenarios.length,
+    completedScenarios: rows.length,
+    successCount,
+    failCount,
+    totalElapsedSeconds,
+    avgRealtimeFactorX: Number.isFinite(avgRealtimeFactorX) ? Number(avgRealtimeFactorX.toFixed(2)) : null,
+    rows
+  };
 };
 
 /**
@@ -1086,7 +1386,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     changeClipLocation: changeClipLocation,
     updateAllPreviewVolumes: updateAllPreviewVolumes,
     populateKeybindingList: keybindingUiModule.populateKeybindingList,
-    shareManagerModule
+    shareManagerModule,
+    applyUiFontSetting,
+    defaultUiFontKey: UI_FONT_DEFAULT
   });
 
   discordManagerModule.init({
@@ -2377,6 +2679,18 @@ function applyIconGreyscale(enabled) {
   document.querySelectorAll('.game-icon').forEach(icon => {
     icon.classList.toggle('greyscale-icon', enabled);
   });
+}
+
+/**
+ * Apply selected UI font stack through a global CSS variable.
+ * @param {string} uiFontKey
+ * @returns {string} The normalized key that was applied
+ */
+function applyUiFontSetting(uiFontKey) {
+  const normalizedKey = UI_FONT_STACKS[uiFontKey] ? uiFontKey : UI_FONT_DEFAULT;
+  const fontStack = UI_FONT_STACKS[normalizedKey];
+  document.documentElement.style.setProperty('--app-font-family', fontStack);
+  return normalizedKey;
 }
 
 // Startup side effects

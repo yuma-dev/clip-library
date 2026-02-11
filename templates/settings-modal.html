@@ -37,6 +37,37 @@
     </div>
 
     <div class="settings-group">
+      <h3 class="settings-group-title">Appearance</h3>
+      <div class="settings-item">
+        <div class="settings-item-info">
+          <div class="settings-item-title">App Font</div>
+          <div class="settings-item-description">Choose the font used across the app interface</div>
+        </div>
+        <div class="settings-control">
+          <select id="uiFontSelect" class="settings-select">
+            <option value="modern_ui">Modern UI (Segoe UI + modern stack)</option>
+            <option value="segoe_ui">Segoe UI</option>
+            <option value="inter">Inter</option>
+            <option value="dm_sans">DM Sans</option>
+            <option value="satoshi">Satoshi</option>
+            <option value="mona_sans">Mona Sans</option>
+            <option value="hubot_sans">Hubot Sans</option>
+            <option value="public_sans">Public Sans</option>
+            <option value="switzer">Switzer</option>
+            <option value="geist">Geist</option>
+            <option value="space_grotesk">Space Grotesk</option>
+            <option value="figtree">Figtree</option>
+            <option value="plus_jakarta_sans">Plus Jakarta Sans</option>
+            <option value="manrope">Manrope</option>
+            <option value="outfit">Outfit</option>
+            <option value="work_sans">Work Sans</option>
+            <option value="roboto">Roboto</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
       <h3 class="settings-group-title">Tag Management</h3>
       <div class="settings-item">
         <div class="settings-item-info">
@@ -174,16 +205,80 @@
   <div class="settings-tab-content" data-tab="exportImport">
     <div class="settings-group">
       <h3 class="settings-group-title">Export Settings</h3>
-      <div class="settings-item">
+      <div class="settings-item" id="exportPresetCard">
         <div class="settings-item-info">
-          <div class="settings-item-title">Export Quality</div>
-          <div class="settings-item-description">Choose the default quality for exported clips</div>
+          <div class="settings-item-title">Master Export Preset</div>
+          <div class="settings-item-description">This preset controls the strategy below (mode, size cap, quality bias, and speed)</div>
+          <div class="settings-item-description export-preset-summary" id="exportPresetSummary">
+            Preset controls all export tuning below.
+          </div>
+        </div>
+        <div class="settings-control">
+          <select id="exportPreset" class="settings-select">
+            <option value="balanced">Balanced (Recommended)</option>
+            <option value="compact">Speed Demon (Fast 25MB)</option>
+            <option value="high_fidelity">High Fidelity (50MB)</option>
+            <option value="discord_fast">Discord Fast (&lt;10MB)</option>
+            <option value="discord_quality">Discord Quality (&lt;10MB)</option>
+            <option value="quality_first">Quality First (100MB)</option>
+            <option value="max_quality">Max Quality (Non-Lossless)</option>
+            <option value="archival_lossless">Archival Lossless</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-item" id="exportQualityItem">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Encoding Mode</div>
+          <div class="settings-item-description">Base encoder mode. Presets set this automatically; change only when using Custom.</div>
         </div>
         <div class="settings-control">
           <select id="exportQuality" class="settings-select">
-            <option value="discord">Discord (target &lt;10MB)</option>
-            <option value="high">High Quality (larger file)</option>
-            <option value="lossless">Lossless (very large file)</option>
+            <option value="discord">Discord Mode (&lt;10MB strategy)</option>
+            <option value="high">High Mode (VBR, larger files)</option>
+            <option value="lossless">Lossless Mode (archival, huge files)</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-item" id="exportSizeGoalItem">
+        <div class="settings-item-info">
+          <div class="settings-item-title">File Size Goal</div>
+          <div class="settings-item-description">Sets maximum output size budget; it caps size and will not inflate smaller clips</div>
+        </div>
+        <div class="settings-control">
+          <select id="exportSizeGoal" class="settings-select">
+            <option value="auto">Auto</option>
+            <option value="discord_10mb">Discord (&lt;10MB)</option>
+            <option value="small_25mb">Small (~25MB)</option>
+            <option value="medium_50mb">Medium (~50MB)</option>
+            <option value="large_100mb">Large (~100MB)</option>
+            <option value="unlimited">No Size Limit</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-item" id="exportQualityBiasItem">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Quality Bias</div>
+          <div class="settings-item-description">Favor speed/performance or visual quality (switches preset to Custom)</div>
+        </div>
+        <div class="settings-control">
+          <select id="exportQualityBias" class="settings-select">
+            <option value="performance">Performance</option>
+            <option value="balanced">Balanced</option>
+            <option value="quality">Quality</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-item" id="exportSpeedBiasItem">
+        <div class="settings-item-info">
+          <div class="settings-item-title">Encoding Speed Bias</div>
+          <div class="settings-item-description">Controls preset speed vs compression efficiency (switches preset to Custom)</div>
+        </div>
+        <div class="settings-control">
+          <select id="exportSpeedBias" class="settings-select">
+            <option value="fast">Fast</option>
+            <option value="balanced">Balanced</option>
+            <option value="best">Best Quality</option>
           </select>
         </div>
       </div>
