@@ -2058,32 +2058,37 @@ function clearSaveTitleTimeout() {
 }
 
 async function saveTitleChange(originalName, oldCustomName, newCustomName, immediate = false) {
+  if (!originalName) return;
+
+  const previousName = typeof oldCustomName === "string" ? oldCustomName : "";
+  const nextName = typeof newCustomName === "string" ? newCustomName.trim() : "";
+
   if (saveTitleTimeout) {
     clearTimeout(saveTitleTimeout);
   }
 
   const saveOperation = async () => {
-    if (newCustomName === oldCustomName) return;
+    if (nextName === previousName) return;
 
     try {
       const result = await ipcRenderer.invoke(
         "save-custom-name",
         originalName,
-        newCustomName
+        nextName
       );
       if (result.success) {
-        clipGridModule.updateClipNameInLibrary(originalName, newCustomName);
-        logger.info(`Title successfully changed to: ${newCustomName}`);
+        clipGridModule.updateClipNameInLibrary(originalName, nextName);
+        logger.info(`Title successfully changed to: ${nextName}`);
         
         // Update the state.currentClip object
         if (state.currentClip && state.currentClip.originalName === originalName) {
-          state.currentClip.customName = newCustomName;
+          state.currentClip.customName = nextName;
         }
         
         // Update the clip in state.allClips array
         const clipIndex = state.allClips.findIndex(clip => clip.originalName === originalName);
         if (clipIndex !== -1) {
-          state.allClips[clipIndex].customName = newCustomName;
+          state.allClips[clipIndex].customName = nextName;
         }
 
         // Update the clip element in the grid
@@ -2091,7 +2096,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
         if (clipElement) {
           const clipNameElement = clipElement.querySelector('.clip-name');
           if (clipNameElement) {
-            clipNameElement.textContent = newCustomName;
+            clipNameElement.textContent = nextName;
           }
         }
       } else {
@@ -2107,7 +2112,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
       if (clipElement) {
         const clipNameElement = clipElement.querySelector('.clip-name');
         if (clipNameElement) {
-          clipNameElement.textContent = oldCustomName;
+          clipNameElement.textContent = previousName;
         }
       }
     }
@@ -2119,24 +2124,6 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
     saveTitleTimeout = setTimeout(saveOperation, 500); // 500ms debounce
   }
 }
-
-
-clipTitle.addEventListener("focus", () => {
-  isRenamingActive = true;
-});
-
-clipTitle.addEventListener("blur", () => {
-  isRenamingActive = false;
-  saveTitleChange();
-});
-
-clipTitle.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    clipTitle.blur();
-  }
-});
-
 
 /**
  * Show a simple alert modal.
