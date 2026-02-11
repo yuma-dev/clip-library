@@ -10,7 +10,12 @@ const DEFAULT_SETTINGS = {
   enableDiscordRPC: false,
   ignoredVersion: null,
   previewVolume: 0.1,
-  exportQuality: 'discord',
+  exportQuality: 'high',
+  exportPreset: 'balanced',
+  exportSizeGoal: 'medium_50mb',
+  exportQualityBias: 'balanced',
+  exportSpeedBias: 'balanced',
+  uiFont: 'modern_ui',
   // Clip sharing integration settings (friends.cliplib.app)
   sharing: {
     serverUrl: 'https://friends.cliplib.app',

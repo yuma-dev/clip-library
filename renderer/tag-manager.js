@@ -691,11 +691,16 @@ function createTagFilterUI() {
   // Find the search container and insert after it
   const searchContainer = document.getElementById('search-container');
   if (searchContainer) {
+    const searchFilterPill = document.getElementById('search-filter-pill');
     // Look for any existing tag filters and remove them
     const existingFilters = document.querySelectorAll('.tagv2-filter');
     existingFilters.forEach(filter => filter.remove());
-    
-    searchContainer.after(tagFilter);
+
+    if (searchFilterPill && searchFilterPill.contains(searchContainer)) {
+      searchFilterPill.appendChild(tagFilter);
+    } else {
+      searchContainer.after(tagFilter);
+    }
   }
 
   setupTagFilterEventListeners();

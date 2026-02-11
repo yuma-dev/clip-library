@@ -31,6 +31,119 @@ const CUDA_DECODER_BY_CODEC = {
   vp9: 'vp9_cuvid',
   mjpeg: 'mjpeg_cuvid'
 };
+const EXPORT_QUALITY_VALUES = new Set(['discord', 'high', 'lossless']);
+const EXPORT_PRESET_VALUES = new Set([
+  'discord_fast',
+  'discord_quality',
+  'compact',
+  'balanced',
+  'high_fidelity',
+  'quality_first',
+  'max_quality',
+  'archival_lossless',
+  'custom'
+]);
+const EXPORT_SIZE_GOAL_VALUES = new Set(['auto', 'discord_10mb', 'small_25mb', 'medium_50mb', 'large_100mb', 'unlimited']);
+const EXPORT_QUALITY_BIAS_VALUES = new Set(['performance', 'balanced', 'quality']);
+const EXPORT_SPEED_BIAS_VALUES = new Set(['fast', 'balanced', 'best']);
+const EXPORT_SIZE_GOAL_BYTES = {
+  auto: null,
+  discord_10mb: DISCORD_TARGET_BYTES,
+  small_25mb: Math.floor(25 * 1024 * 1024),
+  medium_50mb: Math.floor(50 * 1024 * 1024),
+  large_100mb: Math.floor(100 * 1024 * 1024),
+  unlimited: null
+};
+const EXPORT_PRESET_CONFIG = {
+  discord_fast: {
+    quality: 'discord',
+    sizeGoal: 'discord_10mb',
+    qualityBias: 'balanced',
+    speedBias: 'fast'
+  },
+  discord_quality: {
+    quality: 'discord',
+    sizeGoal: 'discord_10mb',
+    qualityBias: 'quality',
+    speedBias: 'balanced'
+  },
+  compact: {
+    quality: 'high',
+    sizeGoal: 'small_25mb',
+    qualityBias: 'performance',
+    speedBias: 'fast'
+  },
+  balanced: {
+    quality: 'high',
+    sizeGoal: 'medium_50mb',
+    qualityBias: 'balanced',
+    speedBias: 'balanced'
+  },
+  high_fidelity: {
+    quality: 'high',
+    sizeGoal: 'medium_50mb',
+    qualityBias: 'quality',
+    speedBias: 'balanced'
+  },
+  quality_first: {
+    quality: 'high',
+    sizeGoal: 'large_100mb',
+    qualityBias: 'quality',
+    speedBias: 'best'
+  },
+  max_quality: {
+    quality: 'high',
+    sizeGoal: 'unlimited',
+    qualityBias: 'quality',
+    speedBias: 'best'
+  },
+  archival_lossless: {
+    quality: 'lossless',
+    sizeGoal: 'unlimited',
+    qualityBias: 'quality',
+    speedBias: 'best'
+  }
+};
+const NVENC_PRESET_BY_SPEED_BIAS = {
+  fast: { discord: 'p1', high: 'p3', lossless: 'p5' },
+  balanced: { discord: 'p2', high: 'p5', lossless: 'p6' },
+  best: { discord: 'p4', high: 'p6', lossless: 'p7' }
+};
+const SOFTWARE_PRESET_BY_SPEED_BIAS = {
+  fast: 'superfast',
+  balanced: 'fast',
+  best: 'medium'
+};
+const QUALITY_BIAS_BITRATE_SCALE = {
+  performance: 0.82,
+  balanced: 1,
+  quality: 1.2
+};
+const QUALITY_BIAS_CQ_DELTA = {
+  performance: 3,
+  balanced: 0,
+  quality: -2
+};
+const DISCORD_LOOKAHEAD_BY_SPEED = {
+  fast: 0,
+  balanced: 8,
+  best: 16
+};
+const DISCORD_BFRAMES_BY_SPEED = {
+  fast: 0,
+  balanced: 2,
+  best: 2
+};
+const HIGH_LOOKAHEAD_BY_SPEED = {
+  fast: 8,
+  balanced: 20,
+  best: 32
+};
+const HIGH_BFRAMES_BY_SPEED = {
+  fast: 0,
+  balanced: 2,
+  best: 3
+};
 let nvencStatusCache = null;
 let decoderListCache = null;
 let hwAccelListCache = null;
@@ -286,6 +399,166 @@ function buildDecodeModeOrder({ sourceCodec, requestedCudaDecoder, hwAccelNames 
   return modes;
 }
 
+function clampNumber(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function chooseSetting(rawValue, allowedValues, fallbackValue) {
+  return allowedValues.has(rawValue) ? rawValue : fallbackValue;
+}
+
+function calculateTargetVideoBitrateKbps(durationSeconds, targetBytes, audioBitrateKbps, options = {}) {
+  const duration = Math.max(0.5, Number(durationSeconds) || 0.5);
+  const bytes = Number(targetBytes);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+  const reserveKbps = Number.isFinite(options.reserveKbps) ? options.reserveKbps : 48;
+  const minKbps = Number.isFinite(options.minKbps) ? options.minKbps : 450;
+  const maxKbps = Number.isFinite(options.maxKbps) ? options.maxKbps : 14000;
+  const totalKbpsBudget = Math.floor((bytes * 8) / duration / 1000);
+  const videoKbps = totalKbpsBudget - Math.max(0, Number(audioBitrateKbps) || 0) - reserveKbps;
+  return Math.max(minKbps, Math.min(maxKbps, videoKbps));
+}
+
+function resolveAudioBitrateKbps({ quality, sizeGoal }) {
+  if (quality === 'discord') {
+    return DISCORD_AUDIO_BITRATE_K;
+  }
+  if (quality === 'lossless') {
+    return sizeGoal === 'unlimited' ? 320 : 192;
+  }
+  if (sizeGoal === 'discord_10mb' || sizeGoal === 'small_25mb') {
+    return 128;
+  }
+  if (sizeGoal === 'large_100mb' || sizeGoal === 'unlimited') {
+    return 256;
+  }
+  return 192;
+}
+
+function resolveExportTuning(settings, requestedQuality, durationSeconds) {
+  const normalizedQuality = chooseSetting(requestedQuality, EXPORT_QUALITY_VALUES, 'discord');
+  const normalizedPreset = chooseSetting(settings?.exportPreset, EXPORT_PRESET_VALUES, 'balanced');
+  const normalizedSizeGoal = chooseSetting(settings?.exportSizeGoal, EXPORT_SIZE_GOAL_VALUES, 'discord_10mb');
+  const normalizedQualityBias = chooseSetting(settings?.exportQualityBias, EXPORT_QUALITY_BIAS_VALUES, 'balanced');
+  const normalizedSpeedBias = chooseSetting(settings?.exportSpeedBias, EXPORT_SPEED_BIAS_VALUES, 'fast');
+
+  let resolvedQuality = normalizedQuality;
+  let resolvedSizeGoal = normalizedSizeGoal;
+  let resolvedQualityBias = normalizedQualityBias;
+  let resolvedSpeedBias = normalizedSpeedBias;
+
+  if (normalizedPreset !== 'custom') {
+    const presetValues = EXPORT_PRESET_CONFIG[normalizedPreset];
+    if (presetValues) {
+      resolvedQuality = presetValues.quality;
+      resolvedSizeGoal = presetValues.sizeGoal;
+      resolvedQualityBias = presetValues.qualityBias;
+      resolvedSpeedBias = presetValues.speedBias;
+    }
+  }
+
+  const audioBitrateKbps = resolveAudioBitrateKbps({
+    quality: resolvedQuality,
+    sizeGoal: resolvedSizeGoal
+  });
+  const sizeGoalBytes = EXPORT_SIZE_GOAL_BYTES[resolvedSizeGoal];
+  const qualityBitrateScale = QUALITY_BIAS_BITRATE_SCALE[resolvedQualityBias] || 1;
+
+  const bitrateMaxByQuality = resolvedQuality === 'discord'
+    ? 14000
+    : (resolvedQuality === 'high' ? 50000 : 120000);
+  const bitrateMinByQuality = resolvedQuality === 'discord' ? 450 : 900;
+
+  let sizeCapVideoBitrateKbps = null;
+  if (Number.isFinite(sizeGoalBytes) && sizeGoalBytes > 0) {
+    sizeCapVideoBitrateKbps = calculateTargetVideoBitrateKbps(
+      durationSeconds,
+      sizeGoalBytes,
+      audioBitrateKbps,
+      // Keep this as a real cap; do not force a high floor that can inflate output.
+      { minKbps: 32, maxKbps: bitrateMaxByQuality }
+    );
+  }
+
+  let nominalVideoBitrateKbps = null;
+  if (resolvedQuality === 'discord') {
+    nominalVideoBitrateKbps = calculateTargetVideoBitrateKbps(
+      durationSeconds,
+      DISCORD_TARGET_BYTES,
+      audioBitrateKbps,
+      { minKbps: 450, maxKbps: 14000 }
+    );
+  } else if (resolvedQuality === 'high') {
+    nominalVideoBitrateKbps = clampNumber(
+      14000,
+      bitrateMinByQuality,
+      bitrateMaxByQuality
+    );
+  }
+
+  if (Number.isFinite(nominalVideoBitrateKbps) && nominalVideoBitrateKbps > 0) {
+    nominalVideoBitrateKbps = Math.round(clampNumber(
+      nominalVideoBitrateKbps * qualityBitrateScale,
+      bitrateMinByQuality,
+      bitrateMaxByQuality
+    ));
+  }
+
+  let targetVideoBitrateKbps = nominalVideoBitrateKbps;
+  if (
+    Number.isFinite(sizeCapVideoBitrateKbps) &&
+    sizeCapVideoBitrateKbps > 0 &&
+    Number.isFinite(targetVideoBitrateKbps) &&
+    targetVideoBitrateKbps > 0
+  ) {
+    targetVideoBitrateKbps = Math.min(targetVideoBitrateKbps, sizeCapVideoBitrateKbps);
+  }
+  if (Number.isFinite(targetVideoBitrateKbps) && targetVideoBitrateKbps > 0) {
+    const targetMinKbps = Number.isFinite(sizeCapVideoBitrateKbps) && sizeCapVideoBitrateKbps > 0
+      ? 32
+      : bitrateMinByQuality;
+    targetVideoBitrateKbps = Math.round(clampNumber(
+      targetVideoBitrateKbps,
+      targetMinKbps,
+      bitrateMaxByQuality
+    ));
+  }
+
+  const speedPresetMap = NVENC_PRESET_BY_SPEED_BIAS[resolvedSpeedBias] || NVENC_PRESET_BY_SPEED_BIAS.fast;
+  const nvencPreset = speedPresetMap[resolvedQuality] || 'p3';
+  const softwarePreset = SOFTWARE_PRESET_BY_SPEED_BIAS[resolvedSpeedBias] || SOFTWARE_PRESET_BY_SPEED_BIAS.fast;
+  const cqDelta = QUALITY_BIAS_CQ_DELTA[resolvedQualityBias] || 0;
+  const discordLookahead = DISCORD_LOOKAHEAD_BY_SPEED[resolvedSpeedBias] ?? 0;
+  const discordBframes = DISCORD_BFRAMES_BY_SPEED[resolvedSpeedBias] ?? 0;
+  const highLookahead = HIGH_LOOKAHEAD_BY_SPEED[resolvedSpeedBias] ?? 20;
+  const highBframes = HIGH_BFRAMES_BY_SPEED[resolvedSpeedBias] ?? 2;
+
+  return {
+    preset: normalizedPreset,
+    requestedQuality: normalizedQuality,
+    quality: resolvedQuality,
+    sizeGoal: resolvedSizeGoal,
+    qualityBias: resolvedQualityBias,
+    speedBias: resolvedSpeedBias,
+    sizeGoalBytes,
+    qualityBitrateScale,
+    nominalVideoBitrateKbps,
+    sizeCapVideoBitrateKbps,
+    audioBitrateKbps,
+    targetVideoBitrateKbps,
+    nvencPreset,
+    softwarePreset,
+    cqDelta,
+    discordLookahead,
+    discordBframes,
+    highLookahead,
+    highBframes
+  };
+}
+
 async function getExportAccelerationStatus(options = {}) {
   const nvencStatus = await getNvencStatus(options);
   let cudaDecoders = [];
@@ -312,13 +585,6 @@ async function getExportAccelerationStatus(options = {}) {
   };
 }
 
-function calculateDiscordVideoBitrateKbps(durationSeconds) {
-  const duration = Math.max(0.5, Number(durationSeconds) || 0.5);
-  const totalKbpsBudget = Math.floor((DISCORD_TARGET_BYTES * 8) / duration / 1000);
-  const videoKbps = totalKbpsBudget - DISCORD_AUDIO_BITRATE_K - 48;
-  return Math.max(450, Math.min(14000, videoKbps));
-}
-
 async function buildExportBenchmark(payload) {
   const {
     mode,
@@ -330,6 +596,11 @@ async function buildExportBenchmark(payload) {
     speed,
     volume,
     quality = null,
+    requestedQuality = null,
+    exportPreset = null,
+    exportSizeGoal = null,
+    exportQualityBias = null,
+    exportSpeedBias = null,
     encoder,
     sourceWidth = null,
     sourceHeight = null,
@@ -341,6 +612,11 @@ async function buildExportBenchmark(payload) {
     requestedCudaDecoder = null,
     decodeAttempts = [],
     decodeErrors = {},
+    targetSizeBytes = null,
+    nominalVideoBitrateKbps = null,
+    sizeCapVideoBitrateKbps = null,
+    targetVideoBitrateKbps = null,
+    targetAudioBitrateKbps = null,
     videoFilters = [],
     audioFilters = []
   } = payload;
@@ -365,6 +641,11 @@ async function buildExportBenchmark(payload) {
     destination,
     encoder,
     quality,
+    requestedQuality,
+    exportPreset,
+    exportSizeGoal,
+    exportQualityBias,
+    exportSpeedBias,
     sourceWidth,
     sourceHeight,
     sourceFps,
@@ -375,6 +656,21 @@ async function buildExportBenchmark(payload) {
     requestedCudaDecoder,
     decodeAttempts,
     decodeErrors,
+    targetSizeMB: Number.isFinite(targetSizeBytes) && targetSizeBytes > 0
+      ? Number((targetSizeBytes / (1024 * 1024)).toFixed(2))
+      : null,
+    nominalVideoBitrateKbps: Number.isFinite(nominalVideoBitrateKbps) && nominalVideoBitrateKbps > 0
+      ? Math.round(nominalVideoBitrateKbps)
+      : null,
+    sizeCapVideoBitrateKbps: Number.isFinite(sizeCapVideoBitrateKbps) && sizeCapVideoBitrateKbps > 0
+      ? Math.round(sizeCapVideoBitrateKbps)
+      : null,
+    targetVideoBitrateKbps: Number.isFinite(targetVideoBitrateKbps) && targetVideoBitrateKbps > 0
+      ? Math.round(targetVideoBitrateKbps)
+      : null,
+    targetAudioBitrateKbps: Number.isFinite(targetAudioBitrateKbps) && targetAudioBitrateKbps > 0
+      ? Math.round(targetAudioBitrateKbps)
+      : null,
     videoFilters,
     audioFilters,
     clipDurationSeconds: Number(clipDurationSeconds.toFixed(2)),
@@ -387,12 +683,6 @@ async function buildExportBenchmark(payload) {
     outputSizeMB,
     timestamp: new Date().toISOString()
   };
-
-  if (quality === 'discord') {
-    benchmark.targetSizeMB = Number((DISCORD_TARGET_BYTES / (1024 * 1024)).toFixed(2));
-    benchmark.targetVideoBitrateKbps = calculateDiscordVideoBitrateKbps(clipDurationSeconds);
-    benchmark.targetAudioBitrateKbps = DISCORD_AUDIO_BITRATE_K;
-  }
 
   return benchmark;
 }
@@ -435,6 +725,7 @@ async function exportVideoWithFallback(options) {
     volume,
     speed,
     quality,
+    exportSettings = null,
     volumeData,
     onProgress,
     onFallback,
@@ -443,6 +734,8 @@ async function exportVideoWithFallback(options) {
     emitGlobalProgress = true
   } = options;
   const duration = Math.max(0.01, Number(end) - Number(start));
+  const resolvedTuning = resolveExportTuning(exportSettings, quality, duration);
+  const effectiveQuality = resolvedTuning.quality;
 
   const reportProgress = (percent) => {
     const normalized = Math.max(0, Math.min(100, Number(percent) || 0));
@@ -543,7 +836,7 @@ async function exportVideoWithFallback(options) {
       );
 
       const needsScaleDown = (
-        quality === 'discord' &&
+        effectiveQuality === 'discord' &&
         Number.isFinite(sourceHeight) &&
         sourceHeight > 1080
       );
@@ -575,11 +868,22 @@ async function exportVideoWithFallback(options) {
       const needsAudioFilter = audioFilters.length > 0;
       const canAttemptHwDecode = !needsVideoFilter;
 
-      const discordVideoBitrateKbps = calculateDiscordVideoBitrateKbps(duration);
+      const targetVideoBitrateKbps = Number.isFinite(resolvedTuning.targetVideoBitrateKbps)
+        ? resolvedTuning.targetVideoBitrateKbps
+        : null;
+      const nominalVideoBitrateKbps = Number.isFinite(resolvedTuning.nominalVideoBitrateKbps)
+        ? resolvedTuning.nominalVideoBitrateKbps
+        : null;
+      const sizeCapVideoBitrateKbps = Number.isFinite(resolvedTuning.sizeCapVideoBitrateKbps)
+        ? resolvedTuning.sizeCapVideoBitrateKbps
+        : null;
+      const targetAudioBitrateKbps = resolvedTuning.audioBitrateKbps;
       logger.info(
-        `[ffmpeg] Export pipeline: quality=${quality}, speed=${effectiveSpeed}, ` +
-        `videoFilter=${needsVideoFilter}, audioFilter=${needsAudioFilter}, hwDecodeCandidate=${canAttemptHwDecode}, scaleDown=${needsScaleDown}, ` +
-        `discordTargetVideo=${discordVideoBitrateKbps}k`
+        `[ffmpeg] Export pipeline: quality=${effectiveQuality}, requestedQuality=${resolvedTuning.requestedQuality}, ` +
+        `preset=${resolvedTuning.preset}, sizeGoal=${resolvedTuning.sizeGoal}, qualityBias=${resolvedTuning.qualityBias}, speedBias=${resolvedTuning.speedBias}, ` +
+        `speed=${effectiveSpeed}, videoFilter=${needsVideoFilter}, audioFilter=${needsAudioFilter}, hwDecodeCandidate=${canAttemptHwDecode}, scaleDown=${needsScaleDown}, ` +
+        `nominalVideo=${nominalVideoBitrateKbps || 'none'}k, videoCap=${sizeCapVideoBitrateKbps || 'none'}k, ` +
+        `targetVideo=${targetVideoBitrateKbps || 'none'}k, targetAudio=${targetAudioBitrateKbps}k`
       );
 
       const maybeReportProgress = (percent) => {
@@ -654,6 +958,17 @@ async function exportVideoWithFallback(options) {
         sourceFps,
         sourceCodec,
         sourcePixelFormat,
+        requestedQuality: resolvedTuning.requestedQuality,
+        resolvedQuality: effectiveQuality,
+        exportPreset: resolvedTuning.preset,
+        exportSizeGoal: resolvedTuning.sizeGoal,
+        exportQualityBias: resolvedTuning.qualityBias,
+        exportSpeedBias: resolvedTuning.speedBias,
+        targetSizeBytes: resolvedTuning.sizeGoalBytes,
+        nominalVideoBitrateKbps,
+        sizeCapVideoBitrateKbps,
+        targetVideoBitrateKbps,
+        targetAudioBitrateKbps,
         hwDecodeEnabled,
         hwDecodeMode: activeDecodeMode,
         requestedCudaDecoder,
@@ -664,36 +979,34 @@ async function exportVideoWithFallback(options) {
       });
 
       const runSoftwareEncode = () => {
-        const softwarePreset = quality === 'discord'
-          ? 'superfast'
-          : (quality === 'high' ? 'fast' : 'medium');
-        const softwareCrf = quality === 'discord'
+        const softwarePreset = resolvedTuning.softwarePreset;
+        const baseSoftwareCrf = effectiveQuality === 'discord'
           ? 28
-          : (quality === 'high' ? 19 : 0);
+          : (effectiveQuality === 'high' ? 20 : 0);
+        const softwareCrf = effectiveQuality === 'lossless'
+          ? 0
+          : clampNumber(baseSoftwareCrf + resolvedTuning.cqDelta, 14, 36);
 
         const softwareOptions = [
           '-c:v libx264',
           `-preset ${softwarePreset}`,
-          quality === 'lossless' ? '-crf 0' : `-crf ${softwareCrf}`,
+          effectiveQuality === 'lossless' ? '-crf 0' : `-crf ${softwareCrf}`,
           '-pix_fmt yuv420p',
           '-progress pipe:1',
           '-stats_period 0.1'
         ];
 
-        const shouldCopyAudio = !needsAudioFilter && allowAudioCopy && quality !== 'discord';
+        const shouldCopyAudio = !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord';
         if (shouldCopyAudio) {
           softwareOptions.push('-c:a copy');
         } else {
-          const audioBitrateK = quality === 'discord'
-            ? DISCORD_AUDIO_BITRATE_K
-            : (quality === 'high' ? 192 : 320);
-          softwareOptions.push(`-b:a ${audioBitrateK}k`);
+          softwareOptions.push(`-b:a ${targetAudioBitrateKbps}k`);
           softwareOptions.push('-c:a aac');
         }
 
-        if (quality === 'discord') {
-          softwareOptions.push(`-maxrate ${discordVideoBitrateKbps}k`);
-          softwareOptions.push(`-bufsize ${Math.max(discordVideoBitrateKbps * 2, 1200)}k`);
+        if (effectiveQuality !== 'lossless' && Number.isFinite(targetVideoBitrateKbps)) {
+          softwareOptions.push(`-maxrate ${targetVideoBitrateKbps}k`);
+          softwareOptions.push(`-bufsize ${Math.max(targetVideoBitrateKbps * 2, 1200)}k`);
         }
 
         createBaseCommand('none')
@@ -797,48 +1110,62 @@ async function exportVideoWithFallback(options) {
         const command = createBaseCommand(decodeMode);
 
         const nvencQualityOptions = [];
-        switch (quality) {
+        switch (effectiveQuality) {
           case 'lossless':
             nvencQualityOptions.push(
               '-c:v h264_nvenc',
-              '-preset p7',
+              `-preset ${resolvedTuning.nvencPreset}`,
               '-tune lossless',
               '-rc:v constqp',
               '-qp 0',
               '-profile:v high',
               '-c:a aac',
-              '-b:a 192k'
+              `-b:a ${targetAudioBitrateKbps}k`
             );
             break;
           case 'high':
+            {
+              const highTargetVideo = Number.isFinite(targetVideoBitrateKbps)
+                ? targetVideoBitrateKbps
+                : Math.round(14000 * resolvedTuning.qualityBitrateScale);
+              const highMaxRate = Number.isFinite(sizeCapVideoBitrateKbps)
+                ? Math.round(highTargetVideo)
+                : Math.round(highTargetVideo * 1.4);
+              const highBufSize = Math.max(highMaxRate * 2, 6000);
+              const highCq = clampNumber(20 + resolvedTuning.cqDelta, 14, 34);
+              const highBframes = resolvedTuning.highBframes;
+              const highLookahead = resolvedTuning.highLookahead;
+
             nvencQualityOptions.push(
               '-c:v h264_nvenc',
-              '-preset p5',
+              `-preset ${resolvedTuning.nvencPreset}`,
               '-rc:v vbr',
-              '-cq:v 18',
-              '-b:v 14M',
-              '-maxrate:v 20M',
-              '-bufsize:v 28M',
+              `-cq:v ${highCq}`,
+              `-b:v ${highTargetVideo}k`,
+              `-maxrate:v ${highMaxRate}k`,
+              `-bufsize:v ${highBufSize}k`,
               '-profile:v high',
-              '-rc-lookahead 32',
+              `-rc-lookahead ${highLookahead}`,
+              `-bf ${highBframes}`,
               '-c:a aac',
-              '-b:a 192k'
+              `-b:a ${targetAudioBitrateKbps}k`
             );
+            }
             break;
           default: // discord
             nvencQualityOptions.push(
               '-c:v h264_nvenc',
-              '-preset p1',
+              `-preset ${resolvedTuning.nvencPreset}`,
               '-rc:v cbr',
               '-tune ll',
-              `-b:v ${discordVideoBitrateKbps}k`,
-              `-maxrate:v ${discordVideoBitrateKbps}k`,
-              `-bufsize:v ${Math.max(discordVideoBitrateKbps * 2, 1200)}k`,
+              `-b:v ${targetVideoBitrateKbps}k`,
+              `-maxrate:v ${targetVideoBitrateKbps}k`,
+              `-bufsize:v ${Math.max(targetVideoBitrateKbps * 2, 1200)}k`,
               '-profile:v high',
-              '-rc-lookahead 0',
-              '-bf 0',
+              `-rc-lookahead ${resolvedTuning.discordLookahead}`,
+              `-bf ${resolvedTuning.discordBframes}`,
               '-c:a aac',
-              `-b:a ${DISCORD_AUDIO_BITRATE_K}k`
+              `-b:a ${targetAudioBitrateKbps}k`
             );
         }
 
@@ -847,7 +1174,7 @@ async function exportVideoWithFallback(options) {
         }
         command.outputOptions(nvencQualityOptions);
 
-        if (!needsAudioFilter && allowAudioCopy && quality !== 'discord') {
+        if (!needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord') {
           command.outputOptions(['-c:a copy']);
         }
 
@@ -964,6 +1291,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       volume,
       speed,
       quality,
+      exportSettings: settings,
       volumeData,
       onProgress,
       onFallback,
@@ -1001,7 +1329,12 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       end,
       speed,
       volume,
-      quality,
+      quality: pipeline.resolvedQuality || quality,
+      requestedQuality: pipeline.requestedQuality || quality,
+      exportPreset: pipeline.exportPreset,
+      exportSizeGoal: pipeline.exportSizeGoal,
+      exportQualityBias: pipeline.exportQualityBias,
+      exportSpeedBias: pipeline.exportSpeedBias,
       encoder: usingFallback ? 'libx264' : 'h264_nvenc',
       sourceWidth: pipeline.sourceWidth,
       sourceHeight: pipeline.sourceHeight,
@@ -1013,6 +1346,11 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       requestedCudaDecoder: pipeline.requestedCudaDecoder,
       decodeAttempts: pipeline.decodeAttempts,
       decodeErrors: pipeline.decodeErrors,
+      targetSizeBytes: pipeline.targetSizeBytes,
+      nominalVideoBitrateKbps: pipeline.nominalVideoBitrateKbps,
+      sizeCapVideoBitrateKbps: pipeline.sizeCapVideoBitrateKbps,
+      targetVideoBitrateKbps: pipeline.targetVideoBitrateKbps,
+      targetAudioBitrateKbps: pipeline.targetAudioBitrateKbps,
       videoFilters: pipeline.videoFilters,
       audioFilters: pipeline.audioFilters
     });
@@ -1073,6 +1411,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       volume,
       speed,
       quality,
+      exportSettings: settings,
       volumeData,
       onProgress,
       onFallback,
@@ -1108,7 +1447,12 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       end,
       speed,
       volume,
-      quality,
+      quality: pipeline.resolvedQuality || quality,
+      requestedQuality: pipeline.requestedQuality || quality,
+      exportPreset: pipeline.exportPreset,
+      exportSizeGoal: pipeline.exportSizeGoal,
+      exportQualityBias: pipeline.exportQualityBias,
+      exportSpeedBias: pipeline.exportSpeedBias,
       encoder: usingFallback ? 'libx264' : 'h264_nvenc',
       sourceWidth: pipeline.sourceWidth,
       sourceHeight: pipeline.sourceHeight,
@@ -1120,6 +1464,11 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       requestedCudaDecoder: pipeline.requestedCudaDecoder,
       decodeAttempts: pipeline.decodeAttempts,
       decodeErrors: pipeline.decodeErrors,
+      targetSizeBytes: pipeline.targetSizeBytes,
+      nominalVideoBitrateKbps: pipeline.nominalVideoBitrateKbps,
+      sizeCapVideoBitrateKbps: pipeline.sizeCapVideoBitrateKbps,
+      targetVideoBitrateKbps: pipeline.targetVideoBitrateKbps,
+      targetAudioBitrateKbps: pipeline.targetAudioBitrateKbps,
       videoFilters: pipeline.videoFilters,
       audioFilters: pipeline.audioFilters
     });
@@ -1169,6 +1518,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       volume,
       speed,
       quality,
+      exportSettings: settings,
       volumeData,
       onProgress,
       allowAudioCopy: quality !== 'discord',
@@ -1198,7 +1548,12 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       end,
       speed,
       volume,
-      quality,
+      quality: pipeline.resolvedQuality || quality,
+      requestedQuality: pipeline.requestedQuality || quality,
+      exportPreset: pipeline.exportPreset,
+      exportSizeGoal: pipeline.exportSizeGoal,
+      exportQualityBias: pipeline.exportQualityBias,
+      exportSpeedBias: pipeline.exportSpeedBias,
       encoder: usingFallback ? 'libx264' : 'h264_nvenc',
       sourceWidth: pipeline.sourceWidth,
       sourceHeight: pipeline.sourceHeight,
@@ -1210,6 +1565,11 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       requestedCudaDecoder: pipeline.requestedCudaDecoder,
       decodeAttempts: pipeline.decodeAttempts,
       decodeErrors: pipeline.decodeErrors,
+      targetSizeBytes: pipeline.targetSizeBytes,
+      nominalVideoBitrateKbps: pipeline.nominalVideoBitrateKbps,
+      sizeCapVideoBitrateKbps: pipeline.sizeCapVideoBitrateKbps,
+      targetVideoBitrateKbps: pipeline.targetVideoBitrateKbps,
+      targetAudioBitrateKbps: pipeline.targetAudioBitrateKbps,
       videoFilters: pipeline.videoFilters,
       audioFilters: pipeline.audioFilters
     });

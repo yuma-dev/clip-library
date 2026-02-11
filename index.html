@@ -2,7 +2,7 @@
 <html>
   <head>
     <title>Clip Library</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=Figtree:wght@400;500&family=Geist:wght@400;500&family=Inter:wght@400;500&family=Manrope:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Public+Sans:wght@400;500&family=Roboto:wght@400;500&family=Space+Grotesk:wght@400;500&family=Work+Sans:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/2.3.3/purify.min.js"></script>
@@ -50,20 +50,22 @@
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
       </button>
-      <div id="search-container">
-        <input type="text" id="search-input" placeholder="Search clips...">
-      </div>
-      <div id="tagv2-filter" class="tagv2-filter">
-        <button id="tagv2-button">Tags <span id="tagv2-count">(0/0)</span></button>
-        <div id="tagv2-dropdown" class="tagv2-dropdown">
-          <div class="tagv2-search-container">
-            <input type="text" id="tagv2-search" placeholder="Search tags...">
+      <div id="search-filter-pill">
+        <div id="search-container">
+          <input type="text" id="search-input" placeholder="Search clips...">
+        </div>
+        <div id="tagv2-filter" class="tagv2-filter">
+          <button id="tagv2-button">Tags <span id="tagv2-count">(0/0)</span></button>
+          <div id="tagv2-dropdown" class="tagv2-dropdown">
+            <div class="tagv2-search-container">
+              <input type="text" id="tagv2-search" placeholder="Search tags...">
+            </div>
+            <div class="tagv2-actions">
+              <button id="tagv2-select-all">Select All</button>
+              <button id="tagv2-deselect-all">Deselect All</button>
+            </div>
+            <div id="tagv2-list" class="tagv2-list"></div>
           </div>
-          <div class="tagv2-actions">
-            <button id="tagv2-select-all">Select All</button>
-            <button id="tagv2-deselect-all">Deselect All</button>
-          </div>
-          <div id="tagv2-list" class="tagv2-list"></div>
         </div>
       </div>
     </div>

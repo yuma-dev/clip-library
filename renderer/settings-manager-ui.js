@@ -15,7 +15,136 @@ const state = require('./state');
 // Dependencies (injected)
 let videoPlayerModule, searchManagerModule, fetchSettings, updateSettingValue, toggleDiscordRPC, 
     applyIconGreyscale, renderClips, updateVersionDisplay, changeClipLocation, updateAllPreviewVolumes,
-    populateKeybindingList, shareManagerModule;
+    populateKeybindingList, shareManagerModule, applyUiFontSetting, defaultUiFontKey;
+let isApplyingExportPreset = false;
+
+const EXPORT_PRESET_CONFIG = {
+  discord_fast: {
+    exportQuality: 'discord',
+    exportSizeGoal: 'discord_10mb',
+    exportQualityBias: 'balanced',
+    exportSpeedBias: 'fast'
+  },
+  discord_quality: {
+    exportQuality: 'discord',
+    exportSizeGoal: 'discord_10mb',
+    exportQualityBias: 'quality',
+    exportSpeedBias: 'balanced'
+  },
+  compact: {
+    exportQuality: 'high',
+    exportSizeGoal: 'small_25mb',
+    exportQualityBias: 'performance',
+    exportSpeedBias: 'fast'
+  },
+  balanced: {
+    exportQuality: 'high',
+    exportSizeGoal: 'medium_50mb',
+    exportQualityBias: 'balanced',
+    exportSpeedBias: 'balanced'
+  },
+  high_fidelity: {
+    exportQuality: 'high',
+    exportSizeGoal: 'medium_50mb',
+    exportQualityBias: 'quality',
+    exportSpeedBias: 'balanced'
+  },
+  quality_first: {
+    exportQuality: 'high',
+    exportSizeGoal: 'large_100mb',
+    exportQualityBias: 'quality',
+    exportSpeedBias: 'best'
+  },
+  max_quality: {
+    exportQuality: 'high',
+    exportSizeGoal: 'unlimited',
+    exportQualityBias: 'quality',
+    exportSpeedBias: 'best'
+  },
+  archival_lossless: {
+    exportQuality: 'lossless',
+    exportSizeGoal: 'unlimited',
+    exportQualityBias: 'quality',
+    exportSpeedBias: 'best'
+  }
+};
+
+const EXPORT_PRESET_META = {
+  discord_fast: 'Fastest Discord-safe preset: speed-first under 10MB.',
+  discord_quality: 'Discord-safe under 10MB with better visual quality.',
+  compact: 'Speed-first 25MB preset for quick shares.',
+  balanced: 'Recommended default: best overall quality/size/speed balance.',
+  high_fidelity: 'Higher visual quality at ~50MB with balanced encode speed.',
+  quality_first: 'Higher visual quality with larger outputs (~100MB target).',
+  max_quality: 'Highest non-lossless quality with no size cap.',
+  archival_lossless: 'Lossless archival output, very large files.',
+  custom: 'Manual mode. Changing any setting below keeps this in Custom.'
+};
+
+const EXPORT_SETTING_DEFAULTS = {
+  exportPreset: 'balanced',
+  exportQuality: 'high',
+  exportSizeGoal: 'medium_50mb',
+  exportQualityBias: 'balanced',
+  exportSpeedBias: 'balanced'
+};
+
+async function saveSettingsPatch(patch) {
+  const currentSettings = await ipcRenderer.invoke('get-settings');
+  Object.assign(currentSettings, patch);
+  const updated = await ipcRenderer.invoke('save-settings', currentSettings);
+  state.settings = updated;
+  return updated;
+}
+
+async function applyExportPreset(presetKey, controls = {}) {
+  const presetValues = EXPORT_PRESET_CONFIG[presetKey];
+  if (!presetValues) {
+    await saveSettingsPatch({ exportPreset: 'custom' });
+    return;
+  }
+
+  isApplyingExportPreset = true;
+  try {
+    if (controls.exportQualitySelect) controls.exportQualitySelect.value = presetValues.exportQuality;
+    if (controls.exportSizeGoalSelect) controls.exportSizeGoalSelect.value = presetValues.exportSizeGoal;
+    if (controls.exportQualityBiasSelect) controls.exportQualityBiasSelect.value = presetValues.exportQualityBias;
+    if (controls.exportSpeedBiasSelect) controls.exportSpeedBiasSelect.value = presetValues.exportSpeedBias;
+    if (controls.exportPresetSelect) controls.exportPresetSelect.value = presetKey;
+
+    await saveSettingsPatch({
+      exportPreset: presetKey,
+      ...presetValues
+    });
+  } finally {
+    isApplyingExportPreset = false;
+  }
+}
+
+function updateExportPresetVisualState(controls = {}) {
+  const presetValue = controls.exportPresetSelect?.value || 'custom';
+  const isManaged = presetValue !== 'custom';
+  const summaryText = EXPORT_PRESET_META[presetValue] || EXPORT_PRESET_META.custom;
+
+  if (controls.exportPresetSummary) {
+    controls.exportPresetSummary.textContent = summaryText;
+  }
+
+  if (controls.exportPresetCard) {
+    controls.exportPresetCard.classList.toggle('is-custom', !isManaged);
+  }
+
+  const managedItems = [
+    controls.exportQualityItem,
+    controls.exportSizeGoalItem,
+    controls.exportQualityBiasItem,
+    controls.exportSpeedBiasItem
+  ];
+  managedItems.forEach((item) => {
+    if (!item) return;
+    item.classList.toggle('is-managed-by-preset', isManaged);
+  });
+}
 
 // ============================================================================
 // INITIALIZATION
@@ -37,6 +166,8 @@ function init(dependencies) {
   updateAllPreviewVolumes = dependencies.updateAllPreviewVolumes;
   populateKeybindingList = dependencies.populateKeybindingList;
   shareManagerModule = dependencies.shareManagerModule;
+  applyUiFontSetting = dependencies.applyUiFontSetting;
+  defaultUiFontKey = dependencies.defaultUiFontKey || 'modern_ui';
 }
 
 // ============================================================================
@@ -101,15 +232,118 @@ async function initializeSettingsModal() {
     }
   });
 
-  // Export quality change handler
-  document.getElementById('exportQuality').addEventListener('change', async (e) => {
-    try {
-      await updateSettingValue('exportQuality', e.target.value);
-    } catch (error) {
-      logger.error('Error saving export quality:', error);
-      e.target.value = state.settings.exportQuality;
-    }
-  });
+  const exportQualitySelect = document.getElementById('exportQuality');
+  const exportPresetSelect = document.getElementById('exportPreset');
+  const exportSizeGoalSelect = document.getElementById('exportSizeGoal');
+  const exportQualityBiasSelect = document.getElementById('exportQualityBias');
+  const exportSpeedBiasSelect = document.getElementById('exportSpeedBias');
+  const exportPresetCard = document.getElementById('exportPresetCard');
+  const exportPresetSummary = document.getElementById('exportPresetSummary');
+  const exportQualityItem = document.getElementById('exportQualityItem');
+  const exportSizeGoalItem = document.getElementById('exportSizeGoalItem');
+  const exportQualityBiasItem = document.getElementById('exportQualityBiasItem');
+  const exportSpeedBiasItem = document.getElementById('exportSpeedBiasItem');
+
+  const exportUiRefs = {
+    exportPresetSelect,
+    exportQualitySelect,
+    exportSizeGoalSelect,
+    exportQualityBiasSelect,
+    exportSpeedBiasSelect,
+    exportPresetCard,
+    exportPresetSummary,
+    exportQualityItem,
+    exportSizeGoalItem,
+    exportQualityBiasItem,
+    exportSpeedBiasItem
+  };
+
+  const markPresetAsCustomIfNeeded = async () => {
+    if (!exportPresetSelect || isApplyingExportPreset) return;
+    if (exportPresetSelect.value === 'custom') return;
+    exportPresetSelect.value = 'custom';
+    await updateSettingValue('exportPreset', 'custom');
+    updateExportPresetVisualState(exportUiRefs);
+  };
+
+  if (exportPresetSelect) {
+    exportPresetSelect.addEventListener('change', async (e) => {
+      try {
+        const presetKey = e.target.value;
+        if (presetKey === 'custom') {
+          await updateSettingValue('exportPreset', 'custom');
+          updateExportPresetVisualState(exportUiRefs);
+          return;
+        }
+        await applyExportPreset(presetKey, {
+          exportPresetSelect,
+          exportQualitySelect,
+          exportSizeGoalSelect,
+          exportQualityBiasSelect,
+          exportSpeedBiasSelect
+        });
+        updateExportPresetVisualState(exportUiRefs);
+      } catch (error) {
+        logger.error('Error applying export preset:', error);
+        e.target.value = state.settings.exportPreset || EXPORT_SETTING_DEFAULTS.exportPreset;
+        updateExportPresetVisualState(exportUiRefs);
+      }
+    });
+  }
+
+  if (exportQualitySelect) {
+    exportQualitySelect.addEventListener('change', async (e) => {
+      const previous = state.settings.exportQuality || EXPORT_SETTING_DEFAULTS.exportQuality;
+      try {
+        await updateSettingValue('exportQuality', e.target.value);
+        await markPresetAsCustomIfNeeded();
+      } catch (error) {
+        logger.error('Error saving export quality:', error);
+        e.target.value = previous;
+      }
+    });
+  }
+
+  if (exportSizeGoalSelect) {
+    exportSizeGoalSelect.addEventListener('change', async (e) => {
+      const previous = state.settings.exportSizeGoal || EXPORT_SETTING_DEFAULTS.exportSizeGoal;
+      try {
+        await updateSettingValue('exportSizeGoal', e.target.value);
+        await markPresetAsCustomIfNeeded();
+      } catch (error) {
+        logger.error('Error saving export size goal:', error);
+        e.target.value = previous;
+      }
+    });
+  }
+
+  if (exportQualityBiasSelect) {
+    exportQualityBiasSelect.addEventListener('change', async (e) => {
+      const previous = state.settings.exportQualityBias || EXPORT_SETTING_DEFAULTS.exportQualityBias;
+      try {
+        await updateSettingValue('exportQualityBias', e.target.value);
+        await markPresetAsCustomIfNeeded();
+      } catch (error) {
+        logger.error('Error saving export quality bias:', error);
+        e.target.value = previous;
+      }
+    });
+  }
+
+  if (exportSpeedBiasSelect) {
+    exportSpeedBiasSelect.addEventListener('change', async (e) => {
+      const previous = state.settings.exportSpeedBias || EXPORT_SETTING_DEFAULTS.exportSpeedBias;
+      try {
+        await updateSettingValue('exportSpeedBias', e.target.value);
+        await markPresetAsCustomIfNeeded();
+      } catch (error) {
+        logger.error('Error saving export speed bias:', error);
+        e.target.value = previous;
+      }
+    });
+  }
+
+  updateExportPresetVisualState(exportUiRefs);
 
   // Discord RPC toggle handler
   const discordRPCToggle = document.getElementById('enableDiscordRPC');
@@ -152,6 +386,36 @@ async function initializeSettingsModal() {
       } catch (error) {
         logger.error('Error toggling New Clips Indicators:', error);
         e.target.checked = !e.target.checked;
+      }
+    });
+  }
+
+  // UI font dropdown
+  const uiFontSelect = document.getElementById('uiFontSelect');
+  if (uiFontSelect) {
+    const currentUiFont = state.settings.uiFont || defaultUiFontKey;
+    uiFontSelect.value = currentUiFont;
+    if (uiFontSelect.value !== currentUiFont) {
+      uiFontSelect.value = defaultUiFontKey;
+    }
+
+    uiFontSelect.addEventListener('change', async (e) => {
+      const previous = state.settings.uiFont || defaultUiFontKey;
+      try {
+        const selectedFont = e.target.value;
+        const appliedFont = typeof applyUiFontSetting === 'function'
+          ? applyUiFontSetting(selectedFont)
+          : selectedFont;
+        if (appliedFont !== selectedFont) {
+          e.target.value = appliedFont;
+        }
+        await updateSettingValue('uiFont', appliedFont);
+      } catch (error) {
+        logger.error('Error saving UI font setting:', error);
+        e.target.value = previous;
+        if (typeof applyUiFontSetting === 'function') {
+          applyUiFontSetting(previous);
+        }
       }
     });
   }
@@ -274,13 +538,29 @@ async function openSettingsModal() {
     // Set control values from state.settings
     const enableDiscordRPCToggle = document.getElementById('enableDiscordRPC');
     const exportQualitySelect = document.getElementById('exportQuality');
+    const exportPresetSelect = document.getElementById('exportPreset');
+    const exportSizeGoalSelect = document.getElementById('exportSizeGoal');
+    const exportQualityBiasSelect = document.getElementById('exportQualityBias');
+    const exportSpeedBiasSelect = document.getElementById('exportSpeedBias');
+    const exportPresetCard = document.getElementById('exportPresetCard');
+    const exportPresetSummary = document.getElementById('exportPresetSummary');
+    const exportQualityItem = document.getElementById('exportQualityItem');
+    const exportSizeGoalItem = document.getElementById('exportSizeGoalItem');
+    const exportQualityBiasItem = document.getElementById('exportQualityBiasItem');
+    const exportSpeedBiasItem = document.getElementById('exportSpeedBiasItem');
     const previewVolumeSlider = document.getElementById('previewVolumeSlider');
     const previewVolumeValue = document.getElementById('previewVolumeValue');
+    const uiFontSelect = document.getElementById('uiFontSelect');
 
     logger.debug('Setting controls with values:', {
       enableDiscordRPC: state.settings.enableDiscordRPC,
       exportQuality: state.settings.exportQuality,
-      previewVolume: state.settings.previewVolume
+      exportPreset: state.settings.exportPreset,
+      exportSizeGoal: state.settings.exportSizeGoal,
+      exportQualityBias: state.settings.exportQualityBias,
+      exportSpeedBias: state.settings.exportSpeedBias,
+      previewVolume: state.settings.previewVolume,
+      uiFont: state.settings.uiFont
     });
 
     if (enableDiscordRPCToggle) {
@@ -288,8 +568,38 @@ async function openSettingsModal() {
     }
     
     if (exportQualitySelect) {
-      exportQualitySelect.value = state.settings.exportQuality || 'discord';
+      exportQualitySelect.value = state.settings.exportQuality || EXPORT_SETTING_DEFAULTS.exportQuality;
     }
+
+    if (exportPresetSelect) {
+      exportPresetSelect.value = state.settings.exportPreset || EXPORT_SETTING_DEFAULTS.exportPreset;
+    }
+
+    if (exportSizeGoalSelect) {
+      exportSizeGoalSelect.value = state.settings.exportSizeGoal || EXPORT_SETTING_DEFAULTS.exportSizeGoal;
+    }
+
+    if (exportQualityBiasSelect) {
+      exportQualityBiasSelect.value = state.settings.exportQualityBias || EXPORT_SETTING_DEFAULTS.exportQualityBias;
+    }
+
+    if (exportSpeedBiasSelect) {
+      exportSpeedBiasSelect.value = state.settings.exportSpeedBias || EXPORT_SETTING_DEFAULTS.exportSpeedBias;
+    }
+
+    updateExportPresetVisualState({
+      exportPresetSelect,
+      exportQualitySelect,
+      exportSizeGoalSelect,
+      exportQualityBiasSelect,
+      exportSpeedBiasSelect,
+      exportPresetCard,
+      exportPresetSummary,
+      exportQualityItem,
+      exportSizeGoalItem,
+      exportQualityBiasItem,
+      exportSpeedBiasItem
+    });
 
     // Refresh greyscale toggle to reflect persisted value
     const greyscaleToggleEl = document.getElementById('greyscaleIcons');
@@ -307,6 +617,14 @@ async function openSettingsModal() {
       const savedVolume = state.settings.previewVolume ?? 0.1;
       previewVolumeSlider.value = savedVolume;
       previewVolumeValue.textContent = `${Math.round(savedVolume * 100)}%`;
+    }
+
+    if (uiFontSelect) {
+      const savedUiFont = state.settings.uiFont || defaultUiFontKey;
+      uiFontSelect.value = savedUiFont;
+      if (uiFontSelect.value !== savedUiFont) {
+        uiFontSelect.value = defaultUiFontKey;
+      }
     }
 
     if (shareManagerModule && typeof shareManagerModule.syncSettingsUiFromState === 'function') {
