@@ -10,6 +10,23 @@ const logger = require('../utils/logger');
 
 // Module state
 let initialized = false;
+let manualUpdateUrl = null;
+
+async function openManualUpdatePage(preferredUrl = null) {
+  try {
+    const result = await ipcRenderer.invoke('open-update-page', preferredUrl || manualUpdateUrl);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to open update page');
+    }
+    if (result.url) {
+      manualUpdateUrl = result.url;
+    }
+    return { success: true, url: result.url };
+  } catch (error) {
+    logger.error('Failed to open manual update page:', error);
+    return { success: false, error: error.message || 'Failed to open update page' };
+  }
+}
 
 /**
  * Handle a manual update check and update status UI.
@@ -29,6 +46,9 @@ async function handleManualUpdateCheck() {
   try {
     logger.info('Manual update check initiated');
     const result = await ipcRenderer.invoke('check-for-updates');
+    if (result?.manualUpdateUrl) {
+      manualUpdateUrl = result.manualUpdateUrl;
+    }
 
     if (result.updateAvailable) {
       statusEl.textContent = `Update available: v${result.latestVersion}`;
@@ -37,15 +57,16 @@ async function handleManualUpdateCheck() {
       ipcRenderer.emit('show-update-notification', null, {
         currentVersion: result.currentVersion,
         latestVersion: result.latestVersion,
-        changelog: result.changelog
+        changelog: result.changelog,
+        manualUpdateUrl: result.manualUpdateUrl
       });
       logger.info(`Update found: ${result.currentVersion} -> ${result.latestVersion}`);
     } else if (result.error === 'network_unavailable') {
-      statusEl.textContent = 'Could not connect. Check your internet connection.';
+      statusEl.textContent = 'Could not connect. You can still use "Open Download Page".';
       statusEl.classList.add('update-error');
       logger.warn('Update check failed: network unavailable');
     } else if (result.error === 'rate_limited') {
-      statusEl.textContent = 'Too many requests. Please try again later.';
+      statusEl.textContent = 'GitHub rate limit hit. You can use "Open Download Page".';
       statusEl.classList.add('update-error');
       logger.warn('Update check failed: rate limited');
     } else if (result.error) {
@@ -91,6 +112,31 @@ function init() {
     checkForUpdatesBtn.addEventListener('click', handleManualUpdateCheck);
   }
 
+  const openUpdatePageBtn = document.getElementById('openUpdatePageBtn');
+  if (openUpdatePageBtn) {
+    openUpdatePageBtn.addEventListener('click', async () => {
+      const statusEl = document.getElementById('updateCheckStatus');
+      const originalText = openUpdatePageBtn.textContent;
+      openUpdatePageBtn.textContent = 'Opening...';
+      openUpdatePageBtn.disabled = true;
+
+      const result = await openManualUpdatePage();
+      if (statusEl) {
+        statusEl.className = 'settings-item-description update-check-status';
+        if (result.success) {
+          statusEl.textContent = 'Opened release page in your browser.';
+          statusEl.classList.add('update-current');
+        } else {
+          statusEl.textContent = result.error || 'Failed to open release page.';
+          statusEl.classList.add('update-error');
+        }
+      }
+
+      openUpdatePageBtn.textContent = originalText;
+      openUpdatePageBtn.disabled = false;
+    });
+  }
+
   ipcRenderer.on('show-update-notification', (event, data) => {
     console.log('[UPDATE] show-update-notification received:', data);
     logger.info('[UPDATE] Received show-update-notification IPC message');
@@ -102,7 +148,10 @@ function init() {
         return;
       }
 
-      const { currentVersion, latestVersion, changelog } = data;
+      const { currentVersion, latestVersion, changelog, manualUpdateUrl: incomingManualUpdateUrl } = data;
+      if (incomingManualUpdateUrl) {
+        manualUpdateUrl = incomingManualUpdateUrl;
+      }
 
       logger.info(`Renderer received update notification: ${currentVersion} -> ${latestVersion}`);
 
@@ -188,7 +237,12 @@ function init() {
           updateText.textContent = `Downloading update... ${roundedProgress}%`;
         };
 
-        const onError = (_, errorMessage) => {
+        const onError = (_, payload) => {
+          const errorMessage = typeof payload === 'string' ? payload : payload?.message;
+          const fallbackManualUrl = typeof payload === 'object' ? payload?.manualUpdateUrl : null;
+          if (fallbackManualUrl) {
+            manualUpdateUrl = fallbackManualUrl;
+          }
           logger.error('Update download failed:', errorMessage);
           updateText.textContent = 'Download failed. Click to retry.';
           content.classList.remove('downloading');
@@ -196,13 +250,20 @@ function init() {
           cleanup();
         };
 
+        const onComplete = () => {
+          updateText.textContent = 'Download complete. Launching installer...';
+          cleanup();
+        };
+
         const cleanup = () => {
           ipcRenderer.removeListener('download-progress', onProgress);
           ipcRenderer.removeListener('update-download-error', onError);
+          ipcRenderer.removeListener('update-download-complete', onComplete);
         };
 
         ipcRenderer.on('download-progress', onProgress);
         ipcRenderer.on('update-download-error', onError);
+        ipcRenderer.on('update-download-complete', onComplete);
 
         try {
           await ipcRenderer.invoke('start-update');

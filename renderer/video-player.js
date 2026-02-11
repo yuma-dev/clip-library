@@ -2184,18 +2184,26 @@ async function openClip(originalName, customName) {
       loadSpeed(originalName)
     ]);
     
-    // Set up volume if loaded
-    if (loadedVolume !== 1) {
+    // Always apply clip-specific volume/speed so prior clip state does not leak.
+    const volumeMin = elements.volumeSlider ? Number(elements.volumeSlider.min) : 0;
+    const volumeMax = elements.volumeSlider ? Number(elements.volumeSlider.max) : 2;
+    const normalizedVolume = Number.isFinite(Number(loadedVolume)) ? Number(loadedVolume) : 1;
+    const targetVolume = Math.min(Math.max(normalizedVolume, volumeMin), volumeMax);
+
+    updateVolumeSlider(targetVolume);
+    if (state.audioContext || targetVolume !== 1) {
       setupAudioContext();
-      state.gainNode.gain.setValueAtTime(loadedVolume, state.audioContext.currentTime);
-      updateVolumeSlider(loadedVolume);
-      updateVolumeIcon(loadedVolume);
+      state.gainNode.gain.setValueAtTime(targetVolume, state.audioContext.currentTime);
     }
-    
-    // Set up speed if loaded
-    if (loadedSpeed !== 1) {
-      changeSpeed(loadedSpeed);
-    }
+
+    const speedMin = elements.speedSlider ? Number(elements.speedSlider.min) : 0.5;
+    const speedMax = elements.speedSlider ? Number(elements.speedSlider.max) : 2;
+    const normalizedSpeed = Number.isFinite(Number(loadedSpeed)) ? Number(loadedSpeed) : 1;
+    const targetSpeed = Math.min(Math.max(normalizedSpeed, speedMin), speedMax);
+
+    elements.videoPlayer.playbackRate = targetSpeed;
+    updateSpeedSlider(targetSpeed);
+    updateSpeedText(targetSpeed);
     
     mark('afterVolumeSpeed');
     

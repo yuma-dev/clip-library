@@ -444,6 +444,7 @@ app.whenReady().then(async () => {
   }
 
   const win = await createWindow();
+  updaterModule.init(win);
 
   if (benchmarkHarness) benchmarkHarness.endStartup('windowCreation');
 
