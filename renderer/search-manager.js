@@ -66,16 +66,12 @@ function performSearch() {
     });
   }
 
-  // Apply tag filter from dropdown
-  if (state.selectedTags.size > 0) {
-    filteredClips = filteredClips.filter(clip => {
-      if (state.selectedTags.has('Untagged')) {
-        if (!clip.tags || clip.tags.length === 0) {
-          return true;
-        }
-      }
-      return clip.tags && clip.tags.some(tag => state.selectedTags.has(tag));
-    });
+  // If user explicitly searches tags (e.g. "@MyTag"), respect search intent
+  // and bypass dropdown visibility exclusions for those results.
+  if (searchTerms.tags.length === 0) {
+    // Apply tag filter from dropdown with strict exclusion semantics:
+    // if any clip tag is unselected, the clip is hidden.
+    filteredClips = filteredClips.filter(matchesCurrentTagFilter);
   }
 
   // Remove duplicates
@@ -95,14 +91,47 @@ function performSearch() {
 }
 
 /**
+ * Check whether a clip matches the current dropdown tag selection rules.
+ */
+function matchesCurrentTagFilter(clip) {
+  if (state.selectedTags.size === 0) {
+    return false;
+  }
+
+  const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
+  const baseFileName = clip.originalName.replace(/\.[^/.]+$/, '');
+  const isUnnamed = clip.customName === baseFileName;
+  const isUntagged = clipTags.length === 0;
+
+  if (isUntagged && !state.selectedTags.has('Untagged')) {
+    return false;
+  }
+
+  if (isUnnamed && !state.selectedTags.has('Unnamed')) {
+    return false;
+  }
+
+  if (clipTags.length > 0) {
+    if (state.isInTemporaryMode) {
+      return clipTags.some(tag => state.temporaryTagSelections.has(tag));
+    }
+
+    return clipTags.every(tag => state.selectedTags.has(tag));
+  }
+
+  return state.selectedTags.has('Untagged');
+}
+
+/**
  * Parse search terms into tag and text buckets.
  */
 function parseSearchTerms(searchText) {
   const terms = searchText.split(/\s+/).filter(term => term.length > 0);
+  const validTagTerms = terms.filter(term => term.startsWith('@') && term.length > 1);
   return {
-    // Get all terms that start with @ (tags)
-    tags: terms.filter(term => term.startsWith('@')),
-    // Get all other terms (regular search)
+    // Get tag terms with an actual query (ignore bare "@")
+    tags: validTagTerms,
+    // Get all non-tag terms (bare "@" is ignored)
     text: terms.filter(term => !term.startsWith('@'))
   };
 }
@@ -435,10 +464,6 @@ async function addNewTag() {
 
   if (newTagName && !tagManagerModule.getGlobalTags().includes(newTagName)) {
     await tagManagerModule.addGlobalTag(newTagName);
-
-    // Automatically enable the new tag
-    state.selectedTags.add(newTagName);
-    await tagManagerModule.saveTagPreferences();
 
     searchInput.value = '';
     renderTagList(tagManagerModule.getGlobalTags());

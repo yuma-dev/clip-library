@@ -2236,25 +2236,14 @@ function filterClips() {
     state.currentClipList = [];
   } else {
     state.currentClipList = state.allClips.filter(clip => {
+      const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
+
       // Check if clip is unnamed
       const baseFileName = clip.originalName.replace(/\.[^/.]+$/, '');
       const isUnnamed = clip.customName === baseFileName;
       
       // Check if clip is untagged
-      const isUntagged = !clip.tags || clip.tags.length === 0;
-
-      // Handle system tag filtering
-      let matchesSystemTag = false;
-      
-      // Handle untagged clips
-      if (state.selectedTags.has('Untagged') && isUntagged) {
-        matchesSystemTag = true;
-      }
-
-      // Handle unnamed clips
-      if (state.selectedTags.has('Unnamed') && isUnnamed) {
-        matchesSystemTag = true;
-      }
+      const isUntagged = clipTags.length === 0;
 
       // If clip is untagged and "Untagged" is not selected, exclude it
       if (isUntagged && !state.selectedTags.has('Untagged')) {
@@ -2266,23 +2255,18 @@ function filterClips() {
         return false;
       }
 
-      // If it matches a system tag, show it
-      if (matchesSystemTag) {
-        return true;
-      }
-
       // For clips with tags, check regular tag filtering
-      if (clip.tags && clip.tags.length > 0) {
+      if (clipTags.length > 0) {
         if (state.isInTemporaryMode) {
           // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
-          return clip.tags.some(tag => state.temporaryTagSelections.has(tag));
+          return clipTags.some(tag => state.temporaryTagSelections.has(tag));
         } else {
           // In normal mode, clips must have ALL their tags selected to be shown
-          return clip.tags.every(tag => state.selectedTags.has(tag));
+          return clipTags.every(tag => state.selectedTags.has(tag));
         }
       }
 
-      return false;
+      return state.selectedTags.has('Untagged');
     });
   }
   
