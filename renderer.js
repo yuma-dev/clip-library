@@ -2107,7 +2107,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
         }
 
         // Update the clip element in the grid
-        const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+        const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
         if (clipElement) {
           const clipNameElement = clipElement.querySelector('.clip-name');
           if (clipNameElement) {
@@ -2123,7 +2123,7 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
         `Failed to save custom name. Please try again later. Error: ${error.message}`
       );
       // Revert to the original name in the grid
-      const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+      const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
       if (clipElement) {
         const clipNameElement = clipElement.querySelector('.clip-name');
         if (clipNameElement) {

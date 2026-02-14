@@ -1677,7 +1677,7 @@ async function closePlayer() {
 
   if (originalName) {
     if (callbacks.updateClipDisplay) callbacks.updateClipDisplay(originalName);
-    const clipElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+    const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
     if (clipElement) {
       logger.info('Found clip element to scroll to:', {
         originalName,
@@ -2232,7 +2232,7 @@ async function openClip(originalName, customName) {
     const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === originalName);
     if (currentIndex !== -1) {
       // Add a special class to the last-opened clip
-      const lastOpenedElement = document.querySelector(`.clip-item[data-original-name="${originalName}"]`);
+      const lastOpenedElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
       if (lastOpenedElement) {
         lastOpenedElement.classList.add('last-opened');
       }

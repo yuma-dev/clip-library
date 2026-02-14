@@ -1254,11 +1254,11 @@ async function exportVideoWithFallback(options) {
 async function exportVideo(clipName, start, end, volume, speed, savePath, getSettings, progressCallbacks = null) {
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
-  const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${clipName}`);
+  const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${path.basename(clipName)}`);
 
   // Load volume range data if it exists
-  const metadataFolder = path.join(path.dirname(inputPath), '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+  const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
   let volumeData = null;
   try {
@@ -1374,11 +1374,11 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
 async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, progressCallbacks = null) {
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
-  const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${clipName}`);
+  const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${path.basename(clipName)}`);
 
   // Load volume range data if it exists
-  const metadataFolder = path.join(path.dirname(inputPath), '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+  const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
   let volumeData = null;
   try {
@@ -1494,8 +1494,8 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `shared_${Date.now()}_${path.parse(clipName).name}.mp4`);
 
-  const metadataFolder = path.join(path.dirname(inputPath), '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+  const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
+  const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
   let volumeData = null;
   try {

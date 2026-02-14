@@ -89,6 +89,16 @@ function getMetadataFolder(clipLocation) {
   return path.join(clipLocation, '.clip_metadata');
 }
 
+/**
+ * Convert a clip's relative path (originalName) into a flat filename
+ * safe for use as a metadata file key in .clip_metadata/.
+ * e.g., "highlights/gameplay.mp4" -> "highlights--gameplay.mp4"
+ * Root clips like "gameplay.mp4" are returned unchanged.
+ */
+function metadataSafeName(clipName) {
+  return clipName.replace(/\//g, '--');
+}
+
 // ============================================================================
 // Custom Name
 // ============================================================================
@@ -104,7 +114,7 @@ async function saveCustomName(clipName, customName, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   await ensureDirectoryExists(metadataFolder);
 
-  const customNameFilePath = path.join(metadataFolder, `${clipName}.customname`);
+  const customNameFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.customname`);
   try {
     await writeFileAtomically(customNameFilePath, customName);
     logger.info(`Custom name saved successfully for ${clipName}`);
@@ -124,7 +134,7 @@ async function saveCustomName(clipName, customName, getSettings) {
 async function getCustomName(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const customNameFilePath = path.join(metadataFolder, `${clipName}.customname`);
+  const customNameFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.customname`);
 
   try {
     return await fs.readFile(customNameFilePath, 'utf8');
@@ -149,7 +159,7 @@ async function saveTrimData(clipName, trimData, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   await ensureDirectoryExists(metadataFolder);
 
-  const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
+  const trimFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trim`);
   try {
     await writeFileAtomically(trimFilePath, JSON.stringify(trimData));
     logger.info(`Trim data saved successfully for ${clipName}`);
@@ -169,7 +179,7 @@ async function saveTrimData(clipName, trimData, getSettings) {
 async function getTrimData(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
+  const trimFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trim`);
 
   try {
     const trimData = await fs.readFile(trimFilePath, 'utf8');
@@ -188,7 +198,7 @@ async function getTrimData(clipName, getSettings) {
 async function deleteTrimData(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const trimFilePath = path.join(metadataFolder, `${clipName}.trim`);
+  const trimFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trim`);
 
   try {
     await fs.unlink(trimFilePath);
@@ -216,7 +226,7 @@ async function saveSpeed(clipName, speed, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   await ensureDirectoryExists(metadataFolder);
-  const speedFilePath = path.join(metadataFolder, `${clipName}.speed`);
+  const speedFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.speed`);
 
   try {
     await writeFileAtomically(speedFilePath, speed.toString());
@@ -238,7 +248,7 @@ async function saveSpeed(clipName, speed, getSettings) {
 async function getSpeed(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const speedFilePath = path.join(metadataFolder, `${clipName}.speed`);
+  const speedFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.speed`);
 
   try {
     const speedData = await fs.readFile(speedFilePath, 'utf8');
@@ -271,7 +281,7 @@ async function saveVolume(clipName, volume, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   await ensureDirectoryExists(metadataFolder);
-  const volumeFilePath = path.join(metadataFolder, `${clipName}.volume`);
+  const volumeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volume`);
 
   try {
     await writeFileAtomically(volumeFilePath, volume.toString());
@@ -293,7 +303,7 @@ async function saveVolume(clipName, volume, getSettings) {
 async function getVolume(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const volumeFilePath = path.join(metadataFolder, `${clipName}.volume`);
+  const volumeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volume`);
 
   try {
     const volumeData = await fs.readFile(volumeFilePath, 'utf8');
@@ -325,7 +335,7 @@ async function getVolume(clipName, getSettings) {
 async function saveVolumeRange(clipName, volumeData, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+  const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
 
   try {
     await writeFileAtomically(volumeRangeFilePath, JSON.stringify(volumeData));
@@ -346,7 +356,7 @@ async function saveVolumeRange(clipName, volumeData, getSettings) {
 async function getVolumeRange(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName}.volumerange`);
+  const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
 
   try {
     const volumeData = await fs.readFile(volumeRangeFilePath, 'utf8');
@@ -373,7 +383,7 @@ async function getVolumeRange(clipName, getSettings) {
 async function getClipTags(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const tagsFilePath = path.join(metadataFolder, `${clipName}.tags`);
+  const tagsFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.tags`);
 
   try {
     const tagsData = await fs.readFile(tagsFilePath, 'utf8');
@@ -396,7 +406,7 @@ async function getClipTags(clipName, getSettings) {
 async function saveClipTags(clipName, tags, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const tagsFilePath = path.join(metadataFolder, `${clipName}.tags`);
+  const tagsFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.tags`);
 
   try {
     await fs.writeFile(tagsFilePath, JSON.stringify(tags));
@@ -609,7 +619,7 @@ async function restoreMissingGlobalTags(getSettings, getAppPath) {
 async function getGameIcon(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const gameInfoPath = path.join(metadataFolder, `${clipName}.gameinfo`);
+  const gameInfoPath = path.join(metadataFolder, `${metadataSafeName(clipName)}.gameinfo`);
 
   let raw;
   try {
