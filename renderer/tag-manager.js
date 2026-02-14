@@ -54,11 +54,13 @@ async function addGlobalTag(tag) {
     globalTags.push(tag);
     await saveGlobalTags();
     
-    // Automatically enable the new tag
+    // Automatically enable and persist the new tag in both selection states
+    state.savedTagSelections.add(tag);
     state.selectedTags.add(tag);
-    saveTagPreferences();
+    await saveTagPreferences();
     
     updateFilterDropdown();
+    updateTagSelectionUI();
     // Re-filter to show clips with the new tag - handled by caller or callback
   }
 }
@@ -183,25 +185,14 @@ async function toggleClipTag(clip, tag, callbacks = {}) {
   if (state.selectedTags.size > 0 && callbacks.onFilterNeeded) {
     // Check if this clip would be filtered out based on current tag selection
     const shouldBeVisible = () => {
+      const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
+
       // Check if clip is unnamed
       const baseFileName = clip.originalName.replace(/\.[^/.]+$/, '');
       const isUnnamed = clip.customName === baseFileName;
       
       // Check if clip is untagged
-      const isUntagged = !clip.tags || clip.tags.length === 0;
-
-      // Handle system tag filtering
-      let matchesSystemTag = false;
-      
-      // Handle untagged clips
-      if (state.selectedTags.has('Untagged') && isUntagged) {
-        matchesSystemTag = true;
-      }
-
-      // Handle unnamed clips
-      if (state.selectedTags.has('Unnamed') && isUnnamed) {
-        matchesSystemTag = true;
-      }
+      const isUntagged = clipTags.length === 0;
 
       // If clip is untagged and "Untagged" is not selected, exclude it
       if (isUntagged && !state.selectedTags.has('Untagged')) {
@@ -213,23 +204,18 @@ async function toggleClipTag(clip, tag, callbacks = {}) {
         return false;
       }
 
-      // If it matches a system tag, show it
-      if (matchesSystemTag) {
-        return true;
-      }
-
       // For clips with tags, check regular tag filtering
-      if (clip.tags && clip.tags.length > 0) {
+      if (clipTags.length > 0) {
         if (state.isInTemporaryMode) {
           // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
-          return clip.tags.some(tag => state.temporaryTagSelections.has(tag));
+          return clipTags.some(tag => state.temporaryTagSelections.has(tag));
         } else {
           // In normal mode, clips must have ALL their tags selected to be shown
-          return clip.tags.every(tag => state.selectedTags.has(tag));
+          return clipTags.every(tag => state.selectedTags.has(tag));
         }
       }
 
-      return false;
+      return state.selectedTags.has('Untagged');
     };
 
     // If tag change would affect visibility, re-filter everything
@@ -289,7 +275,7 @@ async function loadTagPreferences() {
  */
 async function saveTagPreferences() {
   try {
-    await ipcRenderer.invoke('save-tag-preferences', Array.from(state.selectedTags));
+    await ipcRenderer.invoke('save-tag-preferences', Array.from(state.savedTagSelections));
   } catch (error) {
     logger.error('Error saving tag preferences:', error);
   }
@@ -655,7 +641,7 @@ function updateTagSelectionStates() {
  */
 function updateTagCount() {
   const tagCount = document.getElementById('tagv2-count');
-  const allTags = new Set(['Untagged', ...globalTags]);
+  const allTags = new Set(['Untagged', 'Unnamed', ...globalTags]);
   tagCount.textContent = `(${state.selectedTags.size}/${allTags.size})`;
 }
 

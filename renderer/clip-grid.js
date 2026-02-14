@@ -1151,15 +1151,12 @@ function clipMatchesSearchFilters(clip, searchText) {
     return false;
   }
 
-  if (state.selectedTags && state.selectedTags.size > 0) {
-    const isUntagged = clipTags.length === 0;
-    if (state.selectedTags.has('Untagged') && isUntagged) {
-      return true;
-    }
-    return clipTags.some(tag => state.selectedTags.has(tag));
+  // Explicit tag searches (e.g. "@MyTag") should override dropdown visibility.
+  if (searchTerms.tags.length > 0) {
+    return true;
   }
 
-  return true;
+  return clipMatchesTagFilters(clip);
 }
 
 function clipMatchesTagFilters(clip) {
@@ -1174,24 +1171,12 @@ function clipMatchesTagFilters(clip) {
   const clipTags = clip.tags || [];
   const isUntagged = clipTags.length === 0;
 
-  let matchesSystemTag = false;
-  if (state.selectedTags.has('Untagged') && isUntagged) {
-    matchesSystemTag = true;
-  }
-  if (state.selectedTags.has('Unnamed') && isUnnamed) {
-    matchesSystemTag = true;
-  }
-
   if (isUntagged && !state.selectedTags.has('Untagged')) {
     return false;
   }
 
   if (isUnnamed && !state.selectedTags.has('Unnamed')) {
     return false;
-  }
-
-  if (matchesSystemTag) {
-    return true;
   }
 
   if (clipTags.length > 0) {
@@ -1201,7 +1186,7 @@ function clipMatchesTagFilters(clip) {
     return clipTags.every(tag => state.selectedTags.has(tag));
   }
 
-  return false;
+  return state.selectedTags.has('Untagged');
 }
 
 function shouldIncludeClipInCurrentList(clip) {
