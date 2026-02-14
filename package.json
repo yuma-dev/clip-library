@@ -1,7 +1,7 @@
 {
   "name": "clips",
   "displayName": "Clips",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
   "main": "main.js",
