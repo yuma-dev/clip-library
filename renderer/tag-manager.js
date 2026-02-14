@@ -348,7 +348,7 @@ function truncateTag(tag, maxLength = 15) {
  * Update tag list on a clip object and UI.
  */
 function updateClipTags(clip) {
-  const clipElement = document.querySelector(`.clip-item[data-original-name="${clip.originalName}"]`);
+  const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(clip.originalName)}"]`);
   if (clipElement) {
     const tagContainer = clipElement.querySelector(".tag-container");
     tagContainer.innerHTML = "";

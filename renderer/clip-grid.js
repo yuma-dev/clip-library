@@ -775,7 +775,7 @@ async function confirmAndDeleteClip(clipToDelete = null) {
     }
 
     // Immediately remove the clip from UI
-    const clipElement = document.querySelector(`.clip-item[data-original-name="${clipInfo.originalName}"]`);
+    const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(clipInfo.originalName)}"]`);
     if (clipElement) {
       // Update group before removing the clip
       updateGroupAfterDeletion(clipElement);
@@ -896,7 +896,7 @@ function updateClipNameInLibrary(originalName, newCustomName) {
   }
 
   const clipElement = clipGrid.querySelector(
-    `[data-original-name="${originalName}"]`,
+    `[data-original-name="${CSS.escape(originalName)}"]`,
   );
   if (clipElement) {
     const clipNameElement = clipElement.querySelector(".clip-name");
@@ -1392,7 +1392,7 @@ async function addNewClipToLibrary(fileName) {
       if (shouldIncludeClipInCurrentList(newClipInfo)) {
         insertClipIntoCurrentList(newClipInfo);
       }
-      const existingElement = document.querySelector(`[data-original-name="${newClipInfo.originalName}"]`);
+      const existingElement = document.querySelector(`[data-original-name="${CSS.escape(newClipInfo.originalName)}"]`);
       if (existingElement) {
         const updatedElement = await createClipElement(newClipInfo);
         existingElement.replaceWith(updatedElement);

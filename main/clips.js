@@ -2,10 +2,64 @@
 const { app, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
-const readify = require('readify');
 const logger = require('../utils/logger');
 const thumbnailsModule = require('./thumbnails');
 const { logActivity } = require('../utils/activity-tracker');
+
+// Supported video extensions
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov']);
+
+/**
+ * Recursively walk a directory and collect video files with their relative paths.
+ * Skips directories starting with '.' (like .clip_metadata) and 'icons'.
+ * @param {string} dir - Current directory to scan
+ * @param {string} baseDir - Root clip directory (for computing relative paths)
+ * @returns {Promise<Array<{name: string, date: Date}>>} Array of clip entries
+ */
+async function walkClips(dir, baseDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    logger.error(`Error reading directory ${dir}:`, error);
+    return [];
+  }
+
+  let clips = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name.startsWith('.') || entry.name === 'icons') continue;
+      const subClips = await walkClips(fullPath, baseDir);
+      clips = clips.concat(subClips);
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (VIDEO_EXTENSIONS.has(ext)) {
+        const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+        try {
+          const stats = await fs.stat(fullPath);
+          clips.push({
+            name: relativePath,
+            date: stats.mtime
+          });
+        } catch (error) {
+          logger.error(`Error reading stats for ${fullPath}:`, error);
+        }
+      }
+    }
+  }
+  return clips;
+}
+
+/**
+ * Convert a clip's relative path (originalName) into a flat filename
+ * safe for use as a metadata file key in .clip_metadata/.
+ * e.g., "highlights/gameplay.mp4" -> "highlights--gameplay.mp4"
+ * Root clips like "gameplay.mp4" are returned unchanged.
+ */
+function metadataSafeName(clipName) {
+  return clipName.replace(/\//g, '--');
+}
 
 // Module state
 let periodicSaveInterval = null;
@@ -32,15 +86,8 @@ async function saveCurrentClipList(getSettings) {
       return;
     }
 
-    const result = await readify(clipsFolder, {
-      type: 'raw',
-      sort: 'date',
-      order: 'desc'
-    });
-
-    const clipNames = result.files
-      .filter((file) => ['.mp4', '.avi', '.mov'].includes(path.extname(file.name).toLowerCase()))
-      .map((file) => file.name);
+    const files = await walkClips(clipsFolder, clipsFolder);
+    const clipNames = files.map((file) => file.name);
 
     const clipListData = {
       timestamp: Date.now(),
@@ -105,15 +152,8 @@ async function getNewClipsInfo(getSettings) {
     }
 
     const clipsFolder = settings?.clipLocation;
-    const result = await readify(clipsFolder, {
-      type: 'raw',
-      sort: 'date',
-      order: 'desc'
-    });
-
-    const currentClips = result.files
-      .filter((file) => ['.mp4', '.avi', '.mov'].includes(path.extname(file.name).toLowerCase()))
-      .map((file) => file.name);
+    const files = await walkClips(clipsFolder, clipsFolder);
+    const currentClips = files.map((file) => file.name);
 
     const newClips = currentClips.filter((clipName) => !previousClips.includes(clipName));
 
@@ -161,7 +201,7 @@ async function getNewClipInfo(getSettings, fileName) {
   const settings = await getSettings();
   const filePath = path.join(settings.clipLocation, fileName);
   const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
-  const datePath = path.join(metadataFolder, `${fileName}.date`);
+  const datePath = path.join(metadataFolder, `${metadataSafeName(fileName)}.date`);
   const stats = await fs.stat(filePath);
   
   // Default to file system time
@@ -240,18 +280,11 @@ async function getClips(getSettings) {
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
 
   try {
-    const result = await readify(clipsFolder, {
-      type: "raw",
-      sort: "date",
-      order: "desc",
-    });
+    const files = await walkClips(clipsFolder, clipsFolder);
+    // Sort by date descending (newest first)
+    files.sort((a, b) => b.date.getTime() - a.date.getTime());
 
-    const clipInfoPromises = result.files
-      .filter((file) =>
-        [".mp4", ".avi", ".mov"].includes(
-          path.extname(file.name).toLowerCase(),
-        ),
-      )
+    const clipInfoPromises = files
       .map(async (file) => {
         const fullPath = path.join(clipsFolder, file.name);
         
@@ -264,12 +297,13 @@ async function getClips(getSettings) {
           return null;
         }
 
+        const safeName = metadataSafeName(file.name);
         const customNamePath = path.join(
           metadataFolder,
-          `${file.name}.customname`,
+          `${safeName}.customname`,
         );
-        const trimPath = path.join(metadataFolder, `${file.name}.trim`);
-        const datePath = path.join(metadataFolder, `${file.name}.date`);
+        const trimPath = path.join(metadataFolder, `${safeName}.trim`);
+        const datePath = path.join(metadataFolder, `${safeName}.date`);
         let customName;
         let isTrimmed = false;
         let createdAt = file.date.getTime();
@@ -345,8 +379,9 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
   const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
-  const customNamePath = path.join(metadataFolder, `${clipName}.customname`);
-  const trimDataPath = path.join(metadataFolder, `${clipName}.trim`);
+  const safeName = metadataSafeName(clipName);
+  const customNamePath = path.join(metadataFolder, `${safeName}.customname`);
+  const trimDataPath = path.join(metadataFolder, `${safeName}.trim`);
   const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
 
   const filesToDelete = [clipPath, customNamePath, trimDataPath, thumbnailPath];

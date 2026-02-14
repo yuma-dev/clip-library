@@ -50,7 +50,7 @@ function setupFileWatcher(clipLocation, { onNewClip } = {}) {
       return;
     }
 
-    const fileName = path.basename(filePath);
+    const fileName = path.relative(clipLocation, filePath).replace(/\\/g, '/');
     if (typeof onNewClip === 'function') {
       onNewClip(fileName, filePath);
     }
