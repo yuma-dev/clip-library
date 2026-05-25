@@ -1,0 +1,28 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Tauri
+src-tauri/target
+src-tauri/ui/node_modules
+src-tauri/ui/dist
+src-tauri/ui/.svelte-kit
+
+# IDE
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local test artifacts
+clipdip-test.mp4
+*.h264
+*.aac
+
+# FFmpeg / NVENC SDK if vendored locally (not committed)
+/vendor

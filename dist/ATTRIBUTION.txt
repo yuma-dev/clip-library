@@ -1,0 +1,41 @@
+Clipdip — Third-Party Attributions
+====================================
+
+This distribution includes the following third-party software.
+
+
+FFmpeg
+------
+Copyright (c) the FFmpeg developers and contributors.
+Licensed under the GNU Lesser General Public License (LGPL) version 2.1
+or, at your option, any later version.
+
+The FFmpeg binary included here is an "essentials" build that contains
+only LGPL-licensed components (no GPL libraries are linked). In
+accordance with the LGPL:
+
+  - You may use, copy, and distribute this software under the terms of
+    the LGPL 2.1+.
+  - The complete corresponding source code for this FFmpeg build is
+    available at:
+      https://github.com/BtbN/FFmpeg-Builds
+    You may also obtain it by writing to:
+      Clipdip maintainers <fabiansilbermann1@gmail.com>
+  - You are free to replace the bundled ffmpeg.exe with your own LGPL
+    build. Clipdip will prefer a sibling ffmpeg.exe next to clipdip.exe,
+    then fall back to ffmpeg on your PATH, so no configuration change is
+    needed.
+
+Full license text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+
+Rust standard library and crates
+---------------------------------
+Clipdip is written in Rust and links the Rust standard library, which is
+distributed under the MIT License and Apache License 2.0:
+  https://github.com/rust-lang/rust/blob/master/LICENSE-MIT
+  https://github.com/rust-lang/rust/blob/master/LICENSE-APACHE
+
+All Clipdip source code (including its open-source crate dependencies)
+is available under the MIT OR Apache-2.0 license at:
+  https://github.com/fabiansilbermann/clipdip   (placeholder — update when public)

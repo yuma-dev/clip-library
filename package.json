@@ -1,0 +1,12 @@
+{
+  "name": "clipdip",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build":         "cargo build --release",
+    "fetch-ffmpeg":  "node scripts/fetch-ffmpeg.mjs",
+    "package":       "cargo build --release && node scripts/fetch-ffmpeg.mjs && node scripts/assemble.mjs",
+    "package:quick": "node scripts/fetch-ffmpeg.mjs && node scripts/assemble.mjs"
+  }
+}

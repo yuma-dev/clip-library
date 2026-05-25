@@ -1,0 +1,19 @@
+[package]
+name = "clipdip-encoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+windows.workspace = true
+windows-core.workspace = true
+parking_lot.workspace = true
+clipdip-ringbuf.workspace = true
+clipdip-profile.workspace = true
+# Dynamic-load nvEncodeAPI64.dll from the user's NVIDIA driver install. The
+# end user never needs the Video Codec SDK — only the driver, which ships
+# the DLL.
+libloading = "0.8"

@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/capture",
+    "crates/encoder",
+    "crates/audio",
+    "crates/ringbuf",
+    "crates/muxer",
+    "crates/hotkey",
+    "crates/core",
+    "crates/profile",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+directories = "5"
+ctrlc = "3"
+
+# Windows bindings — pin a single version across the workspace so COM
+# interfaces from different crates are ABI-compatible.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.58"
+
+# FFmpeg (LGPL build) for muxing only.
+ffmpeg-next = "7"
+
+# In-workspace crates
+clipdip-capture = { path = "crates/capture" }
+clipdip-encoder = { path = "crates/encoder" }
+clipdip-audio   = { path = "crates/audio" }
+clipdip-ringbuf = { path = "crates/ringbuf" }
+clipdip-muxer   = { path = "crates/muxer" }
+clipdip-hotkey  = { path = "crates/hotkey" }
+clipdip-core    = { path = "crates/core" }
+clipdip-profile = { path = "crates/profile" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

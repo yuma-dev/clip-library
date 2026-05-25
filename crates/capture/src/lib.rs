@@ -1,0 +1,426 @@
+//! DXGI Desktop Duplication capture.
+//!
+//! Acquires frames from `IDXGIOutputDuplication`, copies them into a private
+//! `ID3D11Texture2D` so we can release the source immediately (otherwise the
+//! desktop compositor stalls), and hands the private texture to the encoder.
+
+use anyhow::{anyhow, Context, Result};
+use windows::core::Interface;
+use windows::Win32::Foundation::{HMODULE, TRUE};
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_RESOURCE_MISC_GDI_COMPATIBLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT,
+};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+use windows::Win32::Graphics::Dxgi::{
+    IDXGIAdapter1, IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGISurface1,
+    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
+    DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
+};
+use windows::Win32::Graphics::Gdi::DeleteObject;
+use windows::Win32::UI::WindowsAndMessaging::{
+    DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, ICONINFO,
+};
+use tracing::warn;
+
+const POOL_SIZE: usize = 4;
+
+pub struct CapturedFrame {
+    /// Private copy of the captured backbuffer. Owned by the caller.
+    pub texture: ID3D11Texture2D,
+    /// QPC-based presentation time, matches DXGI_OUTDUPL_FRAME_INFO::LastPresentTime.
+    pub pts_100ns: i64,
+    /// True if this frame is a re-emission of the previously captured frame —
+    /// DXGI delivered no new desktop image within the acquire timeout, so we
+    /// returned the last good texture again to keep the encoder fed at CFR.
+    /// Unchanged content encodes as tiny P-frames; downstream code can also
+    /// use this flag to suppress redundant work.
+    pub was_repeat: bool,
+}
+
+pub struct DesktopDuplicator {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    duplication: IDXGIOutputDuplication,
+    dup_desc: DXGI_OUTDUPL_DESC,
+    /// Private-texture ring. We rotate through slots so the encoder NEVER
+    /// receives the same `ID3D11Texture2D` pointer twice in a row — NVENC
+    /// retains the previous picture's input as an internal reference frame
+    /// and rejects (INVALID_PARAM) a back-to-back submission of the same
+    /// buffer. OBS uses 4–8 (matched to its async pipeline depth +
+    /// lookahead); our encoder is strictly 1:1 (`LockBitstream` immediately
+    /// after every `EncodePicture`), so a small ring of 4 is plenty and
+    /// matches OBS's lower bound.
+    pool: [Option<ID3D11Texture2D>; POOL_SIZE],
+    /// Next slot to render into (mod POOL_SIZE).
+    next_slot: usize,
+    /// Slot holding the most recent successful capture; on DXGI timeout we
+    /// `CopyResource` from this slot into `next_slot` to produce a CFR
+    /// repeat frame with a fresh texture pointer.
+    last_slot: Option<usize>,
+    /// PTS of the last successful capture (kept so repeat frames carry the
+    /// original presentation time — callers can override with their own
+    /// pacing if they want strict monotonicity).
+    last_pts: i64,
+    /// Top-left of this output's rect in the virtual desktop. `GetCursorInfo`
+    /// reports cursor coordinates in virtual-desktop space; we subtract this
+    /// to translate to texture-local coordinates.
+    output_origin: (i32, i32),
+    /// Whether to composite the OS mouse cursor onto each frame. DXGI never
+    /// includes it natively. Defaults to `true`.
+    include_cursor: bool,
+}
+
+impl DesktopDuplicator {
+    /// Create a duplicator on the given D3D11 device. The device MUST be the
+    /// one that will also drive NVENC — sharing one device eliminates the
+    /// cross-context texture copy that costs ~1.5% game FPS (obs#6647).
+    pub fn new(
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        output_index: u32,
+    ) -> Result<Self> {
+        unsafe {
+            let dxgi_device: IDXGIDevice = device.cast()?;
+            let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
+            let output = adapter
+                .EnumOutputs(output_index)
+                .with_context(|| format!("no DXGI output at index {output_index}"))?;
+            let output1: IDXGIOutput1 = output.cast()?;
+            let out_desc: DXGI_OUTPUT_DESC = output1.GetDesc()?;
+            let output_origin = (
+                out_desc.DesktopCoordinates.left,
+                out_desc.DesktopCoordinates.top,
+            );
+            let duplication = output1
+                .DuplicateOutput(&device)
+                .context("DuplicateOutput failed (HDCP? hybrid-GPU mismatch?)")?;
+            let dup_desc = duplication.GetDesc();
+            Ok(Self {
+                device,
+                context,
+                duplication,
+                dup_desc,
+                pool: Default::default(),
+                next_slot: 0,
+                last_slot: None,
+                last_pts: 0,
+                output_origin,
+                include_cursor: true,
+            })
+        }
+    }
+
+    /// Create a fresh D3D11 device on the default adapter and a duplicator on
+    /// `output_index`. Convenience for the walking skeleton.
+    pub fn with_default_device(
+        output_index: u32,
+    ) -> Result<(Self, ID3D11Device, ID3D11DeviceContext)> {
+        let (device, context) = create_d3d11_device()?;
+        let dup = Self::new(device.clone(), context.clone(), output_index)?;
+        Ok((dup, device, context))
+    }
+
+    /// Enable/disable cursor compositing. The compositor uses `IDXGISurface1::GetDC`
+    /// + `DrawIconEx`; turning it off avoids the per-frame GDI cost when callers
+    /// don't want a cursor (e.g. recording a kiosk-style fullscreen app).
+    pub fn set_include_cursor(&mut self, include: bool) {
+        self.include_cursor = include;
+    }
+
+    pub fn width(&self) -> u32 {
+        self.dup_desc.ModeDesc.Width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.dup_desc.ModeDesc.Height
+    }
+
+    /// Block up to `timeout_ms` for a new frame.
+    ///
+    /// On DXGI timeout (the desktop image hasn't changed in the timeout window),
+    /// re-emit the last successfully captured texture with `was_repeat = true`
+    /// so callers see a constant-frame-rate stream. If no frame has ever been
+    /// captured yet, returns `Ok(None)`.
+    pub fn acquire_frame(&mut self, timeout_ms: u32) -> Result<Option<CapturedFrame>> {
+        let _t = clipdip_profile::start("capture.acquire");
+        unsafe {
+            let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+            let mut resource = None;
+            let hr = self.duplication.AcquireNextFrame(timeout_ms, &mut info, &mut resource);
+            match hr {
+                Ok(()) => {}
+                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                    return self.emit_repeat();
+                }
+                Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
+                    return Err(anyhow!("DXGI access lost (likely mode change or HDCP)"));
+                }
+                Err(e) => return Err(e.into()),
+            }
+            let source: ID3D11Texture2D = resource
+                .ok_or_else(|| anyhow!("AcquireNextFrame returned no resource"))?
+                .cast()?;
+
+            let mut src_desc = D3D11_TEXTURE2D_DESC::default();
+            source.GetDesc(&mut src_desc);
+
+            // Take the next ring slot, allocating lazily on first use.
+            let slot_idx = self.next_slot;
+            let dst = self.ensure_slot(slot_idx, &src_desc)?;
+            let t_copy = clipdip_profile::start("capture.copy_flush");
+            self.context.CopyResource(&dst, &source);
+            // Force the copy to actually submit to the GPU before we hand
+            // the texture to NVENC. Without this, NVENC can sample a
+            // not-yet-written texture and emit black frames. Must also
+            // complete before we grab an HDC for cursor compositing.
+            // (Tried replacing this with a D3D11_QUERY_EVENT fence — no
+            // measurable GPU% change. The ~11% is dominated by NVENC
+            // encode, not by Flush bookkeeping. Revisit when we have
+            // per-stage profiling.)
+            self.context.Flush();
+            drop(t_copy);
+
+            // Release the source frame back to DXGI immediately so the compositor
+            // can keep producing.
+            self.duplication.ReleaseFrame().ok();
+
+            // DXGI Desktop Duplication doesn't include the cursor in the
+            // captured texture — paint it ourselves (unless the user
+            // opted out via `set_include_cursor(false)`).
+            if self.include_cursor {
+                let _t = clipdip_profile::start("capture.cursor");
+                draw_cursor(&dst, self.output_origin);
+            }
+
+            self.last_slot = Some(slot_idx);
+            self.last_pts = info.LastPresentTime;
+            self.next_slot = (slot_idx + 1) % POOL_SIZE;
+
+            Ok(Some(CapturedFrame {
+                texture: dst,
+                pts_100ns: info.LastPresentTime,
+                was_repeat: false,
+            }))
+        }
+    }
+
+    /// Re-emit the last captured frame by copying it into a fresh ring slot.
+    /// Used on `DXGI_ERROR_WAIT_TIMEOUT`. Returns `Ok(None)` if no frame has
+    /// ever been captured (nothing to repeat from).
+    fn emit_repeat(&mut self) -> Result<Option<CapturedFrame>> {
+        let src_slot = match self.last_slot {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        // Same logical slot is fine to copy from; the *destination* must be a
+        // different slot so the encoder sees a new pointer.
+        let dst_slot = self.next_slot;
+        // Borrow the source texture out of the pool. Clone first (cheap
+        // refcount bump) so we don't have aliasing issues if dst_slot ==
+        // src_slot (which only happens if POOL_SIZE == 1 — guarded for).
+        let src_tex = self
+            .pool[src_slot]
+            .clone()
+            .ok_or_else(|| anyhow!("last_slot points at an unallocated pool entry"))?;
+        let mut src_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { src_tex.GetDesc(&mut src_desc) };
+
+        let dst_tex = self.ensure_slot(dst_slot, &src_desc)?;
+        unsafe {
+            self.context.CopyResource(&dst_tex, &src_tex);
+            self.context.Flush();
+        }
+        // Repaint the cursor — the user may have moved it while the desktop
+        // image was static, and the previous slot's cursor position is stale.
+        if self.include_cursor {
+            draw_cursor(&dst_tex, self.output_origin);
+        }
+
+        self.last_slot = Some(dst_slot);
+        self.next_slot = (dst_slot + 1) % POOL_SIZE;
+
+        Ok(Some(CapturedFrame {
+            texture: dst_tex,
+            pts_100ns: self.last_pts,
+            was_repeat: true,
+        }))
+    }
+
+    /// Allocate (if needed) the texture in `pool[slot]` matching the given
+    /// source descriptor, and return a refcounted clone of it.
+    ///
+    /// The DXGI source may carry `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`
+    /// and other sharing flags we don't want on a private copy — we
+    /// explicitly clear `MiscFlags`. Bind flags include both
+    /// `RENDER_TARGET` (so the GPU can write via `CopyResource`) and
+    /// `SHADER_RESOURCE` (so NVENC can sample). `ArraySize=1` /
+    /// `MipLevels=1` keep NVENC happy.
+    fn ensure_slot(
+        &mut self,
+        slot: usize,
+        src_desc: &D3D11_TEXTURE2D_DESC,
+    ) -> Result<ID3D11Texture2D> {
+        if let Some(tex) = &self.pool[slot] {
+            return Ok(tex.clone());
+        }
+        let mut dst_desc = *src_desc;
+        dst_desc.Usage = D3D11_USAGE_DEFAULT;
+        dst_desc.BindFlags = (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32;
+        dst_desc.CPUAccessFlags = 0;
+        // Clear any sharing flags from the DXGI source, but ADD
+        // GDI_COMPATIBLE so we can grab an HDC and paint the mouse cursor
+        // via `DrawIconEx` (DXGI Desktop Duplication never includes the
+        // cursor — it's delivered out-of-band). Requires the texture format
+        // be `DXGI_FORMAT_B8G8R8A8_UNORM[_SRGB]`, which is what Desktop
+        // Duplication produces.
+        dst_desc.MiscFlags = D3D11_RESOURCE_MISC_GDI_COMPATIBLE.0 as u32;
+        dst_desc.ArraySize = 1;
+        dst_desc.MipLevels = 1;
+        dst_desc.SampleDesc = DXGI_SAMPLE_DESC { Count: 1, Quality: 0 };
+
+        let mut dst = None;
+        unsafe {
+            self.device
+                .CreateTexture2D(&dst_desc, None, Some(&mut dst))?;
+        }
+        let dst = dst.ok_or_else(|| anyhow!("CreateTexture2D returned null"))?;
+        self.pool[slot] = Some(dst.clone());
+        Ok(dst)
+    }
+}
+
+/// Composite the current OS mouse cursor onto `target` via GDI.
+///
+/// DXGI Desktop Duplication delivers the cursor out-of-band; the captured
+/// texture has no cursor in it. The fast path on Windows is `IDXGISurface1::GetDC`
+/// on a `GDI_COMPATIBLE` texture and `DrawIconEx`, which avoids writing an
+/// HLSL shader pipeline just for this.
+///
+/// Errors from any individual step are logged at WARN and otherwise
+/// swallowed — a missing cursor frame is annoying, not fatal.
+fn draw_cursor(target: &ID3D11Texture2D, output_origin: (i32, i32)) {
+    unsafe {
+        let mut ci = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetCursorInfo(&mut ci).is_err() {
+            return;
+        }
+        if ci.flags.0 & CURSOR_SHOWING.0 == 0 || ci.hCursor.is_invalid() {
+            return;
+        }
+
+        // Translate from virtual-desktop coords to texture-local coords.
+        let mut x = ci.ptScreenPos.x - output_origin.0;
+        let mut y = ci.ptScreenPos.y - output_origin.1;
+
+        // `ptScreenPos` is the cursor hotspot. `DrawIconEx` draws from
+        // top-left, so subtract the hotspot offset.
+        let mut icon_info = ICONINFO::default();
+        if GetIconInfo(ci.hCursor, &mut icon_info).is_ok() {
+            x -= icon_info.xHotspot as i32;
+            y -= icon_info.yHotspot as i32;
+            // `GetIconInfo` returns owned bitmap handles — release them.
+            if !icon_info.hbmMask.is_invalid() {
+                let _ = DeleteObject(icon_info.hbmMask);
+            }
+            if !icon_info.hbmColor.is_invalid() {
+                let _ = DeleteObject(icon_info.hbmColor);
+            }
+        }
+
+        let surface: IDXGISurface1 = match target.cast() {
+            Ok(s) => s,
+            Err(_) => {
+                warn!("cursor composite: target is not an IDXGISurface1");
+                return;
+            }
+        };
+
+        let hdc = match surface.GetDC(TRUE) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!(error = ?e, "cursor composite: GetDC failed");
+                return;
+            }
+        };
+
+        // HCURSOR is an alias for HICON; DrawIconEx accepts either.
+        let hicon = windows::Win32::UI::WindowsAndMessaging::HICON(ci.hCursor.0);
+        let _ = DrawIconEx(hdc, x, y, hicon, 0, 0, 0, None, DI_NORMAL);
+
+        let _ = surface.ReleaseDC(None);
+    }
+}
+
+/// Metadata for one DXGI output (monitor) attached to the default adapter.
+#[derive(Clone, Debug)]
+pub struct OutputInfo {
+    pub index: u32,
+    pub width: u32,
+    pub height: u32,
+    pub device_name: String,
+}
+
+/// Enumerate every DXGI output on the default adapter. Useful for letting
+/// users pick the right monitor for `video.output_index` in config.
+pub fn list_outputs() -> Result<Vec<OutputInfo>> {
+    let (device, _context) = create_d3d11_device()?;
+    let mut out = Vec::new();
+    unsafe {
+        let dxgi_device: IDXGIDevice = device.cast()?;
+        let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
+        let mut i = 0u32;
+        loop {
+            match adapter.EnumOutputs(i) {
+                Ok(output) => {
+                    let output1: IDXGIOutput1 = output.cast()?;
+                    let desc = output1.GetDesc()?;
+                    let device_name = String::from_utf16_lossy(&desc.DeviceName)
+                        .trim_end_matches('\0')
+                        .to_string();
+                    out.push(OutputInfo {
+                        index: i,
+                        width: (desc.DesktopCoordinates.right - desc.DesktopCoordinates.left)
+                            as u32,
+                        height: (desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top)
+                            as u32,
+                        device_name,
+                    });
+                    i += 1;
+                }
+                // Out-of-range index → done enumerating.
+                Err(_) => break,
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    unsafe {
+        let mut device = None;
+        let mut context = None;
+        let feature_levels = [D3D_FEATURE_LEVEL_11_0];
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&feature_levels),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )?;
+        let device = device.ok_or_else(|| anyhow!("D3D11CreateDevice returned null device"))?;
+        let context = context.ok_or_else(|| anyhow!("D3D11CreateDevice returned null context"))?;
+        Ok((device, context))
+    }
+}
+

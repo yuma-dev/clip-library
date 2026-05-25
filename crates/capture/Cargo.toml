@@ -1,0 +1,13 @@
+[package]
+name = "clipdip-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+windows.workspace = true
+windows-core.workspace = true
+clipdip-profile.workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "clipdip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "clipdip"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+crossbeam-channel.workspace = true
+ctrlc.workspace = true
+toml.workspace = true
+clipdip-core.workspace = true
+clipdip-capture.workspace = true
+clipdip-encoder.workspace = true
+clipdip-audio.workspace = true
+clipdip-muxer.workspace = true
+clipdip-hotkey.workspace = true
+clipdip-ringbuf.workspace = true
+clipdip-profile.workspace = true
