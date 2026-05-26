@@ -169,11 +169,10 @@ impl Default for RateControlCfg {
 }
 
 fn default_qp() -> u32 {
-    // Tuned for AV1's wider QP scale — the encoder clamps to 0–51 if it
-    // ends up using H.264 (which would translate this 28 down to 51, i.e.
-    // worst quality). When the user forces H.264 they should explicitly
-    // pick a lower QP (~20) in their config.
-    28
+    // 20 sits comfortably inside H.264's 0–51 range (visually-lossless-ish)
+    // and is also a perfectly reasonable AV1 QP — AV1 has a wider 0–255
+    // scale but the lower end of it is where high-quality clips live.
+    20
 }
 
 // ---- audio --------------------------------------------------------------
@@ -352,7 +351,7 @@ impl Default for NotificationsConfig {
         Self {
             enabled: true,
             sound: true,
-            corner: NotificationCorner::BottomRight,
+            corner: NotificationCorner::TopRight,
             auto_dismiss_secs: 10,
         }
     }

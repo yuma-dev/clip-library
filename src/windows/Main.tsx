@@ -822,11 +822,11 @@ export default function MainWindow() {
       .catch(() => {
         setConfig({
           replay_seconds: 60,
-          video: { output_index: 0, fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 28 } },
+          video: { output_index: 0, fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 } },
           audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }] },
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "clipdip", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10" },
-          notifications: { enabled: true, sound: true, corner: "bottom_right", auto_dismiss_secs: 10 },
+          notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
         });
       });
   }, []);
@@ -1010,7 +1010,7 @@ export default function MainWindow() {
                   onChange={mode => {
                     const next: RateControl =
                       mode === "constant_qp"
-                        ? { mode: "constant_qp", qp: 28 }
+                        ? { mode: "constant_qp", qp: 20 }
                         : { mode: "vbr", avg_bps: config.video.bitrate_bps };
                     patchVideo("rate_control", next);
                   }}
