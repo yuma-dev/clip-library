@@ -19,7 +19,8 @@
         "minWidth": 820,
         "minHeight": 580,
         "center": true,
-        "decorations": true,
+        "decorations": false,
+        "transparent": true,
         "resizable": true,
         "visible": true
       }

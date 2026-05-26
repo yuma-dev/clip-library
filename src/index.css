@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -30,6 +30,11 @@ body {
 
 /* Range input track */
 input[type="range"] { -webkit-appearance: none; appearance: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
 
 /* Remove default focus ring for mouse users; keep for keyboard */
 :focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; border-radius: 4px; }

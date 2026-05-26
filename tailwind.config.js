@@ -11,9 +11,9 @@ export default {
           border:  "#2a2a3a",
         },
         accent: {
-          DEFAULT: "#7c3aed",
-          hover:   "#8b47f0",
-          muted:   "#7c3aed33",
+          DEFAULT: "#00b5c3",
+          hover:   "#00cad9",
+          muted:   "#00b5c333",
         },
         text: {
           DEFAULT: "#e2e8f0",

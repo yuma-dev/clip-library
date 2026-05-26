@@ -1,12 +1,21 @@
+# Rust
 /target
+src-tauri/target
 **/*.rs.bk
 Cargo.lock.bak
 
-# Tauri
-src-tauri/target
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Tauri (legacy paths)
 src-tauri/ui/node_modules
 src-tauri/ui/dist
 src-tauri/ui/.svelte-kit
+
+# Tauri generated
+src-tauri/gen/
 
 # IDE
 .idea
@@ -26,3 +35,6 @@ clipdip-test.mp4
 
 # FFmpeg / NVENC SDK if vendored locally (not committed)
 /vendor
+
+# package-lock (generated, not committed)
+package-lock.json
