@@ -250,8 +250,17 @@ fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Resu
     .context("init NVENC encoder")?;
 
     let frame_interval = Duration::from_secs_f64(1.0 / cfg.video.fps as f64);
+    let frame_interval_100ns: i64 = (1e7 / cfg.video.fps as f64).round() as i64;
     let mut next_at = Instant::now();
     let mut frames: u32 = 0;
+    // Last PTS handed to the encoder. Real frames use DXGI's
+    // LastPresentTime (QPC, same clock as audio). Repeats — emitted
+    // when the desktop didn't change — carry the *same* LastPresentTime
+    // from `emit_repeat`, so we synthesize a monotonically increasing
+    // PTS for them instead. Audio still uses true QPC, but on an idle
+    // screen real desktop activity is sparse so DXGI's clock would
+    // otherwise stall and the two would drift apart.
+    let mut last_emitted_pts: i64 = 0;
 
     info!(
         width = w,
@@ -268,26 +277,48 @@ fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Resu
         if now < next_at {
             std::thread::sleep(next_at - now);
         }
-        // Clamp so an idle stretch (where `acquire_frame` blocks for up to
-        // 200ms per iteration) doesn't push `next_at` hundreds of ms into
-        // the past. Without this, the moment activity starts and DXGI
-        // delivers fresh frames quickly, the loop burst-encodes at the
-        // hardware ceiling (~117fps on a 60fps config) until `next_at`
-        // catches up — exactly the spike you see when moving the mouse
-        // after an idle period.
+        // Clamp so an idle stretch doesn't push `next_at` far into the
+        // past. Without this, when activity resumes and DXGI delivers
+        // fresh frames quickly, the loop would burst-encode at the
+        // hardware ceiling until `next_at` catches up — visible as a
+        // brief frame-rate spike after returning from idle.
         next_at = next_at.max(now) + frame_interval;
 
         let _t_frame = clipdip_profile::start("pipeline.video_frame");
 
-        let frame = match dup.acquire_frame(200).context("acquire frame")? {
+        // Timeout=0: DXGI returns immediately, either with a fresh frame
+        // (desktop changed since the last acquire) or with TIMEOUT, in
+        // which case `acquire_frame` re-emits the last captured texture
+        // so we stay at the configured CFR. A non-zero timeout would
+        // block the loop here for up to that long whenever the desktop
+        // is static — which on an idle screen meant the loop produced
+        // only ~5 fps no matter the target. The outer `next_at` sleep
+        // already handles pacing, so DXGI doesn't need to.
+        let frame = match dup.acquire_frame(0).context("acquire frame")? {
             Some(f) => f,
             None => continue,
         };
 
-        // Use the DXGI QPC presentation time as the encoder PTS so video
-        // and audio packets share a clock — save_clip relies on this.
+        // PTS rule:
+        // - Real frame (DXGI returned new content): use its
+        //   LastPresentTime — same QPC clock as audio.
+        // - Repeat (desktop static): DXGI's LastPresentTime is stale,
+        //   so advance synthetically by one frame_interval to keep
+        //   PTS monotonic and CFR-shaped. Without this, many repeats
+        //   share one PTS, the measured fps at save time collapses,
+        //   and the muxer lays the clip out at the wrong rate.
+        let pts = if frame.was_repeat {
+            last_emitted_pts + frame_interval_100ns
+        } else {
+            // Guard against a real frame whose LastPresentTime hasn't
+            // advanced past our synthetic clock (can happen the very
+            // first time activity resumes after a long static stretch).
+            frame.pts_100ns.max(last_emitted_pts + 1)
+        };
+        last_emitted_pts = pts;
+
         let packets = encoder
-            .encode_frame(&frame.texture, frame.pts_100ns)
+            .encode_frame(&frame.texture, pts)
             .context("encode frame")?;
         let _t_push = clipdip_profile::start("pipeline.ring_push");
         for p in packets {
@@ -325,6 +356,23 @@ fn save_clip_with_stem(
         .first()
         .map(|p| p.pts_100ns)
         .ok_or_else(|| anyhow!("video IDR found but no packets after it"))?;
+    let t_last = video_pkts
+        .last()
+        .map(|p| p.pts_100ns)
+        .unwrap_or(t0);
+
+    // Real fps measured from the QPC span of the captured packets. The
+    // capture loop drops frames under load (DXGI acquire can stall for
+    // up to 200ms), so the target fps from config overstates the actual
+    // rate — using it would shrink the video timeline relative to the
+    // (real-time) audio and audio would drift later. `frames-1` because
+    // a span of N frames covers N-1 inter-frame intervals.
+    let span_secs = (t_last - t0) as f64 / 1e7;
+    let actual_fps = if span_secs > 0.0 && video_pkts.len() > 1 {
+        (video_pkts.len() - 1) as f64 / span_secs
+    } else {
+        cfg.video.fps as f64
+    };
 
     let h264_path = cfg.output.directory.join(format!("{stem}.h264"));
     let mp4_path = cfg.output.directory.join(format!("{stem}.mp4"));
@@ -359,19 +407,34 @@ fn save_clip_with_stem(
             warn!(stream_id, %label, "no audio packets in window — skipping");
             continue;
         }
+        // Audio packets are written contiguously into the WAV starting
+        // at sample 0, but their first packet's QPC may be a few ms
+        // after t0 (audio is captured in ~10ms WASAPI chunks). Tell
+        // ffmpeg to shift this track by that gap so what was originally
+        // at t0+δ doesn't end up playing at video time 0.
+        let first_a_pts = pkts.first().map(|p| p.pts_100ns).unwrap_or(t0);
+        let offset_secs = (first_a_pts - t0).max(0) as f64 / 1e7;
         let wav_path = cfg.output.directory.join(format!("{stem}.{label}.wav"));
         match write_wav(&wav_path, *fmt, &pkts) {
             Ok(_) => audio_tracks.push(AudioTrack {
                 path: wav_path,
                 title: pretty_title(label),
                 bitrate_bps: cfg.output.audio_bitrate_bps,
+                offset_secs,
             }),
             Err(e) => warn!(stream_id, %label, "WAV write failed: {e:#}"),
         }
     }
 
+    info!(
+        actual_fps,
+        target_fps = cfg.video.fps,
+        frames = video_pkts.len(),
+        span_secs,
+        "muxing with measured fps",
+    );
     let ffmpeg = resolve_ffmpeg_path(cfg.output.ffmpeg_path.as_deref());
-    mux_with_ffmpeg_cli(&ffmpeg, &h264_path, cfg.video.fps, &audio_tracks, &mp4_path)
+    mux_with_ffmpeg_cli(&ffmpeg, &h264_path, actual_fps, &audio_tracks, &mp4_path)
         .context("ffmpeg mux")?;
 
     if !cfg.output.keep_sidecars {

@@ -50,16 +50,6 @@ function cornerStyle(corner: Corner): React.CSSProperties {
   }
 }
 
-function enterAnimation(): React.CSSProperties {
-  // Fade + tiny scale-up. We can no longer slide horizontally — the
-  // overlay window is sized to fit the card, so a translateX would
-  // immediately clip at the window's edge. Fade-in is also kinder on
-  // the GPU than a sliding translate.
-  return {
-    animation: `notif-pop-in 0.22s cubic-bezier(0.2,0.8,0.25,1) both`,
-  };
-}
-
 // ---------- sub-components --------------------------------------------------
 
 const NOTIF_SANS = '"Geist", Inter, system-ui, sans-serif';
@@ -207,7 +197,6 @@ function NotificationCard({
   return (
     <div
       style={{
-        ...enterAnimation(),
         display: "inline-flex", alignItems: "center", gap: vh(1.3),
         padding: `${vh(1)} ${vh(1.6)}`,
         borderRadius: vh(0.55),

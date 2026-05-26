@@ -17,27 +17,9 @@ use windows::Win32::Foundation::{BOOL, HWND, TRUE};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 
-/// Notification window dimensions. Sized just larger than the actual
-/// notification card so the rename input + thumbnail + status text can
-/// expand without overflow, and so the card's drop shadow has room to
-/// render inside the window bounds. NOT fullscreen — that's the entire
-/// point: a fullscreen transparent always-on-top window forces DWM to
-/// recomposite the whole desktop through it.
-const OVERLAY_W: u32 = 480;
-const OVERLAY_H: u32 = 140;
-
-fn corner_window_position(monitor_w: u32, monitor_h: u32, corner: &str) -> (i32, i32) {
-    let mw = monitor_w as i32;
-    let mh = monitor_h as i32;
-    let ow = OVERLAY_W as i32;
-    let oh = OVERLAY_H as i32;
-    match corner {
-        "top_left"     => (0,        0),
-        "top_right"    => (mw - ow,  0),
-        "bottom_left"  => (0,        mh - oh),
-        _              => (mw - ow,  mh - oh), // bottom_right default
-    }
-}
+// Overlay is a fullscreen transparent click-through window — the React
+// side positions the card at the configured corner via CSS. Fullscreen
+// also hides Windows' DWM shadow (it extends past the screen edge).
 
 /// Disable Windows' DWM transition animations on the overlay HWND so
 /// `show()` is instant — no scale-up animation playing on top of the
@@ -175,29 +157,21 @@ struct ClipRenamedPayload {
 /// WebView2 process stays dead while the user isn't actively saving.
 fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::WebviewWindow> {
     if let Some(w) = app.get_webview_window("overlay") {
-        if let Ok(Some(monitor)) = w.current_monitor() {
-            let (x, y) = corner_window_position(
-                monitor.size().width,
-                monitor.size().height,
-                corner,
-            );
-            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-        }
         let _ = w.set_ignore_cursor_events(true);
         let _ = w.show();
         return Some(w);
     }
     let monitor = app.primary_monitor().ok().flatten()?;
     let (mw, mh) = (monitor.size().width, monitor.size().height);
-    let (x, y) = corner_window_position(mw, mh, corner);
     let url = format!("index.html?overlay=1&corner={}", corner);
     let w = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App(url.into()))
-        .inner_size(OVERLAY_W as f64, OVERLAY_H as f64)
-        .position(x as f64, y as f64)
+        .inner_size(mw as f64, mh as f64)
+        .position(0.0, 0.0)
         .transparent(true)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        .shadow(false)
         // Build hidden, disable DWM transitions, THEN show — otherwise
         // Windows plays the scale-up animation on first show, which
         // visibly competes with the React enter animation.
@@ -459,10 +433,6 @@ fn run_capture_loop(
 
                 // Anchor for all stage timings. Logged as `t+Nms` so backend
                 // and frontend lines can be lined up against the same zero.
-                // `Instant` is Copy, so we just clone it into each scope-spawned
-                // thread rather than going through a closure. Capture is cheap
-                // (~tens of ns); skipping the log lines when profiling is off
-                // keeps the steady-state info stream uncluttered.
                 let t0 = std::time::Instant::now();
                 let prof = clipdip_profile::enabled();
                 if prof { info!("save flow start [t+0ms]"); }
@@ -472,6 +442,15 @@ fn run_capture_loop(
                 let cur = clipdip_core::config::Config::load_or_default(&config_path)
                     .unwrap_or_default();
                 let notifs_enabled = cur.notifications.enabled;
+
+                // Fire the save sound from a dedicated thread BEFORE creating
+                // the overlay window. WebView2 window creation and gdigrab
+                // spawn both take noticeable time, and Windows' audio device
+                // init adds further latency — kicking off the sound first so
+                // it lands together with (not after) the visual.
+                if notifs_enabled && cur.notifications.sound {
+                    std::thread::spawn(play_save_sound);
+                }
                 if prof { info!("config reloaded [t+{}ms]", t0.elapsed().as_millis()); }
 
                 // Pre-compute the static phase-1 fields so the scope block
@@ -498,9 +477,6 @@ fn run_capture_loop(
                 // `clip-thumbnail` event slots it in once gdigrab finishes
                 // (which can take a couple seconds the first time).
                 if notifs_enabled {
-                    if cur.notifications.sound {
-                        play_save_sound();
-                    }
                     let saving_payload = ClipSavingPayload {
                         thumbnail: None,
                         rename_hotkey: rename_hint.clone(),
@@ -804,6 +780,18 @@ fn main() {
             forward_console,
             overlay_get_pending,
         ])
-        .run(tauri::generate_context!())
-        .expect("error running clipdip");
+        .build(tauri::generate_context!())
+        .expect("error building clipdip")
+        .run(|_app, event| {
+            // The app is a tray-resident background process. Destroying the
+            // overlay window after a notification dismisses (or closing the
+            // main settings window) would otherwise drop the last webview
+            // and Tauri would exit — keep the process alive for the next
+            // save hotkey.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

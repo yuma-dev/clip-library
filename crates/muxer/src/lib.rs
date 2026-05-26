@@ -32,6 +32,10 @@ pub struct AudioTrack {
     pub title: String,
     /// AAC bitrate for this track in bits/sec. 192 kbps stereo is fine.
     pub bitrate_bps: u32,
+    /// Seconds to delay this track relative to the video start. Positive
+    /// values push audio later (used when the first audio packet's QPC
+    /// is slightly after the video IDR PTS).
+    pub offset_secs: f64,
 }
 
 /// Mux `video_h264` (raw Annex-B at `video_fps`) plus each of `audio_tracks`
@@ -51,7 +55,7 @@ pub struct AudioTrack {
 pub fn mux_with_ffmpeg_cli(
     ffmpeg: &Path,
     video_h264: &Path,
-    video_fps: u32,
+    video_fps: f64,
     audio_tracks: &[AudioTrack],
     output_mp4: &Path,
 ) -> Result<()> {
@@ -70,13 +74,22 @@ pub fn mux_with_ffmpeg_cli(
     cmd.arg("-y").arg("-hide_banner").arg("-loglevel").arg("warning");
 
     // Input 0: raw H.264, tell ffmpeg the framerate so PTS are assigned.
+    // Pass the *actual* fps measured from PTS (frames / pts_span) — not
+    // the target fps from config. Under load the capture loop drops
+    // frames, so target-fps would compress the video timeline and the
+    // audio would visibly drift later as the clip plays.
     cmd.arg("-framerate")
-        .arg(video_fps.to_string())
+        .arg(format!("{:.6}", video_fps))
         .arg("-i")
         .arg(video_h264);
 
-    // Inputs 1..N: one per audio track.
+    // Inputs 1..N: one per audio track. `-itsoffset` shifts the audio
+    // start by the gap between the first audio packet's QPC and the
+    // video IDR's QPC, so playback aligns at frame 0.
     for t in audio_tracks {
+        if t.offset_secs.abs() > 1e-4 {
+            cmd.arg("-itsoffset").arg(format!("{:.6}", t.offset_secs));
+        }
         cmd.arg("-i").arg(&t.path);
     }
 
