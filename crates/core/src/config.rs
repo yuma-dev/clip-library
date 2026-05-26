@@ -103,13 +103,23 @@ pub struct VideoConfig {
     /// DXGI output index — which monitor to capture. 0 = primary.
     pub output_index: u32,
     pub fps: u32,
+    /// Used to size the packet ring buffer ([`Config::ring_byte_budget`]).
+    /// Under the default CQP rate-control this is a *hint*, not the actual
+    /// encoder bitrate — pick generously so the ring isn't undersized on
+    /// busy scenes. When `rate_control = Vbr { .. }` it doubles as the
+    /// encoder's average-bitrate target.
     pub bitrate_bps: u32,
     /// Composite the OS mouse cursor onto each frame. DXGI Desktop
     /// Duplication never includes it natively.
     pub include_cursor: bool,
-    /// IDR (keyframe) interval in seconds. Advisory until we bind
-    /// `NV_ENC_CONFIG`; currently only frame 0 is an IDR.
+    /// IDR (keyframe) interval in seconds.
     pub gop_seconds: f32,
+    /// Codec preference. `PreferAv1` (default) uses AV1 on RTX 40-series
+    /// and newer, transparently falls back to H.264 elsewhere.
+    pub codec: CodecPreferenceCfg,
+    /// Rate-control mode. Default is CQP (constant quality, bitrate floats
+    /// with scene complexity) — same model as NVIDIA ShadowPlay.
+    pub rate_control: RateControlCfg,
 }
 
 impl Default for VideoConfig {
@@ -117,11 +127,53 @@ impl Default for VideoConfig {
         Self {
             output_index: 0,
             fps: 60,
-            bitrate_bps: 25_000_000,
+            bitrate_bps: 30_000_000,
             include_cursor: true,
             gop_seconds: 1.0,
+            codec: CodecPreferenceCfg::default(),
+            rate_control: RateControlCfg::default(),
         }
     }
+}
+
+/// Serde-friendly mirror of [`clipdip_encoder::CodecPreference`]. Kept
+/// separate from the encoder enum so the config crate doesn't have to
+/// depend on encoder internals.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecPreferenceCfg {
+    #[default]
+    PreferAv1,
+    ForceH264,
+    ForceAv1,
+}
+
+/// Serde-friendly mirror of [`clipdip_encoder::RateControl`].
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum RateControlCfg {
+    /// Constant quantization. `qp` scale is codec-specific; if unset the
+    /// encoder picks a sensible default (H.264 ~20, AV1 ~28).
+    ConstantQp {
+        #[serde(default = "default_qp")]
+        qp: u32,
+    },
+    /// Variable bitrate with `avg_bps` average target.
+    Vbr { avg_bps: u32 },
+}
+
+impl Default for RateControlCfg {
+    fn default() -> Self {
+        Self::ConstantQp { qp: default_qp() }
+    }
+}
+
+fn default_qp() -> u32 {
+    // Tuned for AV1's wider QP scale — the encoder clamps to 0–51 if it
+    // ends up using H.264 (which would translate this 28 down to 51, i.e.
+    // worst quality). When the user forces H.264 they should explicitly
+    // pick a lower QP (~20) in their config.
+    28
 }
 
 // ---- audio --------------------------------------------------------------

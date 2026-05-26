@@ -19,6 +19,12 @@ interface AudioSource {
   device_id?: string;
 }
 
+type CodecPreference = "prefer_av1" | "force_h264" | "force_av1";
+
+type RateControl =
+  | { mode: "constant_qp"; qp: number }
+  | { mode: "vbr"; avg_bps: number };
+
 interface Config {
   replay_seconds: number;
   video: {
@@ -27,6 +33,8 @@ interface Config {
     bitrate_bps: number;
     include_cursor: boolean;
     gop_seconds: number;
+    codec: CodecPreference;
+    rate_control: RateControl;
   };
   audio: { sources: AudioSource[] };
   output: {
@@ -814,7 +822,7 @@ export default function MainWindow() {
       .catch(() => {
         setConfig({
           replay_seconds: 60,
-          video: { output_index: 0, fps: 60, bitrate_bps: 25_000_000, include_cursor: true, gop_seconds: 1.0 },
+          video: { output_index: 0, fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 28 } },
           audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }] },
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "clipdip", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10" },
@@ -984,14 +992,57 @@ export default function MainWindow() {
                   format={v => `${v} fps`}
                 />
               </Row>
-              <Row label="Bitrate" hint="The visual quality budget. 25 Mbps is a sane default for 1080p60.">
-                <DesignSlider
-                  value={config.video.bitrate_bps}
-                  onChange={v => patchVideo("bitrate_bps", v)}
-                  min={5_000_000} max={80_000_000} step={500_000}
-                  format={v => `${(v / 1_000_000).toFixed(1)} Mbps`}
+              <Row label="Codec" hint="AV1 needs an RTX 40-series GPU or newer. ‘Prefer AV1’ uses it when available and silently falls back to H.264.">
+                <DesignSelect<CodecPreference>
+                  value={config.video.codec}
+                  onChange={v => patchVideo("codec", v)}
+                  options={[
+                    { value: "prefer_av1", label: "Prefer AV1 (auto)" },
+                    { value: "force_h264", label: "H.264" },
+                    { value: "force_av1",  label: "AV1 (require)" },
+                  ]}
+                  width={220}
                 />
               </Row>
+              <Row label="Quality mode" hint="Constant quality keeps the picture clean and lets bitrate float with the scene — same model ShadowPlay uses. Variable bitrate pins an average target instead.">
+                <DesignSelect<RateControl["mode"]>
+                  value={config.video.rate_control.mode}
+                  onChange={mode => {
+                    const next: RateControl =
+                      mode === "constant_qp"
+                        ? { mode: "constant_qp", qp: 28 }
+                        : { mode: "vbr", avg_bps: config.video.bitrate_bps };
+                    patchVideo("rate_control", next);
+                  }}
+                  options={[
+                    { value: "constant_qp", label: "Constant quality (CQP)" },
+                    { value: "vbr",         label: "Variable bitrate (VBR)" },
+                  ]}
+                  width={220}
+                />
+              </Row>
+              {config.video.rate_control.mode === "constant_qp" ? (
+                <Row label="Quality (QP)" hint="Lower = better quality, larger files. AV1 scale is 0–255; H.264 is 0–51. 28 is a balanced AV1 default; for H.264 try ~20.">
+                  <DesignSlider
+                    value={config.video.rate_control.qp}
+                    onChange={qp => patchVideo("rate_control", { mode: "constant_qp", qp })}
+                    min={1} max={config.video.codec === "force_h264" ? 51 : 255} step={1}
+                    format={v => `QP ${v}`}
+                  />
+                </Row>
+              ) : (
+                <Row label="Target bitrate" hint="Average rate the encoder aims for. 25 Mbps is a sane default for 1080p60.">
+                  <DesignSlider
+                    value={config.video.rate_control.avg_bps}
+                    onChange={avg_bps => {
+                      patchVideo("rate_control", { mode: "vbr", avg_bps });
+                      patchVideo("bitrate_bps", avg_bps);
+                    }}
+                    min={5_000_000} max={80_000_000} step={500_000}
+                    format={v => `${(v / 1_000_000).toFixed(1)} Mbps`}
+                  />
+                </Row>
+              )}
               <Row label="Include cursor" hint="Draws the mouse cursor into the captured frame.">
                 <DesignToggle value={config.video.include_cursor} onChange={v => patchVideo("include_cursor", v)} />
               </Row>

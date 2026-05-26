@@ -37,7 +37,7 @@ use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFIN
 use crate::loader::NvEncApi;
 use crate::nv12_converter::Nv12Converter;
 use crate::sys::*;
-use crate::EncoderConfig;
+use crate::{ActiveCodec, CodecPreference, EncoderConfig, RateControl};
 
 const BITSTREAM_POOL_SIZE: usize = 4;
 
@@ -80,6 +80,10 @@ pub struct NvEncoderD3D11 {
     /// fullscreen-triangle pixel-shader passes — Y plane, then UV.
     nv12_converter: Nv12Converter,
     config: EncoderConfig,
+    /// Codec actually negotiated at session open. Drives the keyframe
+    /// scanner and any caller that needs to know whether the bitstream is
+    /// AVC NAL units or AV1 OBUs.
+    active_codec: ActiveCodec,
     /// Paired (bitstream, completion event) entries. Allocated once at
     /// `new()`; reused via round-robin across submissions.
     pool: Vec<PoolSlot>,
@@ -122,8 +126,19 @@ impl NvEncoderD3D11 {
             bail!("OpenEncodeSessionEx returned success but encoder handle is null");
         }
 
+        // ---- codec capability probe -------------------------------------
+        // Ask the driver which codec GUIDs this GPU supports, then resolve
+        // the caller's preference. AV1 NVENC needs Ada (RTX 40+); on older
+        // silicon we transparently fall back to H.264.
+        let supported = query_supported_codecs(&api, encoder)?;
+        let active_codec = resolve_codec(config.codec_preference, &supported)?;
+        let encode_guid = match active_codec {
+            ActiveCodec::H264 => NV_ENC_CODEC_H264_GUID,
+            ActiveCodec::Av1 => NV_ENC_CODEC_AV1_GUID,
+        };
+
         // ---- query preset defaults --------------------------------------
-        // Start from the driver's recommended config for our chosen
+        // Start from the driver's recommended config for our chosen codec +
         // preset + tuning, then override only what we care about
         // (gopLength + idrPeriod + rate-control). This preserves any AQ /
         // VBV / profile defaults the driver picked.
@@ -140,7 +155,7 @@ impl NvEncoderD3D11 {
         let status = unsafe {
             (preset_fn)(
                 encoder,
-                NV_ENC_CODEC_H264_GUID,
+                encode_guid,
                 NV_ENC_PRESET_P4_GUID,
                 NV_ENC_TUNING_INFO_LOW_LATENCY,
                 &mut preset,
@@ -153,30 +168,57 @@ impl NvEncoderD3D11 {
         enc_cfg.version = NV_ENC_CONFIG_VER;
         enc_cfg.gopLength = config.gop_length;
         enc_cfg.frameIntervalP = 1; // IPP... (no B-frames in low-latency)
-        enc_cfg.set_h264_idr_period(config.gop_length);
-        // Emit SPS+PPS in front of EVERY IDR, not just frame 0. The ring
-        // evicts whole GOPs once full, so without this any clip saved
-        // after the first eviction would start with an IDR slice whose
-        // SPS+PPS are no longer in the file — ffmpeg / players reject
-        // it with "non-existing PPS 0 referenced".
-        enc_cfg.set_h264_repeat_sps_pps(true);
+
+        match active_codec {
+            ActiveCodec::H264 => {
+                enc_cfg.set_h264_idr_period(config.gop_length);
+                // Emit SPS+PPS in front of EVERY IDR, not just frame 0. The
+                // ring evicts whole GOPs once full, so without this any
+                // clip saved after the first eviction would start with an
+                // IDR slice whose SPS+PPS are no longer in the file —
+                // ffmpeg / players reject it with "non-existing PPS 0
+                // referenced".
+                enc_cfg.set_h264_repeat_sps_pps(true);
+            }
+            ActiveCodec::Av1 => {
+                enc_cfg.set_av1_idr_period(config.gop_length);
+                // AV1 analogue of repeat_sps_pps — re-emit the sequence
+                // header at every keyframe so post-eviction clips are
+                // self-decodable.
+                enc_cfg.set_av1_repeat_seq_hdr(true);
+            }
+        }
 
         enc_cfg.rcParams.version = NV_ENC_RC_PARAMS_VER;
-        // VBR with a hard average target. CBR would honor bitrate even more
-        // strictly but produces filler bits on quiet content. VBR is the
-        // right default for a clipper.
-        enc_cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
-        enc_cfg.rcParams.averageBitRate = config.bitrate_bps;
-        // Allow short-term overshoot up to ~1.5× average so motion bursts
-        // don't smear. Driver picks defaults when vbvBufferSize stays 0.
-        enc_cfg.rcParams.maxBitRate = config
-            .bitrate_bps
-            .saturating_add(config.bitrate_bps / 2);
+        match config.rate_control {
+            RateControl::ConstantQp { qp } => {
+                let qp = clamp_qp_for_codec(active_codec, qp);
+                enc_cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
+                enc_cfg.rcParams.constQP = NV_ENC_QP {
+                    qpInterP: qp,
+                    qpInterB: qp,
+                    qpIntra: qp,
+                };
+                // CQP ignores these, but zero them for tidiness — the
+                // preset query may have left non-zero defaults behind.
+                enc_cfg.rcParams.averageBitRate = 0;
+                enc_cfg.rcParams.maxBitRate = 0;
+            }
+            RateControl::Vbr { avg_bps } => {
+                // VBR with a hard average target. CBR would honor bitrate
+                // even more strictly but produces filler bits on quiet
+                // content. Allow short-term overshoot up to ~1.5× average
+                // so motion bursts don't smear.
+                enc_cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+                enc_cfg.rcParams.averageBitRate = avg_bps;
+                enc_cfg.rcParams.maxBitRate = avg_bps.saturating_add(avg_bps / 2);
+            }
+        }
 
         // ---- initialize -------------------------------------------------
         let mut init = NV_ENC_INITIALIZE_PARAMS::default();
         init.version = NV_ENC_INITIALIZE_PARAMS_VER;
-        init.encodeGUID = NV_ENC_CODEC_H264_GUID;
+        init.encodeGUID = encode_guid;
         init.presetGUID = NV_ENC_PRESET_P4_GUID;
         init.encodeWidth = config.width;
         init.encodeHeight = config.height;
@@ -313,6 +355,7 @@ impl NvEncoderD3D11 {
             nv12_registered,
             nv12_converter,
             config,
+            active_codec,
             pool,
             next_slot: 0,
             pending: VecDeque::with_capacity(BITSTREAM_POOL_SIZE),
@@ -322,6 +365,13 @@ impl NvEncoderD3D11 {
             // automatic IDR (driven by gopLength) would fall.
             force_idr: true,
         })
+    }
+
+    /// Codec the encoder negotiated at session open. Useful for logging
+    /// and for callers (muxer / keyframe scanner) that need to know
+    /// whether the bitstream is H.264 NAL units or AV1 OBUs.
+    pub fn active_codec(&self) -> ActiveCodec {
+        self.active_codec
     }
 
     /// Manually request an IDR on the next submitted frame. Not needed for
@@ -499,9 +549,11 @@ impl NvEncoderD3D11 {
 
         // Don't trust lock.pictureType — in our config NVENC has been
         // observed to return 0 (P) for every frame including IDRs. Scan
-        // the bitstream for an IDR slice NAL (type 5) or SPS NAL (type 7)
-        // instead. OBS does the same.
-        let is_keyframe = scan_for_keyframe(&bytes);
+        // the bitstream instead. OBS does the same.
+        let is_keyframe = match self.active_codec {
+            ActiveCodec::H264 => scan_for_keyframe_h264(&bytes),
+            ActiveCodec::Av1 => scan_for_keyframe_av1(&bytes),
+        };
 
         let unlock_fn = self.api.functions.nvEncUnlockBitstream.expect("loader checked");
         let status = unsafe { (unlock_fn)(self.encoder, output) };
@@ -617,7 +669,7 @@ impl Drop for NvEncoderD3D11 {
 /// slice NAL (`nal_unit_type == 5`) or an SPS NAL (`nal_unit_type == 7`).
 /// SPS-present implies a stream boundary which all decoders treat as
 /// random-access, so we count it as a keyframe too.
-fn scan_for_keyframe(bytes: &[u8]) -> bool {
+fn scan_for_keyframe_h264(bytes: &[u8]) -> bool {
     // Walk the Annex-B byte stream. NAL units begin with `00 00 00 01` or
     // `00 00 01`. The byte after the start code holds:
     //     bit 7    : forbidden_zero_bit (always 0)
@@ -643,29 +695,107 @@ fn scan_for_keyframe(bytes: &[u8]) -> bool {
     false
 }
 
+/// Scan an AV1 low-overhead bitstream for a keyframe access unit. NVENC
+/// emits OBUs with `obu_has_size_field=1` for the low-overhead format,
+/// which lets us walk OBU-by-OBU using the leb128 size field.
+///
+/// Triggers on:
+/// - any OBU_SEQUENCE_HEADER (type 1) — implies a random-access point
+///   (and with `set_av1_repeat_seq_hdr(true)` every keyframe re-emits one)
+/// - any OBU_FRAME (6) or OBU_FRAME_HEADER (3) whose first bit is
+///   `show_existing_frame=0` and whose 2-bit `frame_type` is KEY_FRAME (0)
+///   or INTRA_ONLY_FRAME (2)
+fn scan_for_keyframe_av1(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        let header = bytes[i];
+        let obu_type = (header >> 3) & 0xF;
+        let has_extension = (header >> 2) & 1 != 0;
+        let has_size = (header >> 1) & 1 != 0;
+        i += 1;
+        if has_extension {
+            if i >= bytes.len() {
+                return false;
+            }
+            i += 1;
+        }
+        let payload_size: usize;
+        if has_size {
+            let (size, leb_len) = match read_leb128(&bytes[i..]) {
+                Some(v) => v,
+                None => return false,
+            };
+            i += leb_len;
+            payload_size = size as usize;
+        } else {
+            // No size field — the OBU must run to end of bitstream. We can
+            // only check this single OBU before bailing.
+            payload_size = bytes.len().saturating_sub(i);
+        }
+
+        if obu_type == 1 {
+            return true;
+        }
+        if (obu_type == 3 || obu_type == 6) && i < bytes.len() {
+            let b = bytes[i];
+            let show_existing = (b >> 7) & 1 != 0;
+            if !show_existing {
+                let frame_type = (b >> 5) & 0b11;
+                if frame_type == 0 || frame_type == 2 {
+                    return true;
+                }
+            }
+        }
+
+        if !has_size {
+            return false;
+        }
+        i = i.saturating_add(payload_size);
+    }
+    false
+}
+
+/// Read an AV1 leb128 (little-endian base-128) integer. Returns
+/// `(value, bytes_consumed)` or `None` if the input is malformed or
+/// truncated. AV1 leb128 is capped at 8 bytes.
+fn read_leb128(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut val: u64 = 0;
+    for n in 0..8 {
+        if n >= bytes.len() {
+            return None;
+        }
+        let b = bytes[n];
+        val |= ((b & 0x7F) as u64) << (7 * n);
+        if b & 0x80 == 0 {
+            return Some((val, n + 1));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::scan_for_keyframe;
+    use super::{read_leb128, scan_for_keyframe_av1, scan_for_keyframe_h264};
 
     #[test]
     fn keyframe_scan_detects_idr_long_start_code() {
         // 00 00 00 01 65 = IDR slice
         let bytes = [0, 0, 0, 1, 0x65, 0x88];
-        assert!(scan_for_keyframe(&bytes));
+        assert!(scan_for_keyframe_h264(&bytes));
     }
 
     #[test]
     fn keyframe_scan_detects_sps_short_start_code() {
         // 00 00 01 67 = SPS
         let bytes = [0, 0, 1, 0x67, 0x42];
-        assert!(scan_for_keyframe(&bytes));
+        assert!(scan_for_keyframe_h264(&bytes));
     }
 
     #[test]
     fn keyframe_scan_rejects_p_slice() {
         // 00 00 00 01 41 = non-IDR slice (nal_type = 1)
         let bytes = [0, 0, 0, 1, 0x41, 0x9A];
-        assert!(!scan_for_keyframe(&bytes));
+        assert!(!scan_for_keyframe_h264(&bytes));
     }
 
     #[test]
@@ -676,13 +806,168 @@ mod tests {
             0, 0, 0, 1, 0x68, 0xeb, // PPS
             0, 0, 0, 1, 0x65, 0xb8, // IDR
         ];
-        assert!(scan_for_keyframe(&bytes));
+        assert!(scan_for_keyframe_h264(&bytes));
     }
 
     #[test]
     fn keyframe_scan_empty_or_tiny() {
-        assert!(!scan_for_keyframe(&[]));
-        assert!(!scan_for_keyframe(&[0, 0]));
+        assert!(!scan_for_keyframe_h264(&[]));
+        assert!(!scan_for_keyframe_h264(&[0, 0]));
+    }
+
+    // OBU header byte: bits 6-3 = obu_type, bit 1 = has_size_field.
+    // For type=N with size field, byte = (N << 3) | 0b10 = (N << 3) | 2.
+    const fn obu_hdr(obu_type: u8) -> u8 {
+        (obu_type << 3) | 0b10
+    }
+
+    #[test]
+    fn av1_leb128_round_trip_small_values() {
+        assert_eq!(read_leb128(&[0]), Some((0, 1)));
+        assert_eq!(read_leb128(&[0x7F]), Some((127, 1)));
+        // 128 -> 0x80, 0x01
+        assert_eq!(read_leb128(&[0x80, 0x01]), Some((128, 2)));
+        assert_eq!(read_leb128(&[]), None);
+        // Continuation bit set on every byte -> malformed (truncated).
+        assert_eq!(read_leb128(&[0x80, 0x80, 0x80]), None);
+    }
+
+    #[test]
+    fn av1_scan_detects_sequence_header_obu() {
+        // OBU_SEQUENCE_HEADER (type 1) with 2-byte payload.
+        let bytes = [obu_hdr(1), 2, 0xAA, 0xBB];
+        assert!(scan_for_keyframe_av1(&bytes));
+    }
+
+    #[test]
+    fn av1_scan_detects_key_frame_obu() {
+        // OBU_FRAME (type 6), 1-byte payload whose first byte has
+        // show_existing_frame=0 (bit 7) and frame_type=0 (bits 6-5 = 00).
+        let bytes = [obu_hdr(6), 1, 0b0000_0000];
+        assert!(scan_for_keyframe_av1(&bytes));
+    }
+
+    #[test]
+    fn av1_scan_detects_intra_only_frame_obu() {
+        // OBU_FRAME (6), frame_type = INTRA_ONLY (2) -> bits 6-5 = 10.
+        let bytes = [obu_hdr(6), 1, 0b0100_0000];
+        assert!(scan_for_keyframe_av1(&bytes));
+    }
+
+    #[test]
+    fn av1_scan_rejects_inter_frame_obu() {
+        // OBU_FRAME (6), frame_type = INTER (1) -> bits 6-5 = 01.
+        let bytes = [obu_hdr(6), 1, 0b0010_0000];
+        assert!(!scan_for_keyframe_av1(&bytes));
+    }
+
+    #[test]
+    fn av1_scan_rejects_show_existing_frame() {
+        // show_existing_frame=1 (bit 7) -> not a real frame header; skip.
+        let bytes = [obu_hdr(6), 1, 0b1000_0000];
+        assert!(!scan_for_keyframe_av1(&bytes));
+    }
+
+    #[test]
+    fn av1_scan_skips_temporal_delimiter_then_finds_keyframe() {
+        // OBU_TEMPORAL_DELIMITER (2), 0-byte payload, then sequence header.
+        let bytes = [obu_hdr(2), 0, obu_hdr(1), 2, 0xAA, 0xBB];
+        assert!(scan_for_keyframe_av1(&bytes));
+    }
+
+    #[test]
+    fn av1_scan_empty_or_tiny() {
+        assert!(!scan_for_keyframe_av1(&[]));
+        assert!(!scan_for_keyframe_av1(&[obu_hdr(1)]));
+    }
+}
+
+// ---- codec capability probe + selection -------------------------------
+
+/// Enumerate codec GUIDs the open NVENC session can encode. Driven by
+/// `nvEncGetEncodeGUIDCount` + `nvEncGetEncodeGUIDs` — on Ada the list
+/// includes H.264, HEVC, and AV1; on Turing it's H.264 + HEVC.
+fn query_supported_codecs(
+    api: &NvEncApi,
+    encoder: *mut std::ffi::c_void,
+) -> Result<Vec<GUID>> {
+    let count_fn = api
+        .functions
+        .nvEncGetEncodeGUIDCount
+        .ok_or_else(|| anyhow!("nvEncGetEncodeGUIDCount missing from function table"))?;
+    let guids_fn = api
+        .functions
+        .nvEncGetEncodeGUIDs
+        .ok_or_else(|| anyhow!("nvEncGetEncodeGUIDs missing from function table"))?;
+
+    let mut count: u32 = 0;
+    // SAFETY: encoder is a live session; &mut count is a valid u32 pointer.
+    let status = unsafe { (count_fn)(encoder, &mut count) };
+    nvenc_check(api, encoder, status, "GetEncodeGUIDCount")?;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut guids: Vec<GUID> = vec![
+        GUID {
+            data1: 0,
+            data2: 0,
+            data3: 0,
+            data4: [0; 8],
+        };
+        count as usize
+    ];
+    let mut written: u32 = 0;
+    // SAFETY: encoder live; the buffer has space for `count` GUIDs and we
+    // pass that capacity as `guidArraySize`.
+    let status = unsafe { (guids_fn)(encoder, guids.as_mut_ptr(), count, &mut written) };
+    nvenc_check(api, encoder, status, "GetEncodeGUIDs")?;
+    guids.truncate(written as usize);
+    Ok(guids)
+}
+
+/// Pick the codec to use given the caller's preference and the GPU's
+/// reported capabilities. Errors only for `ForceAv1` on a GPU without
+/// AV1 support — `PreferAv1` silently falls back to H.264.
+fn resolve_codec(pref: CodecPreference, supported: &[GUID]) -> Result<ActiveCodec> {
+    let has_h264 = supported.contains(&NV_ENC_CODEC_H264_GUID);
+    let has_av1 = supported.contains(&NV_ENC_CODEC_AV1_GUID);
+    match pref {
+        CodecPreference::ForceH264 => {
+            if !has_h264 {
+                bail!("driver reports no H.264 NVENC support — cannot ForceH264");
+            }
+            Ok(ActiveCodec::H264)
+        }
+        CodecPreference::ForceAv1 => {
+            if !has_av1 {
+                bail!(
+                    "driver reports no AV1 NVENC support on this GPU — requires \
+                     RTX 40-series (Ada) or newer. Use PreferAv1 to fall back to H.264."
+                );
+            }
+            Ok(ActiveCodec::Av1)
+        }
+        CodecPreference::PreferAv1 => {
+            if has_av1 {
+                Ok(ActiveCodec::Av1)
+            } else if has_h264 {
+                Ok(ActiveCodec::H264)
+            } else {
+                bail!("driver reports neither AV1 nor H.264 NVENC support");
+            }
+        }
+    }
+}
+
+/// Clamp a caller-supplied QP to the codec's valid range. H.264 / HEVC
+/// use 0–51; AV1 uses 0–255. Out-of-range values silently saturate
+/// rather than failing — the caller is unlikely to know the codec ahead
+/// of the capability probe.
+fn clamp_qp_for_codec(codec: ActiveCodec, qp: u32) -> u32 {
+    match codec {
+        ActiveCodec::H264 => qp.min(51),
+        ActiveCodec::Av1 => qp.min(255),
     }
 }
 

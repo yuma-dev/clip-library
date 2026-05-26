@@ -152,6 +152,21 @@ pub const NV_ENC_PRESET_P4_GUID: GUID = GUID {
     data4: [0xb9, 0xd2, 0xcd, 0x6d, 0x73, 0xa0, 0x86, 0x81],
 };
 
+// AV1 codec (NVENC SDK 13). Hardware support: RTX 40-series (Ada) and newer.
+pub const NV_ENC_CODEC_AV1_GUID: GUID = GUID {
+    data1: 0x0a352289,
+    data2: 0x0aa7,
+    data3: 0x4759,
+    data4: [0x86, 0x2d, 0x5d, 0x15, 0xcd, 0x16, 0xd2, 0x54],
+};
+
+pub const NV_ENC_AV1_PROFILE_MAIN_GUID: GUID = GUID {
+    data1: 0x5f2a39f5,
+    data2: 0xf14e,
+    data3: 0x4f95,
+    data4: [0x9a, 0x9e, 0xb7, 0x6d, 0x56, 0x8f, 0xcf, 0x97],
+};
+
 // =====================================================================
 // Opaque handle types
 // =====================================================================
@@ -301,6 +316,26 @@ pub const NV_ENC_CONFIG_H264_IDR_PERIOD_OFFSET: usize = 8;
 ///   **12 repeatSPSPPS**, ...
 pub const NV_ENC_CONFIG_H264_REPEAT_SPSPPS_BIT: u32 = 1 << 12;
 
+/// Offset of `idrPeriod` inside `NV_ENC_CONFIG_AV1` (SDK 13). AV1's struct
+/// begins with 5×u32 of fixed fields (level, tier, useBFramesAsRef,
+/// numFwdRefs, numBwdRefs) followed by the leading bitfield u32 at offset
+/// 20, then `idrPeriod` at offset 24.
+pub const NV_ENC_CONFIG_AV1_IDR_PERIOD_OFFSET: usize = 24;
+
+/// Offset of the leading bitfield u32 inside `NV_ENC_CONFIG_AV1` (offset
+/// 20, after level/tier/useBFramesAsRef/numFwdRefs/numBwdRefs).
+pub const NV_ENC_CONFIG_AV1_BITFIELD_OFFSET: usize = 20;
+
+/// Bit position of `repeatSeqHdr` inside the AV1 bitfield u32 at
+/// `NV_ENC_CONFIG_AV1_BITFIELD_OFFSET`. LSB-first packing in declaration
+/// order:
+///   0 outputAnnexBFormat, 1 enableTimingInfo, 2 enableDecoderModelInfo,
+///   3 enableFrameIdNumbers, 4 disableSeqHdr, **5 repeatSeqHdr**, ...
+/// AV1's analogue of H.264 `repeatSPSPPS` — without it, IDRs emitted after
+/// the ring evicts the original sequence header would produce a stream
+/// decoders can't resync to.
+pub const NV_ENC_CONFIG_AV1_REPEAT_SEQ_HDR_BIT: u32 = 1 << 5;
+
 #[repr(C)]
 pub struct NV_ENC_CONFIG {
     pub version: u32,
@@ -352,6 +387,30 @@ impl NV_ENC_CONFIG {
             bf & !NV_ENC_CONFIG_H264_REPEAT_SPSPPS_BIT
         };
         self.encodeCodecConfig[0..4].copy_from_slice(&bf.to_ne_bytes());
+    }
+
+    /// AV1 analogue of [`set_h264_idr_period`]. Writes `idrPeriod` at the
+    /// AV1-specific offset inside the `encodeCodecConfig` union.
+    pub fn set_av1_idr_period(&mut self, idr_period: u32) {
+        let bytes = idr_period.to_ne_bytes();
+        self.encodeCodecConfig
+            [NV_ENC_CONFIG_AV1_IDR_PERIOD_OFFSET..NV_ENC_CONFIG_AV1_IDR_PERIOD_OFFSET + 4]
+            .copy_from_slice(&bytes);
+    }
+
+    /// AV1 analogue of [`set_h264_repeat_sps_pps`]. Sets `repeatSeqHdr` so
+    /// every keyframe re-emits the sequence header — required once the
+    /// packet ring starts evicting GOPs.
+    pub fn set_av1_repeat_seq_hdr(&mut self, repeat: bool) {
+        let off = NV_ENC_CONFIG_AV1_BITFIELD_OFFSET;
+        let bf =
+            u32::from_ne_bytes(self.encodeCodecConfig[off..off + 4].try_into().unwrap());
+        let bf = if repeat {
+            bf | NV_ENC_CONFIG_AV1_REPEAT_SEQ_HDR_BIT
+        } else {
+            bf & !NV_ENC_CONFIG_AV1_REPEAT_SEQ_HDR_BIT
+        };
+        self.encodeCodecConfig[off..off + 4].copy_from_slice(&bf.to_ne_bytes());
     }
 }
 
@@ -676,6 +735,16 @@ pub type PFN_GetEncodePresetConfigEx = unsafe extern "C" fn(
     presetConfig: *mut NV_ENC_PRESET_CONFIG,
 ) -> NVENCSTATUS;
 
+pub type PFN_GetEncodeGUIDCount =
+    unsafe extern "C" fn(encoder: *mut c_void, encodeGUIDCount: *mut u32) -> NVENCSTATUS;
+
+pub type PFN_GetEncodeGUIDs = unsafe extern "C" fn(
+    encoder: *mut c_void,
+    guids: *mut GUID,
+    guidArraySize: u32,
+    guidCount: *mut u32,
+) -> NVENCSTATUS;
+
 // Function-pointer table. Layout must match the C header line-for-line.
 // Pointers we don't call are kept as opaque `*mut c_void`.
 #[repr(C)]
@@ -684,10 +753,10 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
     pub reserved: u32,
 
     pub nvEncOpenEncodeSession: *mut c_void,
-    pub nvEncGetEncodeGUIDCount: *mut c_void,
+    pub nvEncGetEncodeGUIDCount: Option<PFN_GetEncodeGUIDCount>,
     pub nvEncGetEncodeProfileGUIDCount: *mut c_void,
     pub nvEncGetEncodeProfileGUIDs: *mut c_void,
-    pub nvEncGetEncodeGUIDs: *mut c_void,
+    pub nvEncGetEncodeGUIDs: Option<PFN_GetEncodeGUIDs>,
     pub nvEncGetInputFormatCount: *mut c_void,
     pub nvEncGetInputFormats: *mut c_void,
     pub nvEncGetEncodeCaps: *mut c_void,

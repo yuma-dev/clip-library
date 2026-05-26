@@ -26,11 +26,11 @@ use tracing::{info, warn};
 
 use clipdip_audio::{AudioCapture, AudioKind, WaveFormat};
 use clipdip_capture::DesktopDuplicator;
-use clipdip_encoder::{EncoderConfig, NvEncoderD3D11};
+use clipdip_encoder::{CodecPreference, EncoderConfig, NvEncoderD3D11, RateControl};
 use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack};
 use clipdip_ringbuf::{EncodedPacket, PacketRing, STREAM_VIDEO};
 
-use crate::config::{AudioSource, Config};
+use crate::config::{AudioSource, CodecPreferenceCfg, Config, RateControlCfg};
 
 /// Metadata about one running audio source, used at save time to size WAV
 /// headers correctly.
@@ -236,6 +236,16 @@ fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Resu
     dup.set_include_cursor(cfg.video.include_cursor);
     let (w, h) = (dup.width(), dup.height());
 
+    let codec_preference = match cfg.video.codec {
+        CodecPreferenceCfg::PreferAv1 => CodecPreference::PreferAv1,
+        CodecPreferenceCfg::ForceH264 => CodecPreference::ForceH264,
+        CodecPreferenceCfg::ForceAv1 => CodecPreference::ForceAv1,
+    };
+    let rate_control = match cfg.video.rate_control {
+        RateControlCfg::ConstantQp { qp } => RateControl::ConstantQp { qp },
+        RateControlCfg::Vbr { avg_bps } => RateControl::Vbr { avg_bps },
+    };
+
     let mut encoder = NvEncoderD3D11::new(
         device,
         EncoderConfig {
@@ -243,11 +253,17 @@ fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Resu
             height: h,
             fps_num: cfg.video.fps,
             fps_den: 1,
-            bitrate_bps: cfg.video.bitrate_bps,
             gop_length: (cfg.video.fps as f32 * cfg.video.gop_seconds).round() as u32,
+            codec_preference,
+            rate_control,
         },
     )
     .context("init NVENC encoder")?;
+
+    info!(
+        codec = ?encoder.active_codec(),
+        "NVENC session opened"
+    );
 
     let frame_interval = Duration::from_secs_f64(1.0 / cfg.video.fps as f64);
     let frame_interval_100ns: i64 = (1e7 / cfg.video.fps as f64).round() as i64;
