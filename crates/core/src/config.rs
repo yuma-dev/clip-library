@@ -301,7 +301,7 @@ impl Default for NotificationsConfig {
             enabled: true,
             sound: true,
             corner: NotificationCorner::BottomRight,
-            auto_dismiss_secs: 8,
+            auto_dismiss_secs: 10,
         }
     }
 }

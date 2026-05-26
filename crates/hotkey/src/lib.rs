@@ -9,6 +9,13 @@
 //! events with the "inputsink" flag (input regardless of focus), and
 //! decode + match in the window procedure ourselves.
 //!
+//! **Single-window design**: `RegisterRawInputDevices` only allows one
+//! registration per device type per process. Spawning multiple listeners
+//! would cause each new registration to replace the previous one, so
+//! only the last-registered window would receive `WM_INPUT`. We therefore
+//! create exactly one window and one message pump, and handle all
+//! configured hotkey bindings inside that single thread.
+//!
 //! Trade-offs we accepted:
 //! - **Observe-only, not consume.** Raw input doesn't block the
 //!   foreground app from receiving the same key. Fine for our default
@@ -29,6 +36,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
+use tracing::{debug, info};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -139,16 +147,29 @@ pub struct HotkeyListener {
 }
 
 impl HotkeyListener {
-    /// Spawn a thread that listens for the given hotkey. The returned
-    /// `Receiver` yields a `()` every time the hotkey fires (key
+    /// Spawn a single thread that listens for all given hotkey bindings.
+    /// Returns one `Receiver<()>` per binding, in the same order.
+    /// Each receiver yields `()` every time its hotkey fires (key
     /// transition only — no auto-repeat).
-    pub fn spawn(binding: HotkeyBinding) -> Result<(Self, Receiver<()>)> {
-        let (event_tx, event_rx) = crossbeam_channel::unbounded::<()>();
+    ///
+    /// Only one Raw Input registration exists for the whole process; this
+    /// design avoids the Windows limitation that a second
+    /// `RegisterRawInputDevices` call for the same device type replaces
+    /// the first one.
+    pub fn spawn(bindings: &[HotkeyBinding]) -> Result<(Self, Vec<Receiver<()>>)> {
+        assert!(!bindings.is_empty(), "need at least one binding");
+
+        let (event_txs, event_rxs): (Vec<_>, Vec<_>) = bindings
+            .iter()
+            .map(|_| crossbeam_channel::unbounded::<()>())
+            .unzip();
+
         let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<u32>>(1);
+        let bindings = bindings.to_vec();
 
         let join = std::thread::Builder::new()
             .name("clipdip-hotkey".into())
-            .spawn(move || run_thread(binding, event_tx, ready_tx))
+            .spawn(move || run_thread(bindings, event_txs, ready_tx))
             .context("spawn hotkey thread")?;
 
         let thread_id = ready_rx
@@ -160,7 +181,7 @@ impl HotkeyListener {
                 thread_id,
                 join: Some(join),
             },
-            event_rx,
+            event_rxs,
         ))
     }
 }
@@ -179,40 +200,26 @@ impl Drop for HotkeyListener {
 }
 
 // ----- Thread-local listener state ------------------------------------
-//
-// The window procedure runs on the hotkey thread and needs access to the
-// binding, sender, and live modifier state. Stash it in a thread-local
-// `RefCell` so `wnd_proc` (a plain `extern "system"` fn pointer) can
-// borrow it. Reentrancy isn't a concern — Raw Input messages are
-// delivered serially via the message pump.
 
 struct ListenerState {
-    binding: HotkeyBinding,
-    /// Modifier-key bitmask currently held (uses the same bit layout as
-    /// [`Modifiers`]).
+    bindings: Vec<HotkeyBinding>,
+    /// Per-binding: whether the non-modifier key is currently held.
+    /// Used to suppress OS auto-repeat.
+    key_pressed: Vec<bool>,
+    event_txs: Vec<Sender<()>>,
+    /// Modifier-key bitmask currently held.
     modifiers_held: u32,
-    /// True while the binding's non-modifier key is currently down.
-    /// Used to suppress OS-driven key auto-repeat — we fire once per
-    /// physical press, not 30 times/sec.
-    key_pressed: bool,
-    event_tx: Sender<()>,
 }
 
 thread_local! {
     static LISTENER: RefCell<Option<ListenerState>> = const { RefCell::new(None) };
 }
 
-/// Lazily register the window class once per process. The class name is
-/// fixed; if multiple `HotkeyListener`s ever coexist, they share the
-/// class but each gets its own window/thread/thread-local state.
+/// Lazily register the window class once per process.
 fn window_class_name() -> PCWSTR {
     static CLASS: OnceLock<Vec<u16>> = OnceLock::new();
     let buf = CLASS.get_or_init(|| {
         let name: Vec<u16> = "clipdip_hotkey_window\0".encode_utf16().collect();
-        // SAFETY: registration may race across threads on first call;
-        // RegisterClassExW with the same atom is idempotent in practice
-        // (returns the existing atom on duplicate). Use a static
-        // sentinel to ensure we only register once.
         static REGISTERED: AtomicU32 = AtomicU32::new(0);
         if REGISTERED.swap(1, Ordering::SeqCst) == 0 {
             unsafe {
@@ -224,8 +231,6 @@ fn window_class_name() -> PCWSTR {
                     lpszClassName: PCWSTR(name.as_ptr()),
                     ..Default::default()
                 };
-                // RegisterClassExW returns 0 on failure; we don't bail
-                // here because errors will surface at CreateWindowExW.
                 let _ = RegisterClassExW(&mut wc);
             }
         }
@@ -234,13 +239,18 @@ fn window_class_name() -> PCWSTR {
     PCWSTR(buf.as_ptr())
 }
 
-fn run_thread(binding: HotkeyBinding, event_tx: Sender<()>, ready_tx: Sender<Result<u32>>) {
+fn run_thread(
+    bindings: Vec<HotkeyBinding>,
+    event_txs: Vec<Sender<()>>,
+    ready_tx: Sender<Result<u32>>,
+) {
+    let n = bindings.len();
     LISTENER.with(|cell| {
         *cell.borrow_mut() = Some(ListenerState {
-            binding,
+            key_pressed: vec![false; n],
+            bindings,
+            event_txs,
             modifiers_held: 0,
-            key_pressed: false,
-            event_tx,
         });
     });
 
@@ -256,7 +266,7 @@ fn run_thread(binding: HotkeyBinding, event_tx: Sender<()>, ready_tx: Sender<Res
             0,
             0,
             0,
-            HWND_MESSAGE, // message-only window — no visual, no Z-order
+            HWND_MESSAGE,
             HMENU::default(),
             HINSTANCE::default(),
             None,
@@ -270,9 +280,6 @@ fn run_thread(binding: HotkeyBinding, event_tx: Sender<()>, ready_tx: Sender<Res
         }
     };
 
-    // Register the keyboard for raw input with INPUTSINK — i.e. deliver
-    // WM_INPUT to our window even when the foreground app has focus.
-    // Usage page 0x01 (Generic Desktop), usage 0x06 (Keyboard).
     let device = RAWINPUTDEVICE {
         usUsagePage: 0x01,
         usUsage: 0x06,
@@ -288,12 +295,15 @@ fn run_thread(binding: HotkeyBinding, event_tx: Sender<()>, ready_tx: Sender<Res
     }
 
     let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+    info!(
+        "hotkey listener ready — {} binding(s), thread={}",
+        n, thread_id
+    );
     if ready_tx.send(Ok(thread_id)).is_err() {
         unsafe { let _ = DestroyWindow(hwnd); }
         return;
     }
 
-    // Standard Win32 message pump. GetMessageW returns 0 on WM_QUIT.
     let mut msg = MSG::default();
     loop {
         let res = unsafe { GetMessageW(&mut msg, None, 0, 0) };
@@ -314,22 +324,14 @@ fn run_thread(binding: HotkeyBinding, event_tx: Sender<()>, ready_tx: Sender<Res
 
 extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_INPUT {
-        // SAFETY: lParam of WM_INPUT is a HRAWINPUT handle valid until
-        // we forward to DefWindowProcW.
         unsafe { handle_raw_input(HRAWINPUT(lparam.0 as *mut _)) };
     }
-    // Always forward to DefWindowProcW so the OS can clean up the raw
-    // input handle (MSDN: "Call DefWindowProc so the system can perform
-    // the cleanup").
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
     let header_size = std::mem::size_of::<RAWINPUTHEADER>() as u32;
 
-    // First call queries the size of the data. We pre-size for a single
-    // RAWINPUT (the keyboard variant is small, <50 bytes). If the OS
-    // ever asks for more we fall through to dynamic.
     let mut size = std::mem::size_of::<RAWINPUT>() as u32;
     let mut buf = vec![0u8; size as usize];
 
@@ -344,7 +346,6 @@ unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
         return;
     }
     if read == 0 && size > buf.len() as u32 {
-        // System asked for more — retry with the requested size.
         buf.resize(size as usize, 0);
         let read = GetRawInputData(
             h_raw_input,
@@ -365,6 +366,7 @@ unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
     let kb = &raw.data.keyboard;
     let vk = kb.VKey as u32;
     let is_down = (kb.Flags as u32 & RI_KEY_BREAK) == 0;
+    debug!("raw input: vk=0x{:02X} is_down={}", vk, is_down);
 
     LISTENER.with(|cell| {
         let mut state_ref = cell.borrow_mut();
@@ -372,15 +374,11 @@ unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
             return;
         };
 
-        // Modifier keys come in left/right (`VK_LCONTROL`/`VK_RCONTROL`)
-        // and generic (`VK_CONTROL`) forms depending on the keyboard
-        // driver. Match either — we only care whether *any* of that
-        // modifier side is currently held.
         let mod_bit = match vk {
             0x11 | 0xA2 | 0xA3 => Modifiers::CONTROL.0, // CONTROL, LCONTROL, RCONTROL
             0x12 | 0xA4 | 0xA5 => Modifiers::ALT.0,     // MENU, LMENU, RMENU
             0x10 | 0xA0 | 0xA1 => Modifiers::SHIFT.0,   // SHIFT, LSHIFT, RSHIFT
-            0x5B | 0x5C => Modifiers::WIN.0,            // LWIN, RWIN
+            0x5B | 0x5C => Modifiers::WIN.0,             // LWIN, RWIN
             _ => 0,
         };
         if mod_bit != 0 {
@@ -392,21 +390,22 @@ unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
             return;
         }
 
-        // Non-modifier key. Fire on the down-transition only — the OS
-        // auto-repeats held keys at ~30 Hz, and we want one event per
-        // physical press (matches RegisterHotKey's MOD_NOREPEAT
-        // behavior).
-        if vk == state.binding.vk {
-            if is_down {
-                if !state.key_pressed
-                    && (state.modifiers_held & state.binding.modifiers.0)
-                        == state.binding.modifiers.0
-                {
-                    let _ = state.event_tx.send(());
+        // Check every binding against this key event.
+        for i in 0..state.bindings.len() {
+            let binding = &state.bindings[i];
+            if vk == binding.vk {
+                if is_down {
+                    if !state.key_pressed[i] && state.modifiers_held == binding.modifiers.0 {
+                        info!(
+                            "hotkey fired: vk=0x{:02X} mods=0x{:02X}",
+                            vk, binding.modifiers.0
+                        );
+                        let _ = state.event_txs[i].send(());
+                    }
+                    state.key_pressed[i] = true;
+                } else {
+                    state.key_pressed[i] = false;
                 }
-                state.key_pressed = true;
-            } else {
-                state.key_pressed = false;
             }
         }
     });
@@ -461,10 +460,4 @@ mod tests {
     fn parse_rejects_unknown_token() {
         assert!(HotkeyBinding::parse("Ctrl+Banana").is_err());
     }
-
-    // No integration test for actual hotkey delivery — Raw Input requires
-    // a real interactive desktop session, which test runners typically
-    // don't have. Manual verification: run `cargo run --bin clipdip` and
-    // press the configured hotkey while a fullscreen-exclusive game is
-    // active (League of Legends is the regression target).
 }

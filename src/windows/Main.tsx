@@ -503,10 +503,8 @@ function CornerPicker({ value, onChange }: { value: string; onChange: (v: string
 
 // ---------- title bar -------------------------------------------------------
 
-function TitleBar({ saveStatus, onSave, saving }: {
-  saveStatus: "idle" | "saved" | "error";
-  onSave: () => void;
-  saving: boolean;
+function TitleBar({ saveStatus }: {
+  saveStatus: "idle" | "saving" | "saved" | "error";
 }) {
   const winAction = async (action: "minimize" | "maximize" | "close") => {
     try {
@@ -544,36 +542,21 @@ function TitleBar({ saveStatus, onSave, saving }: {
       {/* Drag region */}
       <div data-tauri-drag-region style={{ flex: 1, height: "100%" }} />
 
-      {/* Save status */}
+      {/* Autosave status */}
       {saveStatus !== "idle" && (
         <div style={{
           font: "500 11px/1 Inter, sans-serif",
-          color: saveStatus === "saved" ? "#22c55e" : "#ef4444",
-          marginRight: 12,
+          color: saveStatus === "error" ? "#ef4444"
+               : saveStatus === "saved" ? "#22c55e"
+               : "rgba(255,255,255,0.5)",
+          marginRight: 14,
+          transition: "color .15s, opacity .15s",
         }}>
-          {saveStatus === "saved" ? "Saved" : "Save failed"}
+          {saveStatus === "saving" ? "Saving…"
+           : saveStatus === "saved" ? "Saved"
+           : "Save failed"}
         </div>
       )}
-
-      {/* Save button */}
-      <button
-        onClick={onSave}
-        disabled={saving}
-        style={{
-          height: 22, padding: "0 10px",
-          marginRight: 8,
-          borderRadius: 4, border: 0,
-          background: `linear-gradient(180deg, ${TEAL}, ${TEAL_DIM})`,
-          color: "rgba(0,0,0,0.85)",
-          font: "600 10.5px/1 Inter, sans-serif",
-          cursor: saving ? "not-allowed" : "pointer",
-          opacity: saving ? 0.6 : 1,
-          transition: "opacity .12s",
-          flexShrink: 0,
-        }}
-      >
-        {saving ? "Saving…" : "Save"}
-      </button>
 
       {/* Window controls */}
       <div style={{ display: "flex" }}>
@@ -814,11 +797,15 @@ function AudioSourcesList({
 export default function MainWindow() {
   const [config, setConfig] = useState<Config | null>(null);
   const [activeNav, setActiveNav] = useState<SectionId>("recording");
-  const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // True once we've received the initial config from the backend — used to
+  // skip the autosave that would otherwise fire on first load.
+  const loadedRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
+  const idleTimerRef = useRef<number | null>(null);
 
   // Load config
   useEffect(() => {
@@ -831,12 +818,39 @@ export default function MainWindow() {
           audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }] },
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "clipdip", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10" },
-          notifications: { enabled: true, sound: true, corner: "bottom_right", auto_dismiss_secs: 8 },
+          notifications: { enabled: true, sound: true, corner: "bottom_right", auto_dismiss_secs: 10 },
         });
       });
   }, []);
 
-  // Listen for pipeline events
+  // Autosave on config change. Debounced so quick slider drags don't hammer
+  // the disk. The first render-with-config is the load result, so skip it.
+  useEffect(() => {
+    if (!config) return;
+    if (!loadedRef.current) { loadedRef.current = true; return; }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    saveTimerRef.current = window.setTimeout(async () => {
+      setSaveStatus("saving");
+      try {
+        await invoke("update_config", { config });
+        setSaveStatus("saved");
+      } catch {
+        setSaveStatus("error");
+      }
+      idleTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 1500);
+    }, 350);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [config]);
+
+  // Query initial pipeline state (the event fires before the window opens)
+  useEffect(() => {
+    invoke<boolean>("get_pipeline_running").then(setPipelineRunning).catch(() => {});
+  }, []);
+
+  // Listen for runtime pipeline status changes
   useEffect(() => {
     const u1 = listen<string>("pipeline-error", e => setPipelineError(e.payload));
     const u2 = listen<{ running: boolean }>("pipeline-status", e => setPipelineRunning(e.payload.running));
@@ -887,26 +901,12 @@ export default function MainWindow() {
     }
   }, []);
 
-  const save = useCallback(async () => {
-    if (!config) return;
-    setSaving(true);
-    try {
-      await invoke("update_config", { config });
-      setSaveStatus("saved");
-    } catch {
-      setSaveStatus("error");
-    } finally {
-      setSaving(false);
-      setTimeout(() => setSaveStatus("idle"), 2500);
-    }
-  }, [config]);
-
   if (!config) {
     return (
       <div style={{
         width: "100%", height: "100%",
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: "rgba(10,10,14,0.92)",
+        background: "rgb(10,10,14)",
         color: "rgba(255,255,255,0.4)",
         font: "400 13px/1 Inter, sans-serif",
       }}>
@@ -919,7 +919,7 @@ export default function MainWindow() {
     <div style={{
       width: "100%", height: "100%",
       display: "flex", flexDirection: "column",
-      background: "rgba(10,10,14,0.96)",
+      background: "rgb(10,10,14)",
       backdropFilter: "blur(30px) saturate(140%)",
       WebkitBackdropFilter: "blur(30px) saturate(140%)",
       color: "rgba(255,255,255,0.9)",
@@ -927,7 +927,7 @@ export default function MainWindow() {
       userSelect: "none",
       overflow: "hidden",
     }}>
-      <TitleBar saveStatus={saveStatus} onSave={save} saving={saving} />
+      <TitleBar saveStatus={saveStatus} />
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <Sidebar

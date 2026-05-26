@@ -9,6 +9,7 @@
     "preview":        "vite preview",
     "tauri":          "tauri",
     "tauri:dev":      "tauri dev",
+    "tauri:dev:profile": "node scripts/dev-profile.mjs",
     "tauri:build":    "tauri build",
     "fetch-ffmpeg":   "node scripts/fetch-ffmpeg.mjs",
     "package":        "npm run tauri:build && node scripts/fetch-ffmpeg.mjs && node scripts/assemble.mjs",

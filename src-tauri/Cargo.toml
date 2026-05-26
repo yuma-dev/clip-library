@@ -12,7 +12,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
@@ -23,3 +23,4 @@ base64 = "0.22"
 
 clipdip-core.workspace = true
 clipdip-hotkey.workspace = true
+clipdip-profile.workspace = true

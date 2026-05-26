@@ -10,21 +10,7 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Clipdip",
-        "width": 980,
-        "height": 700,
-        "minWidth": 820,
-        "minHeight": 580,
-        "center": true,
-        "decorations": false,
-        "transparent": true,
-        "resizable": true,
-        "visible": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

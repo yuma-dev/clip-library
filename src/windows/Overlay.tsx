@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listen, invoke } from "@/lib/tauri";
-import { AnimatePresence, motion } from "framer-motion";
 
 // ---------- types -----------------------------------------------------------
 
-interface ClipSavedPayload {
-  path: string;
-  title: string;
+interface ClipSavingPayload {
   thumbnail: string | null;
   rename_hotkey: string;
   auto_dismiss_secs: number;
   corner: string;
+  sound: boolean;
+  profile: boolean;
+}
+
+interface ClipSavedPayload {
+  path: string;
+  title: string;
+}
+
+interface ClipThumbnailPayload {
+  thumbnail: string;
 }
 
 type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
@@ -20,83 +28,95 @@ type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 const TEAL = "oklch(0.74 0.13 195)";
 
 function cornerStyle(corner: Corner): React.CSSProperties {
+  const inset = "2.2vh";
   switch (corner) {
-    case "top_left":     return { top: 16, left: 16 };
-    case "top_right":    return { top: 16, right: 16 };
-    case "bottom_left":  return { bottom: 16, left: 16 };
-    case "bottom_right": return { bottom: 16, right: 16 };
+    case "top_left":     return { top: inset, left: inset };
+    case "top_right":    return { top: inset, right: inset };
+    case "bottom_left":  return { bottom: inset, left: inset };
+    case "bottom_right": return { bottom: inset, right: inset };
   }
 }
 
-function slideVariants(corner: Corner) {
+function slideInAnimation(corner: Corner): React.CSSProperties {
   const fromRight = corner === "top_right" || corner === "bottom_right";
-  const x = fromRight ? "40px" : "-40px";
   return {
-    initial: { x, opacity: 0 },
-    animate: {
-      x: "0px",
-      opacity: 1,
-      transition: { duration: 0.52, ease: [0.2, 0.8, 0.25, 1] as [number, number, number, number] },
-    },
-    exit: {
-      x,
-      opacity: 0,
-      transition: { duration: 0.22, ease: "easeIn" },
-    },
+    animation: `${fromRight ? "notif-in-right" : "notif-in-left"} 0.32s cubic-bezier(0.2,0.8,0.25,1) both`,
   };
 }
 
 // ---------- sub-components --------------------------------------------------
 
+const NOTIF_SANS = '"Geist", Inter, system-ui, sans-serif';
+const NOTIF_MONO = '"Geist Mono", "JetBrains Mono", ui-monospace, monospace';
+
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", justifyContent: "center",
-      minWidth: 10, height: 9, padding: "0 2px",
-      borderRadius: 2,
+      minWidth: "1.85vh", height: "1.65vh", padding: "0 0.4vh",
+      borderRadius: "0.35vh",
       background: "rgba(255,255,255,0.07)",
       color: "rgba(255,255,255,0.72)",
       border: "1px solid rgba(255,255,255,0.1)",
-      font: '500 6.5px/1 "JetBrains Mono", ui-monospace, monospace',
+      font: `500 1.2vh/1 ${NOTIF_MONO}`,
     }}>{children}</span>
   );
 }
 
-function Thumb({ src, w = 28, h = 20 }: { src: string | null; w?: number; h?: number }) {
+function Thumb({ src, w = "6.4vh", h = "4.2vh" }: { src: string | null; w?: string; h?: string }) {
+  // Thumbnail arrives via a separate `clip-thumbnail` event (gdigrab is
+  // slow on first run), so the initial render almost always has src=null.
+  // A faint pulse on the placeholder signals "image coming".
   return (
     <div style={{
-      width: w, height: h, borderRadius: 2.5,
-      overflow: "hidden", flexShrink: 0, position: "relative",
-      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
-      background: "#111",
+      width: w, height: h, flexShrink: 0,
+      borderRadius: "0.35vh",
+      background: "#0a0a0c",
+      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+      overflow: "hidden",
+      animation: src ? "none" : "pulse 1.4s ease-in-out infinite",
     }}>
-      {src ? (
-        <img src={src} alt="" style={{
-          position: "absolute", inset: 0, width: "100%", height: "100%",
-          objectFit: "cover", objectPosition: "50% 55%",
-        }} />
-      ) : (
-        <div style={{
-          position: "absolute", inset: 0,
-          background: "linear-gradient(135deg, #1a1a2e 0%, #0d1117 100%)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-            <rect x="1" y="2" width="10" height="8" rx="1.5" stroke="rgba(255,255,255,0.2)" strokeWidth="1.2" />
-            <circle cx="4" cy="5.5" r="1.5" fill="rgba(255,255,255,0.18)" />
-            <path d="M1 9 L4 6.5 L6.5 8.5 L8.5 6 L11 9" stroke="rgba(255,255,255,0.18)" strokeWidth="1.1" strokeLinejoin="round" />
-          </svg>
-        </div>
+      {src && (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          style={{
+            width: "100%", height: "100%",
+            objectFit: "cover", objectPosition: "50% 50%",
+            userSelect: "none",
+            display: "block",
+          }}
+        />
       )}
     </div>
   );
 }
 
+function Spinner({ size = "1.1vh" }: { size?: string }) {
+  return (
+    <span style={{
+      width: size, height: size,
+      borderRadius: 999, flexShrink: 0,
+      border: "0.18vh solid rgba(255,255,255,0.18)",
+      borderTopColor: "rgba(255,255,255,0.85)",
+      boxSizing: "border-box",
+      animation: "notif-spin 0.75s linear infinite",
+      display: "inline-block",
+    }} />
+  );
+}
+
 // ---------- notification card -----------------------------------------------
 
+type Phase = "saving" | "saved";
+
 interface NotifState {
-  path: string;
-  title: string;
+  phase: Phase;
+  /// `null` until phase=saved. The rename input is hidden until then.
+  path: string | null;
+  /// Filename stem. `null` until phase=saved.
+  title: string | null;
   thumbnail: string | null;
   rename_hotkey: string;
   auto_dismiss_secs: number;
@@ -114,26 +134,17 @@ function NotificationCard({
   const [renamed, setRenamed] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const timerRef = useRef<number | null>(null);
 
-  // Auto-dismiss countdown (silent — no visual ring)
+  // Auto-dismiss countdown — only runs in the saved phase. Saving phase
+  // can't dismiss because we don't yet know the clip succeeded.
   useEffect(() => {
+    if (notif.phase !== "saved") return;
     if (!notif.auto_dismiss_secs || focused) return;
     if (renamed) { setTimeout(onDismiss, 1200); return; }
 
-    timerRef.current = window.setInterval(() => {
-      setRenamed(r => {
-        if (r) { clearInterval(timerRef.current!); return r; }
-        return r;
-      });
-    }, 1000);
-
     const t = setTimeout(onDismiss, notif.auto_dismiss_secs * 1000);
-    return () => {
-      clearTimeout(t);
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [notif.auto_dismiss_secs, focused, renamed, onDismiss]);
+    return () => clearTimeout(t);
+  }, [notif.phase, notif.auto_dismiss_secs, focused, renamed, onDismiss]);
 
   // Listen for global rename-activate event from backend
   useEffect(() => {
@@ -142,10 +153,12 @@ function NotificationCard({
   }, []);
 
   const activateRename = useCallback(() => {
-    if (focused) return;
+    // Backend already gates this on active_clip being set, but double-check
+    // here so an in-flight saving notification never grabs focus.
+    if (notif.phase !== "saved" || focused) return;
     invoke("set_overlay_input_mode", { enabled: true }).catch(console.error);
     setTimeout(() => inputRef.current?.focus(), 50);
-  }, [focused]);
+  }, [notif.phase, focused]);
 
   const handleFocus = () => {
     setFocused(true);
@@ -160,7 +173,7 @@ function NotificationCard({
   const submitRename = async () => {
     const trimmed = renameValue.trim();
     inputRef.current?.blur();
-    if (!trimmed) return;
+    if (!trimmed || !notif.path) return;
     try {
       await invoke("rename_clip", { oldPath: notif.path, newName: trimmed });
       setRenamed(true);
@@ -175,116 +188,114 @@ function NotificationCard({
     if (e.key === "Escape") inputRef.current?.blur();
   };
 
-  const variants = slideVariants(notif.corner);
-
   return (
-    <motion.div
-      initial={variants.initial}
-      animate={variants.animate}
-      exit={variants.exit}
+    <div
       style={{
-        display: "inline-flex", alignItems: "center", gap: 7,
-        padding: "5px 9px 5px 5px",
-        borderRadius: 8,
-        background: "linear-gradient(180deg, rgba(14,14,18,0.88), rgba(8,8,12,0.92))",
-        backdropFilter: "blur(28px) saturate(140%)",
-        WebkitBackdropFilter: "blur(28px) saturate(140%)",
-        boxShadow: "0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.07), inset 0 1px 0 rgba(255,255,255,0.06)",
+        ...slideInAnimation(notif.corner),
+        display: "inline-flex", alignItems: "center", gap: "1.3vh",
+        padding: "1vh 1.6vh",
+        borderRadius: "0.55vh",
+        background: "rgb(22,22,26)",
+        boxShadow: "0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06)",
         cursor: "default",
         userSelect: "none",
       }}
     >
       <Thumb src={notif.thumbnail} />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-        {/* header: pip + label */}
-        <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.2vh" }}>
+        {/* header: pip/spinner + label */}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.55vh" }}>
+          {notif.phase === "saving" ? (
+            <Spinner />
+          ) : (
+            <span style={{
+              width: "1.1vh", height: "1.1vh", borderRadius: 999,
+              background: renamed ? "#22c55e" : TEAL,
+              flexShrink: 0,
+              boxShadow: renamed ? "0 0 0.75vh #22c55e88" : `0 0 0.75vh ${TEAL}55`,
+              transition: "background 0.3s, box-shadow 0.3s",
+            }} />
+          )}
           <span style={{
-            width: 6, height: 6, borderRadius: 999,
-            background: renamed ? "#22c55e" : TEAL,
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            flexShrink: 0,
-            boxShadow: renamed ? "0 0 4px #22c55e88" : `0 0 4px ${TEAL}55`,
-            transition: "background 0.3s, box-shadow 0.3s",
-          }}>
-            {/* check mark */}
-            <svg width={4} height={4} viewBox="0 0 10 10" fill="none">
-              <path d="M2 5.2 L4.2 7.2 L8 3" stroke={renamed ? "#fff" : "rgba(0,0,0,0.6)"} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-          <span style={{
-            font: "600 7px/1 Inter, sans-serif",
+            font: `600 1.3vh/1 ${NOTIF_SANS}`,
             color: "rgba(255,255,255,0.88)",
-            letterSpacing: "0.12em",
+            letterSpacing: "0.1em",
             textTransform: "uppercase",
           }}>
-            {renamed ? "Renamed!" : "Clip saved"}
+            {notif.phase === "saving" ? "Clip saving…" : renamed ? "Renamed!" : "Clip saved"}
           </span>
         </div>
 
-        {/* input row */}
-        <div
-          onClick={() => inputRef.current?.focus()}
-          style={{
-            cursor: "text",
-            position: "relative",
-            height: 12,
-            minWidth: 92,
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          {!focused && !renamed && (
-            <div style={{
-              font: "500 7.5px/1 Inter, sans-serif",
-              color: "rgba(255,255,255,0.5)",
-              display: "flex", alignItems: "center", gap: 2.5,
-              pointerEvents: "none",
-              whiteSpace: "nowrap",
-            }}>
-              <Kbd>Ctrl</Kbd>
-              <span style={{ opacity: 0.45 }}>+</span>
-              <Kbd>F10</Kbd>
-              <span style={{ opacity: 0.85, marginLeft: 1 }}>to rename</span>
-            </div>
-          )}
-          {renamed && (
-            <span style={{
-              font: '500 9px/1 "JetBrains Mono", ui-monospace, monospace',
-              color: "rgba(255,255,255,0.7)",
-              letterSpacing: "-0.005em",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              maxWidth: 140,
-            }}>
-              {renameValue || notif.title}
-            </span>
-          )}
-          {!renamed && (
-            <input
-              ref={inputRef}
-              value={renameValue}
-              onChange={e => setRenameValue(e.target.value)}
-              onFocus={handleFocus}
-              onBlur={handleBlur}
-              onKeyDown={handleKeyDown}
-              spellCheck={false}
-              style={{
-                position: "absolute", inset: 0,
-                width: "100%", height: "100%",
-                background: "transparent", border: 0, outline: 0, padding: 0, margin: 0,
-                color: "rgba(255,255,255,0.96)",
-                font: '500 9px/1 "JetBrains Mono", ui-monospace, monospace',
+        {/* input row — only rendered in saved phase. While saving we
+            still reserve the same vertical space so the card doesn't
+            visibly resize when phase 2 lands. */}
+        {notif.phase === "saving" ? (
+          <div style={{ height: "2.2vh", minWidth: "17vh" }} />
+        ) : (
+          <div
+            onClick={() => inputRef.current?.focus()}
+            style={{
+              cursor: "text",
+              position: "relative",
+              height: "2.2vh",
+              minWidth: "17vh",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            {!focused && !renamed && (
+              <div style={{
+                font: `500 1.4vh/1 ${NOTIF_SANS}`,
+                color: "rgba(255,255,255,0.5)",
+                display: "flex", alignItems: "center", gap: "0.45vh",
+                pointerEvents: "none",
+                whiteSpace: "nowrap",
+              }}>
+                <Kbd>Ctrl</Kbd>
+                <span style={{ opacity: 0.45 }}>+</span>
+                <Kbd>F10</Kbd>
+                <span style={{ opacity: 0.85, marginLeft: "0.2vh" }}>to rename</span>
+              </div>
+            )}
+            {renamed && (
+              <span style={{
+                font: `500 1.65vh/1 ${NOTIF_SANS}`,
+                color: "rgba(255,255,255,0.7)",
                 letterSpacing: "-0.005em",
-                opacity: focused ? 1 : 0,
-                caretColor: "#fff",
-              }}
-            />
-          )}
-        </div>
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: "26vh",
+              }}>
+                {renameValue || notif.title}
+              </span>
+            )}
+            {!renamed && (
+              <input
+                ref={inputRef}
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                onKeyDown={handleKeyDown}
+                spellCheck={false}
+                style={{
+                  position: "absolute", inset: 0,
+                  width: "100%", height: "100%",
+                  background: "transparent", border: 0, outline: 0, padding: 0, margin: 0,
+                  color: "rgba(255,255,255,0.96)",
+                  font: `500 1.65vh/1 ${NOTIF_SANS}`,
+                  letterSpacing: "-0.005em",
+                  opacity: focused ? 1 : 0,
+                  caretColor: "#fff",
+                }}
+              />
+            )}
+          </div>
+        )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -295,35 +306,155 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 export default function OverlayWindow() {
   const [notif, setNotif] = useState<NotifState | null>(null);
+  // Bumped on every clip-saving event; used as a React `key` on the card
+  // so its local state (renamed, focused, rename input value) resets
+  // cleanly when a new clip arrives — otherwise the second clip would
+  // inherit "Renamed!" from the first.
+  const [clipSeq, setClipSeq] = useState(0);
+
+  // Startup diagnostics — remove once overlay is confirmed working
+  useEffect(() => {
+    console.log("[overlay] mounted, isTauri=", isTauri, "href=", window.location.href);
+  }, []);
 
   // Show a demo notification in browser preview mode
   useEffect(() => {
     if (!isTauri) {
       const t = setTimeout(() => {
         setNotif({
-          path: "C:\\Users\\User\\Videos\\Clipdip\\clip4291.mp4",
-          title: "clip4291.mp4",
+          phase: "saving",
+          path: null,
+          title: null,
           thumbnail: null,
           rename_hotkey: "Ctrl+F10",
           auto_dismiss_secs: 0,
           corner: (new URLSearchParams(window.location.search).get("corner") as Corner) || "bottom_right",
         });
+        setClipSeq(s => s + 1);
+        // Simulate phase 2 ~500ms later so the demo shows both states.
+        const t2 = setTimeout(() => {
+          setNotif(prev => prev ? {
+            ...prev,
+            phase: "saved",
+            path: "C:\\Users\\User\\Videos\\Clipdip\\clip4291.mp4",
+            title: "clip4291",
+          } : prev);
+        }, 600);
+        return () => clearTimeout(t2);
       }, 400);
       return () => clearTimeout(t);
     }
   }, []);
 
+  // Wall-clock anchor for one save flow. Set when clip-saving arrives,
+  // used to log "received" and "painted" deltas for both phases.
+  const flowStartRef = useRef<number | null>(null);
+  // Tracks whether the current save flow opted in to profiling. The flag
+  // arrives in the saving payload; phase-2 + paint hooks read this ref.
+  const profileRef = useRef(false);
+
+  // Phase 1 — clip-saving. Brand-new notification: reset everything,
+  // bump the seq so the card unmounts/remounts.
   useEffect(() => {
-    const unlisten = listen<ClipSavedPayload>("clip-saved", e => {
+    console.log("[overlay] registering clip-saving listener");
+    const unlisten = listen<ClipSavingPayload>("clip-saving", e => {
       const p = e.payload;
+      profileRef.current = !!p.profile;
+      const t_recv = performance.now();
+      flowStartRef.current = t_recv;
+      if (p.profile) {
+        console.log(`[overlay] clip-saving received [perf=${t_recv.toFixed(0)}ms]`, {
+          ...p,
+          thumbnail: p.thumbnail ? `<${p.thumbnail.length} chars>` : null,
+        });
+      }
+      if (p.sound) {
+        // Served from `assets/sound/save.wav` via Vite's publicDir.
+        const audio = new Audio("/sound/save.wav");
+        audio.play().catch(err => console.warn("[overlay] save sound failed:", err));
+      }
       setNotif({
-        path:              p.path,
-        title:             p.title,
+        phase:             "saving",
+        path:              null,
+        title:             null,
         thumbnail:         p.thumbnail,
         rename_hotkey:     p.rename_hotkey,
         auto_dismiss_secs: p.auto_dismiss_secs,
         corner:            (p.corner as Corner) || "bottom_right",
       });
+      setClipSeq(s => s + 1);
+    });
+    unlisten.catch(err => console.error("[overlay] clip-saving listen failed:", err));
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  // Phase 2 — clip-saved. Merge the title + path into the existing
+  // notification; if (somehow) saving phase was missed, materialize the
+  // card directly into the saved state.
+  useEffect(() => {
+    const unlisten = listen<ClipSavedPayload>("clip-saved", e => {
+      const p = e.payload;
+      if (profileRef.current) {
+        const t_recv = performance.now();
+        const since = flowStartRef.current != null
+          ? ` [+${(t_recv - flowStartRef.current).toFixed(0)}ms since clip-saving]`
+          : "";
+        console.log(`[overlay] clip-saved received${since}`, p);
+      }
+      setNotif(prev => prev ? {
+        ...prev,
+        phase: "saved",
+        path: p.path,
+        title: p.title,
+      } : prev);
+    });
+    unlisten.catch(err => console.error("[overlay] clip-saved listen failed:", err));
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  // First-paint timer per phase. useEffect fires after React commit but
+  // before the browser actually paints, so we hop one RAF to capture the
+  // post-paint moment. Logs `since clip-saving` so we can line it up
+  // against the backend's `save flow start` anchor. Only logs when this
+  // flow was started in profile mode.
+  useEffect(() => {
+    if (!notif || !profileRef.current) return;
+    const t_commit = performance.now();
+    const start = flowStartRef.current;
+    const tag = notif.phase;
+    requestAnimationFrame(() => {
+      const t_painted = performance.now();
+      const since = start != null
+        ? `+${(t_painted - start).toFixed(0)}ms since clip-saving`
+        : `perf=${t_painted.toFixed(0)}ms`;
+      console.log(
+        `[overlay] phase=${tag} painted [${since}, commit→paint=${(t_painted - t_commit).toFixed(1)}ms]`
+      );
+    });
+  }, [notif?.phase, clipSeq]);
+
+  // Thumbnail arrives out-of-band — gdigrab can be slow (~1–2 s the first
+  // run), so it's no longer gated to phase 1. Merge whenever it lands.
+  useEffect(() => {
+    const unlisten = listen<ClipThumbnailPayload>("clip-thumbnail", e => {
+      const p = e.payload;
+      if (profileRef.current) {
+        const since = flowStartRef.current != null
+          ? ` [+${(performance.now() - flowStartRef.current).toFixed(0)}ms since clip-saving]`
+          : "";
+        console.log(`[overlay] clip-thumbnail received${since} <${p.thumbnail.length} chars>`);
+      }
+      setNotif(prev => prev ? { ...prev, thumbnail: p.thumbnail } : prev);
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  // Error case — backend couldn't save the clip. Drop the notification
+  // immediately so the user isn't left staring at a spinner forever.
+  useEffect(() => {
+    const unlisten = listen<string>("clip-error", e => {
+      console.warn("[overlay] clip-error received:", e.payload);
+      setNotif(null);
     });
     return () => { unlisten.then(f => f()); };
   }, []);
@@ -344,15 +475,13 @@ export default function OverlayWindow() {
         className="absolute"
         style={{ ...cornerStyle(corner), pointerEvents: "auto" }}
       >
-        <AnimatePresence mode="wait">
-          {notif && (
-            <NotificationCard
-              key={notif.path}
-              notif={notif}
-              onDismiss={dismiss}
-            />
-          )}
-        </AnimatePresence>
+        {notif && (
+          <NotificationCard
+            key={clipSeq}
+            notif={notif}
+            onDismiss={dismiss}
+          />
+        )}
       </div>
     </div>
   );

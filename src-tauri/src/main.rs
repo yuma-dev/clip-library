@@ -8,8 +8,41 @@ use std::sync::{Arc, Mutex};
 use base64::Engine as _;
 use crossbeam_channel::unbounded;
 use serde::Serialize;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tracing::{error, info, warn};
+
+/// Injected into every webview window so console.* output is forwarded to the
+/// Rust tracing subscriber (visible in the terminal alongside app logs).
+const CONSOLE_SCRIPT: &str = r#"
+(function() {
+  var label = (
+    window.__TAURI_INTERNALS__ &&
+    window.__TAURI_INTERNALS__.metadata &&
+    window.__TAURI_INTERNALS__.metadata.currentWindow &&
+    window.__TAURI_INTERNALS__.metadata.currentWindow.label
+  ) || '?';
+  function fwd(level, args) {
+    try {
+      var msg = Array.prototype.slice.call(args).map(function(a) {
+        try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
+        catch(e) { return '[unserializable]'; }
+      }).join(' ');
+      if (window.__TAURI_INTERNALS__) {
+        window.__TAURI_INTERNALS__.invoke(
+          'forward_console',
+          { windowLabel: label, level: level, msg: msg }
+        ).catch(function(){});
+      }
+    } catch(e) {}
+  }
+  ['log','info','warn','error'].forEach(function(l) {
+    var orig = console[l].bind(console);
+    console[l] = function() { orig.apply(console, arguments); fwd(l, arguments); };
+  });
+})();
+"#;
 
 // ---------- shared state --------------------------------------------------
 
@@ -17,18 +50,46 @@ struct AppState {
     config_path: PathBuf,
     /// Path of the clip whose notification is currently on-screen (if any).
     active_clip: Arc<Mutex<Option<String>>>,
+    pipeline_running: Arc<Mutex<bool>>,
 }
 
 // ---------- event payloads ------------------------------------------------
 
+/// Phase-1 notification, emitted as soon as the desktop screenshot is
+/// ready (~150–250 ms after the hotkey). Carries the thumbnail and every
+/// visual the overlay needs to render its initial state — corner,
+/// auto-dismiss window, rename hint, whether to chirp. Title and path
+/// don't exist yet; the overlay shows a spinner where the saved-state
+/// pip will go.
 #[derive(Clone, Serialize)]
-struct ClipSavedPayload {
-    path: String,
-    title: String,
+struct ClipSavingPayload {
     thumbnail: Option<String>,
     rename_hotkey: String,
     auto_dismiss_secs: u32,
     corner: String,
+    sound: bool,
+    /// Mirrors `clipdip_profile::enabled()` so the overlay knows whether
+    /// to emit its phase-timing logs alongside the backend's.
+    profile: bool,
+}
+
+/// Phase-2 update, emitted once the mux finishes. The overlay merges
+/// these fields into the saving state — spinner → teal pip, title +
+/// rename input appear — and only now allows the rename hotkey to
+/// focus the input.
+#[derive(Clone, Serialize)]
+struct ClipSavedPayload {
+    path: String,
+    title: String,
+}
+
+/// Out-of-band thumbnail delivery. ffmpeg's `gdigrab` pays ~1–2 s of
+/// process startup + DirectShow init the first time it runs, so we no
+/// longer block phase-1 on it — the overlay slots the image in whenever
+/// this event arrives, which may be during phase 1 or phase 2.
+#[derive(Clone, Serialize)]
+struct ClipThumbnailPayload {
+    thumbnail: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -117,7 +178,7 @@ fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<()
     *state.active_clip.lock().unwrap() = None;
     if let Some(w) = app.get_webview_window("overlay") {
         let _ = w.set_ignore_cursor_events(true);
-        let _ = w.hide();
+        // Overlay stays visible (it's transparent + click-through), no hide needed.
     }
     Ok(())
 }
@@ -140,6 +201,20 @@ fn list_monitors(app: AppHandle) -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
+fn forward_console(window_label: String, level: String, msg: String) {
+    match level.as_str() {
+        "error" => tracing::error!(target: "js", "[{window_label}] {msg}"),
+        "warn"  => tracing::warn!(target: "js", "[{window_label}] {msg}"),
+        _       => tracing::info!(target: "js", "[{window_label}] {msg}"),
+    }
+}
+
+#[tauri::command]
+fn get_pipeline_running(state: State<'_, AppState>) -> bool {
+    *state.pipeline_running.lock().unwrap()
+}
+
+#[tauri::command]
 fn open_clips_folder(state: State<'_, AppState>) -> Result<(), String> {
     let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
         .map_err(|e| e.to_string())?;
@@ -152,6 +227,7 @@ fn open_clips_folder(state: State<'_, AppState>) -> Result<(), String> {
 
 // ---------- capture loop --------------------------------------------------
 
+#[derive(Clone, Copy)]
 enum HotkeyEvent {
     Save,
     Rename,
@@ -161,6 +237,7 @@ fn run_capture_loop(
     app: AppHandle,
     config_path: PathBuf,
     active_clip: Arc<Mutex<Option<String>>>,
+    pipeline_running: Arc<Mutex<bool>>,
 ) {
     let cfg = match clipdip_core::config::Config::load_or_default(&config_path) {
         Ok(c) => c,
@@ -173,116 +250,245 @@ fn run_capture_loop(
 
     let save_hk = cfg.hotkey.save_clip.clone();
     let rename_hk = cfg.hotkey.rename_clip.clone();
-    let rename_hint = format!("Press {} to rename", rename_hk);
-    let auto_dismiss = cfg.notifications.auto_dismiss_secs;
-    let corner = format!("{:?}", cfg.notifications.corner)
-        .chars()
-        .fold(String::new(), |mut acc, c| {
-            if c.is_uppercase() && !acc.is_empty() {
-                acc.push('_');
-            }
-            acc.push(c.to_ascii_lowercase());
-            acc
-        });
-    let notifs_enabled = cfg.notifications.enabled;
+    info!("hotkeys — save: {}  rename: {}", save_hk, rename_hk);
 
+    // Register hotkeys BEFORE starting the pipeline so they work even if
+    // the pipeline fails to initialise (e.g. NVENC unavailable).
+    // A single HotkeyListener handles all bindings — RegisterRawInputDevices
+    // only supports one registration per device type per process, so splitting
+    // them across multiple listeners would silently discard all but the last.
+    let (ev_tx, ev_rx) = unbounded::<HotkeyEvent>();
+
+    let mut binding_events: Vec<HotkeyEvent> = Vec::new();
+    let mut binding_defs: Vec<clipdip_hotkey::HotkeyBinding> = Vec::new();
+
+    match clipdip_hotkey::HotkeyBinding::parse(&save_hk) {
+        Ok(b) => { binding_events.push(HotkeyEvent::Save); binding_defs.push(b); }
+        Err(e) => warn!("save hotkey parse failed: {e:#}"),
+    }
+    match clipdip_hotkey::HotkeyBinding::parse(&rename_hk) {
+        Ok(b) => { binding_events.push(HotkeyEvent::Rename); binding_defs.push(b); }
+        Err(e) => warn!("rename hotkey parse failed: {e:#}"),
+    }
+
+    // _listener stays alive until run_capture_loop returns, keeping the
+    // Raw Input thread running for the entire session.
+    let _listener = if !binding_defs.is_empty() {
+        match clipdip_hotkey::HotkeyListener::spawn(&binding_defs) {
+            Ok((listener, rxs)) => {
+                info!("hotkey listener spawned ok ({} binding(s))", binding_defs.len());
+                for (event, rx) in binding_events.into_iter().zip(rxs) {
+                    let tx = ev_tx.clone();
+                    std::thread::spawn(move || {
+                        while rx.recv().is_ok() {
+                            if tx.send(event).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+                Some(listener)
+            }
+            Err(e) => {
+                warn!("hotkey listener spawn failed: {e:#}");
+                let _ = app.emit("pipeline-error", format!("hotkeys: {e:#}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    drop(ev_tx);
+
+    // Start the pipeline after hotkeys are live. On failure we emit the error
+    // and keep the event loop running so hotkeys remain registered.
     let pipeline = match clipdip_core::Pipeline::start(cfg) {
-        Ok(p) => p,
+        Ok(p) => {
+            info!("pipeline started");
+            *pipeline_running.lock().unwrap() = true;
+            let _ = app.emit("pipeline-status", serde_json::json!({"running": true}));
+            Some(p)
+        }
         Err(e) => {
             error!("pipeline start: {e:#}");
             let _ = app.emit("pipeline-error", format!("{e:#}"));
-            return;
+            None
         }
     };
-    info!("pipeline started");
-    let _ = app.emit("pipeline-status", serde_json::json!({"running": true}));
-
-    // Aggregate both hotkeys into one channel so we can handle them in one loop.
-    let (ev_tx, ev_rx) = unbounded::<HotkeyEvent>();
-
-    if let Ok(binding) = clipdip_hotkey::HotkeyBinding::parse(&save_hk) {
-        match clipdip_hotkey::HotkeyListener::spawn(binding) {
-            Ok((listener, rx)) => {
-                let tx = ev_tx.clone();
-                std::thread::spawn(move || {
-                    let _l = listener;
-                    while rx.recv().is_ok() {
-                        if tx.send(HotkeyEvent::Save).is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            Err(e) => {
-                warn!("save hotkey: {e:#}");
-                let _ = app.emit("pipeline-error", format!("save hotkey: {e:#}"));
-            }
-        }
-    }
-
-    if let Ok(binding) = clipdip_hotkey::HotkeyBinding::parse(&rename_hk) {
-        match clipdip_hotkey::HotkeyListener::spawn(binding) {
-            Ok((listener, rx)) => {
-                let tx = ev_tx.clone();
-                std::thread::spawn(move || {
-                    let _l = listener;
-                    while rx.recv().is_ok() {
-                        if tx.send(HotkeyEvent::Rename).is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            Err(e) => warn!("rename hotkey: {e:#} — rename via hotkey disabled"),
-        }
-    }
-
-    drop(ev_tx);
 
     for event in &ev_rx {
         match event {
             HotkeyEvent::Save => {
-                match pipeline.save_clip() {
-                    Ok(path) => {
-                        let title = path
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        let path_str = path.to_string_lossy().to_string();
-                        *active_clip.lock().unwrap() = Some(path_str.clone());
+                let Some(ref pipeline) = pipeline else {
+                    warn!("save hotkey fired but pipeline is not running");
+                    continue;
+                };
 
-                        let thumbnail = if notifs_enabled {
-                            extract_thumbnail(&path)
-                        } else {
-                            None
-                        };
+                // Anchor for all stage timings. Logged as `t+Nms` so backend
+                // and frontend lines can be lined up against the same zero.
+                // `Instant` is Copy, so we just clone it into each scope-spawned
+                // thread rather than going through a closure. Capture is cheap
+                // (~tens of ns); skipping the log lines when profiling is off
+                // keeps the steady-state info stream uncluttered.
+                let t0 = std::time::Instant::now();
+                let prof = clipdip_profile::enabled();
+                if prof { info!("save flow start [t+0ms]"); }
 
-                        if notifs_enabled {
-                            if let Some(overlay) = app.get_webview_window("overlay") {
-                                let _ = overlay.show();
-                                let _ = overlay.set_ignore_cursor_events(true);
+                // Re-read config so notification settings reflect any changes
+                // since the pipeline started.
+                let cur = clipdip_core::config::Config::load_or_default(&config_path)
+                    .unwrap_or_default();
+                let notifs_enabled = cur.notifications.enabled;
+                if prof { info!("config reloaded [t+{}ms]", t0.elapsed().as_millis()); }
+
+                // Pre-compute the static phase-1 fields so the scope block
+                // below can just consume them.
+                let rename_hint = format!("Press {} to rename", cur.hotkey.rename_clip);
+                let corner = format!("{:?}", cur.notifications.corner)
+                    .chars()
+                    .fold(String::new(), |mut acc, c| {
+                        if c.is_uppercase() && !acc.is_empty() {
+                            acc.push('_');
+                        }
+                        acc.push(c.to_ascii_lowercase());
+                        acc
+                    });
+
+                // Run the desktop screenshot and the clip mux in parallel.
+                // Both start at t=0; whichever lags doesn't extend the other.
+                // `thread::scope` lets these threads borrow `pipeline`
+                // without requiring 'static.
+                // Phase 1: emit immediately so the overlay paints within a
+                // few ms of the hotkey, BEFORE either work thread runs. The
+                // thumbnail field stays null here — the overlay shows a
+                // placeholder where it'll appear, and a separate
+                // `clip-thumbnail` event slots it in once gdigrab finishes
+                // (which can take a couple seconds the first time).
+                if notifs_enabled {
+                    let saving_payload = ClipSavingPayload {
+                        thumbnail: None,
+                        rename_hotkey: rename_hint.clone(),
+                        auto_dismiss_secs: cur.notifications.auto_dismiss_secs,
+                        corner: corner.clone(),
+                        sound: cur.notifications.sound,
+                        profile: prof,
+                    };
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay.set_ignore_cursor_events(true);
+                        let _ = overlay.emit("clip-saving", saving_payload);
+                    }
+                    if prof { info!("emit clip-saving [t+{}ms]", t0.elapsed().as_millis()); }
+                }
+
+                std::thread::scope(|s| {
+                    // Thumbnail thread: emits `clip-thumbnail` itself so it
+                    // doesn't serialize with anything else. The handle is
+                    // discarded — we don't await its completion before
+                    // returning from the scope (well, scope still joins it,
+                    // but we don't gate the save flow on its result).
+                    let _thumb_thread = if notifs_enabled {
+                        let app = &app;
+                        Some(s.spawn(move || {
+                            let t_start = t0.elapsed().as_millis();
+                            let r = capture_desktop_thumbnail();
+                            if prof {
+                                let t_end = t0.elapsed().as_millis();
+                                info!(
+                                    "thumbnail [t+{}ms .. t+{}ms = {}ms]",
+                                    t_start, t_end, t_end - t_start
+                                );
                             }
-                            let _ = app.emit(
-                                "clip-saved",
-                                ClipSavedPayload {
-                                    path: path_str,
-                                    title,
-                                    thumbnail,
-                                    rename_hotkey: rename_hint.clone(),
-                                    auto_dismiss_secs: auto_dismiss,
-                                    corner: corner.clone(),
-                                },
+                            if let Some(thumbnail) = r {
+                                if let Some(overlay) = app.get_webview_window("overlay") {
+                                    let _ = overlay.emit(
+                                        "clip-thumbnail",
+                                        ClipThumbnailPayload { thumbnail },
+                                    );
+                                }
+                                if prof {
+                                    info!("emit clip-thumbnail [t+{}ms]", t0.elapsed().as_millis());
+                                }
+                            }
+                        }))
+                    } else {
+                        None
+                    };
+
+                    let save_thread = s.spawn(move || {
+                        let t_start = t0.elapsed().as_millis();
+                        let r = pipeline.save_clip();
+                        if prof {
+                            let t_end = t0.elapsed().as_millis();
+                            info!(
+                                "save_clip [t+{}ms .. t+{}ms = {}ms]",
+                                t_start, t_end, t_end - t_start
                             );
                         }
+                        r
+                    });
+
+                    // Phase 2: wait for the mux, then emit clip-saved with
+                    // the title + path. The overlay swaps the spinner for
+                    // the pip and reveals the rename input.
+                    match save_thread.join() {
+                        Ok(Ok(path)) => {
+                            let title = path
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            let path_str = path.to_string_lossy().to_string();
+                            *active_clip.lock().unwrap() = Some(path_str.clone());
+
+                            if prof {
+                                info!("clip saved: {path_str} [t+{}ms]", t0.elapsed().as_millis());
+                            } else {
+                                info!("clip saved: {path_str}");
+                            }
+
+                            if notifs_enabled {
+                                let payload = ClipSavedPayload {
+                                    path: path_str,
+                                    title,
+                                };
+                                if let Some(overlay) = app.get_webview_window("overlay") {
+                                    let _ = overlay.emit("clip-saved", payload);
+                                }
+                                if prof { info!("emit clip-saved [t+{}ms]", t0.elapsed().as_millis()); }
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            if prof {
+                                error!("save clip: {e:#} [t+{}ms]", t0.elapsed().as_millis());
+                            } else {
+                                error!("save clip: {e:#}");
+                            }
+                            if notifs_enabled {
+                                if let Some(overlay) = app.get_webview_window("overlay") {
+                                    let _ = overlay.emit("clip-error", format!("{e:#}"));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            if prof {
+                                error!("save clip thread panicked [t+{}ms]", t0.elapsed().as_millis());
+                            } else {
+                                error!("save clip thread panicked");
+                            }
+                            if notifs_enabled {
+                                if let Some(overlay) = app.get_webview_window("overlay") {
+                                    let _ = overlay.emit("clip-error", "save thread panicked".to_string());
+                                }
+                            }
+                        }
                     }
-                    Err(e) => error!("save clip: {e:#}"),
-                }
+                });
             }
             HotkeyEvent::Rename => {
                 if active_clip.lock().unwrap().is_some() {
-                    let _ = app.emit("activate-rename", ());
                     if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay.emit("activate-rename", ());
                         let _ = overlay.set_ignore_cursor_events(false);
                         let _ = overlay.set_focus();
                     }
@@ -292,22 +498,25 @@ fn run_capture_loop(
     }
 }
 
-fn extract_thumbnail(path: &PathBuf) -> Option<String> {
-    let path_str = path.to_str()?;
+/// Grab a single frame from the primary desktop via ffmpeg's `gdigrab` and
+/// return a small, low-quality JPEG encoded as a `data:` URL. Runs in
+/// parallel with `save_clip()` so the latency is hidden, and the captured
+/// frame reflects the screen at the moment of the hotkey rather than after
+/// the mux finishes.
+fn capture_desktop_thumbnail() -> Option<String> {
     let mut child = Command::new("ffmpeg")
         .args([
-            "-ss",
-            "1",
-            "-i",
-            path_str,
-            "-vframes",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "-vf",
-            "scale=320:-1",
+            "-loglevel", "error",
+            "-f", "gdigrab",
+            "-framerate", "1",
+            "-i", "desktop",
+            "-frames:v", "1",
+            // ~240px wide preserving aspect ratio, even height (yuv420 friendly).
+            "-vf", "scale=240:-2",
+            // High q value = low quality / small file (MJPEG q range 2..31).
+            "-q:v", "18",
+            "-f", "image2pipe",
+            "-vcodec", "mjpeg",
             "pipe:1",
         ])
         .stdout(Stdio::piped())
@@ -329,6 +538,29 @@ fn extract_thumbnail(path: &PathBuf) -> Option<String> {
     ))
 }
 
+// ---------- helpers -------------------------------------------------------
+
+fn open_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    if let Ok(w) = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("Clipdip")
+        .inner_size(980.0, 700.0)
+        .min_inner_size(820.0, 580.0)
+        .center()
+        .decorations(false)
+        .resizable(true)
+        .visible(true)
+        .initialization_script(CONSOLE_SCRIPT)
+        .build()
+    {
+        let _ = w.set_focus();
+    }
+}
+
 // ---------- main ----------------------------------------------------------
 
 fn main() {
@@ -339,17 +571,84 @@ fn main() {
         )
         .init();
 
+    // Flip on the global profiler if the user opted in. Controls both the
+    // periodic pipeline-stage reporter and the per-save flow timing logs
+    // below.
+    if matches!(
+        std::env::var("CLIPDIP_PROFILE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    ) {
+        clipdip_profile::enable();
+        info!("profiling enabled (CLIPDIP_PROFILE)");
+    }
+
     let config_path = clipdip_core::config::Config::path()
         .unwrap_or_else(|_| PathBuf::from("config.toml"));
 
     let active_clip: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let pipeline_running: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
 
     tauri::Builder::default()
         .manage(AppState {
             config_path: config_path.clone(),
             active_clip: active_clip.clone(),
+            pipeline_running: pipeline_running.clone(),
         })
         .setup(move |app| {
+            // Log configured hotkeys so the user can confirm them in the console.
+            let cfg_peek = clipdip_core::config::Config::load_or_default(&config_path)
+                .unwrap_or_default();
+            info!(
+                "hotkeys — save: {}  rename: {}",
+                cfg_peek.hotkey.save_clip, cfg_peek.hotkey.rename_clip
+            );
+
+            // Build system tray.
+            let menu = Menu::with_items(app, &[
+                &MenuItem::with_id(app, "show", "Open ClipDip", true, None::<&str>)?,
+                &PredefinedMenuItem::separator(app)?,
+                &MenuItem::with_id(app, "quit", "Quit ClipDip", true, None::<&str>)?,
+            ])?;
+
+            let tooltip = format!(
+                "ClipDip\nSave clip: {}",
+                cfg_peek.hotkey.save_clip
+            );
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip(tooltip)
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => open_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        open_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            // Main settings window — hidden until the user opens it via tray.
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("Clipdip")
+                .inner_size(980.0, 700.0)
+                .min_inner_size(820.0, 580.0)
+                .center()
+                .decorations(false)
+                .resizable(true)
+                .visible(false)
+                .initialization_script(CONSOLE_SCRIPT)
+                .build()?;
+
             // Size the overlay to cover the primary monitor.
             let (ow, oh) = app
                 .primary_monitor()
@@ -358,7 +657,9 @@ fn main() {
                 .map(|m| (m.size().width, m.size().height))
                 .unwrap_or((1920, 1080));
 
-            WebviewWindowBuilder::new(
+            // The overlay is always-visible (transparent + click-through) to
+            // avoid the native window-appear animation triggered by show().
+            let overlay = WebviewWindowBuilder::new(
                 app,
                 "overlay",
                 WebviewUrl::App("index.html?overlay=1".into()),
@@ -369,14 +670,17 @@ fn main() {
             .decorations(false)
             .always_on_top(true)
             .skip_taskbar(true)
-            .visible(false)
+            .visible(true)
             .resizable(false)
+            .initialization_script(CONSOLE_SCRIPT)
             .build()?;
+            let _ = overlay.set_ignore_cursor_events(true);
 
             // Start the capture pipeline and hotkey loop in a background thread.
             let handle = app.handle().clone();
             let active = active_clip.clone();
-            std::thread::spawn(move || run_capture_loop(handle, config_path, active));
+            let running = pipeline_running.clone();
+            std::thread::spawn(move || run_capture_loop(handle, config_path, active, running));
 
             Ok(())
         })
@@ -388,6 +692,8 @@ fn main() {
             dismiss_notification,
             list_monitors,
             open_clips_folder,
+            get_pipeline_running,
+            forward_console,
         ])
         .run(tauri::generate_context!())
         .expect("error running clipdip");
