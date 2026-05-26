@@ -1,4 +1,0 @@
-# Built packages and cached downloads — don't commit
-clipdip-*/
-*.zip
-ffmpeg-cache/

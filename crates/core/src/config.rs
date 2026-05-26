@@ -25,6 +25,7 @@ pub struct Config {
     pub audio: AudioConfig,
     pub output: OutputConfig,
     pub hotkey: HotkeyConfig,
+    pub notifications: NotificationsConfig,
     pub profile: ProfileConfig,
     /// Replay window in seconds. Ring buffer is sized for this duration at
     /// `video.bitrate_bps` (plus ~20% headroom for audio + muxer overhead).
@@ -38,6 +39,7 @@ impl Default for Config {
             audio: AudioConfig::default(),
             output: OutputConfig::default(),
             hotkey: HotkeyConfig::default(),
+            notifications: NotificationsConfig::default(),
             profile: ProfileConfig::default(),
             replay_seconds: 60,
         }
@@ -251,20 +253,55 @@ impl Default for OutputConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HotkeyConfig {
-    /// Shortcut that triggers `save_clip`. Parsed via
-    /// `clipdip_hotkey::HotkeyBinding::parse`.
-    ///
-    /// Default: `Ctrl+Alt+F10`. Function-key combos with `Ctrl+Alt` are
-    /// almost never claimed by other software (`Ctrl+Shift+S` collides
-    /// with OneDrive's screen-clip and browsers' "Save Page As"; standard
-    /// letter combos with `Ctrl+Shift` are easy to step on).
+    /// Shortcut that triggers `save_clip`.
     pub save_clip: String,
+    /// Shortcut that activates the rename input in the clip notification overlay.
+    pub rename_clip: String,
 }
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
             save_clip: "Ctrl+Alt+F10".into(),
+            rename_clip: "Ctrl+F10".into(),
+        }
+    }
+}
+
+// ---- notifications -------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Default for NotificationCorner {
+    fn default() -> Self {
+        Self::BottomRight
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    pub enabled: bool,
+    pub sound: bool,
+    pub corner: NotificationCorner,
+    /// Seconds before the notification auto-dismisses (0 = stay until renamed or dismissed).
+    pub auto_dismiss_secs: u32,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sound: true,
+            corner: NotificationCorner::BottomRight,
+            auto_dismiss_secs: 8,
         }
     }
 }

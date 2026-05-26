@@ -8,18 +8,18 @@ license.workspace = true
 name = "clipdip"
 path = "src/main.rs"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 crossbeam-channel.workspace = true
-ctrlc.workspace = true
-toml.workspace = true
+base64 = "0.22"
+
 clipdip-core.workspace = true
-clipdip-capture.workspace = true
-clipdip-encoder.workspace = true
-clipdip-audio.workspace = true
-clipdip-muxer.workspace = true
 clipdip-hotkey.workspace = true
-clipdip-ringbuf.workspace = true
-clipdip-profile.workspace = true
