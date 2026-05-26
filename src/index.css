@@ -41,21 +41,13 @@ input[type="range"] { -webkit-appearance: none; appearance: none; }
   to   { transform: rotate(360deg); }
 }
 
-@keyframes notif-in-right {
-  from { opacity: 0; transform: translateX(40px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-@keyframes notif-in-left {
-  from { opacity: 0; transform: translateX(-40px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-@keyframes notif-out-right {
-  from { opacity: 1; transform: translateX(0); }
-  to   { opacity: 0; transform: translateX(40px); }
-}
-@keyframes notif-out-left {
-  from { opacity: 1; transform: translateX(0); }
-  to   { opacity: 0; transform: translateX(-40px); }
+/* Notification card enter animation. Used to slide in from the side,
+   but the overlay window is now sized to fit the card so a translate
+   would immediately clip at the window edge. Fade + tiny scale-up
+   instead — also cheaper for the compositor. */
+@keyframes notif-pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
 /* Remove default focus ring for mouse users; keep for keyboard */

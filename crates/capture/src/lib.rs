@@ -72,6 +72,35 @@ pub struct DesktopDuplicator {
     /// Whether to composite the OS mouse cursor onto each frame. DXGI never
     /// includes it natively. Defaults to `true`.
     include_cursor: bool,
+    /// Screen-space cursor position the last time we composited. Used by
+    /// `emit_repeat` to skip the GDI compositing work when neither the
+    /// position nor the cursor shape has changed since — that's the most
+    /// common case while the user is idle, and GDI on a D3D texture is
+    /// the single biggest 3D-engine cost in steady state.
+    last_cursor_pos: (i32, i32),
+    /// Raw `HCURSOR` value from the last draw. Compared as an integer
+    /// because `HCURSOR` is `!Send`. Combined with `last_cursor_pos` to
+    /// decide whether a repeat-frame draw can be skipped.
+    last_cursor_handle: isize,
+}
+
+/// Read the current OS cursor's screen position and handle, or `None` if
+/// no cursor is showing. Cheap — `GetCursorInfo` is a syscall but no
+/// allocation, no GDI handles.
+fn read_cursor_state() -> Option<((i32, i32), isize)> {
+    unsafe {
+        let mut ci = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetCursorInfo(&mut ci).is_err() {
+            return None;
+        }
+        if ci.flags.0 & CURSOR_SHOWING.0 == 0 || ci.hCursor.is_invalid() {
+            return None;
+        }
+        Some(((ci.ptScreenPos.x, ci.ptScreenPos.y), ci.hCursor.0 as isize))
+    }
 }
 
 impl DesktopDuplicator {
@@ -110,6 +139,8 @@ impl DesktopDuplicator {
                 last_pts: 0,
                 output_origin,
                 include_cursor: true,
+                last_cursor_pos: (i32::MIN, i32::MIN),
+                last_cursor_handle: 0,
             })
         }
     }
@@ -190,10 +221,16 @@ impl DesktopDuplicator {
 
             // DXGI Desktop Duplication doesn't include the cursor in the
             // captured texture — paint it ourselves (unless the user
-            // opted out via `set_include_cursor(false)`).
+            // opted out via `set_include_cursor(false)`). Real frames
+            // always need a fresh draw because the source texture has
+            // no cursor in it at all.
             if self.include_cursor {
                 let _t = clipdip_profile::start("capture.cursor");
                 draw_cursor(&dst, self.output_origin);
+                if let Some((pos, handle)) = read_cursor_state() {
+                    self.last_cursor_pos = pos;
+                    self.last_cursor_handle = handle;
+                }
             }
 
             self.last_slot = Some(slot_idx);
@@ -211,6 +248,13 @@ impl DesktopDuplicator {
     /// Re-emit the last captured frame by copying it into a fresh ring slot.
     /// Used on `DXGI_ERROR_WAIT_TIMEOUT`. Returns `Ok(None)` if no frame has
     /// ever been captured (nothing to repeat from).
+    ///
+    /// Always emits a frame when prior content exists so the encoder
+    /// keeps producing packets at the configured CFR — the muxer's raw
+    /// `.h264 -> .mp4` path assigns synthetic constant-rate timestamps
+    /// via ffmpeg's `-framerate` flag, so dropping frames here would
+    /// fast-forward the output. The cursor *draw* itself is still
+    /// skipped below when nothing changed; that's the cheap win.
     fn emit_repeat(&mut self) -> Result<Option<CapturedFrame>> {
         let src_slot = match self.last_slot {
             Some(s) => s,
@@ -234,10 +278,33 @@ impl DesktopDuplicator {
             self.context.CopyResource(&dst_tex, &src_tex);
             self.context.Flush();
         }
-        // Repaint the cursor — the user may have moved it while the desktop
-        // image was static, and the previous slot's cursor position is stale.
+        // Repaint the cursor only if it actually moved or changed shape.
+        // The source slot (last_slot) already has a cursor composited at
+        // last_cursor_pos with last_cursor_handle — the CopyResource
+        // carries that pixel data forward. If neither has changed, the
+        // copy is already correct and we save the entire GDI roundtrip.
         if self.include_cursor {
-            draw_cursor(&dst_tex, self.output_origin);
+            match read_cursor_state() {
+                Some((pos, handle))
+                    if pos == self.last_cursor_pos
+                        && handle == self.last_cursor_handle => {
+                    // Cursor unchanged — skip the GDI work entirely. This
+                    // is the common idle path; cuts steady-state cursor
+                    // GDI work to near-zero when nothing's happening.
+                }
+                Some((pos, handle)) => {
+                    let _t = clipdip_profile::start("capture.cursor");
+                    draw_cursor(&dst_tex, self.output_origin);
+                    self.last_cursor_pos = pos;
+                    self.last_cursor_handle = handle;
+                }
+                None => {
+                    // Cursor went away (hidden or off-screen). The copy
+                    // still has the stale cursor — could repaint with an
+                    // empty draw, but in practice the next real frame
+                    // refreshes it. Leave it.
+                }
+            }
         }
 
         self.last_slot = Some(dst_slot);

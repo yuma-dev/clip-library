@@ -27,20 +27,36 @@ type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
 const TEAL = "oklch(0.74 0.13 195)";
 
+// The overlay window is now small (480x140), so CSS `vh` units resolve
+// to the window height — not the screen. Multiply by the actual screen
+// height instead so the notification renders at the same physical size
+// as before regardless of window size.
+const SCREEN_VH_PX =
+  typeof window !== "undefined" ? window.screen.height / 100 : 10.8;
+const vh = (n: number) => `${n * SCREEN_VH_PX}px`;
+
+// Inner offset of the notification card from the window edge. Combined
+// with the small overlay window's screen position (which sits flush at
+// the screen corner), this is the visible distance from the screen edge
+// to the card.
+const CARD_INSET_PX = 24;
+
 function cornerStyle(corner: Corner): React.CSSProperties {
-  const inset = "2.2vh";
   switch (corner) {
-    case "top_left":     return { top: inset, left: inset };
-    case "top_right":    return { top: inset, right: inset };
-    case "bottom_left":  return { bottom: inset, left: inset };
-    case "bottom_right": return { bottom: inset, right: inset };
+    case "top_left":     return { top: CARD_INSET_PX,    left: CARD_INSET_PX };
+    case "top_right":    return { top: CARD_INSET_PX,    right: CARD_INSET_PX };
+    case "bottom_left":  return { bottom: CARD_INSET_PX, left: CARD_INSET_PX };
+    case "bottom_right": return { bottom: CARD_INSET_PX, right: CARD_INSET_PX };
   }
 }
 
-function slideInAnimation(corner: Corner): React.CSSProperties {
-  const fromRight = corner === "top_right" || corner === "bottom_right";
+function enterAnimation(): React.CSSProperties {
+  // Fade + tiny scale-up. We can no longer slide horizontally — the
+  // overlay window is sized to fit the card, so a translateX would
+  // immediately clip at the window's edge. Fade-in is also kinder on
+  // the GPU than a sliding translate.
   return {
-    animation: `${fromRight ? "notif-in-right" : "notif-in-left"} 0.32s cubic-bezier(0.2,0.8,0.25,1) both`,
+    animation: `notif-pop-in 0.22s cubic-bezier(0.2,0.8,0.25,1) both`,
   };
 }
 
@@ -53,24 +69,24 @@ function Kbd({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", justifyContent: "center",
-      minWidth: "1.85vh", height: "1.65vh", padding: "0 0.4vh",
-      borderRadius: "0.35vh",
+      minWidth: vh(1.85), height: vh(1.65), padding: `0 ${vh(0.4)}`,
+      borderRadius: vh(0.35),
       background: "rgba(255,255,255,0.07)",
       color: "rgba(255,255,255,0.72)",
       border: "1px solid rgba(255,255,255,0.1)",
-      font: `500 1.2vh/1 ${NOTIF_MONO}`,
+      font: `500 ${vh(1.2)}/1 ${NOTIF_MONO}`,
     }}>{children}</span>
   );
 }
 
-function Thumb({ src, w = "6.4vh", h = "4.2vh" }: { src: string | null; w?: string; h?: string }) {
+function Thumb({ src, w = vh(6.4), h = vh(4.2) }: { src: string | null; w?: string; h?: string }) {
   // Thumbnail arrives via a separate `clip-thumbnail` event (gdigrab is
   // slow on first run), so the initial render almost always has src=null.
   // A faint pulse on the placeholder signals "image coming".
   return (
     <div style={{
       width: w, height: h, flexShrink: 0,
-      borderRadius: "0.35vh",
+      borderRadius: vh(0.35),
       background: "#0a0a0c",
       boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
       overflow: "hidden",
@@ -93,12 +109,12 @@ function Thumb({ src, w = "6.4vh", h = "4.2vh" }: { src: string | null; w?: stri
   );
 }
 
-function Spinner({ size = "1.1vh" }: { size?: string }) {
+function Spinner({ size = vh(1.1) }: { size?: string }) {
   return (
     <span style={{
       width: size, height: size,
       borderRadius: 999, flexShrink: 0,
-      border: "0.18vh solid rgba(255,255,255,0.18)",
+      border: `${vh(0.18)} solid rgba(255,255,255,0.18)`,
       borderTopColor: "rgba(255,255,255,0.85)",
       boxSizing: "border-box",
       animation: "notif-spin 0.75s linear infinite",
@@ -191,10 +207,10 @@ function NotificationCard({
   return (
     <div
       style={{
-        ...slideInAnimation(notif.corner),
-        display: "inline-flex", alignItems: "center", gap: "1.3vh",
-        padding: "1vh 1.6vh",
-        borderRadius: "0.55vh",
+        ...enterAnimation(),
+        display: "inline-flex", alignItems: "center", gap: vh(1.3),
+        padding: `${vh(1)} ${vh(1.6)}`,
+        borderRadius: vh(0.55),
         background: "rgb(22,22,26)",
         boxShadow: "0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06)",
         cursor: "default",
@@ -203,22 +219,22 @@ function NotificationCard({
     >
       <Thumb src={notif.thumbnail} />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.2vh" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: vh(0.2) }}>
         {/* header: pip/spinner + label */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.55vh" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: vh(0.55) }}>
           {notif.phase === "saving" ? (
             <Spinner />
           ) : (
             <span style={{
-              width: "1.1vh", height: "1.1vh", borderRadius: 999,
+              width: vh(1.1), height: vh(1.1), borderRadius: 999,
               background: renamed ? "#22c55e" : TEAL,
               flexShrink: 0,
-              boxShadow: renamed ? "0 0 0.75vh #22c55e88" : `0 0 0.75vh ${TEAL}55`,
+              boxShadow: renamed ? `0 0 ${vh(0.75)} #22c55e88` : `0 0 ${vh(0.75)} ${TEAL}55`,
               transition: "background 0.3s, box-shadow 0.3s",
             }} />
           )}
           <span style={{
-            font: `600 1.3vh/1 ${NOTIF_SANS}`,
+            font: `600 ${vh(1.3)}/1 ${NOTIF_SANS}`,
             color: "rgba(255,255,255,0.88)",
             letterSpacing: "0.1em",
             textTransform: "uppercase",
@@ -231,42 +247,42 @@ function NotificationCard({
             still reserve the same vertical space so the card doesn't
             visibly resize when phase 2 lands. */}
         {notif.phase === "saving" ? (
-          <div style={{ height: "2.2vh", minWidth: "17vh" }} />
+          <div style={{ height: vh(2.2), minWidth: vh(17) }} />
         ) : (
           <div
             onClick={() => inputRef.current?.focus()}
             style={{
               cursor: "text",
               position: "relative",
-              height: "2.2vh",
-              minWidth: "17vh",
+              height: vh(2.2),
+              minWidth: vh(17),
               display: "flex",
               alignItems: "center",
             }}
           >
             {!focused && !renamed && (
               <div style={{
-                font: `500 1.4vh/1 ${NOTIF_SANS}`,
+                font: `500 ${vh(1.4)}/1 ${NOTIF_SANS}`,
                 color: "rgba(255,255,255,0.5)",
-                display: "flex", alignItems: "center", gap: "0.45vh",
+                display: "flex", alignItems: "center", gap: vh(0.45),
                 pointerEvents: "none",
                 whiteSpace: "nowrap",
               }}>
                 <Kbd>Ctrl</Kbd>
                 <span style={{ opacity: 0.45 }}>+</span>
                 <Kbd>F10</Kbd>
-                <span style={{ opacity: 0.85, marginLeft: "0.2vh" }}>to rename</span>
+                <span style={{ opacity: 0.85, marginLeft: vh(0.2) }}>to rename</span>
               </div>
             )}
             {renamed && (
               <span style={{
-                font: `500 1.65vh/1 ${NOTIF_SANS}`,
+                font: `500 ${vh(1.65)}/1 ${NOTIF_SANS}`,
                 color: "rgba(255,255,255,0.7)",
                 letterSpacing: "-0.005em",
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                maxWidth: "26vh",
+                maxWidth: vh(26),
               }}>
                 {renameValue || notif.title}
               </span>
@@ -285,7 +301,7 @@ function NotificationCard({
                   width: "100%", height: "100%",
                   background: "transparent", border: 0, outline: 0, padding: 0, margin: 0,
                   color: "rgba(255,255,255,0.96)",
-                  font: `500 1.65vh/1 ${NOTIF_SANS}`,
+                  font: `500 ${vh(1.65)}/1 ${NOTIF_SANS}`,
                   letterSpacing: "-0.005em",
                   opacity: focused ? 1 : 0,
                   caretColor: "#fff",
@@ -304,6 +320,18 @@ function NotificationCard({
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window &&
   (window as unknown as { __TAURI_INTERNALS__: { invoke?: unknown } }).__TAURI_INTERNALS__.invoke !== undefined;
 
+// Corner read from the URL params Rust set when it created the window.
+// Used as the initial value before the first clip-saving payload arrives
+// so the card lands at the right edge of the window without a flicker.
+const URL_CORNER: Corner = (() => {
+  if (typeof window === "undefined") return "bottom_right";
+  const c = new URLSearchParams(window.location.search).get("corner");
+  if (c === "top_left" || c === "top_right" || c === "bottom_left" || c === "bottom_right") {
+    return c;
+  }
+  return "bottom_right";
+})();
+
 export default function OverlayWindow() {
   const [notif, setNotif] = useState<NotifState | null>(null);
   // Bumped on every clip-saving event; used as a React `key` on the card
@@ -315,6 +343,36 @@ export default function OverlayWindow() {
   // Startup diagnostics — remove once overlay is confirmed working
   useEffect(() => {
     console.log("[overlay] mounted, isTauri=", isTauri, "href=", window.location.href);
+  }, []);
+
+  // The overlay window is now created on demand per-notification, so the
+  // backend's `clip-saving` emit races with React attaching its listener
+  // below. Read the stashed payload on mount as a safety net.
+  useEffect(() => {
+    if (!isTauri) return;
+    invoke<ClipSavingPayload | null>("overlay_get_pending")
+      .then(p => {
+        if (!p) return;
+        profileRef.current = !!p.profile;
+        flowStartRef.current = performance.now();
+        if (p.profile) {
+          console.log("[overlay] hydrated from pending payload", {
+            ...p,
+            thumbnail: p.thumbnail ? `<${p.thumbnail.length} chars>` : null,
+          });
+        }
+        setNotif({
+          phase:             "saving",
+          path:              null,
+          title:             null,
+          thumbnail:         p.thumbnail,
+          rename_hotkey:     p.rename_hotkey,
+          auto_dismiss_secs: p.auto_dismiss_secs,
+          corner:            (p.corner as Corner) || URL_CORNER,
+        });
+        setClipSeq(s => s + 1);
+      })
+      .catch(err => console.error("[overlay] overlay_get_pending failed:", err));
   }, []);
 
   // Show a demo notification in browser preview mode
@@ -368,11 +426,9 @@ export default function OverlayWindow() {
           thumbnail: p.thumbnail ? `<${p.thumbnail.length} chars>` : null,
         });
       }
-      if (p.sound) {
-        // Served from `assets/sound/save.wav` via Vite's publicDir.
-        const audio = new Audio("/sound/save.wav");
-        audio.play().catch(err => console.warn("[overlay] save sound failed:", err));
-      }
+      // Sound is now played from the Rust process via PlaySoundW —
+      // playing in the webview forced an extra layout/decode pass while
+      // WebView2 was already rendering the notification.
       setNotif({
         phase:             "saving",
         path:              null,

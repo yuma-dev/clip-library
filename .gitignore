@@ -38,3 +38,4 @@ clipdip-test.mp4
 
 # package-lock (generated, not committed)
 package-lock.json
+vendor/

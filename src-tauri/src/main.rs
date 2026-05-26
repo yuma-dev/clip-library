@@ -12,6 +12,65 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tracing::{error, info, warn};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{BOOL, HWND, TRUE};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+
+/// Notification window dimensions. Sized just larger than the actual
+/// notification card so the rename input + thumbnail + status text can
+/// expand without overflow, and so the card's drop shadow has room to
+/// render inside the window bounds. NOT fullscreen — that's the entire
+/// point: a fullscreen transparent always-on-top window forces DWM to
+/// recomposite the whole desktop through it.
+const OVERLAY_W: u32 = 480;
+const OVERLAY_H: u32 = 140;
+
+fn corner_window_position(monitor_w: u32, monitor_h: u32, corner: &str) -> (i32, i32) {
+    let mw = monitor_w as i32;
+    let mh = monitor_h as i32;
+    let ow = OVERLAY_W as i32;
+    let oh = OVERLAY_H as i32;
+    match corner {
+        "top_left"     => (0,        0),
+        "top_right"    => (mw - ow,  0),
+        "bottom_left"  => (0,        mh - oh),
+        _              => (mw - ow,  mh - oh), // bottom_right default
+    }
+}
+
+/// Disable Windows' DWM transition animations on the overlay HWND so
+/// `show()` is instant — no scale-up animation playing on top of the
+/// React enter animation.
+fn disable_window_transitions(hwnd: HWND) {
+    unsafe {
+        let value: BOOL = TRUE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &value as *const _ as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+}
+
+/// Save-sound WAV bytes, embedded so we don't have to resolve a file path at
+/// runtime. PlaySoundW with SND_MEMORY reads directly from this static buffer.
+const SAVE_SOUND_WAV: &[u8] = include_bytes!("../../assets/sound/save.wav");
+
+/// Play the embedded save-sound asynchronously. Replaces the webview-side
+/// `new Audio()` call — playing from the webview blocks on the JS event
+/// loop and forces an extra layout pass while the WebView2 process is
+/// already busy rendering the notification.
+fn play_save_sound() {
+    unsafe {
+        let _ = PlaySoundW(
+            PCWSTR(SAVE_SOUND_WAV.as_ptr() as *const u16),
+            None,
+            SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
+        );
+    }
+}
 
 /// Injected into every webview window so console.* output is forwarded to the
 /// Rust tracing subscriber (visible in the terminal alongside app logs).
@@ -51,6 +110,12 @@ struct AppState {
     /// Path of the clip whose notification is currently on-screen (if any).
     active_clip: Arc<Mutex<Option<String>>>,
     pipeline_running: Arc<Mutex<bool>>,
+    /// Latest `clip-saving` payload, stashed here for the overlay to fetch
+    /// on mount via `overlay_get_pending`. Events emitted before a webview
+    /// is mounted are dropped silently — the overlay is now lazily
+    /// created per-notification, so we'd lose the phase-1 payload without
+    /// this safety net.
+    pending_saving: Arc<Mutex<Option<ClipSavingPayload>>>,
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -97,6 +162,60 @@ struct ClipRenamedPayload {
     old_path: String,
     new_path: String,
     new_title: String,
+}
+
+// ---------- overlay window management -------------------------------------
+
+/// Create the notification overlay window (small, transparent, positioned
+/// at the configured corner) and disable its native window-show animation.
+/// Idempotent — if the window already exists, repositions it for the
+/// requested corner, shows it, and returns it.
+///
+/// This is called on every save hotkey rather than at startup so the
+/// WebView2 process stays dead while the user isn't actively saving.
+fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::WebviewWindow> {
+    if let Some(w) = app.get_webview_window("overlay") {
+        if let Ok(Some(monitor)) = w.current_monitor() {
+            let (x, y) = corner_window_position(
+                monitor.size().width,
+                monitor.size().height,
+                corner,
+            );
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        let _ = w.set_ignore_cursor_events(true);
+        let _ = w.show();
+        return Some(w);
+    }
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let (mw, mh) = (monitor.size().width, monitor.size().height);
+    let (x, y) = corner_window_position(mw, mh, corner);
+    let url = format!("index.html?overlay=1&corner={}", corner);
+    let w = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App(url.into()))
+        .inner_size(OVERLAY_W as f64, OVERLAY_H as f64)
+        .position(x as f64, y as f64)
+        .transparent(true)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        // Build hidden, disable DWM transitions, THEN show — otherwise
+        // Windows plays the scale-up animation on first show, which
+        // visibly competes with the React enter animation.
+        .visible(false)
+        .resizable(false)
+        .initialization_script(CONSOLE_SCRIPT)
+        .build()
+        .ok()?;
+    let _ = w.set_ignore_cursor_events(true);
+    if let Ok(hwnd) = w.hwnd() {
+        // Tauri pulls in `windows` 0.61; we pin 0.58 across the workspace
+        // for COM-ABI consistency, so HWND types differ between crates
+        // despite being identical layout. Round-trip through the raw
+        // pointer to bridge them.
+        disable_window_transitions(HWND(hwnd.0 as *mut _));
+    }
+    let _ = w.show();
+    Some(w)
 }
 
 // ---------- tauri commands ------------------------------------------------
@@ -176,11 +295,24 @@ fn set_overlay_input_mode(enabled: bool, app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.active_clip.lock().unwrap() = None;
+    *state.pending_saving.lock().unwrap() = None;
     if let Some(w) = app.get_webview_window("overlay") {
-        let _ = w.set_ignore_cursor_events(true);
-        // Overlay stays visible (it's transparent + click-through), no hide needed.
+        // Destroy (not hide) the window so the WebView2 process can exit
+        // when the user isn't actively saving. `hide()` keeps the webview
+        // alive and counts as a process the user can see in Task Manager.
+        let _ = w.destroy();
     }
     Ok(())
+}
+
+/// Returns the latest `clip-saving` payload that was stashed before the
+/// overlay window mounted. The overlay calls this on mount because Tauri
+/// events emitted before any listener is attached are dropped silently —
+/// and we now create the overlay window on demand, so the phase-1 emit
+/// races with the React mount.
+#[tauri::command]
+fn overlay_get_pending(state: State<'_, AppState>) -> Option<ClipSavingPayload> {
+    state.pending_saving.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -366,6 +498,9 @@ fn run_capture_loop(
                 // `clip-thumbnail` event slots it in once gdigrab finishes
                 // (which can take a couple seconds the first time).
                 if notifs_enabled {
+                    if cur.notifications.sound {
+                        play_save_sound();
+                    }
                     let saving_payload = ClipSavingPayload {
                         thumbnail: None,
                         rename_hotkey: rename_hint.clone(),
@@ -374,8 +509,14 @@ fn run_capture_loop(
                         sound: cur.notifications.sound,
                         profile: prof,
                     };
-                    if let Some(overlay) = app.get_webview_window("overlay") {
-                        let _ = overlay.set_ignore_cursor_events(true);
+                    // Stash the payload BEFORE creating the window — the
+                    // overlay reads it via `overlay_get_pending` on mount
+                    // because the `clip-saving` event below races with React
+                    // attaching its listener.
+                    if let Some(state) = app.try_state::<AppState>() {
+                        *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
+                    }
+                    if let Some(overlay) = ensure_overlay_window(&app, &corner) {
                         let _ = overlay.emit("clip-saving", saving_payload);
                     }
                     if prof { info!("emit clip-saving [t+{}ms]", t0.elapsed().as_millis()); }
@@ -593,6 +734,7 @@ fn main() {
             config_path: config_path.clone(),
             active_clip: active_clip.clone(),
             pipeline_running: pipeline_running.clone(),
+            pending_saving: Arc::new(Mutex::new(None)),
         })
         .setup(move |app| {
             // Log configured hotkeys so the user can confirm them in the console.
@@ -637,44 +779,10 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Main settings window — hidden until the user opens it via tray.
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("Clipdip")
-                .inner_size(980.0, 700.0)
-                .min_inner_size(820.0, 580.0)
-                .center()
-                .decorations(false)
-                .resizable(true)
-                .visible(false)
-                .initialization_script(CONSOLE_SCRIPT)
-                .build()?;
-
-            // Size the overlay to cover the primary monitor.
-            let (ow, oh) = app
-                .primary_monitor()
-                .ok()
-                .flatten()
-                .map(|m| (m.size().width, m.size().height))
-                .unwrap_or((1920, 1080));
-
-            // The overlay is always-visible (transparent + click-through) to
-            // avoid the native window-appear animation triggered by show().
-            let overlay = WebviewWindowBuilder::new(
-                app,
-                "overlay",
-                WebviewUrl::App("index.html?overlay=1".into()),
-            )
-            .inner_size(ow as f64, oh as f64)
-            .position(0.0, 0.0)
-            .transparent(true)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(true)
-            .resizable(false)
-            .initialization_script(CONSOLE_SCRIPT)
-            .build()?;
-            let _ = overlay.set_ignore_cursor_events(true);
+            // No webview windows are built at startup — main is opened on
+            // demand via the tray, overlay is created per-notification by
+            // ensure_overlay_window(). That way WebView2 isn't running
+            // while the user is idle.
 
             // Start the capture pipeline and hotkey loop in a background thread.
             let handle = app.handle().clone();
@@ -694,6 +802,7 @@ fn main() {
             open_clips_folder,
             get_pipeline_running,
             forward_console,
+            overlay_get_pending,
         ])
         .run(tauri::generate_context!())
         .expect("error running clipdip");

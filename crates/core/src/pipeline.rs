@@ -268,7 +268,14 @@ fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Resu
         if now < next_at {
             std::thread::sleep(next_at - now);
         }
-        next_at += frame_interval;
+        // Clamp so an idle stretch (where `acquire_frame` blocks for up to
+        // 200ms per iteration) doesn't push `next_at` hundreds of ms into
+        // the past. Without this, the moment activity starts and DXGI
+        // delivers fresh frames quickly, the loop burst-encodes at the
+        // hardware ceiling (~117fps on a 60fps config) until `next_at`
+        // catches up — exactly the spike you see when moving the mouse
+        // after an idle period.
+        next_at = next_at.max(now) + frame_interval;
 
         let _t_frame = clipdip_profile::start("pipeline.video_frame");
 

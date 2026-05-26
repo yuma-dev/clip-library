@@ -14,6 +14,7 @@
 
 pub mod encoder;
 pub mod loader;
+mod nv12_converter;
 pub mod sys;
 
 pub use encoder::NvEncoderD3D11;
