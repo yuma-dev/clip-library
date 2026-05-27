@@ -323,6 +323,87 @@ async function getVolume(clipName, getSettings) {
 }
 
 // ============================================================================
+// Per-Track Audio State (multi-track playback)
+// ============================================================================
+
+/**
+ * Save per-track audio state for a clip.
+ * @param {string} clipName
+ * @param {object} trackState - { tracks: { [ordinal]: { volume, muted, name } } }
+ */
+async function saveTrackState(clipName, trackState, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  await ensureDirectoryExists(metadataFolder);
+  const filePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trackstate`);
+  try {
+    await writeFileAtomically(filePath, JSON.stringify(trackState || { tracks: {} }));
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error saving track state for ${clipName}:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Global track preferences keyed by track *name* (e.g. "Mic In (Elgato Wave:XLR)").
+ * Holds color + hidden state — both shared across every clip that contains a
+ * track with the same name. Volume stays per-clip.
+ * Stored in userData/trackPreferences.json: { [trackName]: { color, hidden } }
+ */
+async function getTrackPreferences(getAppPath) {
+  try {
+    const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
+    const raw = await fs.readFile(prefsPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    logger.error('Error reading track preferences:', error);
+    return {};
+  }
+}
+
+async function saveTrackPreferences(trackName, patch, getAppPath) {
+  try {
+    const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
+    const existing = await getTrackPreferences(getAppPath);
+    const current = existing[trackName] || {};
+    const next = { ...current, ...(patch || {}) };
+    // Strip null/undefined entries so the file stays tidy.
+    Object.keys(next).forEach((k) => { if (next[k] == null) delete next[k]; });
+    if (Object.keys(next).length === 0) {
+      delete existing[trackName];
+    } else {
+      existing[trackName] = next;
+    }
+    await writeFileAtomically(prefsPath, JSON.stringify(existing));
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error saving track preferences for ${trackName}:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function getTrackState(clipName, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  const filePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trackstate`);
+  try {
+    const data = await fs.readFile(filePath, 'utf8');
+    const parsed = JSON.parse(data);
+    if (parsed && typeof parsed === 'object' && parsed.tracks && typeof parsed.tracks === 'object') {
+      return parsed;
+    }
+    return { tracks: {} };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { tracks: {} };
+    logger.error(`Error reading track state for ${clipName}:`, error);
+    return { tracks: {} };
+  }
+}
+
+// ============================================================================
 // Volume Range
 // ============================================================================
 
@@ -715,6 +796,14 @@ module.exports = {
   // Volume range
   saveVolumeRange,
   getVolumeRange,
+
+  // Per-track audio state
+  saveTrackState,
+  getTrackState,
+
+  // Global per-device track preferences (color, hidden)
+  getTrackPreferences,
+  saveTrackPreferences,
 
   // Clip tags
   getClipTags,

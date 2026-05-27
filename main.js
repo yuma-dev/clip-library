@@ -621,6 +621,40 @@ ipcMain.handle("get-clip-info", async (event, clipName) => {
   return ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule);
 });
 
+ipcMain.handle("extract-audio-tracks", async (event, clipName) => {
+  try {
+    return await ffmpegModule.extractAudioTracks(clipName, getSettings, thumbnailsModule);
+  } catch (error) {
+    logger.error(`Error extracting audio tracks for ${clipName}:`, error);
+    return [];
+  }
+});
+
+ipcMain.handle("reset-clip-cache", async (event, clipName) => {
+  try {
+    return await ffmpegModule.resetClipCache(clipName, getSettings, thumbnailsModule);
+  } catch (error) {
+    logger.error(`Error resetting cache for ${clipName}:`, error);
+    return { removed: [], error: error.message };
+  }
+});
+
+ipcMain.handle("save-track-state", async (event, clipName, trackState) => {
+  return metadataModule.saveTrackState(clipName, trackState, getSettings);
+});
+
+ipcMain.handle("get-track-state", async (event, clipName) => {
+  return metadataModule.getTrackState(clipName, getSettings);
+});
+
+ipcMain.handle("get-track-preferences", async () => {
+  return metadataModule.getTrackPreferences(app.getPath.bind(app));
+});
+
+ipcMain.handle("save-track-preferences", async (event, trackName, patch) => {
+  return metadataModule.saveTrackPreferences(trackName, patch, app.getPath.bind(app));
+});
+
 ipcMain.handle("get-trim", async (event, clipName) => {
   return metadataModule.getTrimData(clipName, getSettings);
 });
