@@ -17,6 +17,14 @@ const { ipcRenderer } = require('electron');
 const path = require('path');
 const logger = require('../utils/logger');
 const state = require('./state');
+const { AudioTracksManager } = require('./audio-tracks-manager');
+
+// Module-level handle for the currently active multi-track manager (if any).
+let activeAudioTracksManager = null;
+// Monotonically incremented on each openClip call AND on closePlayer. Async
+// multi-track setup uses this token to detect when a newer openClip (or a
+// closePlayer) has superseded it and bail.
+let clipOpenGeneration = 0;
 
 // ============================================================================
 // DOM ELEMENT REFERENCES
@@ -38,6 +46,7 @@ let elements = {
   volumeButton: null,
   volumeSlider: null,
   volumeContainer: null,
+  audioTracksPanel: null,
   speedButton: null,
   speedSlider: null,
   speedContainer: null,
@@ -1665,6 +1674,23 @@ async function closePlayer() {
   elements.fullscreenPlayer.style.display = "none";
   document.body.classList.remove('player-open');
   if (window.uiBlur) window.uiBlur.disable();
+
+  // Bumping the open-generation here signals any in-flight background
+  // multi-track init (started for the clip we're now closing) to discard
+  // itself when it finishes, instead of attaching to a closed player.
+  clipOpenGeneration += 1;
+
+  if (activeAudioTracksManager) {
+    try { activeAudioTracksManager.dispose(); } catch (err) { logger.warn(`[audio-tracks] dispose failed: ${err.message}`); }
+    activeAudioTracksManager = null;
+  }
+  if (elements.audioTracksPanel) {
+    elements.audioTracksPanel.classList.add('hidden');
+  }
+  if (elements.volumeSlider) {
+    elements.volumeSlider.style.display = '';
+  }
+
   await releaseVideoElement();
 
   if (elements.clipTitle) {
@@ -1899,7 +1925,11 @@ async function exportClipFromContextMenu(clip) {
  * @param {string} customName - The custom name of the clip
  */
 async function openClip(originalName, customName) {
-  logger.info(`Opening clip: ${originalName}`);
+  // Capture this open's generation token; async work later verifies it is
+  // still the most recent open before mutating shared state.
+  clipOpenGeneration += 1;
+  const openGen = clipOpenGeneration;
+  logger.info(`Opening clip: ${originalName} (gen=${openGen})`);
   
   // Performance timing for benchmark mode
   const timings = {};
@@ -1946,6 +1976,18 @@ async function openClip(originalName, customName) {
   if (state.currentCleanup) {
     state.currentCleanup();
     state.currentCleanup = null;
+  }
+
+  // Always tear down any previous multi-track manager before opening a new clip.
+  if (activeAudioTracksManager) {
+    try { activeAudioTracksManager.dispose(); } catch (err) { logger.warn(`[audio-tracks] dispose failed: ${err.message}`); }
+    activeAudioTracksManager = null;
+  }
+  if (elements.audioTracksPanel) {
+    elements.audioTracksPanel.classList.add('hidden');
+  }
+  if (elements.volumeSlider) {
+    elements.volumeSlider.style.display = '';
   }
 
   // Remove last-opened class from any previously highlighted clip
@@ -2210,6 +2252,71 @@ async function openClip(originalName, customName) {
     // Check for volume range data to show volume controls
     await loadVolumeData();
     mark('afterVolumeData');
+
+    // Multi-track audio support: if this clip has >1 audio stream, extract each
+    // track to its own .m4a, mute the <video>, and build a per-track audio
+    // graph. We await this before play() — a brief load-delay is preferable
+    // to playing the wrong audio (the native default-track) for the first
+    // second or two and then swapping it out.
+    const audioTracks = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks : [];
+    if (audioTracks.length > 1) {
+      try {
+        setupAudioContext();
+        const [extracted, persisted, globalPrefs] = await Promise.all([
+          ipcRenderer.invoke('extract-audio-tracks', originalName),
+          ipcRenderer.invoke('get-track-state', originalName),
+          ipcRenderer.invoke('get-track-preferences')
+        ]);
+        if (openGen !== clipOpenGeneration) {
+          logger.info(`[${originalName}] Multi-track init aborted (stale gen ${openGen} vs ${clipOpenGeneration})`);
+        } else if (Array.isArray(extracted) && extracted.length > 0) {
+          const trackMetas = extracted.map((entry) => {
+            const meta = audioTracks.find((t) => t.ordinal === entry.ordinal) || {};
+            return {
+              ordinal: entry.ordinal,
+              streamIndex: entry.streamIndex,
+              path: entry.path,
+              name: meta.name || `Track ${entry.ordinal + 1}`,
+              channels: meta.channels || null
+            };
+          });
+          const manager = new AudioTracksManager({
+            videoEl: elements.videoPlayer,
+            audioContext: state.audioContext,
+            masterGainNode: state.gainNode,
+            panelEl: elements.audioTracksPanel,
+            onPersistClip: (trackState) => {
+              ipcRenderer.invoke('save-track-state', originalName, trackState)
+                .catch((err) => logger.warn(`[audio-tracks] save clip failed: ${err.message}`));
+            },
+            onPersistGlobal: (trackName, patch) => {
+              ipcRenderer.invoke('save-track-preferences', trackName, patch)
+                .catch((err) => logger.warn(`[audio-tracks] save global failed: ${err.message}`));
+            }
+          });
+          await manager.init(trackMetas, persisted, globalPrefs);
+          if (openGen !== clipOpenGeneration) {
+            logger.info(`[${originalName}] Multi-track init completed too late, disposing (gen ${openGen} vs ${clipOpenGeneration})`);
+            try { manager.dispose(); } catch (_) {}
+          } else {
+            if (activeAudioTracksManager && activeAudioTracksManager !== manager) {
+              try { activeAudioTracksManager.dispose(); } catch (_) {}
+            }
+            activeAudioTracksManager = manager;
+            if (elements.volumeSlider) {
+              elements.volumeSlider.style.display = 'none';
+            }
+            if (elements.audioTracksPanel) {
+              elements.audioTracksPanel.classList.add('hidden');
+            }
+            logger.info(`[${originalName}] Multi-track audio initialized with ${trackMetas.length} tracks`);
+          }
+        }
+      } catch (err) {
+        logger.error(`[${originalName}] Failed to init multi-track audio:`, err);
+      }
+    }
+    mark('afterAudioTracks');
     
     // Start playhead updates
     requestAnimationFrame(updatePlayhead);
@@ -2602,19 +2709,28 @@ function setupEventListeners() {
 
   if (elements.volumeButton) {
     elements.volumeButton.addEventListener("click", () => {
-      elements.volumeSlider.classList.toggle("collapsed");
-      clearTimeout(elements.volumeContainer.timeout);
+      if (activeAudioTracksManager && elements.audioTracksPanel) {
+        elements.audioTracksPanel.classList.toggle('hidden');
+      } else {
+        elements.volumeSlider.classList.toggle("collapsed");
+        clearTimeout(elements.volumeContainer.timeout);
+      }
     });
   }
 
   if (elements.volumeContainer) {
     elements.volumeContainer.addEventListener("mouseenter", () => {
       clearTimeout(elements.volumeContainer.timeout);
+      if (activeAudioTracksManager) return; // multi-track popout is click-only
       elements.volumeSlider.classList.remove("collapsed");
     });
 
     elements.volumeContainer.addEventListener("mouseleave", () => {
       elements.volumeContainer.timeout = setTimeout(() => {
+        if (activeAudioTracksManager) {
+          if (elements.audioTracksPanel) elements.audioTracksPanel.classList.add('hidden');
+          return;
+        }
         elements.volumeSlider.classList.add("collapsed");
       }, 2000);
     });

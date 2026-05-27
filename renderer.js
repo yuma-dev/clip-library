@@ -1122,6 +1122,7 @@ function setupContextMenu() {
   const contextMenuReveal = document.getElementById("context-menu-reveal");
   const contextMenuTags = document.getElementById("context-menu-tags");
   const contextMenuResetTrim = document.getElementById("context-menu-reset-trim");
+  const contextMenuResetCache = document.getElementById("context-menu-reset-cache");
   const tagsDropdown = document.getElementById("tags-dropdown");
   const tagSearchInput = document.getElementById("tag-search-input");
   const addTagButton = document.getElementById("add-tag-button");
@@ -1229,6 +1230,21 @@ function setupContextMenu() {
     });
   }
 
+  if (contextMenuResetCache) {
+    contextMenuResetCache.addEventListener("click", async () => {
+      const clip = state.contextMenuClip;
+      logger.info("Reset cache clicked for clip:", clip?.originalName);
+      contextMenu.style.display = "none";
+      if (!clip) return;
+      try {
+        const res = await ipcRenderer.invoke('reset-clip-cache', clip.originalName);
+        logger.info(`[reset-cache] cleared ${res?.removed?.length ?? 0} path(s) for ${clip.originalName}`);
+      } catch (err) {
+        logger.error(`[reset-cache] failed for ${clip.originalName}:`, err);
+      }
+    });
+  }
+
   // Close context menu when clicking outside
   document.addEventListener("click", () => {
     contextMenu.style.display = "none";
@@ -1318,6 +1334,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     volumeButton: document.getElementById("volume-button"),
     volumeSlider: document.getElementById("volume-slider"),
     volumeContainer: document.getElementById("volume-container"),
+    audioTracksPanel: document.getElementById("audio-tracks-panel"),
     speedButton: document.getElementById("speed-button"),
     speedSlider: document.getElementById("speed-slider"),
     speedContainer: document.getElementById("speed-container"),

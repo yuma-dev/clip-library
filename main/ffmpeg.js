@@ -1755,6 +1755,56 @@ function setupProgressListeners() {
  * @returns {Promise<Object>} Clip info object with format.duration
  */
 // Metadata helpers
+function buildAudioTracksFromStreams(streams) {
+  if (!Array.isArray(streams)) return [];
+  const audio = streams.filter((s) => s && s.codec_type === 'audio');
+  return audio.map((s, ordinal) => {
+    const tags = s.tags || {};
+    const rawTitle = typeof tags.title === 'string' ? tags.title.trim() : '';
+    const rawHandler = typeof tags.handler_name === 'string' ? tags.handler_name.trim() : '';
+    const handlerIsGeneric = !rawHandler || /^sound\s*handler$/i.test(rawHandler);
+    const resolvedName = rawTitle || (handlerIsGeneric ? '' : rawHandler) || `Track ${ordinal + 1}`;
+    // A stream's first packet PTS (start_time) is non-zero when the source
+    // has an mp4 edit-list (elst) that maps a leading slice of presentation
+    // time to nothing — i.e. the audio track starts late relative to the
+    // video. Stream-copying such a track preserves the elst and breaks
+    // seeking (Chrome's <audio> clamps currentTime up to the playable start),
+    // so we must re-encode to apply the elst and pad silence. Tracks with
+    // start_time == 0 have no such issue and can be stream-copied at near-
+    // zero cost.
+    const startTime = Number(s.start_time);
+    const needsReencode = Number.isFinite(startTime) && Math.abs(startTime) > 0.0005;
+    return {
+      streamIndex: Number.isFinite(s.index) ? s.index : ordinal,
+      ordinal,
+      codec: s.codec_name || null,
+      channels: Number.isFinite(s.channels) ? s.channels : null,
+      sampleRate: Number.isFinite(Number(s.sample_rate)) ? Number(s.sample_rate) : null,
+      language: tags.language || null,
+      name: resolvedName,
+      isDefault: !!(s.disposition && s.disposition.default),
+      startTime: Number.isFinite(startTime) ? startTime : 0,
+      needsReencode
+    };
+  });
+}
+
+// Bump when the audioTracks parsing logic changes so cached entries are recomputed.
+// v3 added per-track startTime + needsReencode (elst detection).
+const AUDIO_TRACKS_CACHE_VERSION = 3;
+
+async function probeAudioTracksDirect(clipPath) {
+  // Use ffprobe directly to get raw stream tags (fluent-ffmpeg sometimes filters them).
+  const { stdout } = await execFileAsync(ffprobePath, [
+    '-v', 'error',
+    '-print_format', 'json',
+    '-show_streams',
+    clipPath
+  ]);
+  const parsed = JSON.parse(stdout || '{}');
+  return buildAudioTracksFromStreams(Array.isArray(parsed.streams) ? parsed.streams : []);
+}
+
 async function getClipInfo(clipName, getSettings, thumbnailsModule) {
   logger.info(`[ffmpeg] get-clip-info requested for: ${clipName}`);
   const settings = await getSettings();
@@ -1773,40 +1823,193 @@ async function getClipInfo(clipName, getSettings, thumbnailsModule) {
 
     // Try to get metadata from cache first
     const metadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath);
-    if (metadata && metadata.duration) {
-      logger.info(`[ffmpeg] Using cached metadata for ${clipName} - duration: ${metadata.duration}`);
+    const cacheHasFreshAudio = metadata
+      && metadata.duration
+      && Array.isArray(metadata.audioTracks)
+      && metadata.audioTracksVersion === AUDIO_TRACKS_CACHE_VERSION;
+
+    if (cacheHasFreshAudio) {
+      logger.info(`[ffmpeg] Using cached metadata for ${clipName} - duration: ${metadata.duration}, audioTracks: ${metadata.audioTracks.length}`);
       return {
         format: {
           filename: clipPath,
           duration: metadata.duration
-        }
+        },
+        audioTracks: metadata.audioTracks
       };
     }
 
-    logger.info(`[ffmpeg] No cached metadata found, running ffprobe for: ${clipName}`);
-    // If no cached metadata, get it from ffprobe and cache it
+    logger.info(`[ffmpeg] No (complete) cached metadata, running ffprobe for: ${clipName}`);
     return new Promise((resolve, reject) => {
       ffmpeg.ffprobe(clipPath, async (err, info) => {
         if (err) {
           logger.error(`[ffmpeg] ffprobe failed for ${clipName}:`, err);
           reject(err);
-        } else {
-          logger.info(`[ffmpeg] ffprobe successful for ${clipName} - duration: ${info.format.duration}`);
-          // Cache the metadata
-          const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
-          await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
-            ...existingMetadata,
-            duration: info.format.duration,
-            timestamp: Date.now()
-          });
-          resolve(info);
+          return;
         }
+        let audioTracks = [];
+        try {
+          // Always re-probe directly to capture stream tags reliably.
+          audioTracks = await probeAudioTracksDirect(clipPath);
+        } catch (directErr) {
+          logger.warn(`[ffmpeg] direct ffprobe failed for ${clipName}, falling back to fluent output: ${directErr?.error?.message || directErr.message || directErr}`);
+          audioTracks = buildAudioTracksFromStreams(info.streams);
+        }
+        logger.info(`[ffmpeg] ffprobe successful for ${clipName} - duration: ${info.format.duration}, audioTracks: ${audioTracks.length} (${audioTracks.map((t) => t.name).join(' | ')})`);
+        const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
+        await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
+          ...existingMetadata,
+          duration: info.format.duration,
+          audioTracks,
+          audioTracksVersion: AUDIO_TRACKS_CACHE_VERSION,
+          timestamp: Date.now()
+        });
+        info.audioTracks = audioTracks;
+        resolve(info);
       });
     });
   } catch (error) {
     logger.error(`[ffmpeg] Error getting clip info for ${clipName}:`, error);
     throw error;
   }
+}
+
+/**
+ * Extract each audio track to its own .m4a file (stream-copy, no re-encode).
+ * Cached under <clipLocation>/.clip_metadata/audio_tracks/<safe-clipname>/track_<ordinal>.m4a
+ * Returns [{ ordinal, streamIndex, path }] for every audio track in the clip.
+ */
+async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
+  const settings = await getSettings();
+  const clipPath = path.join(settings.clipLocation, clipName);
+
+  // Reuse the cached audio-track metadata if present.
+  const info = await getClipInfo(clipName, getSettings, thumbnailsModule);
+  const tracks = Array.isArray(info?.audioTracks) ? info.audioTracks : [];
+  if (tracks.length === 0) return [];
+
+  const safeName = clipName.replace(/\//g, '--').replace(/\\/g, '--');
+  // v3 dir bump — extractor now branches per-track between stream-copy
+  // (fast, default for tracks with no edit-list offset) and re-encode (only
+  // for tracks where ffprobe reported a non-zero start_time). v2 always
+  // re-encoded; v1 always stream-copied and produced broken offset tracks.
+  const outDir = path.join(settings.clipLocation, '.clip_metadata', 'audio_tracks_v3', safeName);
+  await fs.mkdir(outDir, { recursive: true });
+
+  let sourceMtimeMs = 0;
+  try {
+    const sourceStat = await fs.stat(clipPath);
+    sourceMtimeMs = sourceStat.mtimeMs;
+  } catch (error) {
+    logger.warn(`[ffmpeg] extractAudioTracks: could not stat source ${clipPath}: ${error.message}`);
+  }
+
+  const results = [];
+  const missing = [];
+  for (const track of tracks) {
+    const outPath = path.join(outDir, `track_${track.ordinal}.m4a`);
+    let needsExtract = true;
+    try {
+      const st = await fs.stat(outPath);
+      if (st.size > 0 && st.mtimeMs >= sourceMtimeMs) {
+        needsExtract = false;
+      }
+    } catch (_) {
+      needsExtract = true;
+    }
+    results.push({ ordinal: track.ordinal, streamIndex: track.streamIndex, path: outPath });
+    if (needsExtract) missing.push({ track, outPath });
+  }
+
+  if (missing.length === 0) {
+    return results;
+  }
+
+  // Per-track extraction in parallel — one ffmpeg process per stream.
+  //
+  // Why not a single multi-output ffmpeg call? Multi-output shares a single
+  // decode pass across all outputs but serializes the encoders; for clips
+  // with several long tracks the encode phase dominates and benefits more
+  // from process-level parallelism than from a shared demuxer.
+  //
+  // Per-track branching:
+  //   - needsReencode === false → `-c:a copy` (stream copy, near-zero CPU).
+  //   - needsReencode === true  → re-encode with aresample to flatten the
+  //     edit-list offset. AAC @ 192k VBR-ish is well above transparent for
+  //     voice/desktop audio and ~25% faster than the previous 256k CBR.
+  //
+  // Both produce .m4a (audio-only mp4). Chrome plays both via <audio>.
+  const reencodeCount = missing.filter(({ track }) => track.needsReencode).length;
+  logger.info(`[ffmpeg] Extracting ${missing.length} audio track(s) for ${clipName} (${missing.length - reencodeCount} copy, ${reencodeCount} re-encode)`);
+
+  const buildArgsForTrack = ({ track, outPath }) => {
+    const baseArgs = ['-y', '-hide_banner', '-loglevel', 'error', '-i', clipPath,
+      '-map', `0:${track.streamIndex}`, '-vn'];
+    if (track.needsReencode) {
+      return [
+        ...baseArgs,
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-af', 'aresample=async=1:first_pts=0',
+        outPath
+      ];
+    }
+    return [
+      ...baseArgs,
+      '-c:a', 'copy',
+      outPath
+    ];
+  };
+
+  await Promise.all(missing.map((entry) => execFileAsync(ffmpegPath, buildArgsForTrack(entry))));
+
+  return results;
+}
+
+/**
+ * Reset every cached artifact tied to a single clip: thumbnail jpg, thumbnail
+ * .meta file (which holds duration + audioTracks), and every versioned
+ * audio-track extraction dir (audio_tracks, audio_tracks_v2, audio_tracks_v3,
+ * …). Does NOT touch user-owned data (trim, speed, volume, tags, trackstate)
+ * — that's persisted under `.clip_metadata/<clip>.{trim,speed,volume,tags,
+ * trackstate}` and survives a cache reset by design.
+ *
+ * Used by the right-click "Reset cache" entry to test first-show timings.
+ */
+async function resetClipCache(clipName, getSettings, thumbnailsModule) {
+  const settings = await getSettings();
+  const clipPath = path.join(settings.clipLocation, clipName);
+  const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
+  const removed = [];
+
+  const rmFile = async (p) => {
+    try {
+      await fs.unlink(p);
+      removed.push(p);
+    } catch (err) {
+      if (err && err.code !== 'ENOENT') logger.warn(`[reset-cache] unlink ${p}: ${err.message}`);
+    }
+  };
+  const rmDir = async (p) => {
+    try {
+      await fs.rm(p, { recursive: true, force: true });
+      removed.push(p);
+    } catch (err) {
+      if (err && err.code !== 'ENOENT') logger.warn(`[reset-cache] rm ${p}: ${err.message}`);
+    }
+  };
+
+  await rmFile(thumbnailPath);
+  await rmFile(thumbnailPath + '.meta');
+
+  const safeName = clipName.replace(/\//g, '--').replace(/\\/g, '--');
+  const audioTrackDirs = ['audio_tracks', 'audio_tracks_v2', 'audio_tracks_v3'];
+  await Promise.all(audioTrackDirs.map((d) =>
+    rmDir(path.join(settings.clipLocation, '.clip_metadata', d, safeName))
+  ));
+
+  logger.info(`[reset-cache] ${clipName}: removed ${removed.length} path(s)`);
+  return { removed };
 }
 
 module.exports = {
@@ -1823,6 +2026,8 @@ module.exports = {
   generateScreenshot,
   setupProgressListeners,
   getClipInfo,
+  extractAudioTracks,
+  resetClipCache,
   // Re-export fluent-ffmpeg for thumbnail generation
   ffmpeg
 };
