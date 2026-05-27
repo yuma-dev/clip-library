@@ -1,5 +1,5 @@
 if (require("electron-squirrel-startup")) return;
-const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./utils/logger');
@@ -92,7 +92,81 @@ ipcMain.handle('get-export-acceleration-status', async () => {
 let idleTimer;
 
 let mainWindow;
+let splashWindow;
+let splashDismissed = false;
 let settings;
+
+function createSplashWindow() {
+  const primary = screen.getPrimaryDisplay();
+  const { bounds } = primary;
+  const width = 480;
+  const height = 360;
+  const x = Math.round(bounds.x + (bounds.width - width) / 2);
+  const y = Math.round(bounds.y + (bounds.height - height) / 2);
+
+  splashWindow = new BrowserWindow({
+    width,
+    height,
+    x,
+    y,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  splashWindow.setIgnoreMouseEvents(true);
+  splashWindow.loadFile('splash.html');
+
+  splashWindow.once('ready-to-show', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+
+  splashWindow.on('closed', () => {
+    splashWindow = undefined;
+  });
+}
+
+function dismissSplash() {
+  if (splashDismissed) return;
+  splashDismissed = true;
+
+  const reveal = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.maximize();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  };
+
+  const splash = splashWindow;
+  if (!splash || splash.isDestroyed()) {
+    reveal();
+    return;
+  }
+
+  splash.webContents
+    .executeJavaScript("document.body.classList.add('dismiss')")
+    .catch(() => undefined);
+
+  setTimeout(() => {
+    if (!splash.isDestroyed()) {
+      splash.once('closed', reveal);
+      splash.close();
+    } else {
+      reveal();
+    }
+  }, 300);
+}
 let pendingCliplibAuthSession = null;
 let isProcessingProtocolQueue = false;
 const queuedProtocolUrls = [];
@@ -362,8 +436,14 @@ async function createWindow() {
 
   attachTitlebarToWindow(mainWindow);
   mainWindow.loadFile("index.html");
-  mainWindow.maximize();
   Menu.setApplicationMenu(null);
+
+  // Renderer signals when clips are loaded and UI is fully ready
+  ipcMain.once('renderer-ready', () => dismissSplash());
+
+  // Safety fallback in case the renderer never signals ready
+  const splashFallback = setTimeout(() => dismissSplash(), 30000);
+  mainWindow.on('closed', () => clearTimeout(splashFallback));
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key.toLowerCase() === 'i' && input.control && input.shift) {
       mainWindow.webContents.toggleDevTools();
@@ -436,6 +516,8 @@ app.whenReady().then(async () => {
   }
 
   registerCliplibProtocol();
+
+  createSplashWindow();
 
   if (benchmarkHarness) {
     benchmarkHarness.endStartup('moduleLoad');
