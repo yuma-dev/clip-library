@@ -448,9 +448,31 @@ fn save_clip_with_stem(
         .ok_or_else(|| anyhow!("encoder not yet open — wait ~1s after start and retry"))?;
     let _t = clipdip_profile::start("pipeline.save_clip");
     let snapshot = ring.snapshot();
+    // The ring is sized in bytes, not seconds: under CQP rate control the
+    // encoder undershoots `bitrate_bps` on low-motion content, so the ring
+    // can hold well over `replay_seconds` of footage. Bound the saved clip
+    // by time here instead of relying on byte-budget eviction. Pick the
+    // newest IDR whose PTS is still inside the window so the result is at
+    // most `replay_seconds` long (worst case: short by one GOP).
+    let t_last = snapshot
+        .iter()
+        .rev()
+        .find(|p| p.stream_id == STREAM_VIDEO)
+        .map(|p| p.pts_100ns)
+        .ok_or_else(|| anyhow!("no video packets in ring yet — wait ~1s after start and retry"))?;
+    let window_100ns = (cfg.replay_seconds as i64) * 10_000_000;
+    let t_min = t_last - window_100ns;
     let first_idr = snapshot
         .iter()
-        .position(|p| p.stream_id == STREAM_VIDEO && p.is_keyframe)
+        .position(|p| p.stream_id == STREAM_VIDEO && p.is_keyframe && p.pts_100ns >= t_min)
+        .or_else(|| {
+            // Window contains no IDR (e.g. one very long GOP straddling the
+            // boundary) — fall back to the oldest IDR so we still emit a
+            // playable clip rather than refusing to save.
+            snapshot
+                .iter()
+                .position(|p| p.stream_id == STREAM_VIDEO && p.is_keyframe)
+        })
         .ok_or_else(|| anyhow!("no video IDR in ring yet — wait ~1s after start and retry"))?;
 
     let video_pkts: Vec<&EncodedPacket> = snapshot[first_idr..]
@@ -461,10 +483,6 @@ fn save_clip_with_stem(
         .first()
         .map(|p| p.pts_100ns)
         .ok_or_else(|| anyhow!("video IDR found but no packets after it"))?;
-    let t_last = video_pkts
-        .last()
-        .map(|p| p.pts_100ns)
-        .unwrap_or(t0);
 
     // Real fps measured from the QPC span of the captured packets. The
     // capture loop drops frames under load (DXGI acquire can stall for
@@ -534,17 +552,17 @@ fn save_clip_with_stem(
     {
         let pkts: Vec<&EncodedPacket> = snapshot
             .iter()
-            .filter(|p| p.stream_id == *stream_id && p.pts_100ns >= t0)
+            .filter(|p| p.stream_id == *stream_id && p.pts_100ns >= t0 && p.pts_100ns <= t_last)
             .collect();
         if pkts.is_empty() {
             warn!(stream_id, %label, "no audio packets in window — skipping");
             continue;
         }
-        // Audio packets are written contiguously into the WAV starting
-        // at sample 0, but their first packet's QPC may be a few ms
-        // after t0 (audio is captured in ~10ms WASAPI chunks). Tell
-        // ffmpeg to shift this track by that gap so what was originally
-        // at t0+δ doesn't end up playing at video time 0.
+        // Audio packets are written into the WAV starting at sample 0, but
+        // their first packet's QPC may be a few ms after t0 (audio is
+        // captured in ~10ms WASAPI chunks). Tell ffmpeg to shift this
+        // track by that gap so what was originally at t0+δ doesn't end up
+        // playing at video time 0.
         let first_a_pts = pkts.first().map(|p| p.pts_100ns).unwrap_or(t0);
         let offset_secs = (first_a_pts - t0).max(0) as f64 / 1e7;
         let wav_path = cfg.output.directory.join(format!("{stem}.{label}.wav"));
@@ -617,10 +635,43 @@ fn write_wav(path: &PathBuf, fmt: WaveFormat, pkts: &[&EncodedPacket]) -> Result
     f.write_all(b"data")?;
     f.write_all(&0u32.to_le_bytes())?; // patched
 
+    // WASAPI loopback only delivers buffers while a render session is
+    // active — if nothing is playing for a stretch, packets simply stop
+    // arriving and resume later with a fresh QPC stamp. Writing those
+    // packets back-to-back compresses real-time gaps out of the WAV and
+    // the back half of the clip ends up out of sync with video. Detect
+    // inter-packet gaps via QPC deltas and pad with silence frames so the
+    // WAV stays wall-clock-accurate.
+    let frame_bytes = fmt.frame_bytes() as u64;
+    let sample_rate = fmt.sample_rate as i64;
+    // Threshold of half a typical WASAPI period (~5 ms) — large enough to
+    // ignore scheduling jitter, small enough to catch real dropouts.
+    const GAP_THRESHOLD_100NS: i64 = 50_000;
     let mut data_bytes = 0u64;
+    let mut prev_end_pts: Option<i64> = None;
     for p in pkts {
+        if let Some(end) = prev_end_pts {
+            let delta = p.pts_100ns - end;
+            if delta > GAP_THRESHOLD_100NS {
+                // Round to nearest whole frame; never negative.
+                let missing_frames = (delta * sample_rate + 5_000_000) / 10_000_000;
+                if missing_frames > 0 {
+                    let silence_bytes = (missing_frames as u64) * frame_bytes;
+                    let chunk = vec![0u8; silence_bytes.min(64 * 1024) as usize];
+                    let mut remaining = silence_bytes;
+                    while remaining > 0 {
+                        let n = remaining.min(chunk.len() as u64) as usize;
+                        f.write_all(&chunk[..n])?;
+                        remaining -= n as u64;
+                    }
+                    data_bytes += silence_bytes;
+                }
+            }
+        }
         f.write_all(&p.bytes)?;
         data_bytes += p.bytes.len() as u64;
+        let num_frames = (p.bytes.len() as u64 / frame_bytes) as i64;
+        prev_end_pts = Some(p.pts_100ns + num_frames * 10_000_000 / sample_rate);
     }
 
     let total = f.metadata()?.len();

@@ -25,6 +25,7 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
     DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
 };
+use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::System::Com::STGM_READ;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 
@@ -196,6 +197,15 @@ fn run_capture(
     let client: IAudioClient =
         unsafe { device.Activate(CLSCTX_ALL, None) }.context("IMMDevice::Activate")?;
 
+    // Endpoint volume — polled per-buffer so mid-clip slider changes
+    // take effect within one WASAPI period (~10ms). If activation fails
+    // (rare; some virtual devices), fall back to unity gain.
+    let endpoint_volume: Option<IAudioEndpointVolume> =
+        unsafe { device.Activate(CLSCTX_ALL, None) }.ok();
+    if endpoint_volume.is_none() {
+        warn!(?kind, "IAudioEndpointVolume unavailable; capturing at unity gain");
+    }
+
     let mix_fmt = unsafe { client.GetMixFormat() }.context("GetMixFormat")?;
     if mix_fmt.is_null() {
         return Err(anyhow!("GetMixFormat returned null"));
@@ -272,18 +282,23 @@ fn run_capture(
 
             if num_frames > 0 {
                 let byte_count = (num_frames * frame_bytes) as usize;
+                let gain = current_gain(endpoint_volume.as_ref());
                 let bytes: Arc<[u8]> = if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0
                     || data_ptr.is_null()
+                    || gain == 0.0
                 {
-                    // SILENT means "pretend this buffer is zeros". Emit
-                    // matching silence so the timeline stays continuous.
+                    // SILENT, muted, or null: emit zeros so the timeline
+                    // stays continuous.
                     vec![0u8; byte_count].into()
                 } else {
                     // SAFETY: WASAPI guarantees `data_ptr` is valid for
                     // `num_frames * frame_bytes` until ReleaseBuffer.
-                    unsafe { std::slice::from_raw_parts(data_ptr, byte_count) }
-                        .to_vec()
-                        .into()
+                    let mut buf = unsafe { std::slice::from_raw_parts(data_ptr, byte_count) }
+                        .to_vec();
+                    if gain != 1.0 {
+                        apply_gain(&mut buf, &fmt, gain);
+                    }
+                    buf.into()
                 };
 
                 if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
@@ -313,6 +328,46 @@ fn run_capture(
     }
 
     Ok(())
+}
+
+/// Current effective gain (master scalar × !mute) for an endpoint. Returns
+/// 1.0 if the endpoint volume interface is missing or any query fails — we
+/// prefer "loud but present" over silent on transient COM hiccups.
+fn current_gain(vol: Option<&IAudioEndpointVolume>) -> f32 {
+    let Some(vol) = vol else { return 1.0 };
+    let muted = unsafe { vol.GetMute() }.map(|b| b.as_bool()).unwrap_or(false);
+    if muted {
+        return 0.0;
+    }
+    unsafe { vol.GetMasterVolumeLevelScalar() }.unwrap_or(1.0)
+}
+
+/// Scale PCM samples in-place by `gain`. Handles the two formats WASAPI
+/// shared-mode realistically hands us: 32-bit float (the mix format, used
+/// by loopback and most mics) and 16-bit signed int (some legacy mics).
+/// Other formats are passed through unchanged.
+fn apply_gain(buf: &mut [u8], fmt: &WaveFormat, gain: f32) {
+    if fmt.is_float && fmt.bits_per_sample == 32 {
+        // SAFETY: WASAPI float buffers are 4-byte aligned by construction
+        // and `buf` is a Vec<u8> we just allocated — the bytes::Vec layout
+        // gives 8-byte alignment, so casting to f32 is sound.
+        let samples = unsafe {
+            std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut f32, buf.len() / 4)
+        };
+        for s in samples {
+            *s *= gain;
+        }
+    } else if !fmt.is_float && fmt.bits_per_sample == 16 {
+        let samples = unsafe {
+            std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut i16, buf.len() / 2)
+        };
+        for s in samples {
+            let scaled = (*s as f32) * gain;
+            *s = scaled.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        }
+    }
+    // Other bit depths (24-bit packed, 32-bit int) are uncommon in shared
+    // mode and would need byte-level decode; skip for now.
 }
 
 /// Read a WASAPI `WAVEFORMATEX[ENSIBLE]*` pointer into our typed snapshot.
