@@ -1,8 +1,8 @@
 import MainWindow from "./windows/Main";
-import OverlayWindow from "./windows/Overlay";
 
-const isOverlay = new URLSearchParams(window.location.search).get("overlay") === "1";
-
+// The overlay window has its own entry point (`overlay.html` ->
+// `src/overlay-entry.tsx`) so it doesn't pay the cost of loading the
+// settings UI bundle. This file is only used by the settings window.
 export default function App() {
-  return isOverlay ? <OverlayWindow /> : <MainWindow />;
+  return <MainWindow />;
 }

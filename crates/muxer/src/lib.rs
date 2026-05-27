@@ -22,6 +22,30 @@ use tracing::{debug, info};
 
 // ---- ffmpeg CLI path ----------------------------------------------------
 
+/// Which raw bitstream format the video sidecar holds. The muxer passes
+/// this to ffmpeg as `-f h264` / `-f av1` so the demuxer doesn't have to
+/// guess from the file extension — important because Annex-B-like AV1
+/// OBUs misdetect as broken H.264 if the extension is wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoBitstream {
+    H264,
+    Av1,
+}
+
+impl VideoBitstream {
+    fn ffmpeg_format(self) -> &'static str {
+        match self {
+            VideoBitstream::H264 => "h264",
+            // `-f av1` is "AV1 Annex B" in ffmpeg — a misnomer; AV1
+            // doesn't define Annex B and that demuxer doesn't recognize
+            // NVENC's output. `-f obu` is the "AV1 low overhead OBU"
+            // demuxer, which is what NVENC actually produces (OBUs with
+            // `has_size_field=1`, TD-delimited TUs).
+            VideoBitstream::Av1 => "obu",
+        }
+    }
+}
+
 /// One audio source to mux into the output MP4 as its own stream.
 #[derive(Clone, Debug)]
 pub struct AudioTrack {
@@ -55,8 +79,10 @@ pub struct AudioTrack {
 pub fn mux_with_ffmpeg_cli(
     ffmpeg: &Path,
     video_h264: &Path,
+    video_bitstream: VideoBitstream,
     video_fps: f64,
     audio_tracks: &[AudioTrack],
+    include_mix: bool,
     output_mp4: &Path,
 ) -> Result<()> {
     if !video_h264.exists() {
@@ -68,62 +94,112 @@ pub fn mux_with_ffmpeg_cli(
         }
     }
 
-    let do_mix = audio_tracks.len() >= 2;
+    let do_mix = include_mix && audio_tracks.len() >= 2;
 
     let mut cmd = Command::new(ffmpeg);
     cmd.arg("-y").arg("-hide_banner").arg("-loglevel").arg("warning");
 
-    // Input 0: raw H.264, tell ffmpeg the framerate so PTS are assigned.
+    // Input 0: raw video bitstream. Pin the demuxer format explicitly so
+    // ffmpeg doesn't guess from the extension — H.264 and AV1 sidecars
+    // both look "raw" enough to fool probing, especially with AV1 OBUs
+    // misdetecting as broken H.264.
+    //
     // Pass the *actual* fps measured from PTS (frames / pts_span) — not
     // the target fps from config. Under load the capture loop drops
     // frames, so target-fps would compress the video timeline and the
     // audio would visibly drift later as the clip plays.
-    cmd.arg("-framerate")
+    //
+    cmd.arg("-f")
+        .arg(video_bitstream.ffmpeg_format())
+        .arg("-framerate")
         .arg(format!("{:.6}", video_fps))
         .arg("-i")
         .arg(video_h264);
 
-    // Inputs 1..N: one per audio track. `-itsoffset` shifts the audio
-    // start by the gap between the first audio packet's QPC and the
-    // video IDR's QPC, so playback aligns at frame 0.
+    // Inputs 1..N: one per audio track. We deliberately do NOT use
+    // `-itsoffset` here: a positive itsoffset makes ffmpeg write an
+    // empty `elst` (edit-list) atom at the start of the audio track
+    // instead of leading silent samples. Spec-compliant players honor
+    // it, but Chrome's <audio> implementation clamps the edit and the
+    // track ends up out of sync for downstream tooling. We materialise
+    // the offset as real silent PCM samples below via `adelay`.
     for t in audio_tracks {
-        if t.offset_secs.abs() > 1e-4 {
-            cmd.arg("-itsoffset").arg(format!("{:.6}", t.offset_secs));
-        }
         cmd.arg("-i").arg(&t.path);
     }
 
-    // If we have ≥ 2 sources, build an `amix` filter that combines them
-    // into a single `[mix]` pad. `normalize=0` keeps each input at full
-    // gain (i.e. sum, may clip on extreme signals) instead of the default
-    // 1/N attenuation which makes 2-source mixes sound half-volume.
-    if do_mix {
+    // Build one unified filter graph: pad every input with `adelay`
+    // (real silent samples, not an edit list) so the encoded AAC stream
+    // starts at presentation time 0 with the correct leading silence,
+    // then — if we have ≥ 2 sources — `amix` the padded streams into
+    // a `[mix]` pad. `normalize=0` keeps each input at full gain
+    // instead of the default 1/N attenuation.
+    //
+    // When mixing, every delayed pad needs to feed BOTH `amix` AND its
+    // own per-track output map. ffmpeg filter pads are single-use, so we
+    // `asplit` the delayed stream into `[aN]` (for the per-track map)
+    // and `[aNm]` (consumed by amix). Without the split, ffmpeg fails
+    // with "Output with label 'a1' does not exist ... or was already
+    // used elsewhere" once the mix has eaten the pad.
+    if !audio_tracks.is_empty() {
         let mut fc = String::new();
-        for i in 0..audio_tracks.len() {
-            fc.push_str(&format!("[{}:a]", i + 1));
+        for (i, t) in audio_tracks.iter().enumerate() {
+            let idx = i + 1;
+            let delay_ms = (t.offset_secs.max(0.0) * 1000.0).round() as u64;
+            let head = if delay_ms > 0 {
+                format!("[{idx}:a]adelay={delay_ms}:all=1")
+            } else {
+                format!("[{idx}:a]anull")
+            };
+            if do_mix {
+                fc.push_str(&format!("{head},asplit=2[a{idx}][a{idx}m];"));
+            } else {
+                fc.push_str(&format!("{head}[a{idx}];"));
+            }
         }
-        fc.push_str(&format!(
-            "amix=inputs={}:duration=longest:normalize=0[mix]",
-            audio_tracks.len()
-        ));
+        if do_mix {
+            for i in 0..audio_tracks.len() {
+                fc.push_str(&format!("[a{}m]", i + 1));
+            }
+            fc.push_str(&format!(
+                "amix=inputs={}:duration=longest:normalize=0[mix]",
+                audio_tracks.len()
+            ));
+        } else if fc.ends_with(';') {
+            // strip trailing ';' for tidiness — not strictly required.
+            fc.pop();
+        }
         cmd.arg("-filter_complex").arg(&fc);
     }
 
     // ---- map streams in OUTPUT order --------------------------------
     cmd.arg("-map").arg("0:v:0");
 
+    // Stamp each audio stream with `title` (for containers that surface it,
+    // and for ffprobe) AND `handler_name` (which is what MP4 players like
+    // VLC / mpv / Windows Media Player actually read from a `trak`'s
+    // handler box to label the track in their UI). Setting only `title`
+    // leaves the handler as the literal string "SoundHandler" and the
+    // labels never appear in players.
+    let set_audio_title = |cmd: &mut Command, out_idx: usize, title: &str| {
+        cmd.arg(format!("-metadata:s:a:{}", out_idx))
+            .arg(format!("title={}", title));
+        cmd.arg(format!("-metadata:s:a:{}", out_idx))
+            .arg(format!("handler_name={}", title));
+    };
+
     // Output audio stream index — increments as we add maps.
     let mut out_a_idx: usize = 0;
     if do_mix {
         cmd.arg("-map").arg("[mix]");
-        cmd.arg(format!("-metadata:s:a:{}", out_a_idx))
-            .arg("title=Mix");
+        set_audio_title(&mut cmd, out_a_idx, "Mix");
         out_a_idx += 1;
     }
     for (idx, t) in audio_tracks.iter().enumerate() {
-        cmd.arg("-map").arg(format!("{}:a:0", idx + 1));
-        cmd.arg(format!("-metadata:s:a:{}", out_a_idx))
-            .arg(format!("title={}", t.title));
+        // Map the delayed filter pad, not the raw input, so the
+        // adelay-introduced leading silence is encoded into the AAC
+        // stream itself instead of being expressed as an edit list.
+        cmd.arg("-map").arg(format!("[a{}]", idx + 1));
+        set_audio_title(&mut cmd, out_a_idx, &t.title);
         out_a_idx += 1;
     }
 
@@ -150,6 +226,15 @@ pub fn mux_with_ffmpeg_cli(
     // `+faststart` rewrites the moov atom to the front so the file is
     // streamable; cheap on a 3s clip.
     cmd.arg("-movflags").arg("+faststart");
+
+    // Suppress the mp4 muxer's edit-list (`elst`) atom. The AAC encoder
+    // adds a small priming-sample delay that ffmpeg otherwise expresses
+    // as a leading empty edit; Chrome's <audio> clamps that edit and
+    // downstream tools relying on stream-time == media-time misalign.
+    // Since we already materialise per-track offsets as real silence
+    // via `adelay`, an edit list adds no information and only causes
+    // bugs in non-spec-compliant players.
+    cmd.arg("-use_editlist").arg("0");
 
     cmd.arg(output_mp4);
 

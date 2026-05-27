@@ -1,11 +1,13 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { invoke, listen } from "@/lib/tauri";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { formatBitrate } from "@/lib/utils";
-import { Plus, Trash2, ExternalLink } from "lucide-react";
+import {
+  Plus, Trash2, ExternalLink,
+  Film, Video, Mic, FolderOpen, Keyboard, Bell,
+  Monitor, Cpu, Gauge, MousePointer2, Music2,
+  KeyRound, Volume2, MapPin, Timer,
+  Settings2, Sparkles, ChevronRight, ChevronLeft, Check, X,
+  AlertTriangle, CircleCheck, RefreshCw, Headphones,
+} from "lucide-react";
 
 // ---------- design tokens ---------------------------------------------------
 
@@ -36,7 +38,7 @@ interface Config {
     codec: CodecPreference;
     rate_control: RateControl;
   };
-  audio: { sources: AudioSource[] };
+  audio: { sources: AudioSource[]; include_mix: boolean };
   output: {
     directory: string;
     filename_stem: string;
@@ -53,54 +55,68 @@ interface Config {
   };
 }
 
-// ---------- sections config -------------------------------------------------
+interface MonitorInfo { index: number; name: string; width: number; height: number; }
 
-const SECTIONS = [
-  { id: "recording",     label: "Recording",      num: 1 },
-  { id: "video",         label: "Video",           num: 2 },
-  { id: "audio",         label: "Audio",           num: 3 },
-  { id: "output",        label: "Output",          num: 4 },
-  { id: "hotkeys",       label: "Hotkeys",         num: 5 },
-  { id: "notifications", label: "Notifications",   num: 6 },
-] as const;
+interface AudioDeviceInfo {
+  id: string;
+  friendly_name: string;
+  flow: "Render" | "Capture";
+  is_default: boolean;
+}
 
-type SectionId = (typeof SECTIONS)[number]["id"];
+// ---------- tab definitions -------------------------------------------------
+
+type TabId = "video" | "audio" | "output" | "hotkeys" | "notifications";
+
+const TABS: { id: TabId; label: string; Icon: typeof Film }[] = [
+  { id: "video",         label: "Video",         Icon: Video },
+  { id: "audio",         label: "Audio",         Icon: Mic },
+  { id: "output",        label: "Output",        Icon: FolderOpen },
+  { id: "hotkeys",       label: "Hotkeys",       Icon: Keyboard },
+  { id: "notifications", label: "Notifications", Icon: Bell },
+];
 
 // ---------- layout primitives -----------------------------------------------
 
-function SectionHeader({
-  num, title, subtitle,
-}: { num: number; title: string; subtitle?: string }) {
+function PanelHeader({
+  Icon, title, subtitle,
+}: { Icon: typeof Film; title: string; subtitle?: string }) {
   return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
-        <span style={{
-          font: '500 11px/1 "JetBrains Mono", monospace',
-          color: "rgba(255,255,255,0.32)",
-          letterSpacing: "0.04em",
-        }}>{String(num).padStart(2, "0")}</span>
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 24 }}>
+      <div style={{
+        width: 38, height: 38, borderRadius: 9,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: `linear-gradient(135deg, ${TEAL}22, ${TEAL_DIM}11)`,
+        border: `1px solid ${TEAL}33`,
+        color: TEAL,
+        flexShrink: 0,
+      }}>
+        <Icon size={18} strokeWidth={1.8} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0, paddingTop: 1 }}>
         <h2 style={{
           margin: 0,
-          font: "600 20px/1 Inter, sans-serif",
-          color: "rgba(255,255,255,0.95)",
-          letterSpacing: "-0.015em",
+          font: "600 19px/1.1 Inter, sans-serif",
+          color: "rgba(255,255,255,0.96)",
+          letterSpacing: "-0.018em",
         }}>{title}</h2>
+        {subtitle && (
+          <p style={{
+            margin: "5px 0 0",
+            font: "400 12.5px/1.5 Inter, sans-serif",
+            color: "rgba(255,255,255,0.5)",
+            maxWidth: 580,
+          }}>{subtitle}</p>
+        )}
       </div>
-      {subtitle && (
-        <p style={{
-          margin: "0 0 0 32px",
-          font: "400 12.5px/1.5 Inter, sans-serif",
-          color: "rgba(255,255,255,0.5)",
-          maxWidth: 520,
-        }}>{subtitle}</p>
-      )}
     </div>
   );
 }
 
 function Row({
-  label, hint, children, vertical, badge,
+  Icon, label, hint, children, vertical, badge,
 }: {
+  Icon?: typeof Film;
   label: string;
   hint?: string;
   children: React.ReactNode;
@@ -112,59 +128,120 @@ function Row({
       display: "flex",
       flexDirection: vertical ? "column" : "row",
       alignItems: vertical ? "stretch" : "center",
-      gap: vertical ? 8 : 16,
+      gap: vertical ? 10 : 16,
+      padding: "12px 14px",
+      borderRadius: 9,
+      background: "rgba(255,255,255,0.018)",
+      border: "1px solid rgba(255,255,255,0.045)",
+      transition: "background .14s, border-color .14s",
     }}>
-      <div style={{ flex: vertical ? "0 0 auto" : 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{
-            font: "500 13px/1.3 Inter, sans-serif",
-            color: "rgba(255,255,255,0.92)",
-            letterSpacing: "-0.005em",
-          }}>{label}</div>
-          {badge && (
-            <span style={{
-              font: '500 9px/1 "JetBrains Mono", monospace',
-              color: "rgba(255,255,255,0.55)",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              padding: "3px 5px",
-              borderRadius: 3,
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}>{badge}</span>
+      <div style={{ flex: vertical ? "0 0 auto" : 1, minWidth: 0, display: "flex", alignItems: "flex-start", gap: 11 }}>
+        {Icon && (
+          <span style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 22, height: 22, borderRadius: 5,
+            background: "rgba(255,255,255,0.04)",
+            color: "rgba(255,255,255,0.55)",
+            flexShrink: 0,
+            marginTop: 1,
+          }}>
+            <Icon size={12} strokeWidth={1.9} />
+          </span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{
+              font: "500 13px/1.3 Inter, sans-serif",
+              color: "rgba(255,255,255,0.92)",
+              letterSpacing: "-0.005em",
+            }}>{label}</div>
+            {badge && (
+              <span style={{
+                font: '500 9px/1 "JetBrains Mono", monospace',
+                color: "rgba(255,255,255,0.55)",
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                padding: "3px 5px",
+                borderRadius: 3,
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}>{badge}</span>
+            )}
+          </div>
+          {hint && (
+            <div style={{
+              font: "400 11.5px/1.45 Inter, sans-serif",
+              color: "rgba(255,255,255,0.42)",
+              marginTop: 4,
+              maxWidth: 440,
+            }}>{hint}</div>
           )}
         </div>
-        {hint && (
-          <div style={{
-            font: "400 11.5px/1.45 Inter, sans-serif",
-            color: "rgba(255,255,255,0.42)",
-            marginTop: 3,
-            maxWidth: 440,
-          }}>{hint}</div>
-        )}
       </div>
       <div style={{ flexShrink: 0 }}>{children}</div>
     </div>
   );
 }
 
-function SectionShell({
-  id, children,
-}: { id: string; children: React.ReactNode }) {
+function PanelShell({ children }: { children: React.ReactNode }) {
   return (
-    <section id={`sec-${id}`} style={{
-      padding: "30px 36px 26px",
-      borderBottom: "1px solid rgba(255,255,255,0.04)",
+    <div style={{
+      padding: "30px 38px 38px",
+      maxWidth: 880,
+      margin: "0 auto",
     }}>
       {children}
-    </section>
+    </div>
   );
 }
 
-function SectionBody({ children }: { children: React.ReactNode }) {
+function PanelBody({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ marginLeft: 32, display: "flex", flexDirection: "column", gap: 18 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {children}
+    </div>
+  );
+}
+
+function AdvancedDisclosure({
+  open, onToggle, children,
+}: { open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <button
+        onClick={onToggle}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 7,
+          padding: "6px 10px",
+          borderRadius: 6,
+          background: "transparent",
+          border: "1px solid rgba(255,255,255,0.06)",
+          color: "rgba(255,255,255,0.55)",
+          font: "500 11.5px/1 Inter, sans-serif",
+          cursor: "pointer",
+          transition: "all .12s",
+        }}
+        onMouseEnter={e => {
+          (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.035)";
+          (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.8)";
+        }}
+        onMouseLeave={e => {
+          (e.currentTarget as HTMLElement).style.background = "transparent";
+          (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.55)";
+        }}
+      >
+        <Settings2 size={11} />
+        {open ? "Hide advanced" : "Show advanced"}
+        <ChevronRight
+          size={11}
+          style={{ transform: open ? "rotate(90deg)" : "rotate(0)", transition: "transform .15s" }}
+        />
+      </button>
+      {open && (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -211,7 +288,7 @@ function DesignSlider({
         }} />
       </div>
       <div style={{
-        minWidth: 60, textAlign: "right",
+        minWidth: 64, textAlign: "right",
         font: '500 11.5px/1 "JetBrains Mono", monospace',
         color: "rgba(255,255,255,0.88)",
         letterSpacing: "-0.005em",
@@ -264,7 +341,7 @@ function DesignSelect<T extends string | number>({
 }: {
   value: T;
   onChange: (v: T) => void;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; sub?: string }[];
   width?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -274,13 +351,13 @@ function DesignSelect<T extends string | number>({
       <button
         onClick={() => setOpen(!open)}
         style={{
-          width: "100%", height: 30, padding: "0 10px 0 12px",
+          width: "100%", height: 32, padding: "0 10px 0 12px",
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-          borderRadius: 6,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.08)",
+          borderRadius: 7,
+          background: "rgba(255,255,255,0.045)",
+          border: "1px solid rgba(255,255,255,0.09)",
           font: "500 12px/1 Inter, sans-serif",
-          color: "rgba(255,255,255,0.9)",
+          color: "rgba(255,255,255,0.92)",
           cursor: "pointer", textAlign: "left",
         }}
       >
@@ -302,7 +379,7 @@ function DesignSelect<T extends string | number>({
             borderRadius: 7,
             boxShadow: "0 14px 36px rgba(0,0,0,0.5)",
             padding: 3, zIndex: 51,
-            maxHeight: 240, overflowY: "auto",
+            maxHeight: 280, overflowY: "auto",
           }}>
             {options.map(o => (
               <button
@@ -310,10 +387,10 @@ function DesignSelect<T extends string | number>({
                 onClick={() => { onChange(o.value); setOpen(false); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 8,
-                  width: "100%", padding: "7px 10px",
-                  borderRadius: 4, border: 0,
+                  width: "100%", padding: "8px 10px",
+                  borderRadius: 5, border: 0,
                   background: o.value === value ? "rgba(255,255,255,0.06)" : "transparent",
-                  font: "500 12px/1 Inter, sans-serif",
+                  font: "500 12px/1.2 Inter, sans-serif",
                   color: "rgba(255,255,255,0.9)",
                   cursor: "pointer", textAlign: "left",
                 }}
@@ -324,7 +401,17 @@ function DesignSelect<T extends string | number>({
                   width: 4, height: 4, borderRadius: 999, flexShrink: 0,
                   background: o.value === value ? TEAL : "transparent",
                 }} />
-                <span>{o.label}</span>
+                <span style={{ flex: 1 }}>
+                  <span style={{ display: "block" }}>{o.label}</span>
+                  {o.sub && (
+                    <span style={{
+                      display: "block",
+                      font: "400 10.5px/1.2 Inter, sans-serif",
+                      color: "rgba(255,255,255,0.42)",
+                      marginTop: 2,
+                    }}>{o.sub}</span>
+                  )}
+                </span>
               </button>
             ))}
           </div>
@@ -352,10 +439,10 @@ function DesignTextInput({
       width,
       display: "flex", alignItems: "center", gap: 6,
       padding: "0 10px",
-      height: 30,
-      borderRadius: 6,
-      background: "rgba(255,255,255,0.04)",
-      border: `1px solid ${focused ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.08)"}`,
+      height: 32,
+      borderRadius: 7,
+      background: "rgba(255,255,255,0.045)",
+      border: `1px solid ${focused ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.09)"}`,
       boxShadow: focused ? `0 0 0 3px ${TEAL}22` : "none",
       transition: "border-color .12s, box-shadow .12s",
     }}>
@@ -382,7 +469,9 @@ function DesignTextInput({
 
 // ---------- hotkey capture --------------------------------------------------
 
-function HotkeyCapture({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function HotkeyCapture({
+  value, onChange, minWidth = 168,
+}: { value: string; onChange: (v: string) => void; minWidth?: number }) {
   const [recording, setRecording] = useState(false);
   const parts = value ? value.split("+").map(s => s.trim()) : [];
 
@@ -410,15 +499,15 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (v: strin
     <button
       onClick={() => setRecording(!recording)}
       style={{
-        height: 30, padding: "0 4px 0 10px",
+        height: 32, padding: "0 6px 0 10px",
         display: "flex", alignItems: "center", gap: 8,
-        borderRadius: 6,
-        background: recording ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.04)",
-        border: `1px solid ${recording ? TEAL + "88" : "rgba(255,255,255,0.08)"}`,
+        borderRadius: 7,
+        background: recording ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.045)",
+        border: `1px solid ${recording ? TEAL + "88" : "rgba(255,255,255,0.09)"}`,
         boxShadow: recording ? `0 0 0 3px ${TEAL}22` : "none",
         cursor: "pointer",
         transition: "all .12s",
-        minWidth: 156,
+        minWidth,
       }}
     >
       {recording ? (
@@ -446,7 +535,7 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (v: strin
                 background: "rgba(255,255,255,0.06)",
                 border: "1px solid rgba(255,255,255,0.1)",
                 font: '500 11px/1 "JetBrains Mono", monospace',
-                color: "rgba(255,255,255,0.88)",
+                color: "rgba(255,255,255,0.9)",
               }}>{p}</span>
             </span>
           ))}
@@ -461,9 +550,7 @@ function HotkeyCapture({ value, onChange }: { value: string; onChange: (v: strin
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         color: "rgba(255,255,255,0.45)",
       }}>
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-          <path d="M9 2 L10 3 L4 9 L2 10 L3 8 L9 2 Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-        </svg>
+        <KeyRound size={11} />
       </span>
     </button>
   );
@@ -480,10 +567,10 @@ function CornerPicker({ value, onChange }: { value: string; onChange: (v: string
   ];
   return (
     <div style={{
-      width: 90, height: 56, borderRadius: 5,
+      width: 96, height: 60, borderRadius: 6,
       background: "rgba(255,255,255,0.03)",
       border: "1px solid rgba(255,255,255,0.08)",
-      position: "relative", padding: 5,
+      position: "relative", padding: 6,
     }}>
       {corners.map(c => {
         const active = c.value === value;
@@ -491,13 +578,14 @@ function CornerPicker({ value, onChange }: { value: string; onChange: (v: string
           <button
             key={c.value}
             onClick={() => onChange(c.value)}
+            title={c.value.replace("_", " ")}
             style={{
               position: "absolute",
-              top:    c.y === 0 ? 5 : "auto",
-              bottom: c.y === 1 ? 5 : "auto",
-              left:   c.x === 0 ? 5 : "auto",
-              right:  c.x === 1 ? 5 : "auto",
-              width: 22, height: 14, padding: 0, border: 0, borderRadius: 2,
+              top:    c.y === 0 ? 6 : "auto",
+              bottom: c.y === 1 ? 6 : "auto",
+              left:   c.x === 0 ? 6 : "auto",
+              right:  c.x === 1 ? 6 : "auto",
+              width: 24, height: 14, padding: 0, border: 0, borderRadius: 2,
               background: active ? `linear-gradient(180deg, ${TEAL}, ${TEAL_DIM})` : "rgba(255,255,255,0.07)",
               boxShadow: active ? `0 0 8px ${TEAL}66, inset 0 0 0 1px rgba(255,255,255,0.2)` : "inset 0 0 0 1px rgba(255,255,255,0.04)",
               cursor: "pointer", transition: "all .12s",
@@ -511,8 +599,11 @@ function CornerPicker({ value, onChange }: { value: string; onChange: (v: string
 
 // ---------- title bar -------------------------------------------------------
 
-function TitleBar({ saveStatus }: {
+function TitleBar({
+  saveStatus, onReplayOnboarding,
+}: {
   saveStatus: "idle" | "saving" | "saved" | "error";
+  onReplayOnboarding: () => void;
 }) {
   const winAction = async (action: "minimize" | "maximize" | "close") => {
     try {
@@ -526,14 +617,14 @@ function TitleBar({ saveStatus }: {
 
   return (
     <div style={{
-      height: 32, flexShrink: 0,
+      height: 36, flexShrink: 0,
       display: "flex", alignItems: "center",
       borderBottom: "1px solid rgba(255,255,255,0.04)",
     }}>
       {/* Logo */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8,
-        padding: "0 16px",
+        padding: "0 14px",
         pointerEvents: "none",
       }}>
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -541,9 +632,9 @@ function TitleBar({ saveStatus }: {
           <path d="M5 8 L7.5 10.5 L11 6" stroke="white" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span style={{
-          font: "600 11px/1 Inter, sans-serif",
-          color: "rgba(255,255,255,0.72)",
-          letterSpacing: "0.02em",
+          font: "600 12px/1 Inter, sans-serif",
+          color: "rgba(255,255,255,0.78)",
+          letterSpacing: "0.01em",
         }}>ClipDip</span>
       </div>
 
@@ -557,14 +648,45 @@ function TitleBar({ saveStatus }: {
           color: saveStatus === "error" ? "#ef4444"
                : saveStatus === "saved" ? "#22c55e"
                : "rgba(255,255,255,0.5)",
-          marginRight: 14,
+          display: "flex", alignItems: "center", gap: 5,
+          marginRight: 12,
           transition: "color .15s, opacity .15s",
         }}>
+          {saveStatus === "saving" && <span style={{ width: 6, height: 6, borderRadius: 999, background: "rgba(255,255,255,0.5)" }} />}
+          {saveStatus === "saved"  && <Check size={11} />}
+          {saveStatus === "error"  && <AlertTriangle size={11} />}
           {saveStatus === "saving" ? "Saving…"
            : saveStatus === "saved" ? "Saved"
            : "Save failed"}
         </div>
       )}
+
+      {/* Replay onboarding */}
+      <button
+        onClick={onReplayOnboarding}
+        title="Run setup again"
+        style={{
+          height: 24, padding: "0 9px", marginRight: 8,
+          display: "inline-flex", alignItems: "center", gap: 5,
+          borderRadius: 5, border: 0,
+          background: "rgba(255,255,255,0.045)",
+          color: "rgba(255,255,255,0.7)",
+          font: "500 11px/1 Inter, sans-serif",
+          cursor: "pointer",
+          transition: "background .12s, color .12s",
+        }}
+        onMouseEnter={e => {
+          (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.09)";
+          (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.95)";
+        }}
+        onMouseLeave={e => {
+          (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.045)";
+          (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.7)";
+        }}
+      >
+        <Sparkles size={11} />
+        Setup
+      </button>
 
       {/* Window controls */}
       <div style={{ display: "flex" }}>
@@ -577,7 +699,7 @@ function TitleBar({ saveStatus }: {
             key={b.id}
             onClick={() => winAction(b.id)}
             style={{
-              width: 44, height: 32, border: 0,
+              width: 44, height: 36, border: 0,
               background: "transparent", cursor: "pointer",
               display: "flex", alignItems: "center", justifyContent: "center",
               color: "rgba(255,255,255,0.5)",
@@ -603,200 +725,941 @@ function TitleBar({ saveStatus }: {
   );
 }
 
-// ---------- sidebar ---------------------------------------------------------
+// ---------- top tab bar -----------------------------------------------------
 
-function Sidebar({ active, onNavigate, pipelineError, pipelineRunning }: {
-  active: SectionId;
-  onNavigate: (id: SectionId) => void;
+function TopTabs({
+  active, onChange, pipelineError, pipelineRunning,
+}: {
+  active: TabId;
+  onChange: (id: TabId) => void;
   pipelineError: string | null;
   pipelineRunning: boolean;
 }) {
   return (
-    <nav style={{
-      width: 196, flexShrink: 0,
-      padding: "20px 12px",
-      borderRight: "1px solid rgba(255,255,255,0.04)",
-      display: "flex", flexDirection: "column", gap: 1,
+    <div style={{
+      flexShrink: 0,
+      display: "flex", alignItems: "center",
+      padding: "10px 14px 0",
+      borderBottom: "1px solid rgba(255,255,255,0.04)",
       background: "rgba(0,0,0,0.18)",
+      gap: 4,
     }}>
-      <div style={{
-        font: "500 9.5px/1 Inter, sans-serif",
-        letterSpacing: "0.16em",
-        textTransform: "uppercase",
-        color: "rgba(255,255,255,0.32)",
-        padding: "6px 12px 12px",
-      }}>Configure</div>
-
-      {SECTIONS.map((s) => {
-        const isActive = s.id === active;
+      {TABS.map(t => {
+        const isActive = t.id === active;
+        const Icon = t.Icon;
         return (
           <button
-            key={s.id}
-            onClick={() => onNavigate(s.id)}
+            key={t.id}
+            onClick={() => onChange(t.id)}
             style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "8px 12px",
+              display: "inline-flex", alignItems: "center", gap: 7,
+              padding: "9px 13px 11px",
               border: 0, background: "transparent",
-              borderRadius: 5, cursor: "pointer", textAlign: "left",
-              color: isActive ? "rgba(255,255,255,0.96)" : "rgba(255,255,255,0.62)",
-              position: "relative", transition: "color .12s",
-              width: "100%",
-            }}
-            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}
-            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-          >
-            {isActive && (
-              <span style={{
-                position: "absolute", left: 0, top: 8, bottom: 8, width: 2,
-                borderRadius: 1, background: TEAL,
-              }} />
-            )}
-            <span style={{
-              font: '500 11px/1 "JetBrains Mono", monospace',
-              color: isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.3)",
-              minWidth: 18,
-            }}>{String(s.num).padStart(2, "0")}</span>
-            <span style={{
-              font: `${isActive ? 600 : 500} 13px/1 Inter, sans-serif`,
+              borderBottom: `2px solid ${isActive ? TEAL : "transparent"}`,
+              marginBottom: -1,
+              cursor: "pointer",
+              color: isActive ? "rgba(255,255,255,0.96)" : "rgba(255,255,255,0.55)",
+              font: `${isActive ? 600 : 500} 12.5px/1 Inter, sans-serif`,
               letterSpacing: "-0.005em",
-            }}>{s.label}</span>
+              transition: "color .12s",
+            }}
+            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.82)"; }}
+            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.55)"; }}
+          >
+            <Icon size={14} strokeWidth={isActive ? 2.1 : 1.8} />
+            {t.label}
           </button>
         );
       })}
 
       <div style={{ flex: 1 }} />
 
-      {/* Status */}
+      {/* Pipeline status pill */}
       <div style={{
-        margin: "8px 12px",
-        padding: "7px 10px",
-        borderRadius: 6,
+        marginBottom: 8,
+        padding: "5px 10px",
+        borderRadius: 999,
         background: pipelineError
           ? "rgba(239,68,68,0.1)"
           : pipelineRunning
           ? "rgba(34,197,94,0.08)"
           : "rgba(255,255,255,0.03)",
-        border: `1px solid ${pipelineError ? "rgba(239,68,68,0.2)" : pipelineRunning ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.05)"}`,
+        border: `1px solid ${pipelineError ? "rgba(239,68,68,0.22)" : pipelineRunning ? "rgba(34,197,94,0.18)" : "rgba(255,255,255,0.06)"}`,
         display: "flex", alignItems: "center", gap: 7,
       }}>
         <span style={{
           width: 6, height: 6, borderRadius: 999, flexShrink: 0,
-          background: pipelineError ? "#ef4444" : pipelineRunning ? "#22c55e" : "rgba(255,255,255,0.2)",
+          background: pipelineError ? "#ef4444" : pipelineRunning ? "#22c55e" : "rgba(255,255,255,0.3)",
           animation: pipelineRunning && !pipelineError ? "pulse 2s infinite" : "none",
         }} />
         <span style={{
           font: "500 10.5px/1 Inter, sans-serif",
-          color: pipelineError ? "#ef4444" : pipelineRunning ? "#22c55e" : "rgba(255,255,255,0.4)",
+          color: pipelineError ? "#ef4444" : pipelineRunning ? "#22c55e" : "rgba(255,255,255,0.5)",
         }}>
-          {pipelineError ? "Error" : pipelineRunning ? "Recording" : "Starting…"}
+          {pipelineError ? "Capture error" : pipelineRunning ? "Recording" : "Starting…"}
         </span>
       </div>
-
-      {/* Footer */}
-      <div style={{
-        padding: "8px 12px",
-        font: '400 10.5px/1.4 "JetBrains Mono", monospace',
-        color: "rgba(255,255,255,0.28)",
-        letterSpacing: "0.01em",
-      }}>
-        ClipDip v0.1.0<br />
-        config.toml · synced
-      </div>
-    </nav>
+    </div>
   );
 }
 
 // ---------- audio sources ---------------------------------------------------
 
+function audioKindIcon(k: AudioSource["kind"]) {
+  if (k === "microphone") return Mic;
+  if (k === "process_loopback") return Cpu;
+  return Volume2;
+}
+
+const DEFAULT_DEVICE_VALUE = "__default__";
+
+function deviceOptionsFor(
+  kind: AudioSource["kind"],
+  devices: AudioDeviceInfo[],
+): { value: string; label: string; sub?: string }[] {
+  if (kind === "process_loopback") return [];
+  const flow = kind === "microphone" ? "Capture" : "Render";
+  const filtered = devices.filter(d => d.flow === flow);
+  const def = filtered.find(d => d.is_default);
+  return [
+    {
+      value: DEFAULT_DEVICE_VALUE,
+      label: "System default",
+      sub: def ? `Currently: ${def.friendly_name}` : "Follows Windows default",
+    },
+    ...filtered.map(d => ({
+      value: d.id,
+      label: d.friendly_name,
+      sub: d.is_default ? "Default" : undefined,
+    })),
+  ];
+}
+
 function AudioSourcesList({
-  sources, setSources,
+  sources, setSources, devices, devicesLoading, onRefreshDevices,
 }: {
   sources: AudioSource[];
   setSources: (s: AudioSource[]) => void;
+  devices: AudioDeviceInfo[];
+  devicesLoading: boolean;
+  onRefreshDevices: () => void;
 }) {
   const update = (idx: number, patch: Partial<AudioSource>) =>
     setSources(sources.map((s, i) => i === idx ? { ...s, ...patch } : s));
   const remove = (idx: number) => setSources(sources.filter((_, i) => i !== idx));
-  const add = () => setSources([...sources, { kind: "microphone" }]);
+  const add = (kind: AudioSource["kind"]) => setSources([...sources, { kind }]);
 
-  const kindOptions: { value: AudioSource["kind"]; label: string }[] = [
-    { value: "system_loopback",  label: "System output" },
-    { value: "microphone",       label: "Microphone" },
-    { value: "process_loopback", label: "Process loopback" },
+  const kindOptions: { value: AudioSource["kind"]; label: string; sub?: string }[] = [
+    { value: "system_loopback",  label: "System output", sub: "Game audio, music, calls" },
+    { value: "microphone",       label: "Microphone",    sub: "Your voice" },
+    { value: "process_loopback", label: "Process loopback", sub: "Audio from one specific app" },
   ];
 
   return (
     <div style={{ width: "100%" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {sources.map((src, i) => (
-          <div key={i} style={{
-            display: "flex", alignItems: "center", gap: 8,
-            padding: "8px 8px 8px 10px",
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {sources.map((src, i) => {
+          const KindIcon = audioKindIcon(src.kind);
+          const devOpts = deviceOptionsFor(src.kind, devices);
+          const selectedDeviceValue = src.device_id ?? DEFAULT_DEVICE_VALUE;
+          // If the saved device_id no longer exists in enumeration, surface it
+          // so the user can see what's selected even if disconnected.
+          const knownDevice = devices.find(d => d.id === src.device_id);
+          const showStaleWarning =
+            src.kind !== "process_loopback" &&
+            !!src.device_id &&
+            !knownDevice &&
+            !devicesLoading;
+
+          return (
+            <div key={i} style={{
+              display: "flex", flexDirection: "column", gap: 8,
+              padding: "10px 10px 12px 12px",
+              borderRadius: 9,
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.055)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 26, height: 26, borderRadius: 6,
+                  background: `${TEAL}1f`,
+                  color: TEAL,
+                  flexShrink: 0,
+                }}>
+                  <KindIcon size={13} strokeWidth={1.9} />
+                </span>
+                <DesignSelect<AudioSource["kind"]>
+                  value={src.kind}
+                  onChange={kind => update(i, { kind, device_id: undefined })}
+                  options={kindOptions}
+                  width={200}
+                />
+                <span style={{
+                  font: '500 9px/1 "JetBrains Mono", monospace',
+                  color: "rgba(255,255,255,0.45)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  padding: "3px 5px",
+                  borderRadius: 3,
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.07)",
+                }}>
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={() => remove(i)}
+                  title="Remove"
+                  style={{
+                    width: 30, height: 30, borderRadius: 6,
+                    border: 0, background: "transparent", cursor: "pointer",
+                    color: "rgba(255,255,255,0.4)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                  onMouseEnter={e => {
+                    (e.currentTarget as HTMLElement).style.background = "rgba(255,80,80,0.12)";
+                    (e.currentTarget as HTMLElement).style.color = "oklch(0.7 0.18 25)";
+                  }}
+                  onMouseLeave={e => {
+                    (e.currentTarget as HTMLElement).style.background = "transparent";
+                    (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.4)";
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+
+              {src.kind !== "process_loopback" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 9, paddingLeft: 36 }}>
+                  <Headphones size={11} color="rgba(255,255,255,0.4)" />
+                  <span style={{
+                    font: "500 11px/1 Inter, sans-serif",
+                    color: "rgba(255,255,255,0.5)",
+                  }}>Device</span>
+                  <DesignSelect<string>
+                    value={selectedDeviceValue}
+                    onChange={v => update(i, { device_id: v === DEFAULT_DEVICE_VALUE ? undefined : v })}
+                    options={
+                      showStaleWarning
+                        ? [
+                            ...devOpts,
+                            {
+                              value: src.device_id!,
+                              label: "(disconnected device)",
+                              sub: src.device_id,
+                            },
+                          ]
+                        : devOpts
+                    }
+                    width={280}
+                  />
+                  {showStaleWarning && (
+                    <span title="Device not currently connected" style={{ display: "inline-flex", color: "#f59e0b" }}>
+                      <AlertTriangle size={12} />
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {src.kind === "process_loopback" && (
+                <div style={{
+                  paddingLeft: 36,
+                  font: "400 11px/1.4 Inter, sans-serif",
+                  color: "rgba(255,255,255,0.42)",
+                }}>
+                  Process-specific capture targets the focused game window. No device pick needed.
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add row */}
+      <div style={{
+        marginTop: 12,
+        display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+      }}>
+        {([
+          { kind: "system_loopback", label: "Add system output", Icon: Volume2 },
+          { kind: "microphone",      label: "Add microphone",    Icon: Mic },
+        ] as { kind: AudioSource["kind"]; label: string; Icon: typeof Mic }[]).map(b => (
+          <button
+            key={b.kind}
+            onClick={() => add(b.kind)}
+            style={{
+              padding: "8px 12px",
+              display: "inline-flex", alignItems: "center", gap: 6,
+              borderRadius: 7,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px dashed rgba(255,255,255,0.14)",
+              color: "rgba(255,255,255,0.78)",
+              font: "500 11.5px/1 Inter, sans-serif",
+              cursor: "pointer",
+              transition: "all .12s",
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.07)";
+              (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.22)";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)";
+              (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.14)";
+            }}
+          >
+            <Plus size={11} />
+            <b.Icon size={11} />
+            {b.label}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={onRefreshDevices}
+          disabled={devicesLoading}
+          title="Re-scan audio devices"
+          style={{
+            padding: "8px 11px",
+            display: "inline-flex", alignItems: "center", gap: 6,
             borderRadius: 7,
-            background: "rgba(255,255,255,0.025)",
-            border: "1px solid rgba(255,255,255,0.05)",
+            background: "transparent",
+            border: "1px solid rgba(255,255,255,0.07)",
+            color: "rgba(255,255,255,0.55)",
+            font: "500 11.5px/1 Inter, sans-serif",
+            cursor: devicesLoading ? "wait" : "pointer",
+            opacity: devicesLoading ? 0.5 : 1,
+          }}
+        >
+          <RefreshCw size={11} style={{
+            animation: devicesLoading ? "spin 1s linear infinite" : "none",
+          }} />
+          Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- onboarding modal ------------------------------------------------
+
+const ONBOARDING_KEY = "clipdip.onboarded.v1";
+
+function OnboardingModal({
+  config, setConfig, monitors, devices, devicesLoading, onRefreshDevices, onClose,
+}: {
+  config: Config;
+  setConfig: React.Dispatch<React.SetStateAction<Config | null>>;
+  monitors: MonitorInfo[];
+  devices: AudioDeviceInfo[];
+  devicesLoading: boolean;
+  onRefreshDevices: () => void;
+  onClose: () => void;
+}) {
+  const [step, setStep] = useState(0);
+  const steps = [
+    { id: "monitor", title: "Pick your display",   Icon: Monitor,    blurb: "Which screen do you want ClipDip to capture? Multi-monitor setups capture one at a time." },
+    { id: "hotkey",  title: "Set your save key",   Icon: Keyboard,   blurb: "When you press this, the last few seconds of gameplay are written to disk. Use something rare so it doesn't clash with in-game keys." },
+    { id: "folder",  title: "Where do clips go?",  Icon: FolderOpen, blurb: "Pick a folder you'll actually find later. You can always change this." },
+    { id: "audio",   title: "What sound to record?", Icon: Mic,      blurb: "Mix any number of sources. Most people want both: the game's audio plus their mic." },
+  ];
+  const cur = steps[step];
+  const isLast = step === steps.length - 1;
+
+  const patchVideo = (k: keyof Config["video"], v: unknown) =>
+    setConfig(prev => prev ? { ...prev, video: { ...prev.video, [k]: v } } : prev);
+  const patchOutput = (k: keyof Config["output"], v: unknown) =>
+    setConfig(prev => prev ? { ...prev, output: { ...prev.output, [k]: v } } : prev);
+  const patchHotkey = (k: keyof Config["hotkey"], v: string) =>
+    setConfig(prev => prev ? { ...prev, hotkey: { ...prev.hotkey, [k]: v } } : prev);
+  const setSources = (srcs: AudioSource[]) =>
+    setConfig(prev => prev ? { ...prev, audio: { ...prev.audio, sources: srcs } } : prev);
+
+  const finish = () => {
+    try { localStorage.setItem(ONBOARDING_KEY, "1"); } catch { /* private mode */ }
+    onClose();
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 200,
+      background: "rgba(0,0,0,0.55)",
+      backdropFilter: "blur(6px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 32,
+      animation: "fadeIn .15s ease-out",
+    }}>
+      <div style={{
+        width: 560, maxHeight: "calc(100% - 32px)",
+        display: "flex", flexDirection: "column",
+        background: "rgba(18,18,22,0.98)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 14,
+        boxShadow: "0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.02)",
+        overflow: "hidden",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "20px 22px 16px",
+          borderBottom: "1px solid rgba(255,255,255,0.05)",
+          display: "flex", alignItems: "center", gap: 14,
+        }}>
+          <div style={{
+            width: 42, height: 42, borderRadius: 10,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: `linear-gradient(135deg, ${TEAL}33, ${TEAL_DIM}18)`,
+            border: `1px solid ${TEAL}44`,
+            color: TEAL,
+            flexShrink: 0,
           }}>
-            <span style={{
-              font: '500 10px/1 "JetBrains Mono", monospace',
-              color: "rgba(255,255,255,0.32)",
-              minWidth: 18,
-            }}>{String(i + 1).padStart(2, "0")}</span>
-            <DesignSelect<AudioSource["kind"]>
-              value={src.kind}
-              onChange={kind => update(i, { kind, device_id: undefined })}
-              options={kindOptions}
-              width={180}
+            <cur.Icon size={20} strokeWidth={1.8} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              font: '500 10.5px/1 "JetBrains Mono", monospace',
+              color: "rgba(255,255,255,0.36)",
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              marginBottom: 5,
+            }}>
+              Step {step + 1} of {steps.length}
+            </div>
+            <div style={{
+              font: "600 17px/1.2 Inter, sans-serif",
+              color: "rgba(255,255,255,0.96)",
+              letterSpacing: "-0.015em",
+            }}>{cur.title}</div>
+          </div>
+          <button
+            onClick={finish}
+            title="Skip setup"
+            style={{
+              width: 28, height: 28, borderRadius: 6,
+              border: 0, background: "transparent", cursor: "pointer",
+              color: "rgba(255,255,255,0.45)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "background .12s, color .12s",
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)";
+              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.9)";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.45)";
+            }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: "20px 22px 4px", overflowY: "auto" }}>
+          <p style={{
+            margin: "0 0 18px",
+            font: "400 13px/1.5 Inter, sans-serif",
+            color: "rgba(255,255,255,0.6)",
+          }}>{cur.blurb}</p>
+
+          {cur.id === "monitor" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {(monitors.length ? monitors : [{ index: 0, name: "Primary display", width: 1920, height: 1080 }]).map(m => {
+                const isActive = config.video.output_index === m.index;
+                return (
+                  <button
+                    key={m.index}
+                    onClick={() => patchVideo("output_index", m.index)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 12,
+                      padding: "12px 14px",
+                      borderRadius: 9,
+                      border: `1px solid ${isActive ? TEAL + "66" : "rgba(255,255,255,0.08)"}`,
+                      background: isActive ? `${TEAL}14` : "rgba(255,255,255,0.025)",
+                      boxShadow: isActive ? `0 0 0 3px ${TEAL}22` : "none",
+                      cursor: "pointer", textAlign: "left",
+                      transition: "all .12s",
+                    }}
+                  >
+                    <Monitor size={18} color={isActive ? TEAL : "rgba(255,255,255,0.5)"} strokeWidth={1.8} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{
+                        font: "600 13px/1.2 Inter, sans-serif",
+                        color: "rgba(255,255,255,0.95)",
+                      }}>
+                        Display {m.index + 1}{m.index === 0 ? " · primary" : ""}
+                      </div>
+                      <div style={{
+                        font: '400 11px/1 "JetBrains Mono", monospace',
+                        color: "rgba(255,255,255,0.42)",
+                        marginTop: 4,
+                      }}>
+                        {m.width} × {m.height}{m.name ? ` · ${m.name}` : ""}
+                      </div>
+                    </div>
+                    {isActive && <CircleCheck size={16} color={TEAL} />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {cur.id === "hotkey" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{
+                padding: "14px 16px",
+                borderRadius: 9,
+                background: "rgba(255,255,255,0.025)",
+                border: "1px solid rgba(255,255,255,0.05)",
+                display: "flex", alignItems: "center", gap: 14,
+              }}>
+                <span style={{
+                  font: "500 13px/1.2 Inter, sans-serif",
+                  color: "rgba(255,255,255,0.85)",
+                  flex: 1,
+                }}>Save clip</span>
+                <HotkeyCapture
+                  value={config.hotkey.save_clip}
+                  onChange={v => patchHotkey("save_clip", v)}
+                  minWidth={180}
+                />
+              </div>
+              <div style={{
+                padding: "10px 12px",
+                borderRadius: 7,
+                background: "rgba(245,158,11,0.07)",
+                border: "1px solid rgba(245,158,11,0.18)",
+                display: "flex", gap: 9,
+                font: "400 11.5px/1.45 Inter, sans-serif",
+                color: "rgba(255,255,255,0.7)",
+              }}>
+                <AlertTriangle size={13} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  Avoid common combos like Ctrl+Shift+S — games hijack those.
+                  Ctrl+Alt+F-keys are the safest bets.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {cur.id === "folder" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <DesignTextInput
+                value={config.output.directory}
+                onChange={v => patchOutput("directory", v)}
+                placeholder="C:\Users\You\Videos\Clipdip"
+                mono
+                width={"100%" as unknown as number}
+              />
+              <button
+                onClick={() => invoke("open_clips_folder")}
+                style={{
+                  alignSelf: "flex-start",
+                  padding: "7px 11px",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  borderRadius: 6,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  color: "rgba(255,255,255,0.85)",
+                  font: "500 11.5px/1 Inter, sans-serif",
+                  cursor: "pointer",
+                }}
+              >
+                <ExternalLink size={11} />
+                Open folder
+              </button>
+            </div>
+          )}
+
+          {cur.id === "audio" && (
+            <AudioSourcesList
+              sources={config.audio.sources}
+              setSources={setSources}
+              devices={devices}
+              devicesLoading={devicesLoading}
+              onRefreshDevices={onRefreshDevices}
             />
-            <div style={{ flex: 1 }} />
+          )}
+        </div>
+
+        {/* Step dots */}
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, padding: "16px 0 4px" }}>
+          {steps.map((_, i) => (
+            <span key={i} style={{
+              width: i === step ? 18 : 6, height: 6, borderRadius: 999,
+              background: i === step ? TEAL : i < step ? `${TEAL}55` : "rgba(255,255,255,0.12)",
+              transition: "all .18s",
+            }} />
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: "14px 18px 18px",
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <button
+            onClick={finish}
+            style={{
+              padding: "9px 14px",
+              border: 0, background: "transparent", cursor: "pointer",
+              color: "rgba(255,255,255,0.5)",
+              font: "500 12px/1 Inter, sans-serif",
+              borderRadius: 6,
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.85)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.5)"; }}
+          >
+            Skip
+          </button>
+          <div style={{ flex: 1 }} />
+          {step > 0 && (
             <button
-              onClick={() => remove(i)}
+              onClick={() => setStep(s => s - 1)}
               style={{
-                width: 28, height: 28, borderRadius: 5,
-                border: 0, background: "transparent", cursor: "pointer",
-                color: "rgba(255,255,255,0.4)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}
-              onMouseEnter={e => {
-                (e.currentTarget as HTMLElement).style.background = "rgba(255,80,80,0.12)";
-                (e.currentTarget as HTMLElement).style.color = "oklch(0.7 0.18 25)";
-              }}
-              onMouseLeave={e => {
-                (e.currentTarget as HTMLElement).style.background = "transparent";
-                (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.4)";
+                padding: "9px 12px",
+                display: "inline-flex", alignItems: "center", gap: 5,
+                borderRadius: 7,
+                background: "rgba(255,255,255,0.045)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "rgba(255,255,255,0.85)",
+                font: "500 12px/1 Inter, sans-serif",
+                cursor: "pointer",
               }}
             >
-              <Trash2 size={12} />
+              <ChevronLeft size={13} />
+              Back
             </button>
-          </div>
-        ))}
+          )}
+          <button
+            onClick={() => isLast ? finish() : setStep(s => s + 1)}
+            style={{
+              padding: "10px 16px",
+              display: "inline-flex", alignItems: "center", gap: 6,
+              borderRadius: 7,
+              background: `linear-gradient(180deg, ${TEAL}, ${TEAL_DIM})`,
+              border: 0,
+              color: "#0a1416",
+              font: "600 12.5px/1 Inter, sans-serif",
+              cursor: "pointer",
+              boxShadow: `0 4px 16px ${TEAL}33`,
+            }}
+          >
+            {isLast ? <>Finish <Check size={13} /></> : <>Next <ChevronRight size={13} /></>}
+          </button>
+        </div>
       </div>
-      <button
-        onClick={add}
-        style={{
-          marginTop: 10,
-          padding: "7px 12px",
-          display: "inline-flex", alignItems: "center", gap: 6,
-          borderRadius: 6,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px dashed rgba(255,255,255,0.14)",
-          color: "rgba(255,255,255,0.7)",
-          font: "500 12px/1 Inter, sans-serif",
-          cursor: "pointer",
-          transition: "all .12s",
-        }}
-        onMouseEnter={e => {
-          (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.07)";
-          (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.22)";
-        }}
-        onMouseLeave={e => {
-          (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)";
-          (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.14)";
-        }}
-      >
-        <Plus size={11} />
-        Add audio source
-      </button>
     </div>
+  );
+}
+
+// ---------- panel: recording ------------------------------------------------
+
+// ---------- panel: video ----------------------------------------------------
+
+function VideoPanel({
+  config, patch, patchVideo, monitors, advanced, setAdvanced,
+}: {
+  config: Config;
+  patch: <K extends keyof Config>(k: K, v: Config[K]) => void;
+  patchVideo: (k: keyof Config["video"], v: unknown) => void;
+  monitors: MonitorInfo[];
+  advanced: boolean;
+  setAdvanced: (v: boolean) => void;
+}) {
+  const monitorOptions = useMemo(() => {
+    if (!monitors.length) return [
+      { value: 0, label: "Display 1 · primary" },
+      { value: 1, label: "Display 2" },
+      { value: 2, label: "Display 3" },
+    ];
+    return monitors.map(m => ({
+      value: m.index,
+      label: `Display ${m.index + 1}${m.index === 0 ? " · primary" : ""}`,
+      sub: `${m.width} × ${m.height}`,
+    }));
+  }, [monitors]);
+
+  return (
+    <PanelShell>
+      <PanelHeader Icon={Video} title="Video" subtitle="ClipDip keeps a rolling buffer of recent gameplay. Tune what gets captured and how heavy the file is." />
+      <PanelBody>
+        <Row Icon={Timer} label="Replay buffer" hint="The longest clip you can save. Larger buffers use more memory.">
+          <DesignSlider
+            value={config.replay_seconds}
+            onChange={v => patch("replay_seconds", v)}
+            min={10} max={300} step={5}
+            format={v => `${v} s`}
+          />
+        </Row>
+        <Row Icon={Monitor} label="Monitor" hint="Pick the display to capture. Multi-monitor setups capture one at a time.">
+          <DesignSelect<number>
+            value={config.video.output_index}
+            onChange={v => patchVideo("output_index", v)}
+            options={monitorOptions}
+            width={240}
+          />
+        </Row>
+        <Row Icon={Gauge} label="Frame rate" hint="Higher is smoother but produces larger files.">
+          <DesignSlider
+            value={config.video.fps}
+            onChange={v => patchVideo("fps", v)}
+            min={30} max={240} step={1}
+            format={v => `${v} fps`}
+          />
+        </Row>
+        <Row Icon={Cpu} label="Codec" hint="AV1 needs an RTX 40-series GPU or newer. ‘Prefer AV1’ uses it when available and silently falls back to H.264.">
+          <DesignSelect<CodecPreference>
+            value={config.video.codec}
+            onChange={v => patchVideo("codec", v)}
+            options={[
+              { value: "prefer_av1", label: "Prefer AV1", sub: "Falls back to H.264 if unsupported" },
+              { value: "force_h264", label: "H.264",      sub: "Widest compatibility" },
+              { value: "force_av1",  label: "AV1 only",   sub: "Requires RTX 40+ / Arc" },
+            ]}
+            width={240}
+          />
+        </Row>
+        <Row Icon={Sparkles} label="Quality mode" hint="Constant quality keeps the picture clean and lets bitrate float with the scene. Variable bitrate pins an average target instead.">
+          <DesignSelect<RateControl["mode"]>
+            value={config.video.rate_control.mode}
+            onChange={mode => {
+              const next: RateControl =
+                mode === "constant_qp"
+                  ? { mode: "constant_qp", qp: 20 }
+                  : { mode: "vbr", avg_bps: config.video.bitrate_bps };
+              patchVideo("rate_control", next);
+            }}
+            options={[
+              { value: "constant_qp", label: "Constant quality", sub: "Recommended — same model as ShadowPlay" },
+              { value: "vbr",         label: "Variable bitrate", sub: "Pin an average data rate" },
+            ]}
+            width={240}
+          />
+        </Row>
+        {config.video.rate_control.mode === "constant_qp" ? (
+          <Row Icon={Gauge} label="Quality (QP)" hint="Lower = better quality, larger files. AV1 scale is 0–255; H.264 is 0–51. ~20 is a balanced default.">
+            <DesignSlider
+              value={config.video.rate_control.qp}
+              onChange={qp => patchVideo("rate_control", { mode: "constant_qp", qp })}
+              min={1} max={config.video.codec === "force_h264" ? 51 : 255} step={1}
+              format={v => `QP ${v}`}
+            />
+          </Row>
+        ) : (
+          <Row Icon={Gauge} label="Target bitrate" hint="Average rate the encoder aims for. 25 Mbps is sane for 1080p60.">
+            <DesignSlider
+              value={config.video.rate_control.avg_bps}
+              onChange={avg_bps => {
+                patchVideo("rate_control", { mode: "vbr", avg_bps });
+                patchVideo("bitrate_bps", avg_bps);
+              }}
+              min={5_000_000} max={80_000_000} step={500_000}
+              format={v => `${(v / 1_000_000).toFixed(1)} Mbps`}
+            />
+          </Row>
+        )}
+        <Row Icon={MousePointer2} label="Include cursor" hint="Draws the mouse cursor into the captured frame.">
+          <DesignToggle value={config.video.include_cursor} onChange={v => patchVideo("include_cursor", v)} />
+        </Row>
+
+        <AdvancedDisclosure open={advanced} onToggle={() => setAdvanced(!advanced)}>
+          <Row Icon={Timer} label="Keyframe interval" hint="How often the encoder writes a full frame. Lower is more seek-friendly but heavier." badge="adv">
+            <DesignSlider
+              value={config.video.gop_seconds}
+              onChange={v => patchVideo("gop_seconds", v)}
+              min={0.5} max={5} step={0.1}
+              format={v => `${v.toFixed(1)} s`}
+            />
+          </Row>
+        </AdvancedDisclosure>
+      </PanelBody>
+    </PanelShell>
+  );
+}
+
+// ---------- panel: audio ----------------------------------------------------
+
+function AudioPanel({
+  config, setSources, setIncludeMix, devices, devicesLoading, onRefreshDevices,
+}: {
+  config: Config;
+  setSources: (s: AudioSource[]) => void;
+  setIncludeMix: (v: boolean) => void;
+  devices: AudioDeviceInfo[];
+  devicesLoading: boolean;
+  onRefreshDevices: () => void;
+}) {
+  const mixDisabled = config.audio.sources.length < 2;
+  return (
+    <PanelShell>
+      <PanelHeader
+        Icon={Mic}
+        title="Audio"
+        subtitle="Mix any number of audio sources into the clip. Sources are recorded simultaneously and combined."
+      />
+      <PanelBody>
+        <Row Icon={Music2} label="Sources" hint="Add as many as you like. Each source can pin to a specific device, or follow the system default." vertical>
+          <AudioSourcesList
+            sources={config.audio.sources}
+            setSources={setSources}
+            devices={devices}
+            devicesLoading={devicesLoading}
+            onRefreshDevices={onRefreshDevices}
+          />
+        </Row>
+        <Row
+          Icon={Volume2}
+          label="Combined mix track"
+          hint={
+            mixDisabled
+              ? "Needs at least two sources before a combined mix makes sense."
+              : "Add a combined 'Mix' track as the first audio stream of the clip. Per-source tracks are kept either way."
+          }
+        >
+          <DesignToggle
+            value={!mixDisabled && config.audio.include_mix}
+            onChange={setIncludeMix}
+            disabled={mixDisabled}
+          />
+        </Row>
+      </PanelBody>
+    </PanelShell>
+  );
+}
+
+// ---------- panel: output ---------------------------------------------------
+
+function OutputPanel({
+  config, patchOutput, advanced, setAdvanced,
+}: {
+  config: Config;
+  patchOutput: (k: keyof Config["output"], v: unknown) => void;
+  advanced: boolean;
+  setAdvanced: (v: boolean) => void;
+}) {
+  return (
+    <PanelShell>
+      <PanelHeader Icon={FolderOpen} title="Output" subtitle="Where finished clips land and how they're named." />
+      <PanelBody>
+        <Row Icon={FolderOpen} label="Clips folder" hint="Where finished .mp4 files are written.">
+          <DesignTextInput
+            value={config.output.directory}
+            onChange={v => patchOutput("directory", v)}
+            mono width={300}
+            trailing={
+              <button
+                onClick={() => invoke("open_clips_folder")}
+                title="Open folder"
+                style={{
+                  height: 24, padding: "0 9px",
+                  borderRadius: 4, border: 0,
+                  background: "rgba(255,255,255,0.06)",
+                  color: "rgba(255,255,255,0.78)",
+                  font: "500 10.5px/1 Inter, sans-serif",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  display: "flex", alignItems: "center", gap: 4,
+                }}
+              >
+                <ExternalLink size={10} />
+              </button>
+            }
+          />
+        </Row>
+        <Row Icon={Film} label="Filename prefix" hint="Numbered suffix is appended automatically — e.g. clipdip_0007.mp4.">
+          <DesignTextInput value={config.output.filename_stem} onChange={v => patchOutput("filename_stem", v)} mono width={220} />
+        </Row>
+        <Row Icon={Volume2} label="Audio bitrate" hint="Quality of the embedded AAC audio track.">
+          <DesignSlider
+            value={config.output.audio_bitrate_bps}
+            onChange={v => patchOutput("audio_bitrate_bps", v)}
+            min={64_000} max={320_000} step={32_000}
+            format={v => `${(v / 1000).toFixed(0)} kbps`}
+          />
+        </Row>
+
+        <AdvancedDisclosure open={advanced} onToggle={() => setAdvanced(!advanced)}>
+          <Row Icon={Film} label="Keep raw files" hint="Preserve the unmuxed sidecar files next to each clip." badge="adv">
+            <DesignToggle value={config.output.keep_sidecars} onChange={v => patchOutput("keep_sidecars", v)} />
+          </Row>
+          <Row Icon={Cpu} label="FFmpeg path" hint="Leave blank to let ClipDip find a bundled or PATH-installed ffmpeg." badge="adv">
+            <DesignTextInput
+              value={config.output.ffmpeg_path || ""}
+              onChange={v => patchOutput("ffmpeg_path", v || null)}
+              placeholder="Auto-detect"
+              mono width={300}
+            />
+          </Row>
+        </AdvancedDisclosure>
+      </PanelBody>
+    </PanelShell>
+  );
+}
+
+// ---------- panel: hotkeys --------------------------------------------------
+
+function HotkeysPanel({ config, patchHotkey }: {
+  config: Config;
+  patchHotkey: (k: keyof Config["hotkey"], v: string) => void;
+}) {
+  return (
+    <PanelShell>
+      <PanelHeader Icon={Keyboard} title="Hotkeys" subtitle="Global shortcuts. Click any field and press the keys you want." />
+      <PanelBody>
+        <Row Icon={Film} label="Save clip" hint="Captures the replay buffer into a new clip.">
+          <HotkeyCapture value={config.hotkey.save_clip} onChange={v => patchHotkey("save_clip", v)} />
+        </Row>
+        <Row Icon={KeyRound} label="Rename last clip" hint="Focuses the rename field in the fly-in notification.">
+          <HotkeyCapture value={config.hotkey.rename_clip} onChange={v => patchHotkey("rename_clip", v)} />
+        </Row>
+        <div style={{
+          marginTop: 8,
+          padding: "10px 12px",
+          borderRadius: 7,
+          background: "rgba(245,158,11,0.06)",
+          border: "1px solid rgba(245,158,11,0.16)",
+          display: "flex", gap: 9,
+          font: "400 11.5px/1.45 Inter, sans-serif",
+          color: "rgba(255,255,255,0.62)",
+        }}>
+          <AlertTriangle size={13} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Pick combos that games are unlikely to use. Ctrl+Alt+F9 through F12 are typically safe.
+          </span>
+        </div>
+      </PanelBody>
+    </PanelShell>
+  );
+}
+
+// ---------- panel: notifications --------------------------------------------
+
+function NotificationsPanel({ config, patchNotif }: {
+  config: Config;
+  patchNotif: (k: keyof Config["notifications"], v: unknown) => void;
+}) {
+  return (
+    <PanelShell>
+      <PanelHeader Icon={Bell} title="Notifications" subtitle="The fly-in toast that appears whenever a clip is saved." />
+      <PanelBody>
+        <Row Icon={Bell} label="Show notification" hint="The clip-saved toast with rename input.">
+          <DesignToggle value={config.notifications.enabled} onChange={v => patchNotif("enabled", v)} />
+        </Row>
+        <Row Icon={Volume2} label="Play sound" hint="A short audible chirp when a clip lands.">
+          <DesignToggle value={config.notifications.sound} onChange={v => patchNotif("sound", v)} disabled={!config.notifications.enabled} />
+        </Row>
+        <Row Icon={MapPin} label="Position" hint="Where the notification appears on the active display.">
+          <CornerPicker value={config.notifications.corner} onChange={v => patchNotif("corner", v)} />
+        </Row>
+        <Row Icon={Timer} label="Auto-dismiss" hint="How long the toast stays before sliding out. Set to 0 to keep it open.">
+          <DesignSlider
+            value={config.notifications.auto_dismiss_secs}
+            onChange={v => patchNotif("auto_dismiss_secs", v)}
+            min={0} max={30} step={1}
+            format={v => v === 0 ? "Never" : `${v} s`}
+          />
+        </Row>
+      </PanelBody>
+    </PanelShell>
   );
 }
 
@@ -804,13 +1667,18 @@ function AudioSourcesList({
 
 export default function MainWindow() {
   const [config, setConfig] = useState<Config | null>(null);
-  const [activeNav, setActiveNav] = useState<SectionId>("recording");
+  const [activeTab, setActiveTab] = useState<TabId>("video");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const [pipelineRunning, setPipelineRunning] = useState(false);
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  // True once we've received the initial config from the backend — used to
-  // skip the autosave that would otherwise fire on first load.
+  const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [audioDevices, setAudioDevices] = useState<AudioDeviceInfo[]>([]);
+  const [audioDevicesLoading, setAudioDevicesLoading] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  const [videoAdv, setVideoAdv] = useState(false);
+  const [outputAdv, setOutputAdv] = useState(false);
+
   const loadedRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
@@ -818,12 +1686,17 @@ export default function MainWindow() {
   // Load config
   useEffect(() => {
     invoke<Config>("get_config")
-      .then(setConfig)
+      .then(cfg => {
+        setConfig(cfg);
+        try {
+          if (!localStorage.getItem(ONBOARDING_KEY)) setShowOnboarding(true);
+        } catch { /* private mode — just skip */ }
+      })
       .catch(() => {
         setConfig({
           replay_seconds: 60,
           video: { output_index: 0, fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 } },
-          audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }] },
+          audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }], include_mix: true },
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "clipdip", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10" },
           notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
@@ -831,8 +1704,31 @@ export default function MainWindow() {
       });
   }, []);
 
-  // Autosave on config change. Debounced so quick slider drags don't hammer
-  // the disk. The first render-with-config is the load result, so skip it.
+  // Pull monitor list once
+  useEffect(() => {
+    invoke<MonitorInfo[]>("list_monitors").then(setMonitors).catch(() => setMonitors([]));
+  }, []);
+
+  // Audio devices: load on mount, refresh on window focus (user may have
+  // plugged in headphones since we last looked), expose manual refresh.
+  const refreshAudioDevices = useCallback(() => {
+    setAudioDevicesLoading(true);
+    invoke<AudioDeviceInfo[]>("list_audio_devices")
+      .then(setAudioDevices)
+      .catch(err => {
+        console.error("list_audio_devices failed:", err);
+        setAudioDevices([]);
+      })
+      .finally(() => setAudioDevicesLoading(false));
+  }, []);
+  useEffect(() => {
+    refreshAudioDevices();
+    const onFocus = () => refreshAudioDevices();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshAudioDevices]);
+
+  // Autosave on config change (debounced)
   useEffect(() => {
     if (!config) return;
     if (!loadedRef.current) { loadedRef.current = true; return; }
@@ -853,32 +1749,16 @@ export default function MainWindow() {
     };
   }, [config]);
 
-  // Query initial pipeline state (the event fires before the window opens)
+  // Initial pipeline state
   useEffect(() => {
     invoke<boolean>("get_pipeline_running").then(setPipelineRunning).catch(() => {});
   }, []);
 
-  // Listen for runtime pipeline status changes
+  // Pipeline status listeners
   useEffect(() => {
     const u1 = listen<string>("pipeline-error", e => setPipelineError(e.payload));
     const u2 = listen<{ running: boolean }>("pipeline-status", e => setPipelineRunning(e.payload.running));
     return () => { u1.then(f => f()); u2.then(f => f()); };
-  }, []);
-
-  // Scroll-spy: update active nav based on scroll position
-  useEffect(() => {
-    const sc = scrollerRef.current;
-    if (!sc) return;
-    const onScroll = () => {
-      let best: SectionId = SECTIONS[0].id;
-      for (const sec of SECTIONS) {
-        const el = document.getElementById(`sec-${sec.id}`);
-        if (el && el.offsetTop - sc.scrollTop <= 40) best = sec.id;
-      }
-      setActiveNav(best);
-    };
-    sc.addEventListener("scroll", onScroll);
-    return () => sc.removeEventListener("scroll", onScroll);
   }, []);
 
   const patch = useCallback(<K extends keyof Config>(key: K, val: Config[K]) => {
@@ -901,12 +1781,17 @@ export default function MainWindow() {
     setConfig(prev => prev ? { ...prev, notifications: { ...prev.notifications, [k]: v } } : prev);
   }, []);
 
-  const onNavigate = useCallback((id: SectionId) => {
-    setActiveNav(id);
-    const el = document.getElementById(`sec-${id}`);
-    if (el && scrollerRef.current) {
-      scrollerRef.current.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" });
-    }
+  const setSources = useCallback((srcs: AudioSource[]) => {
+    setConfig(prev => prev ? { ...prev, audio: { ...prev.audio, sources: srcs } } : prev);
+  }, []);
+
+  const setIncludeMix = useCallback((v: boolean) => {
+    setConfig(prev => prev ? { ...prev, audio: { ...prev.audio, include_mix: v } } : prev);
+  }, []);
+
+  const replayOnboarding = useCallback(() => {
+    try { localStorage.removeItem(ONBOARDING_KEY); } catch { /* */ }
+    setShowOnboarding(true);
   }, []);
 
   if (!config) {
@@ -935,234 +1820,39 @@ export default function MainWindow() {
       userSelect: "none",
       overflow: "hidden",
     }}>
-      <TitleBar saveStatus={saveStatus} />
+      <TitleBar saveStatus={saveStatus} onReplayOnboarding={replayOnboarding} />
 
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <Sidebar
-          active={activeNav}
-          onNavigate={onNavigate}
-          pipelineError={pipelineError}
-          pipelineRunning={pipelineRunning}
+      <TopTabs
+        active={activeTab}
+        onChange={setActiveTab}
+        pipelineError={pipelineError}
+        pipelineRunning={pipelineRunning}
+      />
+
+      <main style={{
+        flex: 1, minWidth: 0, minHeight: 0,
+        overflowY: "auto",
+        background: "transparent",
+      }}>
+        {activeTab === "video"         && <VideoPanel config={config} patch={patch} patchVideo={patchVideo} monitors={monitors} advanced={videoAdv} setAdvanced={setVideoAdv} />}
+        {activeTab === "audio"         && <AudioPanel config={config} setSources={setSources} setIncludeMix={setIncludeMix} devices={audioDevices} devicesLoading={audioDevicesLoading} onRefreshDevices={refreshAudioDevices} />}
+        {activeTab === "output"        && <OutputPanel config={config} patchOutput={patchOutput} advanced={outputAdv} setAdvanced={setOutputAdv} />}
+        {activeTab === "hotkeys"       && <HotkeysPanel config={config} patchHotkey={patchHotkey} />}
+        {activeTab === "notifications" && <NotificationsPanel config={config} patchNotif={patchNotif} />}
+        <div style={{ height: 60 }} />
+      </main>
+
+      {showOnboarding && (
+        <OnboardingModal
+          config={config}
+          setConfig={setConfig}
+          monitors={monitors}
+          devices={audioDevices}
+          devicesLoading={audioDevicesLoading}
+          onRefreshDevices={refreshAudioDevices}
+          onClose={() => setShowOnboarding(false)}
         />
-
-        <main
-          ref={scrollerRef}
-          style={{
-            flex: 1, minWidth: 0,
-            overflowY: "auto",
-            background: "transparent",
-          }}
-        >
-          {/* Recording */}
-          <SectionShell id="recording">
-            <SectionHeader num={1} title="Recording" subtitle="ClipDip keeps a rolling buffer of recent gameplay. When you hit the save shortcut, the last N seconds become a clip." />
-            <SectionBody>
-              <Row label="Replay buffer" hint="The longest clip you can save. Larger buffers use more memory.">
-                <DesignSlider
-                  value={config.replay_seconds}
-                  onChange={v => patch("replay_seconds", v)}
-                  min={10} max={300} step={5}
-                  format={v => `${v} s`}
-                />
-              </Row>
-            </SectionBody>
-          </SectionShell>
-
-          {/* Video */}
-          <SectionShell id="video">
-            <SectionHeader num={2} title="Video" subtitle="What ClipDip captures and how heavy the file is." />
-            <SectionBody>
-              <Row label="Monitor" hint="Pick the display to capture. Multi-monitor setups capture only one at a time.">
-                <DesignSelect<number>
-                  value={config.video.output_index}
-                  onChange={v => patchVideo("output_index", v)}
-                  options={[
-                    { value: 0, label: "Display 1 · primary" },
-                    { value: 1, label: "Display 2" },
-                    { value: 2, label: "Display 3" },
-                  ]}
-                  width={220}
-                />
-              </Row>
-              <Row label="Frame rate" hint="Higher is smoother but produces larger files.">
-                <DesignSlider
-                  value={config.video.fps}
-                  onChange={v => patchVideo("fps", v)}
-                  min={30} max={240} step={1}
-                  format={v => `${v} fps`}
-                />
-              </Row>
-              <Row label="Codec" hint="AV1 needs an RTX 40-series GPU or newer. ‘Prefer AV1’ uses it when available and silently falls back to H.264.">
-                <DesignSelect<CodecPreference>
-                  value={config.video.codec}
-                  onChange={v => patchVideo("codec", v)}
-                  options={[
-                    { value: "prefer_av1", label: "Prefer AV1 (auto)" },
-                    { value: "force_h264", label: "H.264" },
-                    { value: "force_av1",  label: "AV1 (require)" },
-                  ]}
-                  width={220}
-                />
-              </Row>
-              <Row label="Quality mode" hint="Constant quality keeps the picture clean and lets bitrate float with the scene — same model ShadowPlay uses. Variable bitrate pins an average target instead.">
-                <DesignSelect<RateControl["mode"]>
-                  value={config.video.rate_control.mode}
-                  onChange={mode => {
-                    const next: RateControl =
-                      mode === "constant_qp"
-                        ? { mode: "constant_qp", qp: 20 }
-                        : { mode: "vbr", avg_bps: config.video.bitrate_bps };
-                    patchVideo("rate_control", next);
-                  }}
-                  options={[
-                    { value: "constant_qp", label: "Constant quality (CQP)" },
-                    { value: "vbr",         label: "Variable bitrate (VBR)" },
-                  ]}
-                  width={220}
-                />
-              </Row>
-              {config.video.rate_control.mode === "constant_qp" ? (
-                <Row label="Quality (QP)" hint="Lower = better quality, larger files. AV1 scale is 0–255; H.264 is 0–51. 28 is a balanced AV1 default; for H.264 try ~20.">
-                  <DesignSlider
-                    value={config.video.rate_control.qp}
-                    onChange={qp => patchVideo("rate_control", { mode: "constant_qp", qp })}
-                    min={1} max={config.video.codec === "force_h264" ? 51 : 255} step={1}
-                    format={v => `QP ${v}`}
-                  />
-                </Row>
-              ) : (
-                <Row label="Target bitrate" hint="Average rate the encoder aims for. 25 Mbps is a sane default for 1080p60.">
-                  <DesignSlider
-                    value={config.video.rate_control.avg_bps}
-                    onChange={avg_bps => {
-                      patchVideo("rate_control", { mode: "vbr", avg_bps });
-                      patchVideo("bitrate_bps", avg_bps);
-                    }}
-                    min={5_000_000} max={80_000_000} step={500_000}
-                    format={v => `${(v / 1_000_000).toFixed(1)} Mbps`}
-                  />
-                </Row>
-              )}
-              <Row label="Include cursor" hint="Draws the mouse cursor into the captured frame.">
-                <DesignToggle value={config.video.include_cursor} onChange={v => patchVideo("include_cursor", v)} />
-              </Row>
-              <Row label="Keyframe interval" hint="How often the encoder writes a full frame. Lower is more seek-friendly but heavier.">
-                <DesignSlider
-                  value={config.video.gop_seconds}
-                  onChange={v => patchVideo("gop_seconds", v)}
-                  min={0.5} max={5} step={0.1}
-                  format={v => `${v.toFixed(1)} s`}
-                />
-              </Row>
-            </SectionBody>
-          </SectionShell>
-
-          {/* Audio */}
-          <SectionShell id="audio">
-            <SectionHeader num={3} title="Audio" subtitle="Mix any number of audio sources into the clip. Sources are recorded simultaneously and combined." />
-            <SectionBody>
-              <Row label="Sources" hint="Add as many as you like. Each source can pin to a specific device, or follow the system default." vertical>
-                <AudioSourcesList
-                  sources={config.audio.sources}
-                  setSources={srcs => patch("audio", { sources: srcs })}
-                />
-              </Row>
-            </SectionBody>
-          </SectionShell>
-
-          {/* Output */}
-          <SectionShell id="output">
-            <SectionHeader num={4} title="Output" subtitle="Where finished clips land and how they're named." />
-            <SectionBody>
-              <Row label="Clips folder" hint="Where finished .mp4 files are written.">
-                <DesignTextInput
-                  value={config.output.directory}
-                  onChange={v => patchOutput("directory", v)}
-                  mono width={300}
-                  trailing={
-                    <button
-                      onClick={() => invoke("open_clips_folder")}
-                      style={{
-                        height: 22, padding: "0 8px",
-                        borderRadius: 4, border: 0,
-                        background: "rgba(255,255,255,0.06)",
-                        color: "rgba(255,255,255,0.78)",
-                        font: "500 10.5px/1 Inter, sans-serif",
-                        cursor: "pointer",
-                        flexShrink: 0,
-                        display: "flex", alignItems: "center", gap: 4,
-                      }}
-                    >
-                      <ExternalLink size={10} />
-                    </button>
-                  }
-                />
-              </Row>
-              <Row label="Filename prefix" hint="Numbered suffix is appended automatically — e.g. clipdip_0007.mp4.">
-                <DesignTextInput value={config.output.filename_stem} onChange={v => patchOutput("filename_stem", v)} mono width={220} />
-              </Row>
-              <Row label="Audio bitrate" hint="Quality of the embedded AAC audio track.">
-                <DesignSlider
-                  value={config.output.audio_bitrate_bps}
-                  onChange={v => patchOutput("audio_bitrate_bps", v)}
-                  min={64_000} max={320_000} step={32_000}
-                  format={v => `${(v / 1000).toFixed(0)} kbps`}
-                />
-              </Row>
-              <Row label="Keep raw files" hint="Preserve the unmuxed sidecar files next to each clip.">
-                <DesignToggle value={config.output.keep_sidecars} onChange={v => patchOutput("keep_sidecars", v)} />
-              </Row>
-              <Row label="FFmpeg path" hint="Leave blank to let ClipDip find a bundled or PATH-installed ffmpeg.">
-                <DesignTextInput
-                  value={config.output.ffmpeg_path || ""}
-                  onChange={v => patchOutput("ffmpeg_path", v || null)}
-                  placeholder="Auto-detect"
-                  mono width={300}
-                />
-              </Row>
-            </SectionBody>
-          </SectionShell>
-
-          {/* Hotkeys */}
-          <SectionShell id="hotkeys">
-            <SectionHeader num={5} title="Hotkeys" subtitle="Global shortcuts. Click any field and press the keys you want." />
-            <SectionBody>
-              <Row label="Save clip" hint="Captures the replay buffer into a new clip.">
-                <HotkeyCapture value={config.hotkey.save_clip} onChange={v => patchHotkey("save_clip", v)} />
-              </Row>
-              <Row label="Rename last clip" hint="Focuses the rename field in the fly-in notification.">
-                <HotkeyCapture value={config.hotkey.rename_clip} onChange={v => patchHotkey("rename_clip", v)} />
-              </Row>
-            </SectionBody>
-          </SectionShell>
-
-          {/* Notifications */}
-          <SectionShell id="notifications">
-            <SectionHeader num={6} title="Notifications" subtitle="The fly-in toast that appears whenever a clip is saved." />
-            <SectionBody>
-              <Row label="Show notification" hint="The clip-saved toast with rename input.">
-                <DesignToggle value={config.notifications.enabled} onChange={v => patchNotif("enabled", v)} />
-              </Row>
-              <Row label="Play sound" hint="A short audible chirp when a clip lands.">
-                <DesignToggle value={config.notifications.sound} onChange={v => patchNotif("sound", v)} disabled={!config.notifications.enabled} />
-              </Row>
-              <Row label="Position" hint="Where the notification appears on the active display.">
-                <CornerPicker value={config.notifications.corner} onChange={v => patchNotif("corner", v)} />
-              </Row>
-              <Row label="Auto-dismiss" hint="How long the toast stays before sliding out. Set to 0 to keep it open.">
-                <DesignSlider
-                  value={config.notifications.auto_dismiss_secs}
-                  onChange={v => patchNotif("auto_dismiss_secs", v)}
-                  min={0} max={30} step={1}
-                  format={v => v === 0 ? "Never" : `${v} s`}
-                />
-              </Row>
-            </SectionBody>
-          </SectionShell>
-
-          <div style={{ height: 80 }} />
-        </main>
-      </div>
+      )}
     </div>
   );
 }

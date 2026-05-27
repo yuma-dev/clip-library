@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ClipDip Overlay</title>
+  <style>
+    /* All styling is inline so the overlay window has zero external
+       requests during cold start — no Google Fonts, no Tailwind, no
+       module graph. WebView2 can paint the initial off-screen state on
+       the very first frame after the HTML lands. */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; padding: 0; }
+    body {
+      background: transparent;
+      color: #fff;
+      -webkit-font-smoothing: antialiased;
+      font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      pointer-events: none;
+    }
+
+    /* Anchor: positions the card in one of the four screen corners. The
+       overlay window is sized to the screen, so vh resolves to actual
+       physical screen-percentage units. */
+    .anchor { position: fixed; pointer-events: auto; }
+    .anchor.top_left     { top: 2.4vh;    left: 2.4vh; }
+    .anchor.top_right    { top: 2.4vh;    right: 2.4vh; }
+    .anchor.bottom_left  { bottom: 2.4vh; left: 2.4vh; }
+    .anchor.bottom_right { bottom: 2.4vh; right: 2.4vh; }
+
+    .card {
+      display: inline-flex;
+      align-items: center;
+      gap: 1.4vh;
+      padding: 1.1vh 1.8vh 1.1vh 1.2vh;
+      border-radius: 0.85vh;
+      background: rgb(28, 28, 32);
+      box-shadow:
+        0 18px 40px -16px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(255, 255, 255, 0.05);
+      user-select: none;
+      opacity: 0;
+      /* Default slide direction is from the right; left corners override
+         below. The transition only fires once the `.entered` class is
+         applied, which we gate on `document.fonts.ready` + 2 RAFs so it
+         can't get eaten by WebView2 startup flicker. */
+      transform: translateX(120%);
+      transition: opacity .28s ease-out, transform .42s cubic-bezier(.22, .9, .34, 1);
+      will-change: transform, opacity;
+    }
+    .anchor.top_left .card, .anchor.bottom_left .card {
+      transform: translateX(-120%);
+    }
+    .card.entered { opacity: 1; transform: translateX(0); }
+
+    .logo {
+      width: 4.2vh;
+      height: 4.2vh;
+      flex-shrink: 0;
+      user-select: none;
+      display: block;
+    }
+
+    .body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4vh;
+      min-width: 17vh;
+    }
+
+    .title-row { display: flex; align-items: center; gap: 0.6vh; }
+    .title {
+      font: 700 1.85vh/1 inherit;
+      color: rgba(255, 255, 255, 0.96);
+      letter-spacing: -0.005em;
+    }
+    .spinner {
+      display: none;
+      width: 1.3vh; height: 1.3vh;
+      border-radius: 999px;
+      border: 0.18vh solid rgba(255, 255, 255, 0.18);
+      border-top-color: rgba(255, 255, 255, 0.85);
+      box-sizing: border-box;
+      animation: spin 0.75s linear infinite;
+    }
+    .card.saving .spinner { display: inline-block; }
+
+    .hint-row {
+      position: relative;
+      height: 1.7vh;
+      display: flex;
+      align-items: center;
+      cursor: text;
+    }
+    .card.saving .hint-row { cursor: default; }
+
+    .hint {
+      font: 500 1.25vh/1 inherit;
+      color: rgba(255, 255, 255, 0.48);
+      display: flex;
+      align-items: center;
+      gap: 0.4vh;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 1.85vh;
+      height: 1.65vh;
+      padding: 0 0.4vh;
+      border-radius: 0.35vh;
+      background: rgba(255, 255, 255, 0.07);
+      color: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font: 500 1.2vh/1 "Cascadia Mono", "Consolas", "Segoe UI Mono", ui-monospace, monospace;
+    }
+    .rename-input {
+      position: absolute;
+      inset: 0;
+      width: 100%; height: 100%;
+      background: transparent;
+      border: 0; outline: 0;
+      padding: 0; margin: 0;
+      color: rgba(255, 255, 255, 0.96);
+      font: 500 1.45vh/1 inherit;
+      letter-spacing: -0.005em;
+      opacity: 0;
+      caret-color: #fff;
+    }
+    .rename-display {
+      font: 500 1.45vh/1 inherit;
+      color: rgba(255, 255, 255, 0.7);
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 26vh;
+      display: none;
+    }
+
+    /* Visibility per phase. Each phase reveals exactly one of:
+       spinner+title alone (saving), hint OR input (saved, depending on
+       focus), or rename-display (renamed). */
+    .card.saving   .hint,
+    .card.saving   .rename-input,
+    .card.saving   .rename-display { display: none; }
+    .card.saved    .rename-display { display: none; }
+    .card.renamed  .hint,
+    .card.renamed  .rename-input   { display: none; }
+    .card.renamed  .rename-display { display: inline; }
+    .card.focused  .hint           { display: none; }
+    .card.focused  .rename-input   { opacity: 1; }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="anchor bottom_right" id="anchor">
+    <div class="card saving" id="card">
+      <img class="logo" src="/logo250x250.png" alt="" draggable="false" />
+      <div class="body">
+        <div class="title-row">
+          <span class="spinner"></span>
+          <span class="title" id="title">Saving clip…</span>
+        </div>
+        <div class="hint-row" id="hint-row">
+          <div class="hint" id="hint">
+            <span>Press</span>
+            <span class="kbd" id="kbd-1">Ctrl</span>
+            <span style="opacity:.5">+</span>
+            <span class="kbd" id="kbd-2">F10</span>
+            <span style="margin-left:0.1vh">to rename</span>
+          </div>
+          <!-- autocomplete="new-password" is the canonical Chromium hack
+               to suppress the address-bar-style autofill dropdown.
+               WebView2 honors it; plain `off` is widely ignored on
+               Chromium-family browsers. -->
+          <input
+            class="rename-input"
+            id="rename-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="new-password"
+            autocorrect="off"
+            autocapitalize="off"
+            data-1p-ignore
+            data-lpignore="true"
+            maxlength="120"
+          />
+          <span class="rename-display" id="rename-display"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Tauri IPC ----------------------------------------------------
+    // We bypass `@tauri-apps/api` to keep this file dependency-free.
+    // `__TAURI_INTERNALS__` is injected by the Tauri webview before any
+    // script runs; in dev preview mode without Tauri we no-op out.
+    (function () {
+      // Initial corner: read from URL so first paint slides in from the
+      // right side of the configured corner, not from default. This
+      // beats the racing `overlay_get_pending` round-trip below.
+      try {
+        const c = new URLSearchParams(location.search).get("corner");
+        if (c === "top_left" || c === "top_right" || c === "bottom_left" || c === "bottom_right") {
+          document.getElementById("anchor").className = "anchor " + c;
+        }
+      } catch (_) { /* ignored */ }
+
+      const T = window.__TAURI_INTERNALS__;
+      if (!T) {
+        console.warn("[overlay] not running in Tauri — passive mode");
+        return;
+      }
+      const invoke = (cmd, args) => T.invoke(cmd, args || {});
+      // Mirrors `@tauri-apps/api/event::listen` — registers a callback
+      // via transformCallback (which assigns it a numeric id and stores
+      // it on `window`) and tells the event plugin to forward `event`
+      // to that id.
+      const listen = (event, handler) =>
+        invoke("plugin:event|listen", {
+          event,
+          target: { kind: "Any" },
+          handler: T.transformCallback((msg) => handler(msg)),
+        }).catch((e) => console.error("[overlay] listen", event, "failed:", e));
+
+      // --- DOM refs ---------------------------------------------------
+      const anchor       = document.getElementById("anchor");
+      const card         = document.getElementById("card");
+      const titleEl      = document.getElementById("title");
+      const kbd1         = document.getElementById("kbd-1");
+      const kbd2         = document.getElementById("kbd-2");
+      const hintRow      = document.getElementById("hint-row");
+      const input        = document.getElementById("rename-input");
+      const displayEl    = document.getElementById("rename-display");
+
+      // --- State ------------------------------------------------------
+      const state = {
+        phase: "saving",          // "saving" | "saved" | "renamed"
+        path: null,
+        autoDismissSecs: 0,
+        corner: "bottom_right",
+        focused: false,
+      };
+      let dismissTimer = null;
+      let savingTimeoutTimer = null;
+
+      // Upper bound on how long we'll show "Saving clip…" before
+      // assuming the mux silently failed. Without this the spinner can
+      // get stuck forever if clip-saved never arrives (process killed
+      // mid-mux, ffmpeg crash without a clip-error event, etc.).
+      const SAVING_TIMEOUT_MS = 20000;
+      const armSavingTimeout = () => {
+        if (savingTimeoutTimer) clearTimeout(savingTimeoutTimer);
+        savingTimeoutTimer = setTimeout(() => {
+          if (state.phase === "saving") {
+            console.warn("[overlay] saving timeout — dismissing");
+            dismiss();
+          }
+        }, SAVING_TIMEOUT_MS);
+      };
+      const clearSavingTimeout = () => {
+        if (savingTimeoutTimer) {
+          clearTimeout(savingTimeoutTimer);
+          savingTimeoutTimer = null;
+        }
+      };
+
+      const setPhase = (p) => {
+        state.phase = p;
+        card.classList.remove("saving", "saved", "renamed");
+        card.classList.add(p);
+        titleEl.textContent =
+          p === "saving"  ? "Saving clip…" :
+          p === "renamed" ? "Renamed!" :
+                            "Clip saved";
+      };
+      const setFocused = (f) => {
+        state.focused = f;
+        card.classList.toggle("focused", f);
+      };
+      const setCorner = (c) => {
+        if (!c || c === state.corner) return;
+        state.corner = c;
+        anchor.className = "anchor " + c;
+      };
+      const setHotkey = (s) => {
+        if (!s) return;
+        const cleaned = String(s)
+          .replace(/^Press\s+/i, "")
+          .replace(/\s+to\s+rename$/i, "")
+          .trim();
+        const parts = cleaned ? cleaned.split("+").map((x) => x.trim()) : ["Ctrl", "F10"];
+        kbd1.textContent = parts[0] || "Ctrl";
+        kbd2.textContent = parts[1] || "F10";
+      };
+      const scheduleDismiss = () => {
+        if (dismissTimer) clearTimeout(dismissTimer);
+        if (state.focused) return;
+        if (state.phase === "renamed") {
+          dismissTimer = setTimeout(dismiss, 1200);
+        } else if (state.phase === "saved" && state.autoDismissSecs > 0) {
+          dismissTimer = setTimeout(dismiss, state.autoDismissSecs * 1000);
+        }
+      };
+      const dismiss = () =>
+        invoke("dismiss_notification").catch((e) => console.error("dismiss:", e));
+
+      // --- Pending hydration ------------------------------------------
+      // Backend stashes BOTH the clip-saving and clip-saved payloads
+      // because WebView2 cold start often outraces the entire save
+      // flow — without this safety net a late-mounting overlay would
+      // attach listeners after both events already fired into the
+      // void and sit on the spinner forever.
+      invoke("overlay_get_pending")
+        .then((p) => {
+          if (!p) return;
+          const saving = p.saving;
+          const saved = p.saved;
+          if (saving) {
+            setHotkey(saving.rename_hotkey);
+            setCorner(saving.corner);
+            state.autoDismissSecs = saving.auto_dismiss_secs || 0;
+            setPhase("saving");
+            armSavingTimeout();
+          }
+          if (saved) {
+            // Saved already happened while we were booting — skip the
+            // spinner entirely and land on the rename UI.
+            state.path = saved.path || null;
+            clearSavingTimeout();
+            setPhase("saved");
+            scheduleDismiss();
+          }
+        })
+        .catch((e) => console.error("overlay_get_pending:", e));
+
+      // --- Event listeners --------------------------------------------
+      listen("clip-saving", (ev) => {
+        const p = ev.payload || {};
+        setFocused(false);
+        input.value = "";
+        setHotkey(p.rename_hotkey);
+        setCorner(p.corner);
+        state.autoDismissSecs = p.auto_dismiss_secs || 0;
+        setPhase("saving");
+        armSavingTimeout();
+      });
+
+      listen("clip-saved", (ev) => {
+        const p = ev.payload || {};
+        state.path = p.path || null;
+        clearSavingTimeout();
+        setPhase("saved");
+        scheduleDismiss();
+      });
+
+      listen("clip-error", () => {
+        // Backend also destroys the window from its side, but invoking
+        // dismiss here is harmless and keeps the React-era behavior.
+        clearSavingTimeout();
+        dismiss();
+      });
+
+      listen("activate-rename", () => {
+        if (state.phase !== "saved" || state.focused) return;
+        invoke("set_overlay_input_mode", { enabled: true }).catch(console.error);
+        setTimeout(() => input.focus(), 50);
+      });
+
+      // --- Input wiring -----------------------------------------------
+      input.addEventListener("focus", () => {
+        setFocused(true);
+        invoke("set_overlay_input_mode", { enabled: true }).catch(console.error);
+        if (dismissTimer) clearTimeout(dismissTimer);
+      });
+      input.addEventListener("blur", () => {
+        setFocused(false);
+        invoke("set_overlay_input_mode", { enabled: false }).catch(console.error);
+        scheduleDismiss();
+      });
+      // Mirror the backend's `rename_clip` sanitizer in real-time so
+       // the user can see exactly what filename they'll get. The Rust
+       // side keeps letters/digits/dash/underscore/space and replaces
+       // anything else with '_'; here we *strip* the disallowed chars
+       // instead of replacing — closer to what users expect from a
+       // filename input. `\p{L}\p{N}` covers Unicode letters and
+       // digits, matching Rust's `is_alphanumeric()`.
+      const SANITIZE_RE = /[^\p{L}\p{N}_\- ]/gu;
+      input.addEventListener("input", () => {
+        const before = input.value;
+        const after = before.replace(SANITIZE_RE, "");
+        if (after !== before) {
+          // Keep the caret roughly where the user expects after we
+          // strip characters. Selection APIs are unaffected by the
+          // strip because we only remove characters left of the caret
+          // (in the typical typing flow).
+          const caret = input.selectionStart || 0;
+          const removed = before.length - after.length;
+          input.value = after;
+          const newCaret = Math.max(0, caret - removed);
+          try { input.setSelectionRange(newCaret, newCaret); } catch (_) {}
+        }
+      });
+      input.addEventListener("keydown", async (e) => {
+        if (e.key === "Enter") {
+          const trimmed = input.value.trim();
+          input.blur();
+          if (!trimmed || !state.path) return;
+          try {
+            await invoke("rename_clip", { oldPath: state.path, newName: trimmed });
+            displayEl.textContent = trimmed;
+            setPhase("renamed");
+            invoke("set_overlay_input_mode", { enabled: false }).catch(console.error);
+            scheduleDismiss();
+          } catch (err) {
+            console.error("rename failed:", err);
+          }
+        } else if (e.key === "Escape") {
+          input.blur();
+        }
+      });
+      hintRow.addEventListener("click", () => {
+        if (state.phase === "saved" && !state.focused) input.focus();
+      });
+
+      // --- Lock body width ---------------------------------------------
+      // The hint ("Press Ctrl + F10 to rename") is the widest content
+      // the card ever renders. Without an explicit floor, switching to
+      // the (initially empty) rename input would collapse the body to
+      // its min-width and the card visibly shrinks. Measure the
+      // hint-row once after layout settles and pin the body to that
+      // width — adapts to any hotkey label length without hardcoding.
+      const lockBodyWidth = () => {
+        const hintRow = document.getElementById("hint-row");
+        const body = document.querySelector(".body");
+        if (!hintRow || !body) return;
+        // Force the hint visible just for the measurement; the .saving
+        // phase hides it via display:none which would zero its width.
+        const wasSaving = card.classList.contains("saving");
+        if (wasSaving) card.classList.remove("saving");
+        const w = hintRow.offsetWidth;
+        if (wasSaving) card.classList.add("saving");
+        if (w > 0) body.style.minWidth = w + "px";
+      };
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(lockBodyWidth).catch(lockBodyWidth);
+      } else {
+        requestAnimationFrame(lockBodyWidth);
+      }
+
+      // --- Fly-in -----------------------------------------------------
+      // Wait until layout + font selection has settled, then bump
+      // through 2 RAFs so the browser commits the off-screen initial
+      // state before flipping to .entered. Otherwise the transition
+      // gets visually consumed by WebView2's first-paint flicker.
+      const enter = () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => card.classList.add("entered"));
+        });
+      };
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(enter).catch(enter);
+      } else {
+        enter();
+      }
+
+      console.log("[overlay] vanilla overlay ready");
+    })();
+  </script>
+</body>
+</html>

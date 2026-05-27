@@ -69,33 +69,19 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Thumb({ src, w = vh(6.4), h = vh(4.2) }: { src: string | null; w?: string; h?: string }) {
-  // Thumbnail arrives via a separate `clip-thumbnail` event (gdigrab is
-  // slow on first run), so the initial render almost always has src=null.
-  // A faint pulse on the placeholder signals "image coming".
+function Logo({ size = vh(4.2) }: { size?: string }) {
   return (
-    <div style={{
-      width: w, height: h, flexShrink: 0,
-      borderRadius: vh(0.35),
-      background: "#0a0a0c",
-      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
-      overflow: "hidden",
-      animation: src ? "none" : "pulse 1.4s ease-in-out infinite",
-    }}>
-      {src && (
-        <img
-          src={src}
-          alt=""
-          draggable={false}
-          style={{
-            width: "100%", height: "100%",
-            objectFit: "cover", objectPosition: "50% 50%",
-            userSelect: "none",
-            display: "block",
-          }}
-        />
-      )}
-    </div>
+    <img
+      src="/logo250x250.png"
+      alt=""
+      draggable={false}
+      style={{
+        width: size, height: size, flexShrink: 0,
+        objectFit: "contain",
+        userSelect: "none",
+        display: "block",
+      }}
+    />
   );
 }
 
@@ -139,7 +125,32 @@ function NotificationCard({
   const [focused, setFocused] = useState(false);
   const [renamed, setRenamed] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [entered, setEntered] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Fly-in animation. We wait for two RAFs (and document.fonts.ready) so
+  // the webview has actually painted the offscreen initial state before
+  // the transition kicks in — otherwise the animation gets eaten by the
+  // WebView2 startup flicker and the user sees the card already on-screen.
+  useEffect(() => {
+    let cancelled = false;
+    const start = () => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled) setEntered(true);
+        });
+      });
+    };
+    if (typeof document !== "undefined" && (document as any).fonts?.ready) {
+      (document as any).fonts.ready.then(start).catch(start);
+    } else {
+      start();
+    }
+    return () => { cancelled = true; };
+  }, []);
+
+  const isRight = notif.corner === "top_right" || notif.corner === "bottom_right";
+  const offX = isRight ? "120%" : "-120%";
 
   // Auto-dismiss countdown — only runs in the saved phase. Saving phase
   // can't dismiss because we don't yet know the clip succeeded.
@@ -194,78 +205,79 @@ function NotificationCard({
     if (e.key === "Escape") inputRef.current?.blur();
   };
 
+  // Hint shown below the title — Ctrl+F10 chips inline, matching the mockup.
+  const parsedHotkey = (notif.rename_hotkey || "")
+    .replace(/^Press\s+/i, "")
+    .replace(/\s+to\s+rename$/i, "")
+    .trim();
+  const hotkeyParts = parsedHotkey ? parsedHotkey.split("+").map(s => s.trim()) : ["Ctrl", "F10"];
+
   return (
     <div
       style={{
-        display: "inline-flex", alignItems: "center", gap: vh(1.3),
-        padding: `${vh(1)} ${vh(1.6)}`,
-        borderRadius: vh(0.55),
-        background: "rgb(22,22,26)",
-        boxShadow: "0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06)",
+        display: "inline-flex", alignItems: "center", gap: vh(1.4),
+        padding: `${vh(1.1)} ${vh(1.8)} ${vh(1.1)} ${vh(1.2)}`,
+        borderRadius: vh(0.85),
+        background: "rgb(28,28,32)",
+        boxShadow: "0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05)",
         cursor: "default",
         userSelect: "none",
+        opacity: entered ? 1 : 0,
+        transform: entered ? "translateX(0)" : `translateX(${offX})`,
+        transition: "opacity .28s ease-out, transform .42s cubic-bezier(.22,.9,.34,1)",
+        willChange: "transform, opacity",
       }}
     >
-      <Thumb src={notif.thumbnail} />
+      <Logo />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: vh(0.2) }}>
-        {/* header: pip/spinner + label */}
-        <div style={{ display: "flex", alignItems: "center", gap: vh(0.55) }}>
-          {notif.phase === "saving" ? (
-            <Spinner />
-          ) : (
-            <span style={{
-              width: vh(1.1), height: vh(1.1), borderRadius: 999,
-              background: renamed ? "#22c55e" : TEAL,
-              flexShrink: 0,
-              boxShadow: renamed ? `0 0 ${vh(0.75)} #22c55e88` : `0 0 ${vh(0.75)} ${TEAL}55`,
-              transition: "background 0.3s, box-shadow 0.3s",
-            }} />
-          )}
+      <div style={{ display: "flex", flexDirection: "column", gap: vh(0.4), minWidth: vh(17) }}>
+        {/* Title row */}
+        <div style={{ display: "flex", alignItems: "center", gap: vh(0.6) }}>
+          {notif.phase === "saving" && <Spinner size={vh(1.3)} />}
           <span style={{
-            font: `600 ${vh(1.3)}/1 ${NOTIF_SANS}`,
-            color: "rgba(255,255,255,0.88)",
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
+            font: `700 ${vh(1.85)}/1 ${NOTIF_SANS}`,
+            color: "rgba(255,255,255,0.96)",
+            letterSpacing: "-0.005em",
           }}>
-            {notif.phase === "saving" ? "Clip saving…" : renamed ? "Renamed!" : "Clip saved"}
+            {notif.phase === "saving" ? "Saving clip…" : renamed ? "Renamed!" : "Clip saved"}
           </span>
         </div>
 
-        {/* input row — only rendered in saved phase. While saving we
-            still reserve the same vertical space so the card doesn't
-            visibly resize when phase 2 lands. */}
+        {/* Hint / rename input row */}
         {notif.phase === "saving" ? (
-          <div style={{ height: vh(2.2), minWidth: vh(17) }} />
+          <div style={{ height: vh(1.7) }} />
         ) : (
           <div
             onClick={() => inputRef.current?.focus()}
             style={{
               cursor: "text",
               position: "relative",
-              height: vh(2.2),
-              minWidth: vh(17),
+              height: vh(1.7),
               display: "flex",
               alignItems: "center",
             }}
           >
             {!focused && !renamed && (
               <div style={{
-                font: `500 ${vh(1.4)}/1 ${NOTIF_SANS}`,
-                color: "rgba(255,255,255,0.5)",
-                display: "flex", alignItems: "center", gap: vh(0.45),
+                font: `500 ${vh(1.25)}/1 ${NOTIF_SANS}`,
+                color: "rgba(255,255,255,0.48)",
+                display: "flex", alignItems: "center", gap: vh(0.4),
                 pointerEvents: "none",
                 whiteSpace: "nowrap",
               }}>
-                <Kbd>Ctrl</Kbd>
-                <span style={{ opacity: 0.45 }}>+</span>
-                <Kbd>F10</Kbd>
-                <span style={{ opacity: 0.85, marginLeft: vh(0.2) }}>to rename</span>
+                <span>Press</span>
+                {hotkeyParts.map((p, i) => (
+                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: vh(0.3) }}>
+                    {i > 0 && <span style={{ opacity: 0.5 }}>+</span>}
+                    <Kbd>{p}</Kbd>
+                  </span>
+                ))}
+                <span style={{ marginLeft: vh(0.1) }}>to rename</span>
               </div>
             )}
             {renamed && (
               <span style={{
-                font: `500 ${vh(1.65)}/1 ${NOTIF_SANS}`,
+                font: `500 ${vh(1.45)}/1 ${NOTIF_SANS}`,
                 color: "rgba(255,255,255,0.7)",
                 letterSpacing: "-0.005em",
                 whiteSpace: "nowrap",
@@ -290,7 +302,7 @@ function NotificationCard({
                   width: "100%", height: "100%",
                   background: "transparent", border: 0, outline: 0, padding: 0, margin: 0,
                   color: "rgba(255,255,255,0.96)",
-                  font: `500 ${vh(1.65)}/1 ${NOTIF_SANS}`,
+                  font: `500 ${vh(1.45)}/1 ${NOTIF_SANS}`,
                   letterSpacing: "-0.005em",
                   opacity: focused ? 1 : 0,
                   caretColor: "#fff",
@@ -500,6 +512,8 @@ export default function OverlayWindow() {
     const unlisten = listen<string>("clip-error", e => {
       console.warn("[overlay] clip-error received:", e.payload);
       setNotif(null);
+      // Tear the webview down so WebView2 doesn't linger between sessions.
+      invoke("dismiss_notification").catch(console.error);
     });
     return () => { unlisten.then(f => f()); };
   }, []);

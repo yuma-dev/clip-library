@@ -36,6 +36,7 @@ pub const NV_ENC_CONFIG_VER: u32 = nvencapi_struct_version(9) | (1 << 31);
 pub const NV_ENC_RC_PARAMS_VER: u32 = nvencapi_struct_version(1);
 pub const NV_ENC_PRESET_CONFIG_VER: u32 = nvencapi_struct_version(5) | (1 << 31);
 pub const NV_ENC_EVENT_PARAMS_VER: u32 = nvencapi_struct_version(2);
+pub const NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER: u32 = nvencapi_struct_version(1);
 
 /// Sentinel for `NV_ENC_CONFIG::gopLength` meaning "never insert keyframes
 /// automatically". Not used today but kept for API completeness.
@@ -201,6 +202,33 @@ pub struct NV_ENC_EVENT_PARAMS {
     pub reserved2: [*mut c_void; 64],
 }
 
+// =====================================================================
+// NV_ENC_SEQUENCE_PARAM_PAYLOAD — retrieve out-of-band sequence header
+// (H.264 SPS+PPS, HEVC VPS+SPS+PPS, or AV1 sequence header OBU) from the
+// open encoder session. OBS uses this to seed muxer extradata; we use it
+// to prepend the header to clip files because the AV1 bitstream NVENC
+// emits doesn't reliably contain the sequence header at the start of
+// every IDR even with `repeatSeqHdr=1`.
+// =====================================================================
+
+#[repr(C)]
+pub struct NV_ENC_SEQUENCE_PARAM_PAYLOAD {
+    pub version: u32,
+    pub inBufferSize: u32,
+    pub spsId: u32,
+    pub ppsId: u32,
+    pub spsppsBuffer: *mut c_void,
+    pub outSPSPPSPayloadSize: *mut u32,
+    pub reserved: [u32; 250],
+    pub reserved2: [*mut c_void; 64],
+}
+
+impl Default for NV_ENC_SEQUENCE_PARAM_PAYLOAD {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 impl Default for NV_ENC_EVENT_PARAMS {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
@@ -316,24 +344,98 @@ pub const NV_ENC_CONFIG_H264_IDR_PERIOD_OFFSET: usize = 8;
 ///   **12 repeatSPSPPS**, ...
 pub const NV_ENC_CONFIG_H264_REPEAT_SPSPPS_BIT: u32 = 1 << 12;
 
-/// Offset of `idrPeriod` inside `NV_ENC_CONFIG_AV1` (SDK 13). AV1's struct
-/// begins with 5×u32 of fixed fields (level, tier, useBFramesAsRef,
-/// numFwdRefs, numBwdRefs) followed by the leading bitfield u32 at offset
-/// 20, then `idrPeriod` at offset 24.
-pub const NV_ENC_CONFIG_AV1_IDR_PERIOD_OFFSET: usize = 24;
+// ---- AV1 ----------------------------------------------------------
+//
+// SDK 13.0 `_NV_ENC_CONFIG_AV1` layout. We model the full struct so we
+// can assign fields by name instead of poking bytes at hand-counted
+// offsets — the previous offset-based code had `idrPeriod` and the
+// bitfield word swapped (off by one u32), which silently corrupted
+// neighboring fields and prevented `repeatSeqHdr` from ever being set.
+// That's why NVENC AV1 emitted `INTRA_ONLY_FRAME` instead of
+// `KEY_FRAME` at IDR cadence and never re-emitted the sequence header.
 
-/// Offset of the leading bitfield u32 inside `NV_ENC_CONFIG_AV1` (offset
-/// 20, after level/tier/useBFramesAsRef/numFwdRefs/numBwdRefs).
-pub const NV_ENC_CONFIG_AV1_BITFIELD_OFFSET: usize = 20;
+pub type NV_ENC_AV1_PART_SIZE = u32;
+pub const NV_ENC_AV1_PART_SIZE_AUTOSELECT: NV_ENC_AV1_PART_SIZE = 0;
 
-/// Bit position of `repeatSeqHdr` inside the AV1 bitfield u32 at
-/// `NV_ENC_CONFIG_AV1_BITFIELD_OFFSET`. LSB-first packing in declaration
-/// order:
-///   0 outputAnnexBFormat, 1 enableTimingInfo, 2 enableDecoderModelInfo,
-///   3 enableFrameIdNumbers, 4 disableSeqHdr, **5 repeatSeqHdr**, ...
-/// AV1's analogue of H.264 `repeatSPSPPS` — without it, IDRs emitted after
-/// the ring evicts the original sequence header would produce a stream
-/// decoders can't resync to.
+pub type NV_ENC_VUI_COLOR_PRIMARIES = u32;
+pub type NV_ENC_VUI_TRANSFER_CHARACTERISTIC = u32;
+pub type NV_ENC_VUI_MATRIX_COEFFS = u32;
+
+pub type NV_ENC_BFRAME_REF_MODE = u32;
+pub const NV_ENC_BFRAME_REF_MODE_DISABLED: NV_ENC_BFRAME_REF_MODE = 0;
+
+pub type NV_ENC_NUM_REF_FRAMES = u32;
+pub const NV_ENC_NUM_REF_FRAMES_AUTOSELECT: NV_ENC_NUM_REF_FRAMES = 0;
+pub const NV_ENC_NUM_REF_FRAMES_1: NV_ENC_NUM_REF_FRAMES = 1;
+
+pub type NV_ENC_BIT_DEPTH = u32;
+pub const NV_ENC_BIT_DEPTH_8: NV_ENC_BIT_DEPTH = 8;
+pub const NV_ENC_BIT_DEPTH_10: NV_ENC_BIT_DEPTH = 10;
+
+pub type NV_ENC_TEMPORAL_FILTER_LEVEL = u32;
+
+pub type NV_ENC_LEVEL_AV1 = u32;
+pub const NV_ENC_LEVEL_AV1_AUTOSELECT: NV_ENC_LEVEL_AV1 = 24;
+
+pub type NV_ENC_TIER_AV1 = u32;
+pub const NV_ENC_TIER_AV1_0: NV_ENC_TIER_AV1 = 0;
+
+/// Faithful `#[repr(C)]` mirror of SDK 13.0 `NV_ENC_CONFIG_AV1`. Field
+/// order, types, and padding must match the C header exactly — this
+/// struct is reinterpreted onto `NV_ENC_CONFIG::encodeCodecConfig`,
+/// which the driver also reinterprets through the same union, so any
+/// drift produces silently miscoded frames.
+#[repr(C)]
+pub struct NV_ENC_CONFIG_AV1 {
+    pub level: NV_ENC_LEVEL_AV1,
+    pub tier: NV_ENC_TIER_AV1,
+    pub minPartSize: NV_ENC_AV1_PART_SIZE,
+    pub maxPartSize: NV_ENC_AV1_PART_SIZE,
+    /// Packed bitfield. Layout (LSB-first per the C `: 1` declaration order):
+    ///   0 outputAnnexBFormat, 1 enableTimingInfo, 2 enableDecoderModelInfo,
+    ///   3 enableFrameIdNumbers, 4 disableSeqHdr, **5 repeatSeqHdr**,
+    ///   6 enableIntraRefresh, 7-8 chromaFormatIDC (2 bits),
+    ///   9 enableBitstreamPadding, 10 enableCustomTileConfig,
+    ///   11 enableFilmGrainParams, 12 enableLTR, 13 enableTemporalSVC,
+    ///   14 outputMaxCll, 15 outputMasteringDisplay,
+    ///   16-17 reserved4, 18-31 reserved.
+    pub flags: u32,
+    pub idrPeriod: u32,
+    pub intraRefreshPeriod: u32,
+    pub intraRefreshCnt: u32,
+    pub maxNumRefFramesInDPB: u32,
+    pub numTileColumns: u32,
+    pub numTileRows: u32,
+    pub reserved2: u32,
+    pub tileWidths: *mut u32,
+    pub tileHeights: *mut u32,
+    pub maxTemporalLayersMinus1: u32,
+    pub colorPrimaries: NV_ENC_VUI_COLOR_PRIMARIES,
+    pub transferCharacteristics: NV_ENC_VUI_TRANSFER_CHARACTERISTIC,
+    pub matrixCoefficients: NV_ENC_VUI_MATRIX_COEFFS,
+    pub colorRange: u32,
+    pub chromaSamplePosition: u32,
+    pub useBFramesAsRef: NV_ENC_BFRAME_REF_MODE,
+    pub filmGrainParams: *mut c_void,
+    pub numFwdRefs: NV_ENC_NUM_REF_FRAMES,
+    pub numBwdRefs: NV_ENC_NUM_REF_FRAMES,
+    pub outputBitDepth: NV_ENC_BIT_DEPTH,
+    pub inputBitDepth: NV_ENC_BIT_DEPTH,
+    pub ltrNumFrames: u32,
+    pub numTemporalLayers: u32,
+    pub tfLevel: NV_ENC_TEMPORAL_FILTER_LEVEL,
+    pub reserved1: [u32; 230],
+    pub reserved3: [*mut c_void; 62],
+}
+
+const _: () = {
+    // Compile-time guard: AV1 union member must fit in encodeCodecConfig.
+    assert!(std::mem::size_of::<NV_ENC_CONFIG_AV1>() <= NV_ENC_CODEC_CONFIG_SIZE);
+};
+
+/// Bit position of `repeatSeqHdr` in `NV_ENC_CONFIG_AV1::flags`. Used by
+/// callers who want to flip individual flag bits without rebuilding the
+/// whole word.
 pub const NV_ENC_CONFIG_AV1_REPEAT_SEQ_HDR_BIT: u32 = 1 << 5;
 
 #[repr(C)]
@@ -389,28 +491,20 @@ impl NV_ENC_CONFIG {
         self.encodeCodecConfig[0..4].copy_from_slice(&bf.to_ne_bytes());
     }
 
-    /// AV1 analogue of [`set_h264_idr_period`]. Writes `idrPeriod` at the
-    /// AV1-specific offset inside the `encodeCodecConfig` union.
-    pub fn set_av1_idr_period(&mut self, idr_period: u32) {
-        let bytes = idr_period.to_ne_bytes();
-        self.encodeCodecConfig
-            [NV_ENC_CONFIG_AV1_IDR_PERIOD_OFFSET..NV_ENC_CONFIG_AV1_IDR_PERIOD_OFFSET + 4]
-            .copy_from_slice(&bytes);
-    }
-
-    /// AV1 analogue of [`set_h264_repeat_sps_pps`]. Sets `repeatSeqHdr` so
-    /// every keyframe re-emits the sequence header — required once the
-    /// packet ring starts evicting GOPs.
-    pub fn set_av1_repeat_seq_hdr(&mut self, repeat: bool) {
-        let off = NV_ENC_CONFIG_AV1_BITFIELD_OFFSET;
-        let bf =
-            u32::from_ne_bytes(self.encodeCodecConfig[off..off + 4].try_into().unwrap());
-        let bf = if repeat {
-            bf | NV_ENC_CONFIG_AV1_REPEAT_SEQ_HDR_BIT
-        } else {
-            bf & !NV_ENC_CONFIG_AV1_REPEAT_SEQ_HDR_BIT
-        };
-        self.encodeCodecConfig[off..off + 4].copy_from_slice(&bf.to_ne_bytes());
+    /// Reinterpret the `encodeCodecConfig` union as `&mut NV_ENC_CONFIG_AV1`.
+    /// Only valid once the parent encode session was opened with the AV1
+    /// `encodeGUID`; callers using H.264 must use the H.264 helpers above.
+    ///
+    /// SAFETY: the returned reference aliases `encodeCodecConfig` for the
+    /// lifetime of `self`. The union is correctly sized (compile-time
+    /// asserted in [`NV_ENC_CONFIG_AV1`]); using it under the wrong codec
+    /// would misinterpret the bytes but not violate Rust aliasing.
+    pub fn av1_config_mut(&mut self) -> &mut NV_ENC_CONFIG_AV1 {
+        // SAFETY: encodeCodecConfig is a byte array large enough to hold
+        // NV_ENC_CONFIG_AV1 (checked above), correctly aligned (u32+ptr
+        // fields, parent struct is #[repr(C)] starting on a u32 boundary
+        // and the byte array follows other u32 fields).
+        unsafe { &mut *(self.encodeCodecConfig.as_mut_ptr() as *mut NV_ENC_CONFIG_AV1) }
     }
 }
 
@@ -714,6 +808,11 @@ pub type PFN_UnlockBitstream = unsafe extern "C" fn(
 
 pub type PFN_DestroyEncoder = unsafe extern "C" fn(encoder: *mut c_void) -> NVENCSTATUS;
 
+pub type PFN_GetSequenceParams = unsafe extern "C" fn(
+    encoder: *mut c_void,
+    payload: *mut NV_ENC_SEQUENCE_PARAM_PAYLOAD,
+) -> NVENCSTATUS;
+
 pub type PFN_GetLastErrorString =
     unsafe extern "C" fn(encoder: *mut c_void) -> *const std::ffi::c_char;
 
@@ -774,7 +873,7 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
     pub nvEncLockInputBuffer: *mut c_void,
     pub nvEncUnlockInputBuffer: *mut c_void,
     pub nvEncGetEncodeStats: *mut c_void,
-    pub nvEncGetSequenceParams: *mut c_void,
+    pub nvEncGetSequenceParams: Option<PFN_GetSequenceParams>,
     pub nvEncRegisterAsyncEvent: Option<PFN_RegisterAsyncEvent>,
     pub nvEncUnregisterAsyncEvent: Option<PFN_UnregisterAsyncEvent>,
     pub nvEncMapInputResource: Option<PFN_MapInputResource>,
@@ -853,6 +952,18 @@ mod tests {
         assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG, encodeCodecConfig), 168);
         assert_eq!(std::mem::offset_of!(NV_ENC_RC_PARAMS, averageBitRate), 20);
         assert_eq!(std::mem::offset_of!(NV_ENC_PRESET_CONFIG, presetCfg), 8);
+
+        // AV1 struct layout — these MUST match SDK 13 `_NV_ENC_CONFIG_AV1`.
+        // Counted from the header by hand (see `crates/encoder/src/sys.rs`
+        // doc on `NV_ENC_CONFIG_AV1`). Previous offset-by-offset byte
+        // poking had these wrong, which silently miscoded AV1 IDRs as
+        // INTRA_ONLY_FRAME instead of KEY_FRAME.
+        assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG_AV1, flags), 16);
+        assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG_AV1, idrPeriod), 20);
+        assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG_AV1, tileWidths), 48);
+        assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG_AV1, filmGrainParams), 96);
+        assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG_AV1, numFwdRefs), 104);
+        assert_eq!(std::mem::offset_of!(NV_ENC_CONFIG_AV1, tfLevel), 128);
     }
 
     #[test]

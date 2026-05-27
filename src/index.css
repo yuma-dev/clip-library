@@ -41,6 +41,16 @@ input[type="range"] { -webkit-appearance: none; appearance: none; }
   to   { transform: rotate(360deg); }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* Notification card enter animation. Used to slide in from the side,
    but the overlay window is now sized to fit the card so a translate
    would immediately clip at the window edge. Fade + tiny scale-up

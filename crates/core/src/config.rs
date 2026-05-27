@@ -183,6 +183,16 @@ pub struct AudioConfig {
     /// Each entry is captured on its own thread and muxed as a separate
     /// audio track. Empty list = no audio at all.
     pub sources: Vec<AudioSource>,
+    /// When `true` and at least two sources are captured, the muxer
+    /// prepends a combined "Mix" track (sum of all sources via `amix`)
+    /// as the first audio stream of the output MP4. With one source the
+    /// flag is ignored (a mix of one input would be a redundant copy).
+    #[serde(default = "default_include_mix")]
+    pub include_mix: bool,
+}
+
+fn default_include_mix() -> bool {
+    true
 }
 
 impl Default for AudioConfig {
@@ -192,6 +202,7 @@ impl Default for AudioConfig {
                 AudioSource::SystemLoopback { device_id: None },
                 AudioSource::Microphone { device_id: None },
             ],
+            include_mix: true,
         }
     }
 }

@@ -50,7 +50,10 @@ struct PendingFrame {
 
 /// Bitstream buffer + paired completion event. In async mode every
 /// submitted picture is associated with one of these; NVENC signals the
-/// event when the bitstream for that picture is ready.
+/// event when the bitstream for that picture is ready. In sync mode
+/// (AV1 — async is unreliable on the AV1 codec path and causes the
+/// driver to emit INTRA_ONLY instead of KEY_FRAME at IDRs) `event` is
+/// `HANDLE(0)` and we don't register/wait on it.
 struct PoolSlot {
     bitstream: NV_ENC_OUTPUT_PTR,
     event: HANDLE,
@@ -96,6 +99,25 @@ pub struct NvEncoderD3D11 {
     pending: VecDeque<PendingFrame>,
     frames_submitted: u64,
     force_idr: bool,
+    /// Async-mode flag chosen at session open. True for H.264 (per-frame
+    /// completion events let us submit ahead of encode). False for AV1 —
+    /// the NVENC AV1 path in async mode empirically produces IDRs as
+    /// `OBU_FRAME` with `frame_type=INTRA_ONLY` (2) instead of `KEY_FRAME`
+    /// (0). INTRA_ONLY doesn't reset reference picture state, so decoders
+    /// bootstrapping from a saved clip fail with "no sequence header" on
+    /// every frame and the muxed mp4 is unusable. Sync mode side-steps
+    /// the bug entirely.
+    async_mode: bool,
+    /// Codec-specific sequence header bytes retrieved via
+    /// `nvEncGetSequenceParams` after `InitializeEncoder` returns.
+    /// For H.264 this is concatenated SPS+PPS; for AV1 it's an
+    /// `OBU_SEQUENCE_HEADER`. We cache it here because NVENC AV1 doesn't
+    /// reliably embed the sequence header at the head of every IDR
+    /// bitstream even with `repeatSeqHdr=1`, and ffmpeg refuses to mux an
+    /// AV1 raw input where the first OBU is not a sequence header
+    /// ("dimensions not set"). Callers prepend this to the saved
+    /// bitstream file. OBS does the same.
+    header: Vec<u8>,
 }
 
 // SAFETY: we own the encoder handle. NVENC sessions are not thread-safe and
@@ -181,11 +203,30 @@ impl NvEncoderD3D11 {
                 enc_cfg.set_h264_repeat_sps_pps(true);
             }
             ActiveCodec::Av1 => {
-                enc_cfg.set_av1_idr_period(config.gop_length);
-                // AV1 analogue of repeat_sps_pps — re-emit the sequence
-                // header at every keyframe so post-eviction clips are
-                // self-decodable.
-                enc_cfg.set_av1_repeat_seq_hdr(true);
+                // AV1 needs more than the preset query supplies. Mirror
+                // what OBS does in obs-nvenc/nvenc.c `init_encoder_av1`:
+                // without `chromaFormatIDC=1`, `inputBitDepth`, profile/
+                // tier/level, and explicit reference counts, NVENC AV1
+                // produces malformed bitstreams — IDRs come out as
+                // OBU_FRAME with frame_type=INTRA_ONLY_FRAME instead of
+                // KEY_FRAME, the sequence header is never re-emitted,
+                // and decoders fail to bootstrap on saved clips.
+                enc_cfg.profileGUID = NV_ENC_AV1_PROFILE_MAIN_GUID;
+                let av1 = enc_cfg.av1_config_mut();
+                av1.level = NV_ENC_LEVEL_AV1_AUTOSELECT;
+                av1.tier = NV_ENC_TIER_AV1_0;
+                av1.idrPeriod = config.gop_length;
+                // Bitfield: repeatSeqHdr=1, chromaFormatIDC=1 (yuv420).
+                // All other flag bits start zeroed from the preset query
+                // and we keep them that way.
+                av1.flags = (1 << 5) | (1 << 7);
+                av1.chromaSamplePosition = 0;
+                av1.colorRange = 0; // studio range
+                av1.numFwdRefs = NV_ENC_NUM_REF_FRAMES_1;
+                av1.numBwdRefs = NV_ENC_NUM_REF_FRAMES_1;
+                av1.inputBitDepth = NV_ENC_BIT_DEPTH_8;
+                av1.outputBitDepth = NV_ENC_BIT_DEPTH_8;
+                av1.useBFramesAsRef = NV_ENC_BFRAME_REF_MODE_DISABLED;
             }
         }
 
@@ -242,7 +283,15 @@ impl NvEncoderD3D11 {
         // bitstream is ready instead of making LockBitstream block. Lets
         // us submit frame N+1 while frame N is still encoding — saves the
         // ~2.2 ms / frame CPU wait we'd otherwise burn.
-        init.enableEncodeAsync = 1;
+        //
+        // AV1 exception: async mode on the AV1 codec path causes the
+        // driver to emit `INTRA_ONLY_FRAME` (frame_type=2) at IDR
+        // boundaries instead of `KEY_FRAME` (frame_type=0). INTRA_ONLY
+        // doesn't reset reference picture state, so saved clips can't
+        // be bootstrapped by decoders ("no sequence header" cascade).
+        // Sync mode produces real KEY_FRAMEs.
+        let async_mode = matches!(active_codec, ActiveCodec::H264);
+        init.enableEncodeAsync = if async_mode { 1 } else { 0 };
 
         let init_fn = api.functions.nvEncInitializeEncoder.expect("loader checked");
         // SAFETY: encoder is a valid handle returned by OpenEncodeSessionEx;
@@ -274,17 +323,23 @@ impl NvEncoderD3D11 {
             let status = unsafe { (create_bs)(encoder, &mut bs) };
             nvenc_check(&api, encoder, status, "CreateBitstreamBuffer")?;
 
-            // Completion event.
-            // SAFETY: parameters are all null/false except `bManualReset`
-            // which we explicitly want false (auto-reset).
-            let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }
-                .map_err(|e| anyhow!("CreateEventW failed: {e}"))?;
-            let mut evt_params = NV_ENC_EVENT_PARAMS::default();
-            evt_params.version = NV_ENC_EVENT_PARAMS_VER;
-            evt_params.completionEvent = event.0 as *mut _;
-            // SAFETY: encoder + params are valid.
-            let status = unsafe { (register_evt)(encoder, &mut evt_params) };
-            nvenc_check(&api, encoder, status, "RegisterAsyncEvent")?;
+            // Completion event — only created/registered in async mode.
+            // Sync mode uses HANDLE(0) as a sentinel and skips wait/close.
+            let event = if async_mode {
+                // SAFETY: parameters are all null/false except `bManualReset`
+                // which we explicitly want false (auto-reset).
+                let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }
+                    .map_err(|e| anyhow!("CreateEventW failed: {e}"))?;
+                let mut evt_params = NV_ENC_EVENT_PARAMS::default();
+                evt_params.version = NV_ENC_EVENT_PARAMS_VER;
+                evt_params.completionEvent = event.0 as *mut _;
+                // SAFETY: encoder + params are valid.
+                let status = unsafe { (register_evt)(encoder, &mut evt_params) };
+                nvenc_check(&api, encoder, status, "RegisterAsyncEvent")?;
+                event
+            } else {
+                HANDLE(std::ptr::null_mut())
+            };
 
             pool.push(PoolSlot {
                 bitstream: bs.bitstreamBuffer,
@@ -346,6 +401,32 @@ impl NvEncoderD3D11 {
         let nv12_converter =
             Nv12Converter::new(device.clone(), context.clone(), config.width, config.height)?;
 
+        // Retrieve the codec sequence header (H.264 SPS+PPS or AV1
+        // sequence header OBU) out of band. OBS does this on the first
+        // packet; doing it once at init is equivalent because the
+        // sequence parameters don't change for the life of the session,
+        // and it keeps the per-packet hot path free of an extra API
+        // call. Saving paths prepend these bytes to the bitstream file
+        // so decoders / muxers see a sequence header at byte 0 even
+        // when NVENC's `repeatSeqHdr` doesn't materialize one in front
+        // of an arbitrary mid-stream IDR.
+        let mut header_buf = vec![0u8; 1024];
+        let mut header_size: u32 = 0;
+        let mut payload = NV_ENC_SEQUENCE_PARAM_PAYLOAD::default();
+        payload.version = NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER;
+        payload.inBufferSize = header_buf.len() as u32;
+        payload.spsppsBuffer = header_buf.as_mut_ptr() as *mut std::ffi::c_void;
+        payload.outSPSPPSPayloadSize = &mut header_size;
+        let get_seq = api
+            .functions
+            .nvEncGetSequenceParams
+            .expect("loader checked");
+        // SAFETY: encoder is initialized; payload buffer is large enough
+        // for both H.264 SPS+PPS (~50 B) and AV1 sequence header (~30 B).
+        let status = unsafe { (get_seq)(encoder, &mut payload) };
+        nvenc_check(&api, encoder, status, "GetSequenceParams")?;
+        header_buf.truncate(header_size as usize);
+
         Ok(Self {
             api,
             encoder,
@@ -364,7 +445,18 @@ impl NvEncoderD3D11 {
             // can latch on immediately, regardless of where the next
             // automatic IDR (driven by gopLength) would fall.
             force_idr: true,
+            async_mode,
+            header: header_buf,
         })
+    }
+
+    /// Codec sequence-header bytes (H.264 SPS+PPS, AV1 OBU_SEQUENCE_HEADER)
+    /// captured once at session open. Save flows prepend these to the
+    /// bitstream file so ffmpeg / decoders always see a valid header even
+    /// when the saved window doesn't start exactly at a NVENC keyframe
+    /// that re-emitted one.
+    pub fn header(&self) -> &[u8] {
+        &self.header
     }
 
     /// Codec the encoder negotiated at session open. Useful for logging
@@ -441,7 +533,13 @@ impl NvEncoderD3D11 {
         pic.inputBuffer = mapped.mappedResource;
         pic.bufferFmt = NV_ENC_BUFFER_FORMAT_NV12;
         pic.outputBitstream = output;
-        pic.completionEvent = event.0 as *mut _;
+        // Null completionEvent in sync mode — NVENC interprets a non-null
+        // event in sync mode as a config error.
+        pic.completionEvent = if self.async_mode {
+            event.0 as *mut _
+        } else {
+            std::ptr::null_mut()
+        };
         pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
         pic.inputTimeStamp = pts_100ns as u64;
         pic.frameIdx = self.frames_submitted as u32;
@@ -456,13 +554,25 @@ impl NvEncoderD3D11 {
         let status = unsafe { (encode_fn)(self.encoder, &mut pic) };
         drop(t_submit);
 
-        // In async mode, NVENC fires the completion event for every
-        // submitted picture — even when `EncodePicture` returns
-        // NEED_MORE_INPUT (the picture was consumed; output bitstream
-        // simply isn't ready yet). So we add to `pending` for both
-        // SUCCESS and NEED_MORE_INPUT.
+        // Async mode: NVENC fires a completion event for every submitted
+        // picture even when EncodePicture returns NEED_MORE_INPUT (the
+        // picture was consumed; the bitstream just isn't ready yet). Push
+        // to `pending` and let the drain logic pick it up via the event.
+        //
+        // Sync mode: SUCCESS means the bitstream for *this* picture (plus
+        // any earlier buffered ones in submission order) is ready to
+        // lock right now — drain inline. NEED_MORE_INPUT means the
+        // picture was consumed but output is still buffered up; defer it.
         match status {
-            NV_ENC_SUCCESS | NV_ENC_ERR_NEED_MORE_INPUT => {
+            NV_ENC_SUCCESS => {
+                self.pending.push_back(PendingFrame { slot });
+                if !self.async_mode {
+                    while let Some(p) = self.pending.pop_front() {
+                        packets.push(self.lock_one(self.pool[p.slot].bitstream)?);
+                    }
+                }
+            }
+            NV_ENC_ERR_NEED_MORE_INPUT => {
                 self.pending.push_back(PendingFrame { slot });
             }
             _ => {
@@ -481,24 +591,27 @@ impl NvEncoderD3D11 {
             warn!(status, "UnmapInputResource failed");
         }
 
-        // ---- non-blocking drain ----------------------------------------
+        // ---- non-blocking drain (async mode only) ----------------------
         // Walk the front of the pending queue, popping any frames whose
         // events are already signaled. Lets us catch up if encode is
         // running ahead of submission (which is the steady state at
-        // 60 fps + 2.4 ms p50 encode time).
-        loop {
-            let front_slot = match self.pending.front() {
-                Some(f) => f.slot,
-                None => break,
-            };
-            let front_event = self.pool[front_slot].event;
-            // SAFETY: HANDLE is valid until Drop.
-            let wait = unsafe { WaitForSingleObject(front_event, 0) };
-            if wait == WAIT_OBJECT_0 {
-                self.pending.pop_front();
-                packets.push(self.lock_one(self.pool[front_slot].bitstream)?);
-            } else {
-                break;
+        // 60 fps + 2.4 ms p50 encode time). Sync mode already drained
+        // above on SUCCESS, so there's nothing to poll for here.
+        if self.async_mode {
+            loop {
+                let front_slot = match self.pending.front() {
+                    Some(f) => f.slot,
+                    None => break,
+                };
+                let front_event = self.pool[front_slot].event;
+                // SAFETY: HANDLE is valid until Drop.
+                let wait = unsafe { WaitForSingleObject(front_event, 0) };
+                if wait == WAIT_OBJECT_0 {
+                    self.pending.pop_front();
+                    packets.push(self.lock_one(self.pool[front_slot].bitstream)?);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -513,15 +626,20 @@ impl NvEncoderD3D11 {
             .pop_front()
             .ok_or_else(|| anyhow!("wait_and_lock_front called with empty queue"))?
             .slot;
-        let event = self.pool[slot].event;
-        let _t = clipdip_profile::start("encoder.wait_block");
-        // SAFETY: HANDLE valid; INFINITE = WAIT_OBJECT_0 once signaled
-        // (auto-reset event), or WAIT_FAILED if something is very wrong.
-        let wait = unsafe { WaitForSingleObject(event, INFINITE) };
-        if wait != WAIT_OBJECT_0 {
-            bail!("WaitForSingleObject returned {:?} on completion event", wait);
+        // Sync mode: no completion event — anything in `pending` got there
+        // because EncodePicture returned NEED_MORE_INPUT, and LockBitstream
+        // will itself block until the bitstream is ready.
+        if self.async_mode {
+            let event = self.pool[slot].event;
+            let _t = clipdip_profile::start("encoder.wait_block");
+            // SAFETY: HANDLE valid; INFINITE = WAIT_OBJECT_0 once signaled
+            // (auto-reset event), or WAIT_FAILED if something is very wrong.
+            let wait = unsafe { WaitForSingleObject(event, INFINITE) };
+            if wait != WAIT_OBJECT_0 {
+                bail!("WaitForSingleObject returned {:?} on completion event", wait);
+            }
+            drop(_t);
         }
-        drop(_t);
         self.lock_one(self.pool[slot].bitstream)
     }
 
@@ -597,22 +715,29 @@ impl NvEncoderD3D11 {
 
         // Submit EOS. In async mode this requires a completion event
         // too — reuse slot 0's, which is now unsignaled (auto-reset
-        // consumed the last signal).
+        // consumed the last signal). In sync mode pass null; EOS in
+        // sync mode is itself blocking.
         let eos_event = self.pool[0].event;
         let mut pic = NV_ENC_PIC_PARAMS::default();
         pic.version = NV_ENC_PIC_PARAMS_VER;
         pic.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
-        pic.completionEvent = eos_event.0 as *mut _;
+        pic.completionEvent = if self.async_mode {
+            eos_event.0 as *mut _
+        } else {
+            std::ptr::null_mut()
+        };
         // EOS doesn't need an input buffer.
         let encode_fn = self.api.functions.nvEncEncodePicture.expect("loader checked");
         let status = unsafe { (encode_fn)(self.encoder, &mut pic) };
         if status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT {
             return Err(nvenc_error(&self.api, self.encoder, status, "EOS EncodePicture"));
         }
-        // SAFETY: eos_event valid; INFINITE waits until NVENC signals.
-        let wait = unsafe { WaitForSingleObject(eos_event, INFINITE) };
-        if wait != WAIT_OBJECT_0 {
-            bail!("WaitForSingleObject on EOS event returned {:?}", wait);
+        if self.async_mode {
+            // SAFETY: eos_event valid; INFINITE waits until NVENC signals.
+            let wait = unsafe { WaitForSingleObject(eos_event, INFINITE) };
+            if wait != WAIT_OBJECT_0 {
+                bail!("WaitForSingleObject on EOS event returned {:?}", wait);
+            }
         }
         Ok(packets)
     }
@@ -622,10 +747,15 @@ impl Drop for NvEncoderD3D11 {
     fn drop(&mut self) {
         // If the caller skipped `flush()`, drain remaining events first
         // — NVENC won't let us unregister an event that still has a
-        // pending picture associated with it.
-        while let Some(p) = self.pending.pop_front() {
-            let event = self.pool[p.slot].event;
-            unsafe { WaitForSingleObject(event, INFINITE) };
+        // pending picture associated with it. (Sync mode has no events
+        // to wait on; LockBitstream / EOS already blocked as needed.)
+        if self.async_mode {
+            while let Some(p) = self.pending.pop_front() {
+                let event = self.pool[p.slot].event;
+                unsafe { WaitForSingleObject(event, INFINITE) };
+            }
+        } else {
+            self.pending.clear();
         }
 
         // Order matters: unregister textures → unregister events →
@@ -640,12 +770,14 @@ impl Drop for NvEncoderD3D11 {
         // `nv12_pool` textures release on their own via ID3D11Texture2D
         // ComPtr drop; their NVENC registrations are gone above.
 
-        if let Some(f) = self.api.functions.nvEncUnregisterAsyncEvent {
-            for slot in &self.pool {
-                let mut params = NV_ENC_EVENT_PARAMS::default();
-                params.version = NV_ENC_EVENT_PARAMS_VER;
-                params.completionEvent = slot.event.0 as *mut _;
-                unsafe { (f)(self.encoder, &mut params) };
+        if self.async_mode {
+            if let Some(f) = self.api.functions.nvEncUnregisterAsyncEvent {
+                for slot in &self.pool {
+                    let mut params = NV_ENC_EVENT_PARAMS::default();
+                    params.version = NV_ENC_EVENT_PARAMS_VER;
+                    params.completionEvent = slot.event.0 as *mut _;
+                    unsafe { (f)(self.encoder, &mut params) };
+                }
             }
         }
 
@@ -655,7 +787,10 @@ impl Drop for NvEncoderD3D11 {
                 unsafe { (f)(self.encoder, slot.bitstream) };
             }
             // SAFETY: HANDLE is from CreateEventW; close exactly once.
-            unsafe { CloseHandle(slot.event).ok() };
+            // Skip when sync mode left HANDLE(null) as a sentinel.
+            if !slot.event.0.is_null() {
+                unsafe { CloseHandle(slot.event).ok() };
+            }
         }
         if let Some(f) = self.api.functions.nvEncDestroyEncoder {
             unsafe { (f)(self.encoder) };

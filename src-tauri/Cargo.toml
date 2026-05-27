@@ -25,3 +25,4 @@ windows.workspace = true
 clipdip-core.workspace = true
 clipdip-hotkey.workspace = true
 clipdip-profile.workspace = true
+clipdip-audio.workspace = true

@@ -71,6 +71,11 @@ impl NvEncApi {
                 "function table populated but async-event entry points are null"
             ));
         }
+        if functions.nvEncGetSequenceParams.is_none() {
+            return Err(anyhow!(
+                "function table populated but nvEncGetSequenceParams is null"
+            ));
+        }
 
         Ok(Arc::new(Self {
             _lib: lib,

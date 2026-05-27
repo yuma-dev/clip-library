@@ -82,6 +82,13 @@ const CONSOLE_SCRIPT: &str = r#"
     var orig = console[l].bind(console);
     console[l] = function() { orig.apply(console, arguments); fwd(l, arguments); };
   });
+  // Devtools helper: call testNotification() to trigger a fake clip-save flow.
+  try {
+    window.testNotification = function() {
+      if (!window.__TAURI_INTERNALS__) { console.warn('Tauri not available'); return; }
+      return window.__TAURI_INTERNALS__.invoke('test_notification');
+    };
+  } catch(e) {}
 })();
 "#;
 
@@ -98,6 +105,14 @@ struct AppState {
     /// created per-notification, so we'd lose the phase-1 payload without
     /// this safety net.
     pending_saving: Arc<Mutex<Option<ClipSavingPayload>>>,
+    /// Companion to `pending_saving` for phase 2. WebView2 cold-start can
+    /// take several seconds — long enough for the entire save flow
+    /// (saving → saved) to complete before the overlay's listeners
+    /// attach, in which case both events fire into the void. Stashing
+    /// the saved payload too lets the overlay hydrate straight into the
+    /// "Clip saved" state on mount instead of being stuck on the
+    /// spinner forever.
+    pending_saved: Arc<Mutex<Option<ClipSavedPayload>>>,
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -163,7 +178,13 @@ fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::Webview
     }
     let monitor = app.primary_monitor().ok().flatten()?;
     let (mw, mh) = (monitor.size().width, monitor.size().height);
-    let url = format!("index.html?overlay=1&corner={}", corner);
+    // Separate entry point: `overlay.html` is a self-contained vanilla
+    // HTML/CSS/JS file with no React, no Tailwind, no Google Fonts and
+    // no module graph. The settings UI loads from `index.html`. This
+    // shaves the bulk of WebView2 cold-start time — the bottleneck was
+    // never the webview itself, it was bundling + parsing the React
+    // app before the overlay could paint.
+    let url = format!("overlay.html?corner={}", corner);
     let w = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App(url.into()))
         .inner_size(mw as f64, mh as f64)
         .position(0.0, 0.0)
@@ -190,6 +211,25 @@ fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::Webview
     }
     let _ = w.show();
     Some(w)
+}
+
+/// Kill the overlay after a save failure. The React side has its own
+/// clip-error listener, but if the error fires before the webview
+/// finishes booting (Tauri drops events with no listener), the
+/// notification stays stuck on "Saving clip…". Destroying the window
+/// from the backend guarantees teardown regardless of webview state,
+/// and also clears the stashed pending payload so a freshly-mounted
+/// overlay can't hydrate the dead session.
+fn tear_down_overlay(app: &AppHandle, err: String) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.pending_saving.lock().unwrap() = None;
+        *state.pending_saved.lock().unwrap() = None;
+        *state.active_clip.lock().unwrap() = None;
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.emit("clip-error", err);
+        let _ = overlay.destroy();
+    }
 }
 
 // ---------- tauri commands ------------------------------------------------
@@ -270,6 +310,7 @@ fn set_overlay_input_mode(enabled: bool, app: AppHandle) -> Result<(), String> {
 fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.active_clip.lock().unwrap() = None;
     *state.pending_saving.lock().unwrap() = None;
+    *state.pending_saved.lock().unwrap() = None;
     if let Some(w) = app.get_webview_window("overlay") {
         // Destroy (not hide) the window so the WebView2 process can exit
         // when the user isn't actively saving. `hide()` keeps the webview
@@ -279,14 +320,93 @@ fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<()
     Ok(())
 }
 
-/// Returns the latest `clip-saving` payload that was stashed before the
-/// overlay window mounted. The overlay calls this on mount because Tauri
-/// events emitted before any listener is attached are dropped silently —
-/// and we now create the overlay window on demand, so the phase-1 emit
-/// races with the React mount.
+/// Combined pending payload — both phase-1 (saving) and phase-2 (saved)
+/// stashes, so a late-mounting overlay can hydrate straight to the
+/// correct phase. Either field is `None` if that event hasn't fired yet
+/// (or has already been consumed by a previous overlay mount).
+#[derive(Clone, Serialize)]
+struct PendingState {
+    saving: Option<ClipSavingPayload>,
+    saved: Option<ClipSavedPayload>,
+}
+
+/// Returns whatever clip-saving / clip-saved payloads were stashed
+/// before the overlay window mounted. Tauri drops events with no
+/// listener attached, and WebView2 cold start can outrun the entire
+/// save flow — without this safety net the overlay would sit on the
+/// spinner forever after a late mount.
 #[tauri::command]
-fn overlay_get_pending(state: State<'_, AppState>) -> Option<ClipSavingPayload> {
-    state.pending_saving.lock().unwrap().clone()
+fn overlay_get_pending(state: State<'_, AppState>) -> PendingState {
+    PendingState {
+        saving: state.pending_saving.lock().unwrap().clone(),
+        saved: state.pending_saved.lock().unwrap().clone(),
+    }
+}
+
+/// Trigger a fake save-flow for design / smoke testing. Emits the same
+/// `clip-saving` + (after a short delay) `clip-saved` payloads the real
+/// pipeline would. From the main window's devtools call it via the
+/// `testNotification()` global, or directly with
+/// `__TAURI_INTERNALS__.invoke('test_notification')`.
+#[tauri::command]
+fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
+        .map_err(|e| e.to_string())?;
+    if !cfg.notifications.enabled {
+        return Err("notifications are disabled in config".into());
+    }
+
+    let corner = format!("{:?}", cfg.notifications.corner)
+        .chars()
+        .fold(String::new(), |mut acc, c| {
+            if c.is_uppercase() && !acc.is_empty() {
+                acc.push('_');
+            }
+            acc.push(c.to_ascii_lowercase());
+            acc
+        });
+
+    let saving_payload = ClipSavingPayload {
+        thumbnail: None,
+        rename_hotkey: format!("Press {} to rename", cfg.hotkey.rename_clip),
+        auto_dismiss_secs: cfg.notifications.auto_dismiss_secs,
+        corner: corner.clone(),
+        sound: cfg.notifications.sound,
+        profile: false,
+    };
+
+    *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
+    *state.pending_saved.lock().unwrap() = None;
+
+    if cfg.notifications.sound {
+        std::thread::spawn(play_save_sound);
+    }
+
+    if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+        let _ = overlay.emit("clip-saving", saving_payload);
+    }
+
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let saved = ClipSavedPayload {
+            path: "C:\\Users\\Demo\\Videos\\Clipdip\\demo_clip.mp4".into(),
+            title: "demo_clip".into(),
+        };
+        if let Some(state) = app2.try_state::<AppState>() {
+            *state.pending_saved.lock().unwrap() = Some(saved.clone());
+        }
+        if let Some(overlay) = app2.get_webview_window("overlay") {
+            let _ = overlay.emit("clip-saved", saved);
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn list_audio_devices() -> Result<Vec<clipdip_audio::AudioDeviceInfo>, String> {
+    clipdip_audio::list_devices().map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -488,9 +608,13 @@ fn run_capture_loop(
                     // Stash the payload BEFORE creating the window — the
                     // overlay reads it via `overlay_get_pending` on mount
                     // because the `clip-saving` event below races with React
-                    // attaching its listener.
+                    // attaching its listener. Also clear any stale saved
+                    // payload from a previous flow so the new overlay
+                    // doesn't accidentally hydrate to the old "Clip saved"
+                    // state before phase 2 of THIS flow lands.
                     if let Some(state) = app.try_state::<AppState>() {
                         *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
+                        *state.pending_saved.lock().unwrap() = None;
                     }
                     if let Some(overlay) = ensure_overlay_window(&app, &corner) {
                         let _ = overlay.emit("clip-saving", saving_payload);
@@ -569,6 +693,14 @@ fn run_capture_loop(
                                     path: path_str,
                                     title,
                                 };
+                                // Stash for late-mounting overlay too —
+                                // WebView2 cold start often outruns the
+                                // mux, so an overlay that comes up after
+                                // clip-saved fires would otherwise be
+                                // stuck on the spinner forever.
+                                if let Some(state) = app.try_state::<AppState>() {
+                                    *state.pending_saved.lock().unwrap() = Some(payload.clone());
+                                }
                                 if let Some(overlay) = app.get_webview_window("overlay") {
                                     let _ = overlay.emit("clip-saved", payload);
                                 }
@@ -582,9 +714,7 @@ fn run_capture_loop(
                                 error!("save clip: {e:#}");
                             }
                             if notifs_enabled {
-                                if let Some(overlay) = app.get_webview_window("overlay") {
-                                    let _ = overlay.emit("clip-error", format!("{e:#}"));
-                                }
+                                tear_down_overlay(&app, format!("{e:#}"));
                             }
                         }
                         Err(_) => {
@@ -594,9 +724,7 @@ fn run_capture_loop(
                                 error!("save clip thread panicked");
                             }
                             if notifs_enabled {
-                                if let Some(overlay) = app.get_webview_window("overlay") {
-                                    let _ = overlay.emit("clip-error", "save thread panicked".to_string());
-                                }
+                                tear_down_overlay(&app, "save thread panicked".to_string());
                             }
                         }
                     }
@@ -711,6 +839,7 @@ fn main() {
             active_clip: active_clip.clone(),
             pipeline_running: pipeline_running.clone(),
             pending_saving: Arc::new(Mutex::new(None)),
+            pending_saved: Arc::new(Mutex::new(None)),
         })
         .setup(move |app| {
             // Log configured hotkeys so the user can confirm them in the console.
@@ -775,10 +904,12 @@ fn main() {
             set_overlay_input_mode,
             dismiss_notification,
             list_monitors,
+            list_audio_devices,
             open_clips_folder,
             get_pipeline_running,
             forward_console,
             overlay_get_pending,
+            test_notification,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")

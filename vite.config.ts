@@ -20,4 +20,16 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
+  // Two entry points so the overlay window doesn't have to download +
+  // parse the settings UI bundle (lucide-react, Tailwind, Radix, etc.)
+  // before it can render. In dev mode each entry has its own module
+  // graph too, so Vite only transforms what each window actually needs.
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        overlay: path.resolve(__dirname, "overlay.html"),
+      },
+    },
+  },
 });

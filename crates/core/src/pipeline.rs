@@ -17,17 +17,17 @@ use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use tracing::{info, warn};
 
-use clipdip_audio::{AudioCapture, AudioKind, WaveFormat};
+use clipdip_audio::{list_devices, AudioCapture, AudioDeviceInfo, AudioKind, DeviceFlow, WaveFormat};
 use clipdip_capture::DesktopDuplicator;
-use clipdip_encoder::{CodecPreference, EncoderConfig, NvEncoderD3D11, RateControl};
-use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack};
+use clipdip_encoder::{ActiveCodec, CodecPreference, EncoderConfig, NvEncoderD3D11, RateControl};
+use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack, VideoBitstream};
 use clipdip_ringbuf::{EncodedPacket, PacketRing, STREAM_VIDEO};
 
 use crate::config::{AudioSource, CodecPreferenceCfg, Config, RateControlCfg};
@@ -36,7 +36,14 @@ use crate::config::{AudioSource, CodecPreferenceCfg, Config, RateControlCfg};
 /// headers correctly.
 pub struct AudioMeta {
     pub stream_id: u8,
+    /// Short slug used for the WAV sidecar filename (e.g. `loopback`,
+    /// `mic-3a8f12c0`). Stays stable regardless of the device's current
+    /// friendly name.
     pub label: String,
+    /// Human-readable name written as the track's `title` metadata in
+    /// the muxed MP4 — the device's WASAPI friendly name when we could
+    /// resolve it, otherwise a fallback derived from the source kind.
+    pub friendly_name: String,
     pub fmt: WaveFormat,
 }
 
@@ -50,6 +57,16 @@ pub struct Pipeline {
     /// Spawned only when `clipdip_profile::enabled()` was true at `start`.
     /// Periodically drains the global profiler and logs the report.
     reporter_thread: Option<JoinHandle<()>>,
+    /// Set once by the video thread after the NVENC session opens, so the
+    /// muxer can tell ffmpeg the right input format (`-f h264` vs `-f av1`).
+    /// `None` until the encoder is ready (saving before then is impossible
+    /// anyway — the ring has no IDR yet).
+    active_codec: Arc<Mutex<Option<ActiveCodec>>>,
+    /// Codec sequence header bytes captured once at NVENC init. Prepended
+    /// to the saved bitstream file so ffmpeg always sees a sequence
+    /// header at byte 0, even when the rolling buffer's first keyframe
+    /// didn't repeat one. Empty until the video thread populates it.
+    codec_header: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Pipeline {
@@ -67,7 +84,15 @@ impl Pipeline {
         let (audio_meta, audio_handles) = start_audio(&cfg, Arc::clone(&ring));
 
         let stop = Arc::new(AtomicBool::new(false));
-        let video_thread = spawn_video_thread(cfg.clone(), Arc::clone(&ring), Arc::clone(&stop))?;
+        let active_codec: Arc<Mutex<Option<ActiveCodec>>> = Arc::new(Mutex::new(None));
+        let codec_header: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let video_thread = spawn_video_thread(
+            cfg.clone(),
+            Arc::clone(&ring),
+            Arc::clone(&stop),
+            Arc::clone(&active_codec),
+            Arc::clone(&codec_header),
+        )?;
 
         let reporter_thread = if clipdip_profile::enabled() {
             Some(spawn_reporter(
@@ -86,6 +111,8 @@ impl Pipeline {
             stop,
             video_thread: Some(video_thread),
             reporter_thread,
+            active_codec,
+            codec_header,
         })
     }
 
@@ -103,7 +130,9 @@ impl Pipeline {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let stem = format!("{}-{}", self.cfg.output.filename_stem, ts);
-        save_clip_with_stem(&self.ring, &self.cfg, &self.audio_meta, &stem)
+        let codec = *self.active_codec.lock().unwrap();
+        let header = self.codec_header.lock().unwrap().clone();
+        save_clip_with_stem(&self.ring, &self.cfg, &self.audio_meta, &stem, codec, &header)
     }
 
     /// Like [`save_clip`] but writes to a fixed `{stem}.mp4` (overwriting
@@ -111,7 +140,9 @@ impl Pipeline {
     /// that want a stable output path instead of a new timestamped clip
     /// every run.
     pub fn save_clip_as(&self, stem: &str) -> Result<PathBuf> {
-        save_clip_with_stem(&self.ring, &self.cfg, &self.audio_meta, stem)
+        let codec = *self.active_codec.lock().unwrap();
+        let header = self.codec_header.lock().unwrap().clone();
+        save_clip_with_stem(&self.ring, &self.cfg, &self.audio_meta, stem, codec, &header)
     }
 
     /// Signal the video thread to stop, join it, then drop audio handles
@@ -149,6 +180,15 @@ impl Drop for Pipeline {
 }
 
 fn start_audio(cfg: &Config, ring: Arc<PacketRing>) -> (Vec<AudioMeta>, Vec<AudioCapture>) {
+    // One-shot enumeration so we can stamp each track with its device's
+    // friendly name (used as the MP4 track title). Falls back to an empty
+    // list on failure — capture still works, titles just lose the device
+    // name.
+    let devices = list_devices().unwrap_or_else(|e| {
+        warn!("list_devices failed, audio track titles will use fallback: {e:#}");
+        Vec::new()
+    });
+
     let mut meta = Vec::new();
     let mut handles = Vec::new();
     for (idx, source) in cfg.audio.sources.iter().enumerate() {
@@ -163,13 +203,16 @@ fn start_audio(cfg: &Config, ring: Arc<PacketRing>) -> (Vec<AudioMeta>, Vec<Audi
                 continue;
             }
         };
+        let friendly_name = resolve_friendly_name(kind, device_id.as_deref(), &devices)
+            .unwrap_or_else(|| fallback_friendly_name(kind));
         match AudioCapture::start(kind, stream_id, device_id, Arc::clone(&ring)) {
             Ok(cap) => {
                 let fmt = cap.format();
-                info!(stream_id, %label, ?fmt, "audio source started");
+                info!(stream_id, %label, %friendly_name, ?fmt, "audio source started");
                 meta.push(AudioMeta {
                     stream_id,
                     label,
+                    friendly_name,
                     fmt,
                 });
                 handles.push(cap);
@@ -178,6 +221,34 @@ fn start_audio(cfg: &Config, ring: Arc<PacketRing>) -> (Vec<AudioMeta>, Vec<Audi
         }
     }
     (meta, handles)
+}
+
+fn resolve_friendly_name(
+    kind: AudioKind,
+    device_id: Option<&str>,
+    devices: &[AudioDeviceInfo],
+) -> Option<String> {
+    let want_flow = match kind {
+        AudioKind::SystemLoopback => DeviceFlow::Render,
+        AudioKind::Microphone => DeviceFlow::Capture,
+    };
+    match device_id {
+        Some(id) => devices
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.friendly_name.clone()),
+        None => devices
+            .iter()
+            .find(|d| d.flow == want_flow && d.is_default)
+            .map(|d| d.friendly_name.clone()),
+    }
+}
+
+fn fallback_friendly_name(kind: AudioKind) -> String {
+    match kind {
+        AudioKind::SystemLoopback => "System Audio".into(),
+        AudioKind::Microphone => "Microphone".into(),
+    }
 }
 
 fn spawn_reporter(stop: Arc<AtomicBool>, interval_ms: u64) -> Result<JoinHandle<()>> {
@@ -217,14 +288,22 @@ fn spawn_video_thread(
     cfg: Config,
     ring: Arc<PacketRing>,
     stop: Arc<AtomicBool>,
+    active_codec: Arc<Mutex<Option<ActiveCodec>>>,
+    codec_header: Arc<Mutex<Vec<u8>>>,
 ) -> Result<JoinHandle<Result<()>>> {
     std::thread::Builder::new()
         .name("clipdip-video".into())
-        .spawn(move || video_loop(cfg, ring, stop))
+        .spawn(move || video_loop(cfg, ring, stop, active_codec, codec_header))
         .context("spawn video capture thread")
 }
 
-fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Result<()> {
+fn video_loop(
+    cfg: Config,
+    ring: Arc<PacketRing>,
+    stop: Arc<AtomicBool>,
+    active_codec: Arc<Mutex<Option<ActiveCodec>>>,
+    codec_header: Arc<Mutex<Vec<u8>>>,
+) -> Result<()> {
     let (mut dup, device, _ctx) = DesktopDuplicator::with_default_device(cfg.video.output_index)
         .with_context(|| {
             format!(
@@ -260,8 +339,14 @@ fn video_loop(cfg: Config, ring: Arc<PacketRing>, stop: Arc<AtomicBool>) -> Resu
     )
     .context("init NVENC encoder")?;
 
+    let codec_now = encoder.active_codec();
+    *active_codec.lock().unwrap() = Some(codec_now);
+    let header_bytes = encoder.header().to_vec();
+    let header_len = header_bytes.len();
+    *codec_header.lock().unwrap() = header_bytes;
     info!(
-        codec = ?encoder.active_codec(),
+        codec = ?codec_now,
+        header_bytes = header_len,
         "NVENC session opened"
     );
 
@@ -356,7 +441,11 @@ fn save_clip_with_stem(
     cfg: &Config,
     audio_meta: &[AudioMeta],
     stem: &str,
+    active_codec: Option<ActiveCodec>,
+    codec_header: &[u8],
 ) -> Result<PathBuf> {
+    let codec = active_codec
+        .ok_or_else(|| anyhow!("encoder not yet open — wait ~1s after start and retry"))?;
     let _t = clipdip_profile::start("pipeline.save_clip");
     let snapshot = ring.snapshot();
     let first_idr = snapshot
@@ -390,7 +479,14 @@ fn save_clip_with_stem(
         cfg.video.fps as f64
     };
 
-    let h264_path = cfg.output.directory.join(format!("{stem}.h264"));
+    // Bitstream sidecar uses an extension that matches the encoded codec —
+    // ffmpeg auto-detects format from extension and would otherwise treat
+    // an `.h264` file containing AV1 OBUs as broken H.264.
+    let video_ext = match codec {
+        ActiveCodec::H264 => "h264",
+        ActiveCodec::Av1 => "av1",
+    };
+    let video_path = cfg.output.directory.join(format!("{stem}.{video_ext}"));
     let mp4_path = cfg.output.directory.join(format!("{stem}.mp4"));
 
     info!(
@@ -400,11 +496,31 @@ fn save_clip_with_stem(
         "saving clip"
     );
 
-    let mut vf = File::create(&h264_path)
-        .with_context(|| format!("create {}", h264_path.display()))?;
+    let mut vf = File::create(&video_path)
+        .with_context(|| format!("create {}", video_path.display()))?;
+    // For AV1: ffmpeg's `obu` demuxer (low-overhead bitstream) requires
+    // every Temporal Unit — including the one carrying the initial
+    // sequence header — to start with an OBU_TEMPORAL_DELIMITER, else
+    // it bails out with "Missing Temporal Delimiter" before the
+    // sequence header is parsed. NVENC emits TDs in front of every
+    // packet it gives us, but `nvEncGetSequenceParams` returns just the
+    // bare SEQ_HDR OBU. Wrap it in its own TU: [TD][SEQ_HDR].
+    // For H.264 the equivalent header (SPS+PPS) is already framed by
+    // start codes, so this path doesn't apply.
+    if matches!(codec, ActiveCodec::Av1) && !codec_header.is_empty() {
+        // OBU_TEMPORAL_DELIMITER, obu_has_size_field=1, payload size=0
+        const AV1_TD: [u8; 2] = [0x12, 0x00];
+        vf.write_all(&AV1_TD)
+            .with_context(|| format!("write TD to {}", video_path.display()))?;
+        vf.write_all(codec_header)
+            .with_context(|| format!("write SEQ_HDR to {}", video_path.display()))?;
+    } else if !codec_header.is_empty() {
+        vf.write_all(codec_header)
+            .with_context(|| format!("write header to {}", video_path.display()))?;
+    }
     for p in &video_pkts {
         vf.write_all(&p.bytes)
-            .with_context(|| format!("write {}", h264_path.display()))?;
+            .with_context(|| format!("write {}", video_path.display()))?;
     }
     vf.sync_all().ok();
 
@@ -412,6 +528,7 @@ fn save_clip_with_stem(
     for AudioMeta {
         stream_id,
         label,
+        friendly_name,
         fmt,
     } in audio_meta
     {
@@ -434,7 +551,7 @@ fn save_clip_with_stem(
         match write_wav(&wav_path, *fmt, &pkts) {
             Ok(_) => audio_tracks.push(AudioTrack {
                 path: wav_path,
-                title: pretty_title(label),
+                title: friendly_name.clone(),
                 bitrate_bps: cfg.output.audio_bitrate_bps,
                 offset_secs,
             }),
@@ -450,25 +567,29 @@ fn save_clip_with_stem(
         "muxing with measured fps",
     );
     let ffmpeg = resolve_ffmpeg_path(cfg.output.ffmpeg_path.as_deref());
-    mux_with_ffmpeg_cli(&ffmpeg, &h264_path, actual_fps, &audio_tracks, &mp4_path)
-        .context("ffmpeg mux")?;
+    let bitstream = match codec {
+        ActiveCodec::H264 => VideoBitstream::H264,
+        ActiveCodec::Av1 => VideoBitstream::Av1,
+    };
+    mux_with_ffmpeg_cli(
+        &ffmpeg,
+        &video_path,
+        bitstream,
+        actual_fps,
+        &audio_tracks,
+        cfg.audio.include_mix,
+        &mp4_path,
+    )
+    .context("ffmpeg mux")?;
 
     if !cfg.output.keep_sidecars {
-        let _ = std::fs::remove_file(&h264_path);
+        let _ = std::fs::remove_file(&video_path);
         for t in &audio_tracks {
             let _ = std::fs::remove_file(&t.path);
         }
     }
     info!(path = %mp4_path.display(), "clip saved");
     Ok(mp4_path)
-}
-
-fn pretty_title(label: &str) -> String {
-    match label {
-        "loopback" => "System Audio".into(),
-        "mic" => "Microphone".into(),
-        other => other.to_string(),
-    }
 }
 
 /// Write a minimal RIFF/WAVE file. Header sizes are patched after the

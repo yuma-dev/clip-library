@@ -389,12 +389,17 @@ pub struct AudioDeviceInfo {
 /// This is a one-shot COM call; safe to invoke without an existing
 /// `AudioCapture` running.
 pub fn list_devices() -> Result<Vec<AudioDeviceInfo>> {
-    unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED)
-            .ok()
-            .context("CoInitializeEx")?;
+    // COM may already be initialized on this thread in a different
+    // apartment (Tauri's invoke handlers run on threads that the runtime
+    // may have STA-initialized). Treat RPC_E_CHANGED_MODE as a soft
+    // success — we don't own the init, so we must NOT CoUninitialize on
+    // drop. MMDevice works in either apartment.
+    let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let owns_com = hr.is_ok();
+    if !owns_com && hr != windows::Win32::Foundation::RPC_E_CHANGED_MODE {
+        return Err(anyhow::anyhow!("CoInitializeEx failed: 0x{:08x}", hr.0));
     }
-    let _com_guard = ComUninitGuard;
+    let _com_guard = owns_com.then_some(ComUninitGuard);
 
     let enumerator: IMMDeviceEnumerator =
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
