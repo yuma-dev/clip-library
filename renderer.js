@@ -280,14 +280,13 @@ async function updateSettingValue(path, value) {
  * Fade out and hide the loading overlay.
  */
 function hideLoadingScreen() {
-  if (state.loadingScreen) {
-    // Add the fade-out class to trigger the animations
-    state.loadingScreen.classList.add('fade-out');
-    
-    // Remove the element after the animation completes
-    setTimeout(() => {
-      state.loadingScreen.style.display = 'none';
-    }, 1000); // Match this with the animation duration (1s)
+  // The startup loading visual is handled by a dedicated splash BrowserWindow
+  // in the main process. Notify it that the renderer is fully ready so it can
+  // dismiss the splash and reveal the main window.
+  try {
+    ipcRenderer.send('renderer-ready');
+  } catch (e) {
+    // ignore
   }
 }
 
