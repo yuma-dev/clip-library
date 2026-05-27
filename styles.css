@@ -836,10 +836,19 @@ body.dragging * {
     box-shadow var(--hover-transition-duration) ease,
     border-color var(--hover-transition-duration) ease;
 
-  /* Performance optimizations for large grids */
-  content-visibility: auto;
+  /* Performance optimizations for large grids.
+   * `content-visibility: auto` was removed — it registers a browser-managed
+   * IntersectionObserver that recomputes on every layout, which became a
+   * ~40% CPU hit when the player overlay invalidates layout each frame.
+   * Clip visibility is now driven by an explicit IntersectionObserver in
+   * clip-grid.js, which toggles `.cv-offscreen` on offscreen items.
+   * `contain` alone is still cheap and worth keeping. */
   contain-intrinsic-size: 0 200px; /* Approximate height for layout calculation */
   contain: layout style paint;
+}
+
+.clip-item.cv-offscreen {
+  content-visibility: hidden;
 }
 
 .clip-item-content {
@@ -1257,36 +1266,36 @@ body.dragging * {
  * =========================================================================== */
 #audio-tracks-panel {
   position: absolute;
-  bottom: calc(100% + 10px);
+  bottom: calc(100% + 8px);
   left: 0;
   width: 320px;
   padding: 12px;
-  background: rgba(20, 20, 24, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  /* Match the player controls gradient aesthetic: dark translucent backdrop
+     that blends with the bottom-of-player controls bar. */
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.78) 0%, rgba(0, 0, 0, 0.88) 100%),
+    rgba(20, 20, 24, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 10px;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
   z-index: 30;
   box-sizing: border-box;
   color: #fff;
   font-size: 13px;
+  /* Expand outward from the volume button anchor (bottom-left of the panel
+     sits just above the button). */
+  transform-origin: bottom left;
+  animation: mixerPanelOpen 200ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
 }
 
 #audio-tracks-panel.hidden { display: none; }
 
-.mixer__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 10px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.45);
-  margin-bottom: 10px;
+@keyframes mixerPanelOpen {
+  from { opacity: 0; transform: scale(0.55) translateY(10px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
 }
-
-.mixer__count { font-size: 9px; opacity: 0.65; }
 
 .mixer__tracks { display: flex; flex-direction: column; gap: 4px; }
 
@@ -1310,7 +1319,13 @@ body.dragging * {
   background: linear-gradient(90deg, var(--c1, #3b82f655), var(--c2, #3b82f688));
   transition: width 80ms;
 }
-.mixer__row[data-dragging="true"] .mixer__fill { transition: none; }
+.mixer__row[data-dragging="true"] .mixer__fill,
+#audio-tracks-panel[data-shift-drag="true"] .mixer__fill { transition: none; }
+
+/* Soft-muted row (right-click mute): stays in the active mix but reads as silenced. */
+.mixer__row--muted .mixer__fill { filter: grayscale(0.85) brightness(0.6); }
+.mixer__row--muted .mixer__name,
+.mixer__row--muted .mixer__value { text-decoration: line-through; opacity: 0.65; }
 
 .mixer__unity {
   position: absolute; left: 50%; top: 3px; bottom: 3px;
@@ -1408,36 +1423,50 @@ body.dragging * {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* Floating hidden-tray: positioned above the panel, outside its background.
+   Chips look "disabled" with a checkered/striped fill. */
 .mixer__hidden-tray {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none; /* children re-enable */
 }
 .mixer__hidden-tray[hidden] { display: none; }
-.mixer__hidden-label {
-  font-size: 9px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  margin-right: 2px;
-}
 .mixer__chip {
+  pointer-events: auto;
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 7px 3px 5px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 3px 8px 3px 6px;
+  /* Diagonal "disabled" stripe over a dark translucent backdrop. */
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.05) 0 4px,
+      rgba(255, 255, 255, 0.10) 4px 8px
+    ),
+    rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 99px;
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(255, 255, 255, 0.55);
   cursor: pointer;
-  transition: background 120ms, color 120ms, border-color 120ms;
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: color 120ms, border-color 120ms, opacity 120ms;
 }
-.mixer__chip:hover { background: rgba(255, 255, 255, 0.08); color: #fff; border-color: rgba(255, 255, 255, 0.12); }
+.mixer__chip:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
 .mixer__chip-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .mixer__chip-label { color: rgba(255, 255, 255, 0.85); }
 

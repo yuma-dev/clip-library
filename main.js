@@ -894,18 +894,18 @@ function buildExportProgressCallbacks(event) {
   };
 }
 
-ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath) => {
+ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath, audioMix) => {
   const callbacks = buildExportProgressCallbacks(event);
-  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, getSettings, callbacks);
+  return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, getSettings, callbacks, { audioMix });
 });
 
-ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed) => {
+ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed, audioMix) => {
   const callbacks = buildExportProgressCallbacks(event);
-  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, callbacks);
+  return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, callbacks, { audioMix });
 });
 
-ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath) => {
-  return ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, getSettings);
+ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath, audioMix) => {
+  return ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, getSettings, { audioMix });
 });
 
 ipcMain.handle('get-tag-preferences', async () => {

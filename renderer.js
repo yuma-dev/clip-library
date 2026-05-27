@@ -1569,11 +1569,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Register app functions for benchmark harness
   if (benchmarkHarness) {
     benchmarkHarness.registerFunctions({
-      loadClips,
+      loadClips: clipGridModule.loadClips,
       renderClips: clipGridModule.renderClips,
-      openClip,
+      openClip: videoPlayerModule.openClip,
       closePlayer: videoPlayerModule.closePlayer,
-      performSearch,
+      performSearch: searchManagerModule.performSearch,
       allClips: () => state.allClips  // Getter function for current clips
     });
   }
@@ -1633,6 +1633,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         logger.info(`[Benchmark] Scenarios to run: ${scenarioIds.join(', ')}`);
         
+        // Audio-track comparison benches live in their own module so the
+        // harness stays focused on single-clip scenarios.
+        const audioTrackBench = require('./benchmark/audio-track-bench');
+
         // Map scenario IDs to harness methods
         const scenarioMap = {
           'load_clips': () => benchmarkHarness.benchmarkLoadClips(),
@@ -1646,7 +1650,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           'close_player': () => benchmarkHarness.benchmarkClosePlayer(),
           'search_simple': () => benchmarkHarness.benchmarkSearch('clip'),
           'search_complex': () => benchmarkHarness.benchmarkSearch('gameplay video 2024'),
-          'thumbnail_batch': () => benchmarkHarness.benchmarkThumbnailGeneration()
+          'thumbnail_batch': () => benchmarkHarness.benchmarkThumbnailGeneration(),
+          'playback_cpu_compare': () => audioTrackBench.benchmarkPlaybackCPUCompare(benchmarkHarness),
+          'open_phases_compare': () => audioTrackBench.benchmarkOpenPhasesCompare(benchmarkHarness),
+          'seek_burst_compare': () => audioTrackBench.benchmarkSeekBurstCompare(benchmarkHarness),
+          'memory_footprint_compare': () => audioTrackBench.benchmarkMemoryFootprintCompare(benchmarkHarness)
         };
         
         // Run each requested scenario
@@ -2074,7 +2082,26 @@ fullscreenPlayer.addEventListener("click", (e) => {
   e.stopPropagation();
 });
 
-playerOverlay.addEventListener("click", videoPlayerModule.closePlayer);
+// Close the player on backdrop click — but ignore "clicks" synthesized by a
+// drag that started inside the player and released outside. The browser fires
+// a click on the common ancestor of mousedown+mouseup, which means a drag
+// from e.g. a volume slider that releases over the overlay would otherwise
+// be interpreted as a backdrop click and close the player.
+//
+// Stays on `click` (not mouseup) so existing stopPropagation on
+// #fullscreen-player and the prev/next buttons keeps working — only clicks
+// that genuinely bubble up to the overlay reach this handler.
+let mouseDownInsidePlayer = false;
+playerOverlay.addEventListener("mousedown", (e) => {
+  mouseDownInsidePlayer = !!e.target.closest('#fullscreen-player');
+});
+playerOverlay.addEventListener("click", () => {
+  const startedInPlayer = mouseDownInsidePlayer;
+  mouseDownInsidePlayer = false;
+  if (startedInPlayer) return;
+  if (window.justFinishedDragging) return;
+  videoPlayerModule.closePlayer();
+});
 async function updateClipDisplay(originalName) {
   return
 }

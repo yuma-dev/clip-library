@@ -80,6 +80,16 @@ function parseArgs() {
       case '-t':
         options.timeout = parseInt(args[++i], 10) || 120000;
         break;
+      case '--single':
+        // Pin a specific clip to the "single audio track" bucket in the
+        // audio-track comparison scenarios. Accepts either the bare
+        // filename ("Forza Horizon 6 ….mp4") or a full path — we forward
+        // it verbatim and the bench resolves it against allClips.
+        options.singleClip = args[++i];
+        break;
+      case '--multi':
+        options.multiClip = args[++i];
+        break;
     }
   }
 
@@ -142,6 +152,110 @@ function showList() {
     });
     console.log();
   }
+}
+
+function fmtMs(v) {
+  if (v == null || !Number.isFinite(v)) return '—';
+  if (v < 1) return `${(v * 1000).toFixed(0)}µs`;
+  if (v < 1000) return `${v.toFixed(1)}ms`;
+  return `${(v / 1000).toFixed(2)}s`;
+}
+
+function fmtBytes(v) {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const sign = v < 0 ? '-' : '+';
+  const a = Math.abs(v);
+  if (a < 1024) return `${sign}${a}B`;
+  if (a < 1024 * 1024) return `${sign}${(a / 1024).toFixed(1)}KB`;
+  return `${sign}${(a / 1024 / 1024).toFixed(2)}MB`;
+}
+
+function ratioStr(s, m) {
+  if (s == null || m == null || !Number.isFinite(s) || !Number.isFinite(m) || s === 0) return '—';
+  return `${(m / s).toFixed(2)}×`;
+}
+
+/**
+ * Print a side-by-side single vs multi table for one comparison scenario.
+ * Different scenarios surface different fields; we switch on `label` to keep
+ * the table compact and meaningful instead of dumping every key.
+ */
+function printAudioTrackComparison(data) {
+  const { label, single, multi, probed, missing } = data;
+  console.log('');
+  console.log('  ' + '═'.repeat(64));
+  console.log(`  COMPARISON: ${label}`);
+  console.log('  ' + '─'.repeat(64));
+  if (missing && missing.length) {
+    console.log(`  ⚠ Missing bucket(s): ${missing.join(', ')} — probed ${probed} clips`);
+  }
+
+  // `row` accepts raw numbers + a formatter so the printed value and the
+  // ratio computation stay in sync. Pass `fmt = null` for already-formatted
+  // strings (e.g. counts) — ratio is still computed from the raw numbers.
+  const row = (label, sRaw, mRaw, fmt) => {
+    const sStr = fmt ? fmt(sRaw) : (sRaw == null ? '—' : String(sRaw));
+    const mStr = fmt ? fmt(mRaw) : (mRaw == null ? '—' : String(mRaw));
+    const sNum = typeof sRaw === 'number' && Number.isFinite(sRaw) ? sRaw : null;
+    const mNum = typeof mRaw === 'number' && Number.isFinite(mRaw) ? mRaw : null;
+    const ratio = ratioStr(sNum, mNum);
+    console.log(`  ${label.padEnd(28)} ${sStr.padStart(14)} ${mStr.padStart(14)}   ${ratio}`);
+  };
+  const fmt1 = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—');
+  console.log(`  ${'Metric'.padEnd(28)} ${'single'.padStart(14)} ${'multi'.padStart(14)}   m/s`);
+  console.log('  ' + '─'.repeat(64));
+
+  const s = single || {};
+  const m = multi || {};
+
+  if (s.clipName || m.clipName) {
+    console.log(`  clip                          ${(s.clipName || '—').slice(-14).padStart(14)} ${(m.clipName || '—').slice(-14).padStart(14)}`);
+    console.log(`  audioTracks                   ${String(s.audioTrackCount ?? '—').padStart(14)} ${String(m.audioTrackCount ?? '—').padStart(14)}`);
+  }
+
+  if (label === 'playback_cpu') {
+    row('cpu avg %',          s.cpuAvgPct,        m.cpuAvgPct,        fmt1);
+    row('cpu peak %',         s.cpuPeakPct,       m.cpuPeakPct,       fmt1);
+    row('cpu user avg %',     s.cpuUserAvgPct,    m.cpuUserAvgPct,    fmt1);
+    row('cpu sys avg %',      s.cpuSysAvgPct,     m.cpuSysAvgPct,     fmt1);
+    row('heap delta',         s.heapDeltaBytes,   m.heapDeltaBytes,   fmtBytes);
+    row('dropped frames',     s.droppedFrames,    m.droppedFrames);
+    row('total frames',       s.totalFrames,      m.totalFrames);
+    row('samples',            s.sampleCount,      m.sampleCount);
+  } else if (label === 'open_phases') {
+    row('total open',         s.totalMs,          m.totalMs,          fmtMs);
+    row('heap delta',         s.heapDeltaBytes,   m.heapDeltaBytes,   fmtBytes);
+    row('rss delta',          s.rssDeltaBytes,    m.rssDeltaBytes,    fmtBytes);
+    const sPhases = new Map((s.phases || []).map((p) => [p.name, p.delta]));
+    const mPhases = new Map((m.phases || []).map((p) => [p.name, p.delta]));
+    const names = Array.from(new Set([...sPhases.keys(), ...mPhases.keys()]));
+    if (names.length) {
+      console.log('  ' + '─'.repeat(64));
+      console.log('  phase deltas (per phase, not cumulative):');
+      for (const n of names) {
+        row(`  ${n}`, sPhases.has(n) ? sPhases.get(n) : null, mPhases.has(n) ? mPhases.get(n) : null, fmtMs);
+      }
+    }
+  } else if (label === 'seek_burst') {
+    row('seeks',              s.seekCount,        m.seekCount);
+    row('total wall',         s.totalWallMs,      m.totalWallMs,      fmtMs);
+    row('avg seek',           s.avgSeekMs,        m.avgSeekMs,        fmtMs);
+    row('max seek',           s.maxSeekMs,        m.maxSeekMs,        fmtMs);
+    row('cpu user',           s.cpuUserMs,        m.cpuUserMs,        fmtMs);
+    row('cpu sys',            s.cpuSysMs,         m.cpuSysMs,         fmtMs);
+    row('cpu % of wall',      s.cpuPctOfWall,     m.cpuPctOfWall,     fmt1);
+    row('dropped frames',     s.droppedFrames,    m.droppedFrames);
+  } else if (label === 'memory_footprint') {
+    row('heap before',        s.heapBeforeBytes,  m.heapBeforeBytes,  fmtBytes);
+    row('heap after',         s.heapAfterBytes,   m.heapAfterBytes,   fmtBytes);
+    row('heap delta',         s.heapDeltaBytes,   m.heapDeltaBytes,   fmtBytes);
+    row('rss delta',          s.rssDeltaBytes,    m.rssDeltaBytes,    fmtBytes);
+  }
+
+  if (s.error) console.log(`  ⚠ single bucket error: ${s.error}`);
+  if (m.error) console.log(`  ⚠ multi bucket error:  ${m.error}`);
+  console.log('  ' + '═'.repeat(64));
+  console.log('');
 }
 
 class BenchmarkRunner {
@@ -263,7 +377,9 @@ class BenchmarkRunner {
         CLIPS_BENCHMARK_VERBOSE: this.options.verbose ? '1' : '0',
         CLIPS_BENCHMARK_SCENARIOS: JSON.stringify(scenarios.map(s => s.id)),
         CLIPS_BENCHMARK_WARMUP: isWarmup ? '1' : '0',
-        CLIPS_BENCHMARK_ITERATION: String(iteration)
+        CLIPS_BENCHMARK_ITERATION: String(iteration),
+        BENCH_SINGLE_CLIP: this.options.singleClip || '',
+        BENCH_MULTI_CLIP: this.options.multiClip || ''
       };
 
       this.log('Spawning Electron with benchmark mode');
@@ -327,6 +443,23 @@ class BenchmarkRunner {
                 console.log(`     ${'TOTAL'.padEnd(20)} ${timing.total.toFixed(0).padStart(5)}ms`);
               } catch (e) {
                 this.log('Failed to parse timing:', e.message);
+              }
+            }
+          }
+
+          // Look for audio-track comparison results
+          if (line.includes('AUDIO_TRACK_COMPARE:')) {
+            const match = line.match(/AUDIO_TRACK_COMPARE:(.+)/);
+            if (match) {
+              try {
+                const data = JSON.parse(match[1]);
+                if (!this.results.audioTrackComparisons) {
+                  this.results.audioTrackComparisons = [];
+                }
+                this.results.audioTrackComparisons.push(data);
+                printAudioTrackComparison(data);
+              } catch (e) {
+                this.log('Failed to parse audio track comparison:', e.message);
               }
             }
           }

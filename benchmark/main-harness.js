@@ -190,6 +190,17 @@ class MainHarness {
       return true;
     });
 
+    // Generic marker forwarder. Renderer-side console.log doesn't reach the
+    // spawned Electron's stdout, so anything that needs to be picked up by
+    // the runner's line parser (e.g. AUDIO_TRACK_COMPARE) has to round-trip
+    // through this handler.
+    ipcMain.handle('benchmark:outputMarker', (event, marker, payload) => {
+      const safeMarker = String(marker || '').replace(/[^A-Z0-9_]/gi, '');
+      if (!safeMarker) return false;
+      process.stdout.write(`${safeMarker}:${JSON.stringify(payload)}\n`);
+      return true;
+    });
+
     // Handler to output complete signal to stdout
     ipcMain.handle('benchmark:outputComplete', (event, data) => {
       process.stdout.write(`BENCHMARK_COMPLETE:${JSON.stringify(data)}\n`);
