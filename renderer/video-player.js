@@ -1500,10 +1500,18 @@ function handleKeyPress(e) {
           skipTime(1);
           break;
         case 'volumeUp':
-          changeVolume(0.1);
+          if (activeAudioTracksManager) {
+            activeAudioTracksManager.nudgeAll(0.1);
+          } else {
+            changeVolume(0.1);
+          }
           break;
         case 'volumeDown':
-          changeVolume(-0.1);
+          if (activeAudioTracksManager) {
+            activeAudioTracksManager.nudgeAll(-0.1);
+          } else {
+            changeVolume(-0.1);
+          }
           break;
         case 'exportAudioFile':
           if (callbacks.exportAudioWithFileSelection) callbacks.exportAudioWithFileSelection();
@@ -1749,6 +1757,9 @@ async function preloadClipData(originalName) {
   // Check if already cached and not expired
   const cached = state.clipDataCache.get(originalName);
   if (cached && (Date.now() - cached.timestamp) < state.CACHE_EXPIRY_MS) {
+    // Still kick off audio warming in case it wasn't done on the previous
+    // hover (e.g. cache hit from a fresh page-load without audio warming).
+    warmAudioTracksForHover(originalName, cached.data?.clipInfo).catch(() => {});
     return cached.data;
   }
 
@@ -1770,11 +1781,134 @@ async function preloadClipData(originalName) {
       state.clipDataCache.delete(oldestKey);
     }
 
+    // Fire-and-forget audio decoder warmup for multi-track clips. Has its own
+    // LRU cap + dedup, so calling on every hover is safe.
+    warmAudioTracksForHover(originalName, clipInfo).catch(() => {});
+
     return data;
   } catch (error) {
     logger.warn(`[Preload] Failed to preload ${originalName}:`, error.message);
     return null;
   }
+}
+
+// ============================================================================
+// AUDIO TRACK HOVER PRELOAD
+// ============================================================================
+// For multi-track clips (>1 audio stream), the per-track AAC decoder warmup
+// is the biggest open-time cost — ~200ms of "wait for all <audio> elements
+// to reach readyState>=2". We hide that cost by warming the decoders during
+// hover: extract the tracks if needed, create hidden <audio preload="auto">
+// elements, let them load in the background, and adopt them in
+// AudioTracksManager.init when the user actually clicks. If the user moves
+// to a different clip, the LRU cap drops the oldest entry and stops its
+// decoders. Per-clip dedup prevents redundant work on repeated hovers.
+//
+// Entry shape: { audioEls: Map<ordinal, HTMLAudioElement>,
+//                trackMetas: Array, warmedAt: number,
+//                pending: Promise<void> }
+
+const audioWarmCache = new Map();
+const AUDIO_WARM_CAP = 3;
+
+function warmCacheEvict(originalName) {
+  const entry = audioWarmCache.get(originalName);
+  if (!entry) return;
+  audioWarmCache.delete(originalName);
+  for (const audioEl of entry.audioEls.values()) {
+    try { audioEl.pause(); } catch (_) {}
+    try { audioEl.removeAttribute('src'); audioEl.load(); } catch (_) {}
+    if (audioEl.parentNode) audioEl.parentNode.removeChild(audioEl);
+  }
+}
+
+function warmCacheEnforceCap() {
+  while (audioWarmCache.size > AUDIO_WARM_CAP) {
+    // Map iteration order is insertion order — oldest first.
+    const oldest = audioWarmCache.keys().next().value;
+    if (!oldest) break;
+    warmCacheEvict(oldest);
+  }
+}
+
+/**
+ * Kick off audio decoder warming for `originalName` if it's a multi-track
+ * clip. Idempotent — repeated hovers don't re-warm. Returns the existing
+ * entry's pending Promise if warming is in flight.
+ */
+async function warmAudioTracksForHover(originalName, clipInfo) {
+  const tracks = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks : [];
+  if (tracks.length <= 1) return;
+  const existing = audioWarmCache.get(originalName);
+  if (existing) {
+    // Refresh LRU position without retriggering work.
+    audioWarmCache.delete(originalName);
+    audioWarmCache.set(originalName, existing);
+    return existing.pending;
+  }
+
+  // Reserve slot eagerly so concurrent hovers dedup.
+  const entry = {
+    audioEls: new Map(),
+    trackMetas: [],
+    warmedAt: Date.now(),
+    pending: null
+  };
+  audioWarmCache.set(originalName, entry);
+  warmCacheEnforceCap();
+
+  entry.pending = (async () => {
+    try {
+      const extracted = await ipcRenderer.invoke('extract-audio-tracks', originalName);
+      if (!Array.isArray(extracted) || extracted.length === 0) {
+        warmCacheEvict(originalName);
+        return;
+      }
+      // The cache may have been evicted while extract was running.
+      if (!audioWarmCache.has(originalName)) return;
+
+      entry.trackMetas = extracted.map((e) => {
+        const meta = tracks.find((t) => t.ordinal === e.ordinal) || {};
+        return {
+          ordinal: e.ordinal,
+          streamIndex: e.streamIndex,
+          path: e.path,
+          name: meta.name || `Track ${e.ordinal + 1}`,
+          channels: meta.channels || null
+        };
+      });
+
+      for (const m of entry.trackMetas) {
+        const audioEl = document.createElement('audio');
+        audioEl.preload = 'auto';
+        audioEl.src = `file://${m.path.replace(/\\/g, '/')}`;
+        audioEl.style.display = 'none';
+        audioEl.volume = 1;
+        // Tag so we can recognise warmed elements if we ever inspect the DOM.
+        audioEl.dataset.warmedClip = originalName;
+        audioEl.dataset.warmedOrdinal = String(m.ordinal);
+        document.body.appendChild(audioEl);
+        entry.audioEls.set(m.ordinal, audioEl);
+      }
+    } catch (err) {
+      logger.warn(`[audio-warm] failed for ${originalName}: ${err.message}`);
+      warmCacheEvict(originalName);
+    }
+  })();
+
+  return entry.pending;
+}
+
+/**
+ * Consume the warm entry for `originalName` (removes from cache). Returns
+ * `null` if there's nothing warm. The caller takes ownership of the audio
+ * elements — they must be either adopted into a manager or torn down.
+ */
+function takeWarmAudioTracks(originalName) {
+  const entry = audioWarmCache.get(originalName);
+  if (!entry) return null;
+  audioWarmCache.delete(originalName);
+  return entry;
 }
 
 /**
@@ -2262,13 +2396,33 @@ async function openClip(originalName, customName) {
     if (audioTracks.length > 1) {
       try {
         setupAudioContext();
+        // Adopt the hover-warmed entry if present — its trackMetas + audio
+        // elements are already in flight, so we skip the extract IPC and the
+        // <audio> creation cost. _waitForReady on warm elements typically
+        // resolves immediately because their AAC decoders are already past
+        // readyState>=2.
+        const warm = takeWarmAudioTracks(originalName);
+        const extractedPromise = warm && warm.trackMetas.length > 0
+          ? Promise.resolve(warm.trackMetas.map((m) => ({
+              ordinal: m.ordinal,
+              streamIndex: m.streamIndex,
+              path: m.path
+            })))
+          : ipcRenderer.invoke('extract-audio-tracks', originalName);
         const [extracted, persisted, globalPrefs] = await Promise.all([
-          ipcRenderer.invoke('extract-audio-tracks', originalName),
+          extractedPromise,
           ipcRenderer.invoke('get-track-state', originalName),
           ipcRenderer.invoke('get-track-preferences')
         ]);
         if (openGen !== clipOpenGeneration) {
           logger.info(`[${originalName}] Multi-track init aborted (stale gen ${openGen} vs ${clipOpenGeneration})`);
+          // The warm entry was consumed but won't be used — drop its elements.
+          if (warm) {
+            for (const el of warm.audioEls.values()) {
+              try { el.pause(); el.removeAttribute('src'); el.load(); } catch (_) {}
+              if (el.parentNode) el.parentNode.removeChild(el);
+            }
+          }
         } else if (Array.isArray(extracted) && extracted.length > 0) {
           const trackMetas = extracted.map((entry) => {
             const meta = audioTracks.find((t) => t.ordinal === entry.ordinal) || {};
@@ -2294,7 +2448,7 @@ async function openClip(originalName, customName) {
                 .catch((err) => logger.warn(`[audio-tracks] save global failed: ${err.message}`));
             }
           });
-          await manager.init(trackMetas, persisted, globalPrefs);
+          await manager.init(trackMetas, persisted, globalPrefs, warm ? warm.audioEls : null);
           if (openGen !== clipOpenGeneration) {
             logger.info(`[${originalName}] Multi-track init completed too late, disposing (gen ${openGen} vs ${clipOpenGeneration})`);
             try { manager.dispose(); } catch (_) {}
@@ -2437,6 +2591,17 @@ async function openClip(originalName, customName) {
 
     if (callbacks.isBenchmarkMode) {
       logger.info(`[PERF] Total: ${timings.end.toFixed(1)}ms`);
+      // Expose a side-channel for the benchmark harness so it can read
+      // per-phase timings + the audio track count of the just-opened clip
+      // without having to plumb anything through openClip's return value.
+      try {
+        const audioTrackCount = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks.length : 0;
+        window.__benchmarkLastOpenTimings = {
+          clipName: originalName,
+          audioTrackCount,
+          timings: { ...timings }
+        };
+      } catch (_) { /* ignore */ }
     }
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -2726,15 +2891,26 @@ function setupEventListeners() {
     });
 
     elements.volumeContainer.addEventListener("mouseleave", () => {
+      // Multi-track popout stays open until an outside click — auto-hide on
+      // mouseleave was too aggressive to interact with (drag handles, palette).
+      if (activeAudioTracksManager) return;
       elements.volumeContainer.timeout = setTimeout(() => {
-        if (activeAudioTracksManager) {
-          if (elements.audioTracksPanel) elements.audioTracksPanel.classList.add('hidden');
-          return;
-        }
         elements.volumeSlider.classList.add("collapsed");
       }, 2000);
     });
   }
+
+  // Outside-click closer for the multi-track audio panel. Installed once;
+  // no-ops unless the panel is open. Fires on mousedown (not click) so it
+  // takes effect before the player-overlay's own close logic runs on the
+  // same gesture.
+  document.addEventListener('mousedown', (e) => {
+    if (!activeAudioTracksManager) return;
+    const panel = elements.audioTracksPanel;
+    if (!panel || panel.classList.contains('hidden')) return;
+    if (e.target.closest('#volume-container')) return;
+    panel.classList.add('hidden');
+  });
 
   // Video events
   if (elements.videoPlayer) {
@@ -2959,6 +3135,7 @@ module.exports = {
   updateVolumeIcon,
   showVolumeContainer,
   loadVolume,
+  getActiveAudioTracksManager: () => activeAudioTracksManager,
 
   // Playback controls
   togglePlayPause,

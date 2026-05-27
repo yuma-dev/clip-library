@@ -142,6 +142,46 @@ const SCENARIOS = {
     timeout: 10000
   },
 
+  // ============= AUDIO TRACK COMPARISON SCENARIOS =============
+  // Each compares one single-audio-track clip vs one multi-audio-track clip,
+  // selected automatically by ffprobing the loaded clip set.
+
+  playback_cpu_compare: {
+    id: 'playback_cpu_compare',
+    name: 'Playback CPU (single vs multi audio)',
+    category: CATEGORIES.PLAYBACK,
+    description: 'Samples CPU + memory + dropped frames over several seconds of playback for each bucket',
+    renderer: true,
+    timeout: 120000
+  },
+
+  open_phases_compare: {
+    id: 'open_phases_compare',
+    name: 'Open Clip Phases (single vs multi audio)',
+    category: CATEGORIES.PLAYBACK,
+    description: 'Breaks openClip into its internal phases for each bucket — pinpoints where multi-track adds cost',
+    renderer: true,
+    timeout: 60000
+  },
+
+  seek_burst_compare: {
+    id: 'seek_burst_compare',
+    name: 'Seek Burst (single vs multi audio)',
+    category: CATEGORIES.PLAYBACK,
+    description: 'Rapid series of seeks across the timeline, measuring latency + CPU + dropped frames',
+    renderer: true,
+    timeout: 60000
+  },
+
+  memory_footprint_compare: {
+    id: 'memory_footprint_compare',
+    name: 'Memory Footprint (single vs multi audio)',
+    category: CATEGORIES.PLAYBACK,
+    description: 'Heap + RSS delta on open for each bucket',
+    renderer: true,
+    timeout: 60000
+  },
+
   // ==================== THUMBNAIL SCENARIOS ====================
 
   thumbnail_batch: {
@@ -201,6 +241,15 @@ const SUITES = {
   // Startup analysis - detailed breakdown of app startup phases
   startup: [
     'startup_detailed'
+  ],
+
+  // Audio-track regression suite — compares single vs multi audio playback
+  // across CPU, open phases, seek bursts, and memory footprint.
+  multitrack: [
+    'open_phases_compare',
+    'playback_cpu_compare',
+    'seek_burst_compare',
+    'memory_footprint_compare'
   ]
 };
 

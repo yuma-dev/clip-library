@@ -118,8 +118,14 @@ class AudioTracksManager {
    * @param {Array<{ordinal, streamIndex, path, name, channels}>} trackMetas
    * @param {{tracks: Object}} persistedState - per-clip state (volume by ordinal)
    * @param {Object} globalPrefs - { [trackName]: { color, hidden } }
+   * @param {Map<number, HTMLAudioElement>} [preloadedAudioEls] - audio elements
+   *   already created and warmed during hover. When provided, init reuses them
+   *   instead of creating new <audio> elements — their AAC decoders are
+   *   already partway (or fully) through warmup, so `_waitForReady` returns
+   *   nearly instantly. The caller transfers ownership: dispose() will tear
+   *   them down.
    */
-  async init(trackMetas, persistedState, globalPrefs) {
+  async init(trackMetas, persistedState, globalPrefs, preloadedAudioEls) {
     if (!trackMetas || trackMetas.length === 0) return;
 
     if (this.audioContext.state === 'suspended') {
@@ -130,13 +136,24 @@ class AudioTracksManager {
     const prefs = globalPrefs || {};
 
     for (const meta of trackMetas) {
-      const audioEl = document.createElement('audio');
-      audioEl.preload = 'auto';
-      audioEl.src = `file://${meta.path.replace(/\\/g, '/')}`;
-      audioEl.style.display = 'none';
-      // Keep the element's intrinsic volume at 1 — gain comes from the GainNode.
-      audioEl.volume = 1;
-      document.body.appendChild(audioEl);
+      // Prefer a pre-warmed <audio> element if one was created during hover.
+      // It's already in the DOM with src set and (hopefully) past readyState>=2.
+      const warm = preloadedAudioEls && preloadedAudioEls.get(meta.ordinal);
+      let audioEl;
+      if (warm) {
+        audioEl = warm;
+        // Clear the warmed dataset so the element looks normal post-adoption.
+        delete audioEl.dataset.warmedClip;
+        delete audioEl.dataset.warmedOrdinal;
+      } else {
+        audioEl = document.createElement('audio');
+        audioEl.preload = 'auto';
+        audioEl.src = `file://${meta.path.replace(/\\/g, '/')}`;
+        audioEl.style.display = 'none';
+        // Keep the element's intrinsic volume at 1 — gain comes from the GainNode.
+        audioEl.volume = 1;
+        document.body.appendChild(audioEl);
+      }
 
       const sourceNode = this.audioContext.createMediaElementSource(audioEl);
       const gainNode = this.audioContext.createGain();
@@ -145,14 +162,17 @@ class AudioTracksManager {
 
       const saved = persisted[meta.ordinal] || {};
       const volume = Number.isFinite(saved.volume) ? saved.volume : 1;
+      const muted = !!saved.muted;
       const trackName = meta.name || `Track ${meta.ordinal + 1}`;
       const globalPref = prefs[trackName] || {};
-      const muted = !!globalPref.hidden;
+      // `hidden` = removed from active mix into the floating tray (global pref).
+      // `muted`  = right-click soft mute, per-clip. Either silences the track.
+      const hidden = !!globalPref.hidden;
       const color = typeof globalPref.color === 'string' && /^#[0-9a-f]{6}$/i.test(globalPref.color)
         ? globalPref.color
         : COLOR_PALETTE[meta.ordinal % COLOR_PALETTE.length];
 
-      gainNode.gain.setValueAtTime(muted ? 0 : volume, this.audioContext.currentTime);
+      gainNode.gain.setValueAtTime((hidden || muted) ? 0 : volume, this.audioContext.currentTime);
 
       this.tracks.push({
         ordinal: meta.ordinal,
@@ -162,8 +182,15 @@ class AudioTracksManager {
         audioEl,
         sourceNode,
         gainNode,
+        hidden,
         muted,
         volume,
+        // Unclamped "true" volume for shift-drag offset memory. Tracks the
+        // value as if it had unlimited range; the displayed `volume` is the
+        // clamped projection into [0, 2]. Lets a track that was pushed below
+        // 0 by a shift-drag come back at the right level when the group is
+        // shifted up again. Session-local only — not persisted.
+        _trueVolume: volume,
         color
       });
     }
@@ -367,47 +394,29 @@ class AudioTracksManager {
   _renderPanel() {
     if (!this.panelEl) return;
     this.panelEl.innerHTML = '';
-    // The panel itself is shown/hidden by video-player.js (click on volume button).
-    // We just build its contents here.
-
-    // Outer scaffold: header + active rows + hidden tray + footer hint.
-    const header = document.createElement('div');
-    header.className = 'mixer__header';
-    const headerTitle = document.createElement('span');
-    headerTitle.textContent = 'Audio mix';
-    const headerCount = document.createElement('span');
-    headerCount.className = 'mixer__count';
-    header.appendChild(headerTitle);
-    header.appendChild(headerCount);
+    // Hidden tray floats *above* the panel (absolutely positioned). Sliders
+    // start right at the top of the panel for thumb reachability.
+    const tray = document.createElement('div');
+    tray.className = 'mixer__hidden-tray';
+    tray.hidden = true;
 
     const tracksWrap = document.createElement('div');
     tracksWrap.className = 'mixer__tracks';
 
-    const tray = document.createElement('div');
-    tray.className = 'mixer__hidden-tray';
-    tray.hidden = true;
-    const trayLabel = document.createElement('span');
-    trayLabel.className = 'mixer__hidden-label';
-    trayLabel.textContent = 'Hidden';
-    tray.appendChild(trayLabel);
-
-    this.panelEl.appendChild(header);
-    this.panelEl.appendChild(tracksWrap);
     this.panelEl.appendChild(tray);
+    this.panelEl.appendChild(tracksWrap);
 
-    this._panelRefs = { headerCount, tracksWrap, tray, trayLabel };
+    this._panelRefs = { tracksWrap, tray };
     this._renderRows();
   }
 
   _renderRows() {
-    const { headerCount, tracksWrap, tray, trayLabel } = this._panelRefs;
+    const { tracksWrap, tray } = this._panelRefs;
     tracksWrap.innerHTML = '';
+    tray.innerHTML = '';
 
-    // Reset tray children (preserve the label).
-    Array.from(tray.querySelectorAll('.mixer__chip')).forEach((c) => c.remove());
-
-    const visible = this.tracks.filter((t) => !t.muted);
-    const hidden = this.tracks.filter((t) => t.muted);
+    const visible = this.tracks.filter((t) => !t.hidden);
+    const hidden = this.tracks.filter((t) => t.hidden);
 
     visible.forEach((track) => tracksWrap.appendChild(this._buildRow(track)));
     if (hidden.length > 0) {
@@ -416,8 +425,15 @@ class AudioTracksManager {
     } else {
       tray.hidden = true;
     }
+  }
 
-    headerCount.textContent = `${visible.length} of ${this.tracks.length}`;
+  _repaintTrackRow(track) {
+    if (!this.panelEl) return;
+    const row = this.panelEl.querySelector(`.mixer__row[data-ordinal="${track.ordinal}"]`);
+    if (!row) return;
+    const value = row.querySelector('.mixer__value');
+    const dot = row.querySelector('.mixer__dot');
+    this._paintRow(track, { row, value, dot });
   }
 
   _paintRow(track, els) {
@@ -436,7 +452,7 @@ class AudioTracksManager {
     wrap.className = 'mixer__row-wrap';
 
     const row = document.createElement('div');
-    row.className = 'mixer__row';
+    row.className = 'mixer__row' + (track.muted ? ' mixer__row--muted' : '');
     row.dataset.ordinal = String(track.ordinal);
     row.innerHTML = `
       <div class="mixer__fill"></div>
@@ -479,14 +495,42 @@ class AudioTracksManager {
       this._setHidden(track, true);
     });
 
+    // Snapshot taken at mousedown when shift is held. Locks the baseline so
+    // delta from the dragged track propagates to every other track,
+    // preserving the offset of tracks that get clamped at 0 or 2.
+    let dragShiftSnapshot = null;
+
     const applyFromClientX = (clientX) => {
       const r = row.getBoundingClientRect();
       const raw = clamp((clientX - r.left) / r.width, 0, 1) * 2;
       const next = detentSnap(raw);
-      if (next !== track.volume) {
+
+      if (dragShiftSnapshot) {
+        const delta = next - dragShiftSnapshot.dragged;
+        let anyChanged = false;
+        for (const snap of dragShiftSnapshot.all) {
+          const t = this.tracks.find((x) => x.ordinal === snap.ord);
+          if (!t) continue;
+          const newTrue = snap.base + delta;
+          const newDisplay = clamp(newTrue, 0, 2);
+          if (newTrue === t._trueVolume && newDisplay === t.volume) continue;
+          t._trueVolume = newTrue;
+          if (newDisplay !== t.volume) {
+            t.volume = newDisplay;
+            if (!t.hidden && !t.muted) {
+              t.gainNode.gain.setValueAtTime(newDisplay, this.audioContext.currentTime);
+            }
+            if (t === track) this._paintRow(t, els);
+            else this._repaintTrackRow(t);
+            anyChanged = true;
+          }
+        }
+        if (anyChanged) this._schedulePersistClip();
+      } else if (next !== track.volume) {
         track.volume = next;
+        track._trueVolume = next;
         this._paintRow(track, els);
-        if (!track.muted) {
+        if (!track.hidden && !track.muted) {
           track.gainNode.gain.setValueAtTime(next, this.audioContext.currentTime);
         }
         this._schedulePersistClip();
@@ -502,7 +546,10 @@ class AudioTracksManager {
     };
     const onUp = () => {
       dragging = false;
+      dragShiftSnapshot = null;
       delete row.dataset.dragging;
+      // Re-enable per-row transitions on all rows once the group drag ends.
+      if (this.panelEl) this.panelEl.removeAttribute('data-shift-drag');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchmove', onMove);
@@ -510,9 +557,27 @@ class AudioTracksManager {
     };
     const onDown = (e) => {
       if (e.target.closest('.mixer__dot, .mixer__hide, .mixer__palette')) return;
+      // Ignore non-primary buttons — right-click is reserved for soft mute
+      // and must not drag the slider before the contextmenu fires.
+      if (typeof e.button === 'number' && e.button !== 0) return;
       e.preventDefault();
       dragging = true;
       row.dataset.dragging = 'true';
+      if (e.shiftKey) {
+        const draggedBase = track._trueVolume != null ? track._trueVolume : track.volume;
+        dragShiftSnapshot = {
+          dragged: draggedBase,
+          all: this.tracks.map((t) => ({
+            ord: t.ordinal,
+            base: t._trueVolume != null ? t._trueVolume : t.volume
+          }))
+        };
+        // Kill the .mixer__fill width transition on *every* row so they
+        // track the drag 1:1 with the dragged row instead of easing behind.
+        if (this.panelEl) this.panelEl.setAttribute('data-shift-drag', 'true');
+      } else {
+        dragShiftSnapshot = null;
+      }
       const cx = e.touches ? e.touches[0].clientX : e.clientX;
       applyFromClientX(cx);
       window.addEventListener('mousemove', onMove);
@@ -527,8 +592,9 @@ class AudioTracksManager {
     row.addEventListener('dblclick', (e) => {
       if (e.target.closest('.mixer__dot, .mixer__hide')) return;
       track.volume = 1;
+      track._trueVolume = 1;
       this._paintRow(track, els);
-      if (!track.muted) {
+      if (!track.hidden && !track.muted) {
         track.gainNode.gain.setValueAtTime(1, this.audioContext.currentTime);
       }
       this._schedulePersistClip();
@@ -539,12 +605,20 @@ class AudioTracksManager {
       const step = 0.05;
       const next = clamp(track.volume + (e.deltaY < 0 ? step : -step), 0, 2);
       track.volume = detentSnap(next);
+      track._trueVolume = track.volume;
       this._paintRow(track, els);
-      if (!track.muted) {
+      if (!track.hidden && !track.muted) {
         track.gainNode.gain.setValueAtTime(track.volume, this.audioContext.currentTime);
       }
       this._schedulePersistClip();
     }, { passive: false });
+
+    // Right-click toggles per-clip soft mute (separate from "hide to tray").
+    row.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.mixer__dot, .mixer__hide, .mixer__palette')) return;
+      e.preventDefault();
+      this._setMuted(track, !track.muted);
+    });
 
     return wrap;
   }
@@ -623,20 +697,87 @@ class AudioTracksManager {
   _applyHiddenByName(name, hidden) {
     for (const t of this.tracks) {
       if (t.name === name) {
-        t.muted = hidden;
-        t.gainNode.gain.setValueAtTime(hidden ? 0 : t.volume, this.audioContext.currentTime);
+        t.hidden = hidden;
+        const gain = (hidden || t.muted) ? 0 : t.volume;
+        t.gainNode.gain.setValueAtTime(gain, this.audioContext.currentTime);
       }
     }
   }
 
-  /** Debounced per-clip volume persistence (volume only, by ordinal). */
+  /** Per-clip soft mute (right-click). Keeps the row in the active mix, just silences it. */
+  _setMuted(track, muted) {
+    const next = !!muted;
+    if (track.muted === next) return;
+    track.muted = next;
+    const gain = (track.hidden || next) ? 0 : track.volume;
+    track.gainNode.gain.setValueAtTime(gain, this.audioContext.currentTime);
+    this._repaintTrackRow(track);
+    // Also reflect the muted class on the row element directly (in case the
+    // row was just rebuilt).
+    const row = this.panelEl && this.panelEl.querySelector(`.mixer__row[data-ordinal="${track.ordinal}"]`);
+    if (row) row.classList.toggle('mixer__row--muted', next);
+    this._schedulePersistClip();
+  }
+
+  /** Nudge all non-hidden tracks by `delta`, preserving relative offsets via _trueVolume. */
+  nudgeAll(delta) {
+    if (!Number.isFinite(delta) || delta === 0) return;
+    let anyChanged = false;
+    for (const t of this.tracks) {
+      if (t.hidden) continue;
+      const base = t._trueVolume != null ? t._trueVolume : t.volume;
+      const newTrue = base + delta;
+      const newDisplayRaw = clamp(newTrue, 0, 2);
+      const newDisplay = detentSnap(newDisplayRaw);
+      t._trueVolume = newTrue;
+      if (newDisplay !== t.volume) {
+        t.volume = newDisplay;
+        if (!t.muted) {
+          t.gainNode.gain.setValueAtTime(newDisplay, this.audioContext.currentTime);
+        }
+        this._repaintTrackRow(t);
+        anyChanged = true;
+      }
+    }
+    if (anyChanged) this._schedulePersistClip();
+    // Reveal the panel while the user is nudging so they get visual feedback,
+    // then auto-hide a short while after the last nudge.
+    this._showPanelTransient();
+  }
+
+  /**
+   * Snapshot of the audible mix for export. Returns one entry per track that
+   * is neither hidden (tray) nor muted (right-click). Each entry carries the
+   * absolute source stream index so ffmpeg can map it directly.
+   */
+  getExportMix() {
+    return this.tracks
+      .filter((t) => !t.hidden && !t.muted)
+      .map((t) => ({
+        streamIndex: t.streamIndex,
+        ordinal: t.ordinal,
+        volume: Number.isFinite(t.volume) ? t.volume : 1
+      }));
+  }
+
+  _showPanelTransient(durationMs = 1600) {
+    if (!this.panelEl) return;
+    this.panelEl.classList.remove('hidden');
+    if (this._panelHideTimer) clearTimeout(this._panelHideTimer);
+    this._panelHideTimer = setTimeout(() => {
+      this._panelHideTimer = null;
+      if (!this.disposed && this.panelEl) this.panelEl.classList.add('hidden');
+    }, durationMs);
+  }
+
+  /** Debounced per-clip persistence (volume + muted, by ordinal). */
   _schedulePersistClip() {
     if (this._persistTimer) clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
       const state = { tracks: {} };
       this.tracks.forEach((t) => {
-        state.tracks[t.ordinal] = { volume: t.volume };
+        state.tracks[t.ordinal] = { volume: t.volume, muted: !!t.muted };
       });
       try {
         this.onPersistClip(state);
@@ -659,6 +800,10 @@ class AudioTracksManager {
     if (this.disposed) return;
     this.disposed = true;
     if (this._rafId) cancelAnimationFrame(this._rafId);
+    if (this._panelHideTimer) {
+      clearTimeout(this._panelHideTimer);
+      this._panelHideTimer = null;
+    }
     if (this._persistTimer) {
       clearTimeout(this._persistTimer);
       this._persistTimer = null;

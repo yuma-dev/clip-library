@@ -40,6 +40,25 @@ function getCurrentPlaybackRate() {
   return 1;
 }
 
+/**
+ * Snapshot the active multi-track mix (if any) so the main process can
+ * mix the per-track volumes / hide / mute states into the exported file.
+ * Returns null when the current clip is single-track (default export path).
+ */
+function getActiveAudioMix() {
+  if (!videoPlayerModule || typeof videoPlayerModule.getActiveAudioTracksManager !== 'function') {
+    return null;
+  }
+  const manager = videoPlayerModule.getActiveAudioTracksManager();
+  if (!manager || typeof manager.getExportMix !== 'function') return null;
+  try {
+    return manager.getExportMix();
+  } catch (err) {
+    logger.warn('Failed to snapshot audio mix for export:', err);
+    return null;
+  }
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -65,7 +84,8 @@ async function exportVideo(savePath = null) {
       state.trimEndTime,
       volume,
       speed,
-      savePath
+      savePath,
+      getActiveAudioMix()
     );
     if (result.success) {
       logger.info(`Video exported successfully via ${result.encoder || 'unknown encoder'}:`, result.path);
@@ -97,7 +117,8 @@ async function exportAudio(savePath = null) {
       state.trimEndTime,
       volume,
       speed,
-      savePath
+      savePath,
+      getActiveAudioMix()
     );
     if (result.success) {
       logger.info("Audio exported successfully:", result.path);
@@ -136,7 +157,8 @@ async function exportTrimmedVideo() {
       state.trimStartTime,
       state.trimEndTime,
       volume,
-      speed
+      speed,
+      getActiveAudioMix()
     );
 
     if (result.success) {

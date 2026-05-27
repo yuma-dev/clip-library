@@ -716,6 +716,84 @@ function ffprobeAsync(filePath) {
  * @returns {Promise<{usingFallback: boolean, pipeline: object}>}
  */
 // Export helpers
+/**
+ * Build an audio filter_complex graph that mixes a list of source streams with
+ * per-track volumes, then layers the trim-time master volume / volume range /
+ * speed (atempo) on top. Returns `null` when no mix is requested.
+ *
+ * Output label is always `[aout]` so the caller can `-map [aout]`.
+ */
+function buildAudioMixFilterComplex({
+  audioMix,
+  effectiveVolume,
+  hasBaseVolumeChange,
+  effectiveSpeed,
+  hasSpeedChange,
+  hasRangeVolumeChange,
+  rangeLevelRaw,
+  relativeRangeStart,
+  relativeRangeEnd,
+  videoFilters = null
+}) {
+  if (!Array.isArray(audioMix) || audioMix.length === 0) return null;
+
+  const parts = [];
+
+  // If video filters are present we have to inline them into the complex
+  // graph too. Mixing `-vf` with `-filter_complex` on the same output stream
+  // is rejected by ffmpeg ("Filtergraph 'X' was specified through the -vf/-af
+  // option ... which is fed from a complex filtergraph").
+  if (Array.isArray(videoFilters) && videoFilters.length > 0) {
+    parts.push(`[0:v:0]${videoFilters.join(',')}[vout]`);
+  }
+  const inputLabels = [];
+  audioMix.forEach((track, idx) => {
+    const streamIndex = Number(track.streamIndex);
+    if (!Number.isFinite(streamIndex)) return;
+    const vol = Number.isFinite(track.volume) ? Math.max(0, track.volume) : 1;
+    const label = `mt${idx}`;
+    inputLabels.push(label);
+    // Pre-stage volume per track so amix sees properly weighted inputs.
+    parts.push(`[0:${streamIndex}]volume=${vol}[${label}]`);
+  });
+  if (inputLabels.length === 0) return null;
+
+  // Mix down to a single stream (or pass through for a single track).
+  let mixedLabel;
+  if (inputLabels.length === 1) {
+    mixedLabel = inputLabels[0];
+  } else {
+    mixedLabel = 'mt_mix';
+    parts.push(
+      `${inputLabels.map((l) => `[${l}]`).join('')}` +
+      `amix=inputs=${inputLabels.length}:normalize=0:duration=longest[${mixedLabel}]`
+    );
+  }
+
+  // Post-mix transforms (mirror the single-stream filter chain).
+  const postFilters = [];
+  if (hasBaseVolumeChange) postFilters.push(`volume=${effectiveVolume}`);
+  if (hasRangeVolumeChange) {
+    postFilters.push(
+      `volume=${rangeLevelRaw}:enable='between(t,${relativeRangeStart},${relativeRangeEnd})'`
+    );
+  }
+  if (hasSpeedChange) postFilters.push(`atempo=${effectiveSpeed}`);
+
+  if (postFilters.length > 0) {
+    parts.push(`[${mixedLabel}]${postFilters.join(',')}[aout]`);
+  } else if (inputLabels.length === 1) {
+    // Lone track, no transforms — pass through under the [aout] label.
+    parts.push(`[${mixedLabel}]anull[aout]`);
+  } else {
+    // amix already produced [mt_mix]; rename to [aout].
+    const last = parts.pop();
+    parts.push(last.replace(`[${mixedLabel}]`, '[aout]'));
+  }
+
+  return parts.join(';');
+}
+
 async function exportVideoWithFallback(options) {
   const {
     inputPath,
@@ -727,6 +805,7 @@ async function exportVideoWithFallback(options) {
     quality,
     exportSettings = null,
     volumeData,
+    audioMix = null,
     onProgress,
     onFallback,
     onDecodeFallback,
@@ -865,7 +944,29 @@ async function exportVideoWithFallback(options) {
 
       const audioFilters = buildAudioFilter();
       const needsVideoFilter = videoFilters.length > 0;
-      const needsAudioFilter = audioFilters.length > 0;
+      // Multi-track audio export: when the renderer provided an explicit mix,
+      // we replace the single-stream audio filter chain with a filter_complex
+      // graph that mixes per-track volumes and re-applies master/range/speed.
+      // An *empty* mix means every track was muted/hidden — we silence the
+      // output entirely with `-an`.
+      const audioMixProvided = Array.isArray(audioMix);
+      const audioMixSilent = audioMixProvided && audioMix.length === 0;
+      const audioFilterComplex = audioMixProvided && !audioMixSilent
+        ? buildAudioMixFilterComplex({
+            audioMix,
+            effectiveVolume,
+            hasBaseVolumeChange,
+            effectiveSpeed,
+            hasSpeedChange,
+            hasRangeVolumeChange,
+            rangeLevelRaw,
+            relativeRangeStart,
+            relativeRangeEnd,
+            videoFilters
+          })
+        : null;
+      const usingAudioMix = audioFilterComplex !== null || audioMixSilent;
+      const needsAudioFilter = !usingAudioMix && audioFilters.length > 0;
       const canAttemptHwDecode = !needsVideoFilter;
 
       const targetVideoBitrateKbps = Number.isFinite(resolvedTuning.targetVideoBitrateKbps)
@@ -941,12 +1042,25 @@ async function exportVideoWithFallback(options) {
           command.inputOptions(['-hwaccel dxva2']);
         }
 
-        if (needsVideoFilter) {
-          command.videoFilters(videoFilters);
-        }
-
-        if (needsAudioFilter) {
-          command.audioFilters(audioFilters);
+        if (audioFilterComplex) {
+          // Multi-track mix path. Video filters (if any) were folded into the
+          // complex graph as [vout]; map that instead of 0:v:0. -filter_complex
+          // disables automatic mapping, so both outputs are explicit.
+          const videoMap = needsVideoFilter ? '[vout]' : '0:v:0';
+          command.outputOptions([
+            '-filter_complex', audioFilterComplex,
+            '-map', videoMap,
+            '-map', '[aout]'
+          ]);
+        } else {
+          if (needsVideoFilter) {
+            command.videoFilters(videoFilters);
+          }
+          if (audioMixSilent) {
+            command.outputOptions(['-an']);
+          } else if (needsAudioFilter) {
+            command.audioFilters(audioFilters);
+          }
         }
 
         return command;
@@ -996,8 +1110,10 @@ async function exportVideoWithFallback(options) {
           '-stats_period 0.1'
         ];
 
-        const shouldCopyAudio = !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord';
-        if (shouldCopyAudio) {
+        const shouldCopyAudio = !usingAudioMix && !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord';
+        if (audioMixSilent) {
+          // No audio output at all — codec selection irrelevant.
+        } else if (shouldCopyAudio) {
           softwareOptions.push('-c:a copy');
         } else {
           softwareOptions.push(`-b:a ${targetAudioBitrateKbps}k`);
@@ -1172,9 +1288,14 @@ async function exportVideoWithFallback(options) {
         if (!isCudaDecodeMode) {
           nvencQualityOptions.push('-pix_fmt yuv420p');
         }
-        command.outputOptions(nvencQualityOptions);
+        // When the export is silent (all tracks muted/hidden), strip any audio
+        // codec/bitrate options that would otherwise fight with -an.
+        const filteredNvencOptions = audioMixSilent
+          ? nvencQualityOptions.filter((opt) => !/^-c:a |^-b:a /.test(opt))
+          : nvencQualityOptions;
+        command.outputOptions(filteredNvencOptions);
 
-        if (!needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord') {
+        if (!usingAudioMix && !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord') {
           command.outputOptions(['-c:a copy']);
         }
 
@@ -1251,7 +1372,8 @@ async function exportVideoWithFallback(options) {
 /**
  * Export video to file or clipboard
  */
-async function exportVideo(clipName, start, end, volume, speed, savePath, getSettings, progressCallbacks = null) {
+async function exportVideo(clipName, start, end, volume, speed, savePath, getSettings, progressCallbacks = null, extraOptions = {}) {
+  const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${path.basename(clipName)}`);
@@ -1293,10 +1415,13 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       quality,
       exportSettings: settings,
       volumeData,
+      audioMix,
       onProgress,
       onFallback,
       onDecodeFallback,
-      allowAudioCopy: !savePath && quality !== 'discord',
+      // Audio copy is incompatible with a custom mix — we have to re-encode
+      // when filter_complex builds [aout].
+      allowAudioCopy: !savePath && quality !== 'discord' && !audioMix,
       emitGlobalProgress: !onProgress
     });
     const usingFallback = Boolean(exportResult?.usingFallback);
@@ -1371,7 +1496,8 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
 /**
  * Export trimmed video to clipboard
  */
-async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, progressCallbacks = null) {
+async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, progressCallbacks = null, extraOptions = {}) {
+  const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${path.basename(clipName)}`);
@@ -1413,10 +1539,11 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       quality,
       exportSettings: settings,
       volumeData,
+      audioMix,
       onProgress,
       onFallback,
       onDecodeFallback,
-      allowAudioCopy: quality !== 'discord',
+      allowAudioCopy: quality !== 'discord' && !audioMix,
       emitGlobalProgress: !onProgress
     });
     const usingFallback = Boolean(exportResult?.usingFallback);
@@ -1590,7 +1717,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
 /**
  * Export audio as MP3
  */
-async function exportAudio(clipName, start, end, volume, speed, savePath, getSettings) {
+async function exportAudio(clipName, start, end, volume, speed, savePath, getSettings, extraOptions = {}) {
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = savePath || path.join(os.tmpdir(), `audio_${Date.now()}_${path.parse(clipName).name}.mp3`);
@@ -1602,24 +1729,55 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
   const hasSpeedChange = Math.abs(effectiveSpeed - 1) > 0.001;
   const hasVolumeChange = Math.abs(effectiveVolume - 1) > 0.001;
 
+  const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
+  const audioMixSilent = Array.isArray(audioMix) && audioMix.length === 0;
+  const audioFilterComplex = Array.isArray(audioMix) && audioMix.length > 0
+    ? buildAudioMixFilterComplex({
+        audioMix,
+        effectiveVolume,
+        hasBaseVolumeChange: hasVolumeChange,
+        effectiveSpeed,
+        hasSpeedChange,
+        hasRangeVolumeChange: false,
+        rangeLevelRaw: 0,
+        relativeRangeStart: 0,
+        relativeRangeEnd: 0
+      })
+    : null;
+
   try {
     const exportStartedAt = Date.now();
     await new Promise((resolve, reject) => {
       const command = ffmpeg(inputPath)
         .seekInput(start)
         .setDuration(duration)
-        .output(outputPath)
-        .audioCodec('libmp3lame');
+        .output(outputPath);
 
-      const audioFilters = [];
-      if (hasVolumeChange) {
-        audioFilters.push(`volume=${effectiveVolume}`);
+      if (audioMixSilent) {
+        // Refuse to write an empty/silent mp3 — caller probably hid/muted
+        // every track by mistake. Surface as an error.
+        reject(new Error('All audio tracks are hidden or muted — nothing to export.'));
+        return;
       }
-      if (hasSpeedChange) {
-        audioFilters.push(`atempo=${effectiveSpeed}`);
-      }
-      if (audioFilters.length > 0) {
-        command.audioFilters(audioFilters);
+
+      command.audioCodec('libmp3lame');
+
+      if (audioFilterComplex) {
+        command.outputOptions([
+          '-filter_complex', audioFilterComplex,
+          '-map', '[aout]'
+        ]);
+      } else {
+        const audioFilters = [];
+        if (hasVolumeChange) {
+          audioFilters.push(`volume=${effectiveVolume}`);
+        }
+        if (hasSpeedChange) {
+          audioFilters.push(`atempo=${effectiveSpeed}`);
+        }
+        if (audioFilters.length > 0) {
+          command.audioFilters(audioFilters);
+        }
       }
 
       command

@@ -516,7 +516,7 @@ class RendererHarness {
     }
 
     // Output results
-    console.log(`GRID_PERFORMANCE:${JSON.stringify(results)}`);
+    await ipcRenderer.invoke('benchmark:outputMarker', 'GRID_PERFORMANCE', results);
 
     return results;
   }
@@ -619,7 +619,7 @@ class RendererHarness {
     };
 
     // Output structured data for the runner to display
-    console.log(`STARTUP_BREAKDOWN:${JSON.stringify(report)}`);
+    await ipcRenderer.invoke('benchmark:outputMarker', 'STARTUP_BREAKDOWN', report);
 
     return report;
   }
