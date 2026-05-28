@@ -125,6 +125,15 @@ impl Pipeline {
     /// ffmpeg to produce a timestamped MP4 with a "Mix" track + one
     /// stream per source. Returns the saved MP4 path.
     pub fn save_clip(&self) -> Result<PathBuf> {
+        self.save_clip_in(None)
+    }
+
+    /// Like [`save_clip`] but writes to `directory_override` instead of
+    /// the directory the pipeline was started with. Used so config edits
+    /// to the output directory take effect on the next save without
+    /// requiring a pipeline restart (which would tear down NVENC + the
+    /// ring buffer for what is conceptually just a path change).
+    pub fn save_clip_in(&self, directory_override: Option<&std::path::Path>) -> Result<PathBuf> {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -132,7 +141,15 @@ impl Pipeline {
         let stem = format!("{}-{}", self.cfg.output.filename_stem, ts);
         let codec = *self.active_codec.lock().unwrap();
         let header = self.codec_header.lock().unwrap().clone();
-        save_clip_with_stem(&self.ring, &self.cfg, &self.audio_meta, &stem, codec, &header)
+        let mut cfg_ref = std::borrow::Cow::Borrowed(&self.cfg);
+        if let Some(dir) = directory_override {
+            if dir != self.cfg.output.directory.as_path() {
+                let mut cloned = self.cfg.clone();
+                cloned.output.directory = dir.to_path_buf();
+                cfg_ref = std::borrow::Cow::Owned(cloned);
+            }
+        }
+        save_clip_with_stem(&self.ring, &cfg_ref, &self.audio_meta, &stem, codec, &header)
     }
 
     /// Like [`save_clip`] but writes to a fixed `{stem}.mp4` (overwriting

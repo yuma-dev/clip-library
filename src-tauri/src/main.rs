@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod metadata;
+
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -11,7 +13,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, HWND, TRUE};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
@@ -557,6 +559,13 @@ fn run_capture_loop(
                 let prof = clipdip_profile::enabled();
                 if prof { info!("save flow start [t+0ms]"); }
 
+                // Snapshot foreground HWND+PID up-front so the metadata
+                // reflects what was on screen at the hotkey moment, not
+                // whatever app has stolen focus by the time the mux ends
+                // (~1–2 s later). Cheap call — pure GetForegroundWindow +
+                // GetWindowThreadProcessId.
+                let foreground = metadata::ForegroundSnapshot::capture();
+
                 // Re-read config so notification settings reflect any changes
                 // since the pipeline started.
                 let cur = clipdip_core::config::Config::load_or_default(&config_path)
@@ -656,9 +665,10 @@ fn run_capture_loop(
                         None
                     };
 
+                    let save_dir = cur.output.directory.clone();
                     let save_thread = s.spawn(move || {
                         let t_start = t0.elapsed().as_millis();
-                        let r = pipeline.save_clip();
+                        let r = pipeline.save_clip_in(Some(&save_dir));
                         if prof {
                             let t_end = t0.elapsed().as_millis();
                             info!(
@@ -668,6 +678,32 @@ fn run_capture_loop(
                         }
                         r
                     });
+
+                    // Metadata resolution (window title, exe lookup,
+                    // icon extraction) in parallel with the mux. The
+                    // two 200 ms SendMessageTimeoutW calls + GDI icon
+                    // walk would otherwise add ~half a second to the
+                    // observed save time if we ran them serially after
+                    // save_clip returned.
+                    let meta_thread = if cur.metadata.enabled {
+                        foreground.map(|snap| {
+                            let meta_cfg = cur.metadata.clone();
+                            s.spawn(move || {
+                                let t_start = t0.elapsed().as_millis();
+                                let r = metadata::resolve(snap, &meta_cfg);
+                                if prof {
+                                    let t_end = t0.elapsed().as_millis();
+                                    info!(
+                                        "metadata.resolve [t+{}ms .. t+{}ms = {}ms]",
+                                        t_start, t_end, t_end - t_start
+                                    );
+                                }
+                                r
+                            })
+                        })
+                    } else {
+                        None
+                    };
 
                     // Phase 2: wait for the mux, then emit clip-saved with
                     // the title + path. The overlay swaps the spinner for
@@ -686,6 +722,26 @@ fn run_capture_loop(
                                 info!("clip saved: {path_str} [t+{}ms]", t0.elapsed().as_millis());
                             } else {
                                 info!("clip saved: {path_str}");
+                            }
+
+                            // `.gameinfo` finalize. The heavy work
+                            // (title + icon) already ran in parallel
+                            // with the mux above — this is just the
+                            // JSON write keyed by the now-known clip
+                            // path. Best-effort; failures only log.
+                            if let Some(handle) = meta_thread {
+                                match handle.join() {
+                                    Ok(resolved) => {
+                                        if let Err(e) = metadata::write_gameinfo(&path, &resolved) {
+                                            warn!("metadata write failed: {e:#}");
+                                        } else if prof {
+                                            info!("metadata.write_gameinfo [t+{}ms]", t0.elapsed().as_millis());
+                                        }
+                                    }
+                                    Err(_) => warn!("metadata resolve thread panicked"),
+                                }
+                            } else if cur.metadata.enabled {
+                                debug!("metadata enabled but no foreground window at hotkey time");
                             }
 
                             if notifs_enabled {

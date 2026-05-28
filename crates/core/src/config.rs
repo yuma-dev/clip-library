@@ -27,6 +27,7 @@ pub struct Config {
     pub hotkey: HotkeyConfig,
     pub notifications: NotificationsConfig,
     pub profile: ProfileConfig,
+    pub metadata: MetadataConfig,
     /// Replay window in seconds. Ring buffer is sized for this duration at
     /// `video.bitrate_bps` (plus ~20% headroom for audio + muxer overhead).
     pub replay_seconds: u32,
@@ -41,6 +42,7 @@ impl Default for Config {
             hotkey: HotkeyConfig::default(),
             notifications: NotificationsConfig::default(),
             profile: ProfileConfig::default(),
+            metadata: MetadataConfig::default(),
             replay_seconds: 60,
         }
     }
@@ -387,6 +389,54 @@ impl Default for ProfileConfig {
             report_interval_ms: 5_000,
         }
     }
+}
+
+// ---- metadata -----------------------------------------------------------
+
+/// Per-clip game-info capture. When enabled, each saved clip gets a sidecar
+/// JSON file under `{directory}/.clip_metadata/{clip}.gameinfo` containing
+/// the foreground window title at hotkey time, and (optionally) the
+/// foreground exe's icon is extracted to `{directory}/icons/{exe}.png`.
+///
+/// Disabled by default — the capture touches the foreground HWND and reads
+/// the target process's image, which some users may not want.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MetadataConfig {
+    pub enabled: bool,
+    /// When `true` (and `enabled`), extract the foreground exe's icon as
+    /// a PNG into `icons/{exe-basename}.png`. Skipped if the file already
+    /// exists, so it's a one-time cost per game.
+    pub capture_icon: bool,
+    /// Lower-cased exe basenames to skip (e.g. `explorer.exe`). If the
+    /// foreground process at hotkey time matches one of these, no
+    /// metadata is written for the clip.
+    pub ignored_processes: Vec<String>,
+}
+
+impl Default for MetadataConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            capture_icon: true,
+            ignored_processes: default_ignored_processes(),
+        }
+    }
+}
+
+fn default_ignored_processes() -> Vec<String> {
+    [
+        "explorer.exe", "systemsettings.exe", "searchui.exe", "searchapp.exe",
+        "shellexperiencehost.exe", "startmenuexperiencehost.exe", "taskmgr.exe",
+        "snippingtool.exe", "snipandsketch.exe", "lockapp.exe", "ctfmon.exe",
+        "sihost.exe", "applicationframehost.exe", "runtimebroker.exe",
+        "smartscreen.exe", "werfault.exe", "cmd.exe", "powershell.exe",
+        "windowsterminal.exe", "wt.exe", "conhost.exe", "rundll32.exe",
+        "msiexec.exe", "setup.exe",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 #[cfg(test)]

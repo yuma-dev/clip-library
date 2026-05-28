@@ -53,6 +53,11 @@ interface Config {
     corner: string;
     auto_dismiss_secs: number;
   };
+  metadata: {
+    enabled: boolean;
+    capture_icon: boolean;
+    ignored_processes: string[];
+  };
 }
 
 interface MonitorInfo { index: number; name: string; width: number; height: number; }
@@ -1529,10 +1534,11 @@ function AudioPanel({
 // ---------- panel: output ---------------------------------------------------
 
 function OutputPanel({
-  config, patchOutput, advanced, setAdvanced,
+  config, patchOutput, patchMetadata, advanced, setAdvanced,
 }: {
   config: Config;
   patchOutput: (k: keyof Config["output"], v: unknown) => void;
+  patchMetadata: (k: keyof Config["metadata"], v: unknown) => void;
   advanced: boolean;
   setAdvanced: (v: boolean) => void;
 }) {
@@ -1574,6 +1580,24 @@ function OutputPanel({
             onChange={v => patchOutput("audio_bitrate_bps", v)}
             min={64_000} max={320_000} step={32_000}
             format={v => `${(v / 1000).toFixed(0)} kbps`}
+          />
+        </Row>
+        <Row
+          Icon={Sparkles}
+          label="Capture game metadata"
+          hint="Writes a .gameinfo sidecar per clip with the foreground window title — useful for grouping clips by game in browsers like Clipter."
+        >
+          <DesignToggle value={config.metadata.enabled} onChange={v => patchMetadata("enabled", v)} />
+        </Row>
+        <Row
+          Icon={Sparkles}
+          label="Extract game icon"
+          hint="Saves the foreground app's icon as PNG into icons/. Deduped per executable."
+        >
+          <DesignToggle
+            value={config.metadata.capture_icon}
+            onChange={v => patchMetadata("capture_icon", v)}
+            disabled={!config.metadata.enabled}
           />
         </Row>
 
@@ -1700,6 +1724,7 @@ export default function MainWindow() {
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "clipdip", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10" },
           notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
+          metadata: { enabled: false, capture_icon: true, ignored_processes: [] },
         });
       });
   }, []);
@@ -1781,6 +1806,10 @@ export default function MainWindow() {
     setConfig(prev => prev ? { ...prev, notifications: { ...prev.notifications, [k]: v } } : prev);
   }, []);
 
+  const patchMetadata = useCallback((k: keyof Config["metadata"], v: unknown) => {
+    setConfig(prev => prev ? { ...prev, metadata: { ...prev.metadata, [k]: v } } : prev);
+  }, []);
+
   const setSources = useCallback((srcs: AudioSource[]) => {
     setConfig(prev => prev ? { ...prev, audio: { ...prev.audio, sources: srcs } } : prev);
   }, []);
@@ -1836,7 +1865,7 @@ export default function MainWindow() {
       }}>
         {activeTab === "video"         && <VideoPanel config={config} patch={patch} patchVideo={patchVideo} monitors={monitors} advanced={videoAdv} setAdvanced={setVideoAdv} />}
         {activeTab === "audio"         && <AudioPanel config={config} setSources={setSources} setIncludeMix={setIncludeMix} devices={audioDevices} devicesLoading={audioDevicesLoading} onRefreshDevices={refreshAudioDevices} />}
-        {activeTab === "output"        && <OutputPanel config={config} patchOutput={patchOutput} advanced={outputAdv} setAdvanced={setOutputAdv} />}
+        {activeTab === "output"        && <OutputPanel config={config} patchOutput={patchOutput} patchMetadata={patchMetadata} advanced={outputAdv} setAdvanced={setOutputAdv} />}
         {activeTab === "hotkeys"       && <HotkeysPanel config={config} patchHotkey={patchHotkey} />}
         {activeTab === "notifications" && <NotificationsPanel config={config} patchNotif={patchNotif} />}
         <div style={{ height: 60 }} />
