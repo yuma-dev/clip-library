@@ -1535,12 +1535,16 @@ function AudioPanel({
 
 function OutputPanel({
   config, patchOutput, patchMetadata, advanced, setAdvanced,
+  autostartEnabled, autostartIsDev, onToggleAutostart,
 }: {
   config: Config;
   patchOutput: (k: keyof Config["output"], v: unknown) => void;
   patchMetadata: (k: keyof Config["metadata"], v: unknown) => void;
   advanced: boolean;
   setAdvanced: (v: boolean) => void;
+  autostartEnabled: boolean;
+  autostartIsDev: boolean;
+  onToggleAutostart: (v: boolean) => void;
 }) {
   return (
     <PanelShell>
@@ -1598,6 +1602,22 @@ function OutputPanel({
             value={config.metadata.capture_icon}
             onChange={v => patchMetadata("capture_icon", v)}
             disabled={!config.metadata.enabled}
+          />
+        </Row>
+
+        <Row
+          Icon={Settings2}
+          label="Start with Windows"
+          hint={
+            autostartIsDev
+              ? "Autostart is disabled in development mode."
+              : "Launches ClipDip automatically when you log into Windows."
+          }
+        >
+          <DesignToggle
+            value={autostartEnabled}
+            onChange={onToggleAutostart}
+            disabled={autostartIsDev}
           />
         </Row>
 
@@ -1702,6 +1722,8 @@ export default function MainWindow() {
 
   const [videoAdv, setVideoAdv] = useState(false);
   const [outputAdv, setOutputAdv] = useState(false);
+  const [autostartEnabled, setAutostartEnabled] = useState(false);
+  const [autostartIsDev, setAutostartIsDev] = useState(false);
 
   const loadedRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
@@ -1726,6 +1748,18 @@ export default function MainWindow() {
           notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
           metadata: { enabled: false, capture_icon: true, ignored_processes: [] },
         });
+      });
+  }, []);
+
+  // Load autostart status
+  useEffect(() => {
+    invoke<{ enabled: boolean; is_dev: boolean }>("get_autostart_info")
+      .then(info => {
+        setAutostartEnabled(info.enabled);
+        setAutostartIsDev(info.is_dev);
+      })
+      .catch(err => {
+        console.error("failed to get autostart status:", err);
       });
   }, []);
 
@@ -1865,7 +1899,26 @@ export default function MainWindow() {
       }}>
         {activeTab === "video"         && <VideoPanel config={config} patch={patch} patchVideo={patchVideo} monitors={monitors} advanced={videoAdv} setAdvanced={setVideoAdv} />}
         {activeTab === "audio"         && <AudioPanel config={config} setSources={setSources} setIncludeMix={setIncludeMix} devices={audioDevices} devicesLoading={audioDevicesLoading} onRefreshDevices={refreshAudioDevices} />}
-        {activeTab === "output"        && <OutputPanel config={config} patchOutput={patchOutput} patchMetadata={patchMetadata} advanced={outputAdv} setAdvanced={setOutputAdv} />}
+        {activeTab === "output"        && (
+          <OutputPanel
+            config={config}
+            patchOutput={patchOutput}
+            patchMetadata={patchMetadata}
+            advanced={outputAdv}
+            setAdvanced={setOutputAdv}
+            autostartEnabled={autostartEnabled}
+            autostartIsDev={autostartIsDev}
+            onToggleAutostart={async (enabled) => {
+              try {
+                await invoke("set_autostart_status", { enabled });
+                setAutostartEnabled(enabled);
+              } catch (err) {
+                console.error("failed to set autostart:", err);
+                alert(String(err));
+              }
+            }}
+          />
+        )}
         {activeTab === "hotkeys"       && <HotkeysPanel config={config} patchHotkey={patchHotkey} />}
         {activeTab === "notifications" && <NotificationsPanel config={config} patchNotif={patchNotif} />}
         <div style={{ height: 60 }} />

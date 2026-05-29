@@ -293,8 +293,20 @@ fn bundled_ffmpeg() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-    let candidate = dir.join(name);
-    candidate.is_file().then_some(candidate)
+    
+    // 1. Sibling to the executable (portable/zip release)
+    let sibling = dir.join(name);
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+
+    // 2. Inside Tauri's resources directory (installed package)
+    let resource = dir.join("resources").join(name);
+    if resource.is_file() {
+        return Some(resource);
+    }
+
+    None
 }
 
 // ---- future: libavformat-based fragmented MP4 ---------------------------

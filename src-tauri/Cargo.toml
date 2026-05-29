@@ -22,6 +22,7 @@ crossbeam-channel.workspace = true
 base64 = "0.22"
 png = "0.17"
 windows.workspace = true
+directories.workspace = true
 
 clipdip-core.workspace = true
 clipdip-hotkey.workspace = true

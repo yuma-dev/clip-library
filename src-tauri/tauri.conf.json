@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run fetch-ffmpeg && npm run dev",
+    "beforeBuildCommand": "npm run build && npm run fetch-ffmpeg"
   },
   "app": {
     "windows": [],
@@ -17,7 +17,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
+    "resources": {
+      "../dist/ffmpeg-cache/ffmpeg.exe": "ffmpeg.exe",
+      "../dist/ATTRIBUTION.txt": "ATTRIBUTION.txt"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

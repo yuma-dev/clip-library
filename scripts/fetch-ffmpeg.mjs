@@ -12,7 +12,7 @@ import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const ROOT       = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CACHE_DIR  = path.join(ROOT, 'dist', 'ffmpeg-cache');
+const CACHE_DIR  = path.join(ROOT, 'ffmpeg-cache');
 const CACHED_EXE = path.join(CACHE_DIR, 'ffmpeg.exe');
 const CACHED_ZIP = path.join(CACHE_DIR, 'ffmpeg-lgpl.zip');
 
@@ -22,8 +22,24 @@ const CACHED_ZIP = path.join(CACHE_DIR, 'ffmpeg-lgpl.zip');
 const RELEASES_API =
   'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest';
 
+function copyToDist() {
+  const distCacheDir = path.join(ROOT, 'dist', 'ffmpeg-cache');
+  fs.mkdirSync(distCacheDir, { recursive: true });
+  fs.copyFileSync(CACHED_EXE, path.join(distCacheDir, 'ffmpeg.exe'));
+  console.log('Copied ffmpeg.exe to dist/ffmpeg-cache/');
+
+  const rootAttr = path.join(ROOT, 'ATTRIBUTION.txt');
+  const distAttr = path.join(ROOT, 'dist', 'ATTRIBUTION.txt');
+  if (fs.existsSync(rootAttr)) {
+    fs.mkdirSync(path.dirname(distAttr), { recursive: true });
+    fs.copyFileSync(rootAttr, distAttr);
+    console.log('Copied ATTRIBUTION.txt to dist/');
+  }
+}
+
 if (existsSync(CACHED_EXE)) {
   console.log(`ffmpeg already cached: ${CACHED_EXE}`);
+  copyToDist();
   process.exit(0);
 }
 
@@ -125,6 +141,8 @@ fs.rmSync(extractDir, { recursive: true, force: true });
 
 const sizeMB = (fs.statSync(CACHED_EXE).size / 1e6).toFixed(1);
 console.log(`Cached: ${CACHED_EXE}  (${sizeMB} MB)`);
+
+copyToDist();
 
 function findFile(dir, name) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

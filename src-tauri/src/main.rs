@@ -2,7 +2,7 @@
 
 mod metadata;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -235,6 +235,102 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
 }
 
 // ---------- tauri commands ------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct AutostartInfo {
+    enabled: bool,
+    is_dev: bool,
+}
+
+#[tauri::command]
+fn get_autostart_info() -> Result<AutostartInfo, String> {
+    let is_dev = cfg!(debug_assertions);
+    if is_dev {
+        return Ok(AutostartInfo {
+            enabled: false,
+            is_dev: true,
+        });
+    }
+
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+    let exe_path_str = exe_path.to_string_lossy().to_string();
+
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut cmd = Command::new("reg");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.args(&[
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "/v",
+        "ClipDip",
+    ]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to query registry: {}", e))?;
+    if !output.status.success() {
+        return Ok(AutostartInfo {
+            enabled: false,
+            is_dev: false,
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let enabled = stdout.contains(&exe_path_str);
+
+    Ok(AutostartInfo {
+        enabled,
+        is_dev: false,
+    })
+}
+
+#[tauri::command]
+fn set_autostart_status(enabled: bool) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Err("Autostart cannot be enabled in development mode.".into());
+    }
+
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+    let exe_path_str = format!("\"{}\"", exe_path.to_string_lossy());
+
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut cmd = Command::new("reg");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    if enabled {
+        cmd.args(&[
+            "add",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "ClipDip",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &exe_path_str,
+            "/f",
+        ]);
+    } else {
+        cmd.args(&[
+            "delete",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "ClipDip",
+            "/f",
+        ]);
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to run reg: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Registry operation failed: {}", stderr));
+    }
+
+    Ok(())
+}
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
@@ -862,14 +958,84 @@ fn open_main_window(app: &AppHandle) {
     }
 }
 
+struct SharedFileWriter {
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for SharedFileWriter {
+    type Writer = SharedFileWriter;
+
+    fn make_writer(&self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Write for SharedFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.lock().unwrap().flush()
+    }
+}
+
+impl Clone for SharedFileWriter {
+    fn clone(&self) -> Self {
+        Self {
+            file: Arc::clone(&self.file),
+        }
+    }
+}
+
 // ---------- main ----------------------------------------------------------
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    use tracing_subscriber::prelude::*;
+
+    let mut file_layer = None;
+
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "clipdip") {
+        let log_dir = dirs.data_local_dir().join("logs");
+        if std::fs::create_dir_all(&log_dir).is_ok() {
+            let log_path = log_dir.join("clipdip.log");
+
+            // Rotate if the file exceeds 10MB
+            if let Ok(metadata) = std::fs::metadata(&log_path) {
+                if metadata.len() > 10 * 1024 * 1024 {
+                    let old_path = log_dir.join("clipdip.log.old");
+                    let _ = std::fs::remove_file(&old_path);
+                    let _ = std::fs::rename(&log_path, &old_path);
+                }
+            }
+
+            if let Ok(file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                let writer = SharedFileWriter {
+                    file: Arc::new(Mutex::new(file)),
+                };
+
+                let layer = tracing_subscriber::fmt::layer()
+                    .with_writer(writer)
+                    .with_ansi(false)
+                    .with_filter(tracing_subscriber::filter::LevelFilter::TRACE);
+                file_layer = Some(layer);
+            }
+        }
+    }
+
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        );
+
+    tracing_subscriber::registry()
+        .with(stdout_layer)
+        .with(file_layer)
         .init();
 
     // Flip on the global profiler if the user opted in. Controls both the
@@ -966,6 +1132,8 @@ fn main() {
             forward_console,
             overlay_get_pending,
             test_notification,
+            get_autostart_info,
+            set_autostart_status,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")
