@@ -331,6 +331,7 @@ dependencies = [
  "clipdip-core",
  "clipdip-hotkey",
  "clipdip-profile",
+ "clipdip-ringbuf",
  "crossbeam-channel",
  "directories",
  "png 0.17.16",
@@ -340,7 +341,9 @@ dependencies = [
  "tauri-build",
  "tracing",
  "tracing-subscriber",
+ "webview2-com",
  "windows 0.58.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -375,6 +378,7 @@ name = "clipdip-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clipdip-audio",
  "clipdip-capture",
  "clipdip-encoder",

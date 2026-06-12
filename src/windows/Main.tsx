@@ -1,10 +1,10 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { invoke, listen } from "@/lib/tauri";
 import {
   Plus, Trash2, ExternalLink,
   Film, Video, Mic, FolderOpen, Keyboard, Bell,
   Monitor, Cpu, Gauge, MousePointer2, Music2,
-  KeyRound, Volume2, MapPin, Timer,
+  KeyRound, Volume2, MapPin, Timer, Disc,
   Settings2, Sparkles, ChevronRight, ChevronLeft, Check, X,
   AlertTriangle, CircleCheck, RefreshCw, Headphones,
 } from "lucide-react";
@@ -46,7 +46,7 @@ interface Config {
     keep_sidecars: boolean;
     audio_bitrate_bps: number;
   };
-  hotkey: { save_clip: string; rename_clip: string };
+  hotkey: { save_clip: string; rename_clip: string; toggle_recording: string };
   notifications: {
     enabled: boolean;
     sound: boolean;
@@ -632,10 +632,7 @@ function TitleBar({
         padding: "0 14px",
         pointerEvents: "none",
       }}>
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <rect x="1" y="1" width="14" height="14" rx="3" fill={TEAL} opacity="0.9" />
-          <path d="M5 8 L7.5 10.5 L11 6" stroke="white" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <img src="/logo250x250.png" width="16" height="16" draggable={false} style={{ imageRendering: "auto" }} />
         <span style={{
           font: "600 12px/1 Inter, sans-serif",
           color: "rgba(255,255,255,0.78)",
@@ -1360,6 +1357,73 @@ function OnboardingModal({
 
 // ---------- panel: video ----------------------------------------------------
 
+// Named quality presets over the encoder's QP. The +6-QP-halves-size rule
+// of thumb makes the steps roughly 25% / 50% / 100% / 160% of the default.
+// QP is on the H.264 0–51 scale; the encoder matches AV1 internally.
+const QUALITY_PRESETS = [
+  { qp: 32, label: "Space saver",  desc: "Visibly compressed — roughly a quarter of High quality's file size." },
+  { qp: 26, label: "Balanced",     desc: "Looks great in motion at about half of High quality's file size." },
+  { qp: 20, label: "High quality", desc: "Crisp, clean picture — the default." },
+  { qp: 16, label: "Maximum",      desc: "Near-perfect picture. Files get large." },
+];
+
+type BufferStats = {
+  measuring: boolean;
+  mb_per_minute: number;
+  clip_mb: number;
+  buffered_secs: number;
+};
+
+/// Live file-size readout, measured from the actual encoded bytes in the
+/// replay ring — honest numbers that track whatever is on screen right now.
+function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
+  const [stats, setStats] = useState<BufferStats | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      invoke<BufferStats>("get_buffer_stats")
+        .then(s => { if (alive) setStats(s); })
+        .catch(() => { if (alive) setStats(null); });
+    };
+    tick();
+    const id = window.setInterval(tick, 2000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, []);
+
+  const fmt = (n: number) => (n >= 100 ? Math.round(n).toString() : n.toFixed(1));
+
+  return (
+    <div style={{
+      marginTop: 2,
+      padding: "10px 12px",
+      borderRadius: 7,
+      background: "rgba(255,255,255,0.035)",
+      border: "1px solid rgba(255,255,255,0.08)",
+      display: "flex", gap: 9, alignItems: "flex-start",
+      font: "400 11.5px/1.45 Inter, sans-serif",
+      color: "rgba(255,255,255,0.62)",
+    }}>
+      <Gauge size={13} style={{ flexShrink: 0, marginTop: 1, color: "rgba(255,255,255,0.45)" }} />
+      {stats?.measuring ? (
+        <span>
+          At current screen activity: ≈{" "}
+          <b style={{ color: "rgba(255,255,255,0.85)", fontWeight: 600 }}>
+            {fmt(stats.mb_per_minute)} MB per minute
+          </b>
+          {" "}— a {replaySeconds} s clip ≈{" "}
+          <b style={{ color: "rgba(255,255,255,0.85)", fontWeight: 600 }}>
+            {fmt(stats.clip_mb)} MB
+          </b>
+          . Quality changes apply right away (the replay buffer restarts and refills).
+        </span>
+      ) : (
+        <span>Measuring clip size from the live buffer…</span>
+      )}
+    </div>
+  );
+}
+
 function VideoPanel({
   config, patch, patchVideo, monitors, advanced, setAdvanced,
 }: {
@@ -1382,6 +1446,12 @@ function VideoPanel({
       sub: `${m.width} × ${m.height}`,
     }));
   }, [monitors]);
+
+  // Which preset the current config corresponds to; -1 = custom (VBR mode
+  // or a QP that doesn't match any preset, e.g. set via Advanced).
+  const presetIdx = config.video.rate_control.mode === "constant_qp"
+    ? QUALITY_PRESETS.findIndex(p => p.qp === (config.video.rate_control as { mode: "constant_qp"; qp: number }).qp)
+    : -1;
 
   return (
     <PanelShell>
@@ -1423,50 +1493,65 @@ function VideoPanel({
             width={240}
           />
         </Row>
-        <Row Icon={Sparkles} label="Quality mode" hint="Constant quality keeps the picture clean and lets bitrate float with the scene. Variable bitrate pins an average target instead.">
-          <DesignSelect<RateControl["mode"]>
-            value={config.video.rate_control.mode}
-            onChange={mode => {
-              const next: RateControl =
-                mode === "constant_qp"
-                  ? { mode: "constant_qp", qp: 20 }
-                  : { mode: "vbr", avg_bps: config.video.bitrate_bps };
-              patchVideo("rate_control", next);
-            }}
-            options={[
-              { value: "constant_qp", label: "Constant quality", sub: "Recommended — same model as ShadowPlay" },
-              { value: "vbr",         label: "Variable bitrate", sub: "Pin an average data rate" },
-            ]}
-            width={240}
+        <Row
+          Icon={Sparkles}
+          label="Quality & size"
+          hint={presetIdx === -1
+            ? "Custom encoder settings are active (see Advanced). Moving this slider replaces them with a preset."
+            : QUALITY_PRESETS[presetIdx].desc}
+        >
+          <DesignSlider
+            value={presetIdx === -1 ? 2 : presetIdx}
+            onChange={i => patchVideo("rate_control", { mode: "constant_qp", qp: QUALITY_PRESETS[i].qp })}
+            min={0} max={QUALITY_PRESETS.length - 1} step={1}
+            format={i => (presetIdx === -1 ? "Custom" : QUALITY_PRESETS[i]?.label ?? "Custom")}
           />
         </Row>
-        {config.video.rate_control.mode === "constant_qp" ? (
-          <Row Icon={Gauge} label="Quality (QP)" hint="Lower = better quality, larger files. AV1 scale is 0–255; H.264 is 0–51. ~20 is a balanced default.">
-            <DesignSlider
-              value={config.video.rate_control.qp}
-              onChange={qp => patchVideo("rate_control", { mode: "constant_qp", qp })}
-              min={1} max={config.video.codec === "force_h264" ? 51 : 255} step={1}
-              format={v => `QP ${v}`}
-            />
-          </Row>
-        ) : (
-          <Row Icon={Gauge} label="Target bitrate" hint="Average rate the encoder aims for. 25 Mbps is sane for 1080p60.">
-            <DesignSlider
-              value={config.video.rate_control.avg_bps}
-              onChange={avg_bps => {
-                patchVideo("rate_control", { mode: "vbr", avg_bps });
-                patchVideo("bitrate_bps", avg_bps);
-              }}
-              min={5_000_000} max={80_000_000} step={500_000}
-              format={v => `${(v / 1_000_000).toFixed(1)} Mbps`}
-            />
-          </Row>
-        )}
+        <SizeEstimate replaySeconds={config.replay_seconds} />
         <Row Icon={MousePointer2} label="Include cursor" hint="Draws the mouse cursor into the captured frame.">
           <DesignToggle value={config.video.include_cursor} onChange={v => patchVideo("include_cursor", v)} />
         </Row>
 
         <AdvancedDisclosure open={advanced} onToggle={() => setAdvanced(!advanced)}>
+          <Row Icon={Sparkles} label="Quality mode" hint="Constant quality keeps the picture clean and lets bitrate float with the scene. Variable bitrate pins an average target instead." badge="adv">
+            <DesignSelect<RateControl["mode"]>
+              value={config.video.rate_control.mode}
+              onChange={mode => {
+                const next: RateControl =
+                  mode === "constant_qp"
+                    ? { mode: "constant_qp", qp: 20 }
+                    : { mode: "vbr", avg_bps: config.video.bitrate_bps };
+                patchVideo("rate_control", next);
+              }}
+              options={[
+                { value: "constant_qp", label: "Constant quality", sub: "Recommended — same model as ShadowPlay" },
+                { value: "vbr",         label: "Variable bitrate", sub: "Pin an average data rate" },
+              ]}
+              width={240}
+            />
+          </Row>
+          {config.video.rate_control.mode === "constant_qp" ? (
+            <Row Icon={Gauge} label="Quality (QP)" hint="Lower = better quality, larger files. 0–51 scale (AV1 is matched internally). +6 ≈ half the file size." badge="adv">
+              <DesignSlider
+                value={config.video.rate_control.qp}
+                onChange={qp => patchVideo("rate_control", { mode: "constant_qp", qp })}
+                min={1} max={51} step={1}
+                format={v => `QP ${v}`}
+              />
+            </Row>
+          ) : (
+            <Row Icon={Gauge} label="Target bitrate" hint="Average rate the encoder aims for. 25 Mbps is sane for 1080p60." badge="adv">
+              <DesignSlider
+                value={config.video.rate_control.avg_bps}
+                onChange={avg_bps => {
+                  patchVideo("rate_control", { mode: "vbr", avg_bps });
+                  patchVideo("bitrate_bps", avg_bps);
+                }}
+                min={5_000_000} max={80_000_000} step={500_000}
+                format={v => `${(v / 1_000_000).toFixed(1)} Mbps`}
+              />
+            </Row>
+          )}
           <Row Icon={Timer} label="Keyframe interval" hint="How often the encoder writes a full frame. Lower is more seek-friendly but heavier." badge="adv">
             <DesignSlider
               value={config.video.gop_seconds}
@@ -1533,6 +1618,96 @@ function AudioPanel({
 
 // ---------- panel: output ---------------------------------------------------
 
+type FilenameVariableInfo = { token: string; description: string; example: string };
+
+/// Live preview of the filename template plus a collapsible reference of
+/// every available [variable]. Clicking a variable appends it to the
+/// template.
+function FilenameTemplateHelp({ template, onInsert }: {
+  template: string;
+  onInsert: (token: string) => void;
+}) {
+  const [vars, setVars] = useState<FilenameVariableInfo[]>([]);
+  const [preview, setPreview] = useState("");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    invoke<FilenameVariableInfo[]>("get_filename_variables").then(setVars).catch(() => {});
+  }, []);
+
+  // Debounced live preview while the user types.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      invoke<string>("preview_filename", { template }).then(setPreview).catch(() => {});
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [template]);
+
+  const chip: React.CSSProperties = {
+    display: "inline-block",
+    padding: "2px 6px",
+    borderRadius: 4,
+    background: "rgba(255,255,255,0.07)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    color: "rgba(255,255,255,0.78)",
+    font: "500 11px/1.4 Consolas, ui-monospace, monospace",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+
+  return (
+    <div style={{
+      marginTop: 2,
+      padding: "10px 12px",
+      borderRadius: 7,
+      background: "rgba(255,255,255,0.035)",
+      border: "1px solid rgba(255,255,255,0.08)",
+      font: "400 11.5px/1.5 Inter, sans-serif",
+      color: "rgba(255,255,255,0.62)",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          Preview:{" "}
+          <b style={{ color: "rgba(255,255,255,0.85)", fontWeight: 600, fontFamily: "Consolas, ui-monospace, monospace" }}>
+            {preview}.mp4
+          </b>
+        </span>
+        <button
+          onClick={() => setOpen(!open)}
+          style={{
+            background: "none", border: "none", padding: 0, flexShrink: 0,
+            color: "rgba(122,162,255,0.85)", cursor: "pointer",
+            font: "500 11.5px/1.4 Inter, sans-serif",
+          }}
+        >
+          {open ? "Hide variables" : "Show variables"}
+        </button>
+      </div>
+      {open && (
+        <div style={{
+          marginTop: 10,
+          display: "grid",
+          gridTemplateColumns: "auto 1fr auto",
+          columnGap: 12, rowGap: 5,
+          alignItems: "baseline",
+        }}>
+          {vars.map(v => (
+            <React.Fragment key={v.token}>
+              <span style={chip} title="Click to add to the template" onClick={() => onInsert(v.token)}>
+                [{v.token}]
+              </span>
+              <span>{v.description}</span>
+              <span style={{ color: "rgba(255,255,255,0.4)", fontFamily: "Consolas, ui-monospace, monospace", fontSize: 11 }}>
+                {v.example}
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OutputPanel({
   config, patchOutput, patchMetadata, advanced, setAdvanced,
   autostartEnabled, autostartIsDev, onToggleAutostart,
@@ -1575,9 +1750,13 @@ function OutputPanel({
             }
           />
         </Row>
-        <Row Icon={Film} label="Filename prefix" hint="Numbered suffix is appended automatically — e.g. clipdip_0007.mp4.">
-          <DesignTextInput value={config.output.filename_stem} onChange={v => patchOutput("filename_stem", v)} mono width={220} />
+        <Row Icon={Film} label="Filename" hint="Template with [variables]. A number like (2) is appended only when the name is already taken.">
+          <DesignTextInput value={config.output.filename_stem} onChange={v => patchOutput("filename_stem", v)} mono width={300} />
         </Row>
+        <FilenameTemplateHelp
+          template={config.output.filename_stem}
+          onInsert={token => patchOutput("filename_stem", `${config.output.filename_stem}[${token}]`)}
+        />
         <Row Icon={Volume2} label="Audio bitrate" hint="Quality of the embedded AAC audio track.">
           <DesignSlider
             value={config.output.audio_bitrate_bps}
@@ -1655,6 +1834,9 @@ function HotkeysPanel({ config, patchHotkey }: {
         <Row Icon={KeyRound} label="Rename last clip" hint="Focuses the rename field in the fly-in notification.">
           <HotkeyCapture value={config.hotkey.rename_clip} onChange={v => patchHotkey("rename_clip", v)} />
         </Row>
+        <Row Icon={Disc} label="Start / stop recording" hint="Press once to start a manual recording, again to save it as a clip.">
+          <HotkeyCapture value={config.hotkey.toggle_recording} onChange={v => patchHotkey("toggle_recording", v)} />
+        </Row>
         <div style={{
           marginTop: 8,
           padding: "10px 12px",
@@ -1728,6 +1910,13 @@ export default function MainWindow() {
   const loadedRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
+  // Capture-relevant config slice as of the last applied pipeline state.
+  // When a save changes this slice, the pipeline must restart for the new
+  // settings to take effect (encoder/audio/replay length only apply at
+  // pipeline start).
+  const captureCfgRef = useRef<string | null>(null);
+  const captureSlice = (c: Config) =>
+    JSON.stringify({ v: c.video, r: c.replay_seconds, a: c.audio });
 
   // Load config
   useEffect(() => {
@@ -1743,8 +1932,8 @@ export default function MainWindow() {
           replay_seconds: 60,
           video: { output_index: 0, fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 } },
           audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }], include_mix: true },
-          output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "clipdip", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
-          hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10" },
+          output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
+          hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10", toggle_recording: "Ctrl+Alt+F9" },
           notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
           metadata: { enabled: false, capture_icon: true, ignored_processes: [] },
         });
@@ -1790,7 +1979,11 @@ export default function MainWindow() {
   // Autosave on config change (debounced)
   useEffect(() => {
     if (!config) return;
-    if (!loadedRef.current) { loadedRef.current = true; return; }
+    if (!loadedRef.current) {
+      loadedRef.current = true;
+      captureCfgRef.current = captureSlice(config);
+      return;
+    }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     saveTimerRef.current = window.setTimeout(async () => {
@@ -1798,6 +1991,13 @@ export default function MainWindow() {
       try {
         await invoke("update_config", { config });
         setSaveStatus("saved");
+        // Capture settings only apply at pipeline start — restart it so
+        // quality presets etc. take effect (and the size readout follows).
+        const slice = captureSlice(config);
+        if (captureCfgRef.current !== slice) {
+          captureCfgRef.current = slice;
+          invoke("restart_pipeline").catch(() => {});
+        }
       } catch {
         setSaveStatus("error");
       }

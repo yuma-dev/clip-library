@@ -7,14 +7,29 @@
 //!
 //! ## Eviction
 //!
-//! When the byte budget is exceeded, we evict whole video GOPs (IDR through
+//! Two triggers, both of which evict whole video GOPs (IDR through
 //! just-before-next-IDR) plus every audio packet older than the new oldest
-//! video IDR. This guarantees:
+//! video IDR:
+//!
+//! - **Time**: a GOP whose successor IDR is already older than
+//!   `newest_video_pts - time_window` contributes nothing to the replay
+//!   window and goes. This is the primary trigger — the byte budget is
+//!   only a hint (under CQP the encoder's real bitrate floats with scene
+//!   complexity), so time is what actually guarantees the configured
+//!   replay duration is retained.
+//! - **Bytes**: hard safety cap so a runaway bitrate can't eat all RAM.
+//!
+//! Both guarantee:
 //!
 //! 1. The buffer always starts at a video IDR (the muxer never has to scan
 //!    past P-frames whose IDR was already evicted).
 //! 2. No audio "ghosts" — audio whose corresponding video has been dropped is
 //!    dropped too.
+//!
+//! A **hold point** ([`PacketRing::set_hold`]) pins everything at/after a
+//! PTS — used for manual recordings, where eviction must not eat footage
+//! between "start recording" and "stop". While a hold is active the ring
+//! grows beyond both the time window and the byte budget.
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -45,26 +60,76 @@ pub struct PacketRing {
     inner: Mutex<RingInner>,
 }
 
+/// Snapshot of the ring's video occupancy — see [`PacketRing::stats`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RingStats {
+    /// Encoded video payload bytes currently buffered.
+    pub video_bytes: u64,
+    /// PTS span from oldest to newest buffered video packet (100-ns ticks).
+    pub video_span_100ns: i64,
+}
+
 struct RingInner {
     packets: std::collections::VecDeque<EncodedPacket>,
     bytes_used: usize,
     byte_budget: usize,
+    /// Replay window in 100-ns ticks. GOPs that fall entirely outside
+    /// `newest_video_pts - time_window_100ns` are evicted regardless of
+    /// the byte budget. 0 disables time-based eviction (byte budget only).
+    time_window_100ns: i64,
+    /// Newest video PTS seen so far — the anchor for time eviction.
+    newest_video_pts: i64,
+    /// While `Some(pts)`, no packet with `pts_100ns >= pts` is ever
+    /// evicted (manual-recording hold).
+    hold_from_pts: Option<i64>,
 }
 
 impl PacketRing {
     pub fn new(byte_budget: usize) -> Self {
+        Self::with_time_window(byte_budget, 0)
+    }
+
+    /// Ring with both a byte cap and a replay time window (100-ns ticks).
+    pub fn with_time_window(byte_budget: usize, time_window_100ns: i64) -> Self {
         Self {
             inner: Mutex::new(RingInner {
                 packets: std::collections::VecDeque::new(),
                 bytes_used: 0,
                 byte_budget,
+                time_window_100ns,
+                newest_video_pts: i64::MIN,
+                hold_from_pts: None,
             }),
         }
+    }
+
+    /// Pin everything at/after `pts` against eviction (`Some`), or release
+    /// the pin (`None`). Releasing re-applies the time window + byte budget
+    /// on the next push.
+    pub fn set_hold(&self, pts: Option<i64>) {
+        self.inner.lock().hold_from_pts = pts;
+    }
+
+    /// PTS of the newest video keyframe currently buffered, if any. Used
+    /// as the anchor when a manual recording starts: holding from the
+    /// latest IDR (rather than "now") keeps the recording decodable from
+    /// its very first frame.
+    pub fn latest_keyframe_pts(&self) -> Option<i64> {
+        self.inner
+            .lock()
+            .packets
+            .iter()
+            .rev()
+            .find(|p| p.stream_id == STREAM_VIDEO && p.is_keyframe)
+            .map(|p| p.pts_100ns)
     }
 
     pub fn push(&self, packet: EncodedPacket) {
         let mut g = self.inner.lock();
         g.bytes_used += packet.size_in_bytes();
+        if packet.stream_id == STREAM_VIDEO && packet.pts_100ns > g.newest_video_pts {
+            g.newest_video_pts = packet.pts_100ns;
+        }
         g.packets.push_back(packet);
         g.evict_to_budget();
     }
@@ -79,6 +144,28 @@ impl PacketRing {
         self.inner.lock().bytes_used
     }
 
+    /// Occupancy stats for the UI's file-size estimate. Counts only video
+    /// payload bytes — audio sits in the ring as raw PCM, which is far
+    /// heavier than the AAC it becomes in the saved clip, so including it
+    /// would wildly overstate clip size.
+    pub fn stats(&self) -> RingStats {
+        let g = self.inner.lock();
+        let mut video_bytes: u64 = 0;
+        let mut first_pts: Option<i64> = None;
+        let mut last_pts: i64 = 0;
+        for p in g.packets.iter().filter(|p| p.stream_id == STREAM_VIDEO) {
+            video_bytes += p.bytes.len() as u64;
+            if first_pts.is_none() {
+                first_pts = Some(p.pts_100ns);
+            }
+            last_pts = p.pts_100ns;
+        }
+        RingStats {
+            video_bytes,
+            video_span_100ns: first_pts.map_or(0, |f| last_pts - f),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.inner.lock().packets.len()
     }
@@ -89,12 +176,13 @@ impl PacketRing {
 }
 
 impl RingInner {
-    /// Evict whole GOPs from the front until either we're under budget or
-    /// the buffer is empty. A "GOP" is defined as everything from one video
-    /// IDR up to (but not including) the next video IDR, plus all audio
-    /// packets older than the new oldest video IDR.
+    /// Evict whole GOPs from the front while the front GOP is either stale
+    /// (entirely outside the replay time window) or we're over the byte
+    /// budget. A "GOP" is defined as everything from one video IDR up to
+    /// (but not including) the next video IDR, plus all audio packets older
+    /// than the new oldest video IDR.
     fn evict_to_budget(&mut self) {
-        while self.bytes_used > self.byte_budget && !self.packets.is_empty() {
+        while !self.packets.is_empty() {
             // Find the index of the second video IDR. Everything before it is
             // one GOP (plus audio) and can safely go.
             let second_idr = self
@@ -111,6 +199,28 @@ impl RingInner {
                 // start at an IDR. Better to temporarily overshoot the budget.
                 break;
             };
+            let cut_pts = self.packets[cut].pts_100ns;
+
+            // Never evict past an active hold point. Eviction up to a cut
+            // exactly AT the hold pts is fine — the buffer then starts at
+            // the held IDR itself.
+            if let Some(hold) = self.hold_from_pts {
+                if cut_pts > hold {
+                    break;
+                }
+            }
+
+            // Time trigger: the front GOP ends at `cut_pts`; if even that
+            // is at/before the window start, the whole GOP is outside the
+            // replay window and keeping it can only make clips *longer*
+            // than configured, never help.
+            let stale = self.time_window_100ns > 0
+                && self.newest_video_pts != i64::MIN
+                && cut_pts <= self.newest_video_pts - self.time_window_100ns;
+
+            if !stale && self.bytes_used <= self.byte_budget {
+                break;
+            }
 
             for _ in 0..cut {
                 if let Some(pkt) = self.packets.pop_front() {
@@ -232,6 +342,62 @@ mod tests {
         assert_eq!(r.len(), 2);
         // In practice the pipeline always has video running, so this corner
         // is documented but not optimized.
+    }
+
+    #[test]
+    fn time_window_evicts_stale_gops_even_under_byte_budget() {
+        // Huge byte budget, 10-tick window. GOPs at pts 0/10/20/30 — once
+        // pts 30 lands, everything whose successor IDR is <= 20 is stale.
+        let r = PacketRing::with_time_window(usize::MAX, 10);
+        for gop in 0..4 {
+            let base = gop * 10;
+            r.push(video_idr(base, 10));
+            r.push(video_p(base + 5, 10));
+            r.push(audio_sys(base + 5, 5));
+        }
+        let snap = r.snapshot();
+        // Window start = 30 - 10 = 20: GOPs at 0 and 10 are droppable
+        // (their successor IDRs at 10 and 20 are <= 20). GOP at 20 must
+        // stay — it covers the window start.
+        assert!(snap[0].stream_id == STREAM_VIDEO && snap[0].is_keyframe);
+        assert_eq!(snap[0].pts_100ns, 20);
+    }
+
+    #[test]
+    fn hold_pins_packets_against_both_triggers() {
+        // Tiny byte budget + tiny window would normally evict aggressively,
+        // but a hold at pts 10 must keep everything from the IDR at 10 on.
+        let r = PacketRing::with_time_window(50, 10);
+        r.set_hold(Some(10));
+        for gop in 0..5 {
+            let base = gop * 10;
+            r.push(video_idr(base, 1000));
+            r.push(video_p(base + 5, 1000));
+        }
+        let snap = r.snapshot();
+        // GOP at 0 may go (cut at 10 == hold), nothing newer may.
+        assert!(snap[0].stream_id == STREAM_VIDEO && snap[0].is_keyframe);
+        assert_eq!(snap[0].pts_100ns, 10);
+        assert_eq!(
+            snap.iter().filter(|p| p.is_keyframe && p.stream_id == STREAM_VIDEO).count(),
+            4
+        );
+
+        // Releasing the hold re-applies the budget on the next push.
+        r.set_hold(None);
+        r.push(video_idr(50, 1000));
+        assert!(r.bytes_used() <= 50 + 1000 + 2 * std::mem::size_of::<EncodedPacket>() + 1000);
+    }
+
+    #[test]
+    fn latest_keyframe_pts_reports_newest_idr() {
+        let r = PacketRing::new(usize::MAX);
+        assert_eq!(r.latest_keyframe_pts(), None);
+        r.push(video_idr(0, 10));
+        r.push(video_p(1, 10));
+        r.push(video_idr(2, 10));
+        r.push(video_p(3, 10));
+        assert_eq!(r.latest_keyframe_pts(), Some(2));
     }
 
     #[test]

@@ -89,11 +89,23 @@ impl Config {
         Ok(())
     }
 
-    /// Byte budget for the packet ring, sized for `replay_seconds` of video
-    /// at `video.bitrate_bps` plus 20% headroom for audio + muxer overhead.
+    /// Byte budget for the packet ring. This is a *safety cap*, not the
+    /// sizing mechanism — the ring evicts by time (`replay_seconds`), so
+    /// resident memory tracks the encoder's actual bitrate. Under CQP the
+    /// real bitrate floats with scene complexity and can far exceed the
+    /// `bitrate_bps` hint on busy scenes; cap at 2× the nominal size so
+    /// byte eviction never truncates the replay window in practice.
     pub fn ring_byte_budget(&self) -> usize {
         let video = (self.replay_seconds as u64 * self.video.bitrate_bps as u64) / 8;
-        ((video + video / 5) as usize).max(1024 * 1024)
+        ((video * 2) as usize).max(1024 * 1024)
+    }
+
+    /// Replay window in 100-ns ticks for the ring's time-based eviction.
+    /// Two seconds of slack on top of `replay_seconds` so the save path
+    /// always finds an IDR at/before the window start — guaranteeing the
+    /// saved clip covers the full configured duration.
+    pub fn ring_time_window_100ns(&self) -> i64 {
+        (self.replay_seconds as i64 + 2) * 10_000_000
     }
 }
 
@@ -283,8 +295,11 @@ fn sanitize(s: &str) -> String {
 pub struct OutputConfig {
     /// Directory clips are written to.
     pub directory: PathBuf,
-    /// Filename stem (no extension). Sidecars and the final container all
-    /// derive from this — e.g. `{stem}.h264`, `{stem}.loopback.wav`, `{stem}.mp4`.
+    /// Filename template (no extension). Supports `[token]` variables —
+    /// see [`crate::filename`] for the full list. Sidecars and the final
+    /// container all derive from the expanded stem — e.g. `{stem}.h264`,
+    /// `{stem}.loopback.wav`, `{stem}.mp4`. On a name collision a ` (2)`
+    /// style suffix is appended.
     pub filename_stem: String,
     /// Override path to the `ffmpeg` binary. `None` = use whatever's on
     /// `PATH`. Set this if you have multiple ffmpeg builds installed.
@@ -304,7 +319,7 @@ impl Default for OutputConfig {
             .join("Clipdip");
         Self {
             directory: dir,
-            filename_stem: "clipdip-test".into(),
+            filename_stem: "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]".into(),
             ffmpeg_path: None,
             keep_sidecars: true,
             audio_bitrate_bps: 192_000,
@@ -321,6 +336,9 @@ pub struct HotkeyConfig {
     pub save_clip: String,
     /// Shortcut that activates the rename input in the clip notification overlay.
     pub rename_clip: String,
+    /// Shortcut that toggles a manual recording: first press marks the
+    /// start point, second press saves everything since then as a clip.
+    pub toggle_recording: String,
 }
 
 impl Default for HotkeyConfig {
@@ -328,6 +346,7 @@ impl Default for HotkeyConfig {
         Self {
             save_clip: "Ctrl+Alt+F10".into(),
             rename_clip: "Ctrl+F10".into(),
+            toggle_recording: "Ctrl+Alt+F9".into(),
         }
     }
 }

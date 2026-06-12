@@ -65,6 +65,12 @@ pub struct DesktopDuplicator {
     /// original presentation time — callers can override with their own
     /// pacing if they want strict monotonicity).
     last_pts: i64,
+    /// QueryPerformanceFrequency, cached once. `LastPresentTime` is a raw
+    /// QPC reading; we normalize it to 100-ns ticks so video PTS shares a
+    /// unit with WASAPI audio positions (which Windows pre-normalizes).
+    /// On most modern machines QPF is exactly 10 MHz and this is a no-op,
+    /// but that's a coincidence we must not rely on.
+    qpc_freq: i64,
     /// Top-left of this output's rect in the virtual desktop. `GetCursorInfo`
     /// reports cursor coordinates in virtual-desktop space; we subtract this
     /// to translate to texture-local coordinates.
@@ -137,6 +143,11 @@ impl DesktopDuplicator {
                 next_slot: 0,
                 last_slot: None,
                 last_pts: 0,
+                qpc_freq: {
+                    let mut f = 0i64;
+                    let _ = windows::Win32::System::Performance::QueryPerformanceFrequency(&mut f);
+                    f.max(1)
+                },
                 output_origin,
                 include_cursor: true,
                 last_cursor_pos: (i32::MIN, i32::MIN),
@@ -168,6 +179,14 @@ impl DesktopDuplicator {
 
     pub fn height(&self) -> u32 {
         self.dup_desc.ModeDesc.Height
+    }
+
+    /// Convert a raw QPC reading to 100-ns ticks. Split arithmetic so
+    /// `ticks * 1e7` can't overflow i64 after long uptimes.
+    fn qpc_to_100ns(&self, ticks: i64) -> i64 {
+        let secs = ticks / self.qpc_freq;
+        let rem = ticks % self.qpc_freq;
+        secs * 10_000_000 + rem * 10_000_000 / self.qpc_freq
     }
 
     /// Block up to `timeout_ms` for a new frame.
@@ -233,13 +252,14 @@ impl DesktopDuplicator {
                 }
             }
 
+            let pts_100ns = self.qpc_to_100ns(info.LastPresentTime);
             self.last_slot = Some(slot_idx);
-            self.last_pts = info.LastPresentTime;
+            self.last_pts = pts_100ns;
             self.next_slot = (slot_idx + 1) % POOL_SIZE;
 
             Ok(Some(CapturedFrame {
                 texture: dst,
-                pts_100ns: info.LastPresentTime,
+                pts_100ns,
                 was_repeat: false,
             }))
         }

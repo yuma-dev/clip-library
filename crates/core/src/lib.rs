@@ -7,6 +7,7 @@
 //!   into the same `start` / `save_clip` / `stop` API.
 
 pub mod config;
+pub mod filename;
 pub mod pipeline;
 
 pub use pipeline::{AudioMeta, Pipeline};

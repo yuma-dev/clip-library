@@ -115,6 +115,19 @@ struct AppState {
     /// "Clip saved" state on mount instead of being stuck on the
     /// spinner forever.
     pending_saved: Arc<Mutex<Option<ClipSavedPayload>>>,
+    /// Stash for transient notice toasts ("Recording started"), same
+    /// late-mount race as the two fields above.
+    pending_notice: Arc<Mutex<Option<NoticePayload>>>,
+    /// Live handle to the running pipeline's packet ring, for the settings
+    /// UI's size estimate. `None` while no pipeline is running.
+    ring: Arc<Mutex<Option<Arc<clipdip_ringbuf::PacketRing>>>>,
+    /// Whether a manual recording is in progress — drives the overlay's
+    /// red recording dot (and survives overlay re-mounts via
+    /// `overlay_get_pending`).
+    recording_active: Arc<Mutex<bool>>,
+    /// Control channel into `run_capture_loop` — lets commands ask the
+    /// capture loop to restart the pipeline after config changes.
+    loop_tx: crossbeam_channel::Sender<LoopEvent>,
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -135,6 +148,17 @@ struct ClipSavingPayload {
     /// Mirrors `clipdip_profile::enabled()` so the overlay knows whether
     /// to emit its phase-timing logs alongside the backend's.
     profile: bool,
+    /// `"clip"` (replay-buffer save) or `"recording"` (manual recording
+    /// stop) — the overlay words its messages accordingly.
+    kind: String,
+}
+
+/// Transient toast with no save flow attached ("Recording started").
+/// The overlay shows the message and auto-dismisses after a few seconds.
+#[derive(Clone, Serialize)]
+struct NoticePayload {
+    message: String,
+    corner: String,
 }
 
 /// Phase-2 update, emitted once the mux finishes. The overlay merges
@@ -145,6 +169,8 @@ struct ClipSavingPayload {
 struct ClipSavedPayload {
     path: String,
     title: String,
+    /// Same convention as [`ClipSavingPayload::kind`].
+    kind: String,
 }
 
 /// Out-of-band thumbnail delivery. ffmpeg's `gdigrab` pays ~1–2 s of
@@ -165,6 +191,39 @@ struct ClipRenamedPayload {
 
 // ---------- overlay window management -------------------------------------
 
+/// `BottomRight` → `"bottom_right"` — the corner format the overlay CSS uses.
+fn corner_slug(corner: &clipdip_core::config::NotificationCorner) -> String {
+    format!("{:?}", corner)
+        .chars()
+        .fold(String::new(), |mut acc, c| {
+            if c.is_uppercase() && !acc.is_empty() {
+                acc.push('_');
+            }
+            acc.push(c.to_ascii_lowercase());
+            acc
+        })
+}
+
+/// Turn off WebView2's form autofill on a window. The rename input already
+/// carries `autocomplete="new-password"` etc., but Edge's *general
+/// autofill* (the "things you typed before" dropdown) ignores all of the
+/// HTML-side hints — it can only be disabled at the engine level.
+fn disable_webview_autofill(w: &tauri::WebviewWindow) {
+    let _ = w.with_webview(|webview| {
+        #[cfg(windows)]
+        unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+            use windows_core_061::Interface as _;
+            let Ok(core) = webview.controller().CoreWebView2() else { return };
+            let Ok(settings) = core.Settings() else { return };
+            if let Ok(s4) = settings.cast::<ICoreWebView2Settings4>() {
+                let _ = s4.SetIsGeneralAutofillEnabled(false);
+                let _ = s4.SetIsPasswordAutosaveEnabled(false);
+            }
+        }
+    });
+}
+
 /// Create the notification overlay window (small, transparent, positioned
 /// at the configured corner) and disable its native window-show animation.
 /// Idempotent — if the window already exists, repositions it for the
@@ -175,6 +234,7 @@ struct ClipRenamedPayload {
 fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::WebviewWindow> {
     if let Some(w) = app.get_webview_window("overlay") {
         let _ = w.set_ignore_cursor_events(true);
+        exclude_from_capture(&w);
         let _ = w.show();
         return Some(w);
     }
@@ -211,8 +271,25 @@ fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::Webview
         // pointer to bridge them.
         disable_window_transitions(HWND(hwnd.0 as *mut _));
     }
+    exclude_from_capture(&w);
+    disable_webview_autofill(&w);
     let _ = w.show();
     Some(w)
+}
+
+/// Exclude the overlay window from screen capture (DXGI duplication,
+/// gdigrab, …) so the toast and the recording dot never photobomb the
+/// clips themselves. Windows 10 2004+; failure is harmless (the overlay
+/// just becomes visible in captures, as before).
+fn exclude_from_capture(w: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    if let Ok(hwnd) = w.hwnd() {
+        unsafe {
+            let _ = SetWindowDisplayAffinity(HWND(hwnd.0 as *mut _), WDA_EXCLUDEFROMCAPTURE);
+        }
+    }
 }
 
 /// Kill the overlay after a save failure. The React side has its own
@@ -226,6 +303,7 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
     if let Some(state) = app.try_state::<AppState>() {
         *state.pending_saving.lock().unwrap() = None;
         *state.pending_saved.lock().unwrap() = None;
+        *state.pending_notice.lock().unwrap() = None;
         *state.active_clip.lock().unwrap() = None;
     }
     if let Some(overlay) = app.get_webview_window("overlay") {
@@ -404,11 +482,28 @@ fn set_overlay_input_mode(enabled: bool, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Play the save chirp. Invoked by the overlay at the exact moment the
+/// "saved" payoff animation starts, so audio and visuals land together
+/// regardless of how WebView2 cold start raced the mux. The overlay only
+/// calls this when the `sound` flag from the clip-saving payload was true
+/// and the toast is for a clip, so no config re-check is needed here.
+#[tauri::command]
+fn play_saved_sound() {
+    std::thread::spawn(play_save_sound);
+}
+
 #[tauri::command]
 fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.active_clip.lock().unwrap() = None;
     *state.pending_saving.lock().unwrap() = None;
     *state.pending_saved.lock().unwrap() = None;
+    *state.pending_notice.lock().unwrap() = None;
+    // While a manual recording runs, the overlay window stays alive to
+    // keep the red recording dot on screen — the card has already slid
+    // out on the JS side.
+    if *state.recording_active.lock().unwrap() {
+        return Ok(());
+    }
     if let Some(w) = app.get_webview_window("overlay") {
         // Destroy (not hide) the window so the WebView2 process can exit
         // when the user isn't actively saving. `hide()` keeps the webview
@@ -426,6 +521,8 @@ fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<()
 struct PendingState {
     saving: Option<ClipSavingPayload>,
     saved: Option<ClipSavedPayload>,
+    notice: Option<NoticePayload>,
+    recording: bool,
 }
 
 /// Returns whatever clip-saving / clip-saved payloads were stashed
@@ -438,6 +535,8 @@ fn overlay_get_pending(state: State<'_, AppState>) -> PendingState {
     PendingState {
         saving: state.pending_saving.lock().unwrap().clone(),
         saved: state.pending_saved.lock().unwrap().clone(),
+        notice: state.pending_notice.lock().unwrap().clone(),
+        recording: *state.recording_active.lock().unwrap(),
     }
 }
 
@@ -454,15 +553,7 @@ fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
         return Err("notifications are disabled in config".into());
     }
 
-    let corner = format!("{:?}", cfg.notifications.corner)
-        .chars()
-        .fold(String::new(), |mut acc, c| {
-            if c.is_uppercase() && !acc.is_empty() {
-                acc.push('_');
-            }
-            acc.push(c.to_ascii_lowercase());
-            acc
-        });
+    let corner = corner_slug(&cfg.notifications.corner);
 
     let saving_payload = ClipSavingPayload {
         thumbnail: None,
@@ -471,14 +562,14 @@ fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
         corner: corner.clone(),
         sound: cfg.notifications.sound,
         profile: false,
+        kind: "clip".into(),
     };
 
     *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
     *state.pending_saved.lock().unwrap() = None;
 
-    if cfg.notifications.sound {
-        std::thread::spawn(play_save_sound);
-    }
+    // No chirp here — the overlay invokes `play_saved_sound` when its
+    // saved-state animation actually shows.
 
     if let Some(overlay) = ensure_overlay_window(&app, &corner) {
         let _ = overlay.emit("clip-saving", saving_payload);
@@ -490,6 +581,7 @@ fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
         let saved = ClipSavedPayload {
             path: "C:\\Users\\Demo\\Videos\\Clipdip\\demo_clip.mp4".into(),
             title: "demo_clip".into(),
+            kind: "clip".into(),
         };
         if let Some(state) = app2.try_state::<AppState>() {
             *state.pending_saved.lock().unwrap() = Some(saved.clone());
@@ -505,6 +597,38 @@ fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
 #[tauri::command]
 fn list_audio_devices() -> Result<Vec<clipdip_audio::AudioDeviceInfo>, String> {
     clipdip_audio::list_devices().map_err(|e| format!("{e:#}"))
+}
+
+/// The filename-template variables reference, for the settings UI.
+#[derive(Clone, Serialize)]
+struct FilenameVariableInfo {
+    token: String,
+    description: String,
+    example: String,
+}
+
+#[tauri::command]
+fn get_filename_variables() -> Vec<FilenameVariableInfo> {
+    clipdip_core::filename::VARIABLES
+        .iter()
+        .map(|v| FilenameVariableInfo {
+            token: v.token.into(),
+            description: v.description.into(),
+            example: v.example.into(),
+        })
+        .collect()
+}
+
+/// Expand a filename template with sample values + the current clock, so
+/// the settings UI can show a live preview while the user types.
+#[tauri::command]
+fn preview_filename(template: String) -> String {
+    let vars = clipdip_core::filename::FilenameVars {
+        app_name: Some("VALORANT".into()),
+        window_title: Some("VALORANT".into()),
+        kind: "Clip",
+    };
+    clipdip_core::filename::expand(&template, &vars)
 }
 
 #[tauri::command]
@@ -538,6 +662,67 @@ fn get_pipeline_running(state: State<'_, AppState>) -> bool {
     *state.pipeline_running.lock().unwrap()
 }
 
+/// Ask the capture loop to restart the pipeline so changed capture
+/// settings (encoder, audio sources, replay length) take effect. The
+/// restart is asynchronous; `pipeline-status` events report the result.
+#[tauri::command]
+fn restart_pipeline(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .loop_tx
+        .send(LoopEvent::Restart)
+        .map_err(|e| e.to_string())
+}
+
+/// Live size estimate for the settings UI, measured from the ring buffer:
+/// real encoded video bytes over the buffered time span, plus the AAC
+/// bitrate the audio tracks will encode to at save time.
+#[derive(Clone, Serialize, Default)]
+struct BufferStats {
+    /// `false` while there's no pipeline or under ~3s of footage buffered
+    /// (the other fields are zero in that case).
+    measuring: bool,
+    mb_per_minute: f64,
+    /// `mb_per_minute` scaled to the configured replay window.
+    clip_mb: f64,
+    buffered_secs: f64,
+}
+
+#[tauri::command]
+fn get_buffer_stats(state: State<'_, AppState>) -> BufferStats {
+    let ring = state.ring.lock().unwrap().clone();
+    let Some(ring) = ring else {
+        return BufferStats::default();
+    };
+    let s = ring.stats();
+    let span_secs = s.video_span_100ns as f64 / 1e7;
+    if span_secs < 3.0 {
+        return BufferStats::default();
+    }
+    let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
+        .unwrap_or_default();
+    let video_bytes_per_sec = s.video_bytes as f64 / span_secs;
+    let sources = cfg
+        .audio
+        .sources
+        .iter()
+        .filter(|s| {
+            !matches!(
+                s,
+                clipdip_core::config::AudioSource::ProcessLoopback { .. }
+            )
+        })
+        .count();
+    let audio_streams = sources + usize::from(cfg.audio.include_mix && sources >= 2);
+    let audio_bytes_per_sec = audio_streams as f64 * cfg.output.audio_bitrate_bps as f64 / 8.0;
+    let mb_per_minute = (video_bytes_per_sec + audio_bytes_per_sec) * 60.0 / 1_000_000.0;
+    BufferStats {
+        measuring: true,
+        mb_per_minute,
+        clip_mb: mb_per_minute * cfg.replay_seconds as f64 / 60.0,
+        buffered_secs: span_secs,
+    }
+}
+
 #[tauri::command]
 fn open_clips_folder(state: State<'_, AppState>) -> Result<(), String> {
     let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
@@ -552,9 +737,32 @@ fn open_clips_folder(state: State<'_, AppState>) -> Result<(), String> {
 // ---------- capture loop --------------------------------------------------
 
 #[derive(Clone, Copy)]
-enum HotkeyEvent {
+enum LoopEvent {
     Save,
     Rename,
+    ToggleRecording,
+    /// Tear down and re-start the pipeline with freshly-loaded config.
+    /// Sent by the `restart_pipeline` command after capture settings
+    /// change (encoder options only apply at pipeline start).
+    Restart,
+}
+
+/// What the shared save flow below is saving — a replay-buffer clip or a
+/// just-stopped manual recording. Controls which pipeline call runs and
+/// how the overlay words its messages.
+#[derive(Clone, Copy, PartialEq)]
+enum SaveKind {
+    Clip,
+    Recording,
+}
+
+impl SaveKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            SaveKind::Clip => "clip",
+            SaveKind::Recording => "recording",
+        }
+    }
 }
 
 fn run_capture_loop(
@@ -562,6 +770,9 @@ fn run_capture_loop(
     config_path: PathBuf,
     active_clip: Arc<Mutex<Option<String>>>,
     pipeline_running: Arc<Mutex<bool>>,
+    ring_handle: Arc<Mutex<Option<Arc<clipdip_ringbuf::PacketRing>>>>,
+    ev_tx: crossbeam_channel::Sender<LoopEvent>,
+    ev_rx: crossbeam_channel::Receiver<LoopEvent>,
 ) {
     let cfg = match clipdip_core::config::Config::load_or_default(&config_path) {
         Ok(c) => c,
@@ -574,25 +785,31 @@ fn run_capture_loop(
 
     let save_hk = cfg.hotkey.save_clip.clone();
     let rename_hk = cfg.hotkey.rename_clip.clone();
-    info!("hotkeys — save: {}  rename: {}", save_hk, rename_hk);
+    let record_hk = cfg.hotkey.toggle_recording.clone();
+    info!(
+        "hotkeys — save: {}  rename: {}  record: {}",
+        save_hk, rename_hk, record_hk
+    );
 
     // Register hotkeys BEFORE starting the pipeline so they work even if
     // the pipeline fails to initialise (e.g. NVENC unavailable).
     // A single HotkeyListener handles all bindings — RegisterRawInputDevices
     // only supports one registration per device type per process, so splitting
     // them across multiple listeners would silently discard all but the last.
-    let (ev_tx, ev_rx) = unbounded::<HotkeyEvent>();
-
-    let mut binding_events: Vec<HotkeyEvent> = Vec::new();
+    let mut binding_events: Vec<LoopEvent> = Vec::new();
     let mut binding_defs: Vec<clipdip_hotkey::HotkeyBinding> = Vec::new();
 
     match clipdip_hotkey::HotkeyBinding::parse(&save_hk) {
-        Ok(b) => { binding_events.push(HotkeyEvent::Save); binding_defs.push(b); }
+        Ok(b) => { binding_events.push(LoopEvent::Save); binding_defs.push(b); }
         Err(e) => warn!("save hotkey parse failed: {e:#}"),
     }
     match clipdip_hotkey::HotkeyBinding::parse(&rename_hk) {
-        Ok(b) => { binding_events.push(HotkeyEvent::Rename); binding_defs.push(b); }
+        Ok(b) => { binding_events.push(LoopEvent::Rename); binding_defs.push(b); }
         Err(e) => warn!("rename hotkey parse failed: {e:#}"),
+    }
+    match clipdip_hotkey::HotkeyBinding::parse(&record_hk) {
+        Ok(b) => { binding_events.push(LoopEvent::ToggleRecording); binding_defs.push(b); }
+        Err(e) => warn!("record hotkey parse failed: {e:#}"),
     }
 
     // _listener stays alive until run_capture_loop returns, keeping the
@@ -627,9 +844,10 @@ fn run_capture_loop(
 
     // Start the pipeline after hotkeys are live. On failure we emit the error
     // and keep the event loop running so hotkeys remain registered.
-    let pipeline = match clipdip_core::Pipeline::start(cfg) {
+    let mut pipeline = match clipdip_core::Pipeline::start(cfg) {
         Ok(p) => {
             info!("pipeline started");
+            *ring_handle.lock().unwrap() = Some(p.ring());
             *pipeline_running.lock().unwrap() = true;
             let _ = app.emit("pipeline-status", serde_json::json!({"running": true}));
             Some(p)
@@ -643,10 +861,58 @@ fn run_capture_loop(
 
     for event in &ev_rx {
         match event {
-            HotkeyEvent::Save => {
+            LoopEvent::Save | LoopEvent::ToggleRecording => {
+                // Stamp the press the instant it arrives — the saved clip
+                // is clamped to end here, so the notification chirp and
+                // overlay can't leak into it.
+                let t_hotkey_100ns = clipdip_core::pipeline::qpc_now_100ns();
                 let Some(ref pipeline) = pipeline else {
-                    warn!("save hotkey fired but pipeline is not running");
+                    warn!("save/record hotkey fired but pipeline is not running");
                     continue;
+                };
+
+                // ToggleRecording is two actions on one key: the first
+                // press arms a manual recording (handled right here), the
+                // second press falls through into the shared save flow
+                // below with kind = Recording.
+                let save_kind = match event {
+                    LoopEvent::ToggleRecording if !pipeline.is_recording() => {
+                        match pipeline.start_recording() {
+                            Ok(()) => {
+                                info!("manual recording started");
+                                let cur =
+                                    clipdip_core::config::Config::load_or_default(&config_path)
+                                        .unwrap_or_default();
+                                if let Some(state) = app.try_state::<AppState>() {
+                                    *state.recording_active.lock().unwrap() = true;
+                                }
+                                // Recordings are silent by design — only the
+                                // overlay notice + the red dot.
+                                if cur.notifications.enabled {
+                                    let corner = corner_slug(&cur.notifications.corner);
+                                    let notice = NoticePayload {
+                                        message: "Recording started".into(),
+                                        corner: corner.clone(),
+                                    };
+                                    if let Some(state) = app.try_state::<AppState>() {
+                                        *state.pending_notice.lock().unwrap() =
+                                            Some(notice.clone());
+                                        *state.pending_saving.lock().unwrap() = None;
+                                        *state.pending_saved.lock().unwrap() = None;
+                                    }
+                                    if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                                        let _ = overlay
+                                            .emit("recording-state", serde_json::json!({"recording": true}));
+                                        let _ = overlay.emit("overlay-notice", notice);
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("start recording: {e:#}"),
+                        }
+                        continue;
+                    }
+                    LoopEvent::ToggleRecording => SaveKind::Recording,
+                    _ => SaveKind::Clip,
                 };
 
                 // Anchor for all stage timings. Logged as `t+Nms` so backend
@@ -668,28 +934,31 @@ fn run_capture_loop(
                     .unwrap_or_default();
                 let notifs_enabled = cur.notifications.enabled;
 
-                // Fire the save sound from a dedicated thread BEFORE creating
-                // the overlay window. WebView2 window creation and gdigrab
-                // spawn both take noticeable time, and Windows' audio device
-                // init adds further latency — kicking off the sound first so
-                // it lands together with (not after) the visual.
-                if notifs_enabled && cur.notifications.sound {
-                    std::thread::spawn(play_save_sound);
+                // Recording stop: drop the red dot immediately — the save
+                // flow's own toasts take over from here.
+                if save_kind == SaveKind::Recording {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        *state.recording_active.lock().unwrap() = false;
+                    }
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay
+                            .emit("recording-state", serde_json::json!({"recording": false}));
+                    }
                 }
+
+                // The save chirp is no longer fired here — the overlay
+                // invokes `play_saved_sound` at the exact moment its
+                // "saved" payoff animation starts, so audio and visuals
+                // land together even when WebView2 cold start outruns the
+                // mux. The clip itself is clamped to `t_hotkey_100ns`, so
+                // the chirp can't leak into it. Recordings stay silent
+                // (the overlay only chirps for kind == "clip").
                 if prof { info!("config reloaded [t+{}ms]", t0.elapsed().as_millis()); }
 
                 // Pre-compute the static phase-1 fields so the scope block
                 // below can just consume them.
                 let rename_hint = format!("Press {} to rename", cur.hotkey.rename_clip);
-                let corner = format!("{:?}", cur.notifications.corner)
-                    .chars()
-                    .fold(String::new(), |mut acc, c| {
-                        if c.is_uppercase() && !acc.is_empty() {
-                            acc.push('_');
-                        }
-                        acc.push(c.to_ascii_lowercase());
-                        acc
-                    });
+                let corner = corner_slug(&cur.notifications.corner);
 
                 // Run the desktop screenshot and the clip mux in parallel.
                 // Both start at t=0; whichever lags doesn't extend the other.
@@ -709,6 +978,7 @@ fn run_capture_loop(
                         corner: corner.clone(),
                         sound: cur.notifications.sound,
                         profile: prof,
+                        kind: save_kind.as_str().into(),
                     };
                     // Stash the payload BEFORE creating the window — the
                     // overlay reads it via `overlay_get_pending` on mount
@@ -720,6 +990,7 @@ fn run_capture_loop(
                     if let Some(state) = app.try_state::<AppState>() {
                         *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
                         *state.pending_saved.lock().unwrap() = None;
+                        *state.pending_notice.lock().unwrap() = None;
                     }
                     if let Some(overlay) = ensure_overlay_window(&app, &corner) {
                         let _ = overlay.emit("clip-saving", saving_payload);
@@ -762,9 +1033,37 @@ fn run_capture_loop(
                     };
 
                     let save_dir = cur.output.directory.clone();
+                    let stem_template = cur.output.filename_stem.clone();
                     let save_thread = s.spawn(move || {
                         let t_start = t0.elapsed().as_millis();
-                        let r = pipeline.save_clip_in(Some(&save_dir));
+                        // Resolve the focused app's name for the filename
+                        // template. The window title costs up to ~400 ms
+                        // against a hung window, so only fetch it when the
+                        // template actually uses it.
+                        let (app_name, window_title) = metadata::filename_names(
+                            foreground,
+                            stem_template.contains("[title]"),
+                        );
+                        let vars = clipdip_core::filename::FilenameVars {
+                            app_name,
+                            window_title,
+                            kind: match save_kind {
+                                SaveKind::Clip => "Clip",
+                                SaveKind::Recording => "Recording",
+                            },
+                        };
+                        let r = match save_kind {
+                            SaveKind::Clip => pipeline.save_clip_in(
+                                Some(&save_dir),
+                                &vars,
+                                Some(t_hotkey_100ns),
+                            ),
+                            SaveKind::Recording => pipeline.stop_recording_and_save_in(
+                                Some(&save_dir),
+                                &vars,
+                                Some(t_hotkey_100ns),
+                            ),
+                        };
                         if prof {
                             let t_end = t0.elapsed().as_millis();
                             info!(
@@ -844,6 +1143,7 @@ fn run_capture_loop(
                                 let payload = ClipSavedPayload {
                                     path: path_str,
                                     title,
+                                    kind: save_kind.as_str().into(),
                                 };
                                 // Stash for late-mounting overlay too —
                                 // WebView2 cold start often outruns the
@@ -882,7 +1182,7 @@ fn run_capture_loop(
                     }
                 });
             }
-            HotkeyEvent::Rename => {
+            LoopEvent::Rename => {
                 if active_clip.lock().unwrap().is_some() {
                     if let Some(overlay) = app.get_webview_window("overlay") {
                         let _ = overlay.emit("activate-rename", ());
@@ -890,6 +1190,45 @@ fn run_capture_loop(
                         let _ = overlay.set_focus();
                     }
                 }
+            }
+            LoopEvent::Restart => {
+                if pipeline.as_ref().is_some_and(|p| p.is_recording()) {
+                    warn!("capture settings changed during a manual recording — restart deferred; re-save settings after the recording ends");
+                    continue;
+                }
+                info!("restarting pipeline to apply changed capture settings");
+                *ring_handle.lock().unwrap() = None;
+                *pipeline_running.lock().unwrap() = false;
+                if let Some(p) = pipeline.take() {
+                    if let Err(e) = p.stop() {
+                        warn!("pipeline stop during restart: {e:#}");
+                    }
+                }
+                let cfg = match clipdip_core::config::Config::load_or_default(&config_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("config load for restart: {e:#}");
+                        let _ = app.emit("pipeline-error", format!("{e:#}"));
+                        continue;
+                    }
+                };
+                pipeline = match clipdip_core::Pipeline::start(cfg) {
+                    Ok(p) => {
+                        info!("pipeline restarted");
+                        *ring_handle.lock().unwrap() = Some(p.ring());
+                        *pipeline_running.lock().unwrap() = true;
+                        let _ = app.emit(
+                            "pipeline-status",
+                            serde_json::json!({"running": true}),
+                        );
+                        Some(p)
+                    }
+                    Err(e) => {
+                        error!("pipeline restart: {e:#}");
+                        let _ = app.emit("pipeline-error", format!("{e:#}"));
+                        None
+                    }
+                };
             }
         }
     }
@@ -901,7 +1240,9 @@ fn run_capture_loop(
 /// frame reflects the screen at the moment of the hotkey rather than after
 /// the mux finishes.
 fn capture_desktop_thumbnail() -> Option<String> {
+    use std::os::windows::process::CommandExt;
     let mut child = Command::new("ffmpeg")
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .args([
             "-loglevel", "error",
             "-f", "gdigrab",
@@ -954,6 +1295,7 @@ fn open_main_window(app: &AppHandle) {
         .initialization_script(CONSOLE_SCRIPT)
         .build()
     {
+        disable_webview_autofill(&w);
         let _ = w.set_focus();
     }
 }
@@ -1054,6 +1396,11 @@ fn main() {
 
     let active_clip: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let pipeline_running: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let ring_handle: Arc<Mutex<Option<Arc<clipdip_ringbuf::PacketRing>>>> =
+        Arc::new(Mutex::new(None));
+    // Control + hotkey event channel for the capture loop. Created here so
+    // commands (restart_pipeline) can send into it via AppState.
+    let (loop_tx, loop_rx) = unbounded::<LoopEvent>();
 
     tauri::Builder::default()
         .manage(AppState {
@@ -1062,14 +1409,20 @@ fn main() {
             pipeline_running: pipeline_running.clone(),
             pending_saving: Arc::new(Mutex::new(None)),
             pending_saved: Arc::new(Mutex::new(None)),
+            pending_notice: Arc::new(Mutex::new(None)),
+            ring: ring_handle.clone(),
+            recording_active: Arc::new(Mutex::new(false)),
+            loop_tx: loop_tx.clone(),
         })
         .setup(move |app| {
             // Log configured hotkeys so the user can confirm them in the console.
             let cfg_peek = clipdip_core::config::Config::load_or_default(&config_path)
                 .unwrap_or_default();
             info!(
-                "hotkeys — save: {}  rename: {}",
-                cfg_peek.hotkey.save_clip, cfg_peek.hotkey.rename_clip
+                "hotkeys — save: {}  rename: {}  record: {}",
+                cfg_peek.hotkey.save_clip,
+                cfg_peek.hotkey.rename_clip,
+                cfg_peek.hotkey.toggle_recording
             );
 
             // Build system tray.
@@ -1080,8 +1433,8 @@ fn main() {
             ])?;
 
             let tooltip = format!(
-                "ClipDip\nSave clip: {}",
-                cfg_peek.hotkey.save_clip
+                "ClipDip\nSave clip: {}\nRecord: {}",
+                cfg_peek.hotkey.save_clip, cfg_peek.hotkey.toggle_recording
             );
 
             TrayIconBuilder::new()
@@ -1115,7 +1468,11 @@ fn main() {
             let handle = app.handle().clone();
             let active = active_clip.clone();
             let running = pipeline_running.clone();
-            std::thread::spawn(move || run_capture_loop(handle, config_path, active, running));
+            let ring = ring_handle.clone();
+            let tx = loop_tx.clone();
+            std::thread::spawn(move || {
+                run_capture_loop(handle, config_path, active, running, ring, tx, loop_rx)
+            });
 
             Ok(())
         })
@@ -1125,10 +1482,15 @@ fn main() {
             rename_clip,
             set_overlay_input_mode,
             dismiss_notification,
+            play_saved_sound,
             list_monitors,
             list_audio_devices,
+            get_filename_variables,
+            preview_filename,
             open_clips_folder,
             get_pipeline_running,
+            restart_pipeline,
+            get_buffer_stats,
             forward_console,
             overlay_get_pending,
             test_notification,

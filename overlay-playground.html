@@ -1,0 +1,1032 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ClipDip Overlay — Shimmer Luxe Playground</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #0b0b0e;
+    color: #fff;
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    padding: 36px 40px 80px;
+    background-image:
+      radial-gradient(1200px 600px at 70% -10%, rgba(168, 85, 247, 0.06), transparent 60%),
+      radial-gradient(900px 500px at 10% 110%, rgba(216, 68, 221, 0.04), transparent 60%);
+  }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 6px; }
+  .sub { color: rgba(255,255,255,0.45); font-size: 13px; margin: 0 0 28px; max-width: 700px; line-height: 1.5; }
+
+  .top-controls { display: flex; gap: 10px; margin-bottom: 30px; align-items: center; flex-wrap: wrap; }
+  button.ctl {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.85);
+    font: 600 12.5px/1 inherit;
+    padding: 9px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background .15s ease, transform .1s ease;
+  }
+  button.ctl:hover { background: rgba(255,255,255,0.12); }
+  button.ctl:active { transform: scale(0.96); }
+  button.ctl.primary { background: #8b5cf6; border-color: transparent; color: #fff; }
+  button.ctl.primary:hover { background: #9d70f8; }
+  label.speed { color: rgba(255,255,255,0.5); font-size: 12.5px; display: inline-flex; gap: 8px; align-items: center; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(470px, 1fr)); gap: 22px; }
+
+  .pane {
+    border-radius: 14px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.06);
+    overflow: hidden;
+  }
+  .pane-head { padding: 14px 18px 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .pane-head h2 { margin: 0; font-size: 14.5px; font-weight: 700; letter-spacing: -0.005em; }
+  .pane-head .tag {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: rgba(255,255,255,0.35); text-align: right;
+  }
+  .pane-desc { padding: 0 18px 12px; color: rgba(255,255,255,0.42); font-size: 12px; line-height: 1.5; min-height: 50px; }
+  .stage {
+    position: relative;
+    height: 168px;
+    background:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 24px 24px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    overflow: hidden;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    padding: 18px;
+  }
+  .pane-actions { padding: 12px 18px 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .pane-actions button {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.7);
+    font: 600 11.5px/1 inherit;
+    padding: 7px 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s ease;
+  }
+  .pane-actions button:hover { background: rgba(255,255,255,0.11); color: #fff; }
+  .pane-actions button.flow { background: rgba(139,92,246,0.22); border-color: rgba(139,92,246,0.38); color: #d6c9ff; }
+  .pane-actions button.flow:hover { background: rgba(139,92,246,0.38); }
+
+  /* ================= shared card base (mirrors overlay.html) ============= */
+  .anchor {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+  }
+  .card {
+    display: inline-flex;
+    align-items: center;
+    gap: 13px;
+    padding: 10px 17px 10px 11px;
+    border-radius: 9px;
+    background: rgb(28, 28, 32);
+    box-shadow:
+      0 18px 40px -16px rgba(0, 0, 0, 0.7),
+      0 0 0 1px rgba(255, 255, 255, 0.05);
+    user-select: none;
+    position: relative;
+    opacity: 0;
+    transform: translateX(130%);
+  }
+  .logo-wrap { position: relative; width: 40px; height: 40px; flex-shrink: 0; }
+  .logo { width: 100%; height: 100%; display: block; transition: opacity .25s ease, transform .25s ease; }
+  .cbody { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
+  .title { font: 700 16px/1 inherit; color: rgba(255,255,255,0.96); letter-spacing: -0.005em; }
+  .hintrow { position: relative; height: 16px; display: flex; align-items: center; }
+  .hint {
+    font: 500 11.5px/1 inherit;
+    color: rgba(255,255,255,0.48);
+    display: flex; align-items: center; gap: 4px;
+    white-space: nowrap;
+  }
+  .kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 16px; padding: 0 4px;
+    border-radius: 3.5px;
+    background: rgba(255,255,255,0.07);
+    color: rgba(255,255,255,0.72);
+    border: 1px solid rgba(255,255,255,0.1);
+    font: 500 11px/1 "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  }
+  .card.saving .hint { visibility: hidden; }
+  .card.saving .logo { opacity: 0.12; transform: scale(0.9); }
+  .card.notice .hintrow { display: none; }
+
+  /* typing simulation (the focused rename experience) */
+  .typer {
+    display: none;
+    align-items: center;
+    font: 500 13px/1 inherit;
+    color: rgba(255,255,255,0.96);
+    letter-spacing: -0.005em;
+    white-space: pre;
+  }
+  .card.focused .hint { display: none; }
+  .card.focused .typer { display: flex; }
+  .caret {
+    width: 1.5px; height: 13px;
+    background: #fff;
+    margin-left: 1px;
+    animation: caretblink 1.06s steps(1) infinite;
+  }
+  @keyframes caretblink { 50% { opacity: 0; } }
+  .ch { display: inline-block; animation: chpop .16s cubic-bezier(.3,1.4,.5,1); }
+  @keyframes chpop {
+    0% { transform: scale(0.4) translateY(2px); opacity: 0; }
+    100% { transform: none; opacity: 1; }
+  }
+  .rename-display { display: none; font: 500 13px/1 inherit; color: rgba(255,255,255,0.7); }
+  .card.renamed .hint, .card.renamed .typer { display: none !important; }
+  .card.renamed .rename-display { display: inline; }
+
+  /* spinner (baseline) */
+  .spinner {
+    display: none;
+    position: absolute; inset: 0; margin: auto;
+    width: 19px; height: 19px;
+    border-radius: 999px;
+    border: 2px solid rgba(255,255,255,0.16);
+    border-top-color: rgba(255,255,255,0.85);
+    animation: spin 0.75s linear infinite;
+  }
+  .card.saving .spinner { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* shared fx primitives */
+  @property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  @keyframes spinang { to { --ang: 360deg; } }
+
+  .fxclip { position: absolute; inset: 0; border-radius: 9px; overflow: hidden; pointer-events: none; }
+  .sheen {
+    position: absolute; inset: 0;
+    background: linear-gradient(115deg,
+      transparent 30%, transparent 40%,
+      var(--sheen-c, rgba(233,213,255,0.2)) 50%, transparent 60%, transparent 70%);
+    transform: translateX(-120%);
+  }
+  .sheen.on { animation: sheenk .9s cubic-bezier(.3,.6,.35,1) .15s; }
+  @keyframes sheenk { to { transform: translateX(120%); } }
+
+  .drain {
+    position: absolute; left: 9px; right: 9px; bottom: 3px;
+    height: 2px; border-radius: 2px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden; opacity: 0; transition: opacity .3s ease;
+    pointer-events: none;
+  }
+  .drain.on { opacity: 1; }
+  .drain i {
+    position: absolute; inset: 0; border-radius: 2px;
+    transform-origin: left;
+    background: var(--drain-bg, linear-gradient(90deg, #d844dd, #8b5cf6));
+  }
+  .drain.on i { animation: draink var(--drain-ms, 4000ms) linear forwards; }
+  @keyframes draink { to { transform: scaleX(0); } }
+
+  .sparkle { position: absolute; pointer-events: none; z-index: 3; }
+  .sparkle svg { display: block; width: 100%; height: 100%; }
+
+  /* recording dot container (variant styles the inside) */
+  .dot { opacity: 0; transition: opacity .4s ease; position: relative; }
+  .dot.on { opacity: 1; }
+
+  /* ---- shared "luxe" motion language (entrance / exit / pop / logo) ---- */
+  .luxe .card { overflow: visible; transition: opacity .3s ease-out; }
+  .luxe .card.entered {
+    opacity: 1; transform: translateX(0);
+    animation: luxein 0.6s cubic-bezier(.26,1.25,.42,1) both;
+  }
+  @keyframes luxein {
+    0%   { opacity: 0; transform: translateX(130%) scaleX(1.05) scaleY(0.97); }
+    60%  { opacity: 1; transform: translateX(-1.5%) scaleY(1.01); }
+    100% { opacity: 1; transform: translateX(0) scale(1); }
+  }
+  .luxe .card.leaving { animation: luxeout 0.42s cubic-bezier(.55,0,.8,.25) both; }
+  @keyframes luxeout {
+    0%   { opacity: 1; transform: translateX(0); }
+    22%  { transform: translateX(-2.5%); }
+    100% { opacity: 0; transform: translateX(135%); }
+  }
+  .luxe .card.saved-pop { animation: luxepop 0.45s cubic-bezier(.34,1.45,.64,1); }
+  @keyframes luxepop {
+    0%   { transform: scaleX(1) scaleY(1); }
+    35%  { transform: scaleX(1.035) scaleY(0.975); }
+    70%  { transform: scaleX(0.99) scaleY(1.012); }
+    100% { transform: scale(1); }
+  }
+  .luxe .card.saving .logo {
+    opacity: 0.95;
+    animation: logopulse 1.8s ease-in-out infinite;
+  }
+  @keyframes logopulse {
+    0%, 100% { transform: scale(0.96); filter: drop-shadow(0 0 2px rgba(192,132,252,0)); }
+    50%      { transform: scale(1.05); filter: drop-shadow(0 0 8px rgba(192,132,252,0.6)); }
+  }
+  .luxe .title.swap { animation: titleswap 0.4s ease both; }
+  @keyframes titleswap {
+    0%   { opacity: 0; filter: blur(4px); transform: translateY(5px); }
+    100% { opacity: 1; filter: blur(0); transform: translateY(0); }
+  }
+
+  /* =================== V0 — Current (baseline) =========================== */
+  .v0 .card { transition: opacity .28s ease-out, transform .42s cubic-bezier(.22,.9,.34,1); }
+  .v0 .card.entered { opacity: 1; transform: translateX(0); }
+  .v0 .card.leaving { opacity: 0; transform: translateX(130%); }
+  .v0 .card.saved-pop { animation: v0pop 0.32s cubic-bezier(.34,1.4,.64,1); }
+  @keyframes v0pop { 45% { transform: scale(1.035); } }
+  .v0 .dot { width: 13px; height: 13px; }
+  .v0 .dot .core {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: #f43f5e;
+    box-shadow: 0 0 0 3.5px rgba(20, 20, 24, 0.55);
+  }
+  .v0 .dot .core::after {
+    content: ""; position: absolute; inset: 0; border-radius: 999px;
+    background: rgba(244, 63, 94, 0.6);
+    animation: recpulse 1.8s ease-out infinite;
+  }
+  @keyframes recpulse {
+    0% { transform: scale(1); opacity: 0.7; }
+    70%, 100% { transform: scale(2.4); opacity: 0; }
+  }
+
+  /* =================== C0 — Luxe Border (refined) ========================= */
+  .c0 .card::before {
+    content: ""; position: absolute; inset: 0; border-radius: 9px; padding: 1px;
+    background: conic-gradient(from var(--ang, 0deg),
+      rgba(216,68,221,0.0)  0%,  rgba(216,68,221,0.7)  12%,
+      rgba(139,92,246,0.25) 30%, rgba(243,232,255,0.9) 50%,
+      rgba(124,58,237,0.55) 70%, rgba(216,68,221,0.0)  100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0; transition: opacity .35s ease; pointer-events: none;
+  }
+  .c0 .card.saving::before { opacity: 1; animation: spinang 2.6s linear infinite; }
+  .c0 .card.flash::before {
+    opacity: 1;
+    animation: spinang 0.9s cubic-bezier(.3,.6,.3,1) 1, borderfade 1.5s ease-out forwards;
+  }
+  @keyframes borderfade {
+    0%   { opacity: 1; filter: brightness(1.9) saturate(1.4); }
+    40%  { opacity: 0.85; filter: brightness(1.3); }
+    100% { opacity: 0; filter: brightness(1); }
+  }
+  /* recording notice: same border machinery, rose palette, slow & calm */
+  .c0 .card.notice::before {
+    opacity: 1;
+    background: conic-gradient(from var(--ang, 0deg),
+      rgba(244,63,94,0.0) 0%, rgba(244,63,94,0.65) 15%,
+      rgba(251,113,133,0.2) 35%, rgba(255,228,230,0.8) 50%,
+      rgba(225,29,72,0.5) 70%, rgba(244,63,94,0.0) 100%);
+    animation: spinang 3.2s linear infinite;
+  }
+  .c0 .card.saving {
+    box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05),
+                0 0 28px -6px rgba(168,85,247,0.3);
+    transition: box-shadow .4s ease;
+  }
+  .c0 .card.notice {
+    box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05),
+                0 0 26px -6px rgba(244,63,94,0.3);
+  }
+  .c0 .card.glow { animation: c0glow 1.2s ease-out 0.05s; }
+  @keyframes c0glow {
+    0%   { box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05), 0 0 0 0 rgba(192,132,252,0); }
+    30%  { box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(216,180,254,0.4), 0 0 34px -4px rgba(192,132,252,0.55); }
+    100% { box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05), 0 0 0 0 rgba(192,132,252,0); }
+  }
+  .c0 .title span { display: inline-block; }
+  .c0 .title.cascade span {
+    animation: c0letter 0.5s cubic-bezier(.22,1.2,.36,1) both;
+    animation-delay: calc(var(--i) * 24ms);
+  }
+  @keyframes c0letter {
+    0%   { opacity: 0; transform: translateY(8px); filter: blur(3px); }
+    55%  { opacity: 1; text-shadow: 0 0 14px rgba(216,180,254,0.85); }
+    100% { opacity: 1; transform: translateY(0); filter: blur(0); text-shadow: 0 0 0 rgba(216,180,254,0); }
+  }
+  .c0 .kbd.pulse { animation: kbdpulse 1.6s ease-in-out 0.6s 2; }
+  @keyframes kbdpulse {
+    0%, 100% { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.1); transform: translateY(0); }
+    12% { background: rgba(168,85,247,0.28); border-color: rgba(216,180,254,0.45); transform: translateY(1.5px); box-shadow: 0 0 10px rgba(168,85,247,0.35); }
+    24% { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.1); transform: translateY(0); }
+  }
+  /* focused: gradient underline slides in, steady purple presence */
+  .c0 .underline {
+    position: absolute; left: 0; right: 0; bottom: -4px;
+    height: 1.5px; border-radius: 2px;
+    background: linear-gradient(90deg, #d844dd, #8b5cf6);
+    transform: scaleX(0); transform-origin: left;
+    transition: transform .35s cubic-bezier(.3,.7,.3,1);
+  }
+  .c0 .card.focused .underline { transform: scaleX(1); }
+  .c0 .card.focused {
+    box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(168,85,247,0.3),
+                0 0 22px -6px rgba(168,85,247,0.35);
+    transition: box-shadow .3s ease;
+  }
+  .c0 .caret { background: #e9d5ff; box-shadow: 0 0 6px rgba(192,132,252,0.8); }
+  /* dot: red core + thin rotating rose conic ring */
+  .c0 .dot { width: 16px; height: 16px; }
+  .c0 .dot .core {
+    position: absolute; inset: 4px; border-radius: 999px;
+    background: #f43f5e;
+    box-shadow: 0 0 8px rgba(244,63,94,0.8);
+    animation: corebreathe 1.8s ease-in-out infinite;
+  }
+  .c0 .dot .ringy {
+    position: absolute; inset: 0; border-radius: 999px; padding: 1.5px;
+    background: conic-gradient(from var(--ang, 0deg),
+      rgba(244,63,94,0) 0%, #fb7185 25%, rgba(244,63,94,0) 55%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: spinang 2.2s linear infinite;
+  }
+  @keyframes corebreathe { 50% { transform: scale(0.82); opacity: 0.85; } }
+
+  /* =================== C1 — Aurora Wash =================================== */
+  .c1 .card { --aur1: rgba(216,68,221,0.2); --aur2: rgba(124,58,237,0.22); }
+  .c1 .card.notice { --aur1: rgba(244,63,94,0.22); --aur2: rgba(251,113,133,0.14); }
+  .c1 .aurora {
+    position: absolute; inset: -20%;
+    background:
+      radial-gradient(55% 75% at 18% 115%, var(--aur1), transparent 60%),
+      radial-gradient(50% 70% at 85% -15%, var(--aur2), transparent 60%);
+    opacity: 0; transition: opacity .6s ease;
+    animation: aurdrift 5s ease-in-out infinite alternate;
+  }
+  .c1 .card.saving .aurora, .c1 .card.notice .aurora { opacity: 1; }
+  @keyframes aurdrift {
+    from { transform: translateX(-5%) scale(1); }
+    to   { transform: translateX(5%) scale(1.18); }
+  }
+  .c1 .card.flash .aurora { animation: aurflash 1.2s ease-out forwards; }
+  @keyframes aurflash {
+    0%   { opacity: 1; filter: brightness(2.4) saturate(1.5); }
+    100% { opacity: 0; filter: brightness(1); }
+  }
+  /* save payoff: a soft lavender bloom swells out from behind the logo */
+  .c1 .bloom {
+    position: absolute; inset: -12px; border-radius: 999px;
+    background: radial-gradient(circle, rgba(243,232,255,0.85), rgba(192,132,252,0.35) 45%, transparent 70%);
+    opacity: 0; pointer-events: none;
+  }
+  .c1 .bloom.on { animation: bloomk 0.75s cubic-bezier(.2,.6,.3,1); }
+  @keyframes bloomk {
+    0%   { opacity: 0.95; transform: scale(0.25); }
+    100% { opacity: 0; transform: scale(1.7); }
+  }
+  .c1 .card.focused .aurora { opacity: 0.55; }
+  .c1 .caret { background: #e9d5ff; box-shadow: 0 0 7px rgba(192,132,252,0.9); }
+  /* dot: soft breathing ember */
+  .c1 .dot { width: 15px; height: 15px; }
+  .c1 .dot .core {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: radial-gradient(circle at 35% 35%, #fb7185, #e11d48);
+    box-shadow: 0 0 14px rgba(244,63,94,0.65);
+    animation: emberbreathe 2.2s ease-in-out infinite;
+  }
+  @keyframes emberbreathe {
+    0%, 100% { transform: scale(0.88); box-shadow: 0 0 8px rgba(244,63,94,0.4); }
+    50%      { transform: scale(1.05); box-shadow: 0 0 16px rgba(244,63,94,0.75); }
+  }
+
+  /* =================== C2 — Halo Snap ===================================== */
+  .c2 .halo {
+    position: absolute; inset: -7px; border-radius: 999px; padding: 2px;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 10%, rgba(216,68,221,0.8) 32%,
+      rgba(243,232,255,0.95) 50%, rgba(124,58,237,0.7) 68%, transparent 90% 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0; transition: opacity .25s ease;
+    pointer-events: none;
+  }
+  .c2 .card.saving .halo { opacity: 1; animation: spinang 1.6s linear infinite; }
+  .c2 .card.notice .halo {
+    opacity: 1;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 10%, rgba(244,63,94,0.8) 35%,
+      rgba(255,228,230,0.9) 50%, rgba(225,29,72,0.65) 65%, transparent 90% 100%);
+    animation: spinang 2.6s linear infinite;
+  }
+  .c2 .halo.snap {
+    opacity: 1;
+    animation: spinang 0.5s cubic-bezier(.4,.1,.5,1) 1, halosnap 0.9s ease-out forwards;
+  }
+  @keyframes halosnap {
+    0%   { filter: brightness(1.1); opacity: 1; }
+    35%  { filter: brightness(2.3) saturate(1.4); opacity: 1; }
+    100% { filter: brightness(1); opacity: 0; }
+  }
+  .c2 .card.focused .halo { opacity: 0.35; animation: spinang 4.5s linear infinite; }
+  .c2 .caret { background: #e9d5ff; box-shadow: 0 0 6px rgba(192,132,252,0.8); }
+  /* dot: radar sweep */
+  .c2 .dot { width: 17px; height: 17px; }
+  .c2 .dot .core {
+    position: absolute; inset: 5px; border-radius: 999px;
+    background: #f43f5e; box-shadow: 0 0 6px rgba(244,63,94,0.8);
+  }
+  .c2 .dot .sweep {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: conic-gradient(from var(--ang, 0deg),
+      rgba(244,63,94,0) 0%, rgba(251,113,133,0.7) 12%, rgba(244,63,94,0) 30%);
+    -webkit-mask: radial-gradient(circle, transparent 38%, #000 40%);
+            mask: radial-gradient(circle, transparent 38%, #000 40%);
+    animation: spinang 2s linear infinite;
+  }
+
+  /* =================== C3 — Comet ========================================= */
+  .c3 .card::before {
+    content: ""; position: absolute; inset: 0; border-radius: 9px; padding: 1.2px;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 62%, rgba(139,92,246,0.12) 75%,
+      rgba(216,68,221,0.55) 90%, #f3e8ff 98%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0; transition: opacity .3s ease; pointer-events: none;
+  }
+  .c3 .card.saving::before { opacity: 1; animation: spinang 1.4s linear infinite; }
+  .c3 .card.flash::before {
+    opacity: 1;
+    animation: spinang 0.42s cubic-bezier(.45,.05,.55,.95) 2, borderfade 1.1s ease-out forwards;
+  }
+  .c3 .card.notice::before {
+    opacity: 1;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 62%, rgba(225,29,72,0.12) 75%,
+      rgba(244,63,94,0.55) 90%, #ffe4e6 98%, transparent 100%);
+    animation: spinang 2.4s linear infinite;
+  }
+  /* blurred twin of the comet orbiting BEHIND the card. Two layers:
+     the inner <i> paints a thin, sharply-masked ring (hollow center,
+     so nothing washes over the card face), and the wrapper blurs that
+     ring as the FINAL step — soft falloff in both directions, a true
+     glow. Same spin animation as the border = the glow chases the
+     comet head in perfect sync. */
+  .c3 .glowwrap {
+    position: absolute; inset: -22px;
+    filter: blur(13px);
+    opacity: 0; transition: opacity .3s ease;
+    pointer-events: none; z-index: -1;
+  }
+  .c3 .glowwrap i {
+    position: absolute; inset: 16px;       /* = 6px outside the card edge */
+    border-radius: 13px; padding: 9px;     /* ring thickness before blur */
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 62%, rgba(139,92,246,0.25) 78%,
+      rgba(216,68,221,0.6) 90%, rgba(243,232,255,0.95) 98%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+  }
+  .c3 .card.saving .glowwrap { opacity: 0.8; }
+  .c3 .card.saving .glowwrap i { animation: spinang 1.4s linear infinite; }
+  .c3 .card.flash .glowwrap { opacity: 1; animation: glowburn 1.1s ease-out forwards; }
+  .c3 .card.flash .glowwrap i { animation: spinang 0.42s cubic-bezier(.45,.05,.55,.95) 2; }
+  @keyframes glowburn {
+    0%   { opacity: 1; filter: blur(13px) brightness(1.9) saturate(1.3); }
+    55%  { opacity: 0.8; filter: blur(14px) brightness(1.4); }
+    100% { opacity: 0; filter: blur(16px) brightness(1); }
+  }
+  .c3 .card.notice .glowwrap { opacity: 0.7; }
+  .c3 .card.notice .glowwrap i {
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 62%, rgba(225,29,72,0.25) 78%,
+      rgba(244,63,94,0.6) 90%, rgba(255,228,230,0.9) 98%, transparent 100%);
+    animation: spinang 2.4s linear infinite;
+  }
+  /* ambient under-glow (same treatment as Luxe Border) */
+  .c3 .card.saving {
+    box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05),
+                0 0 28px -6px rgba(168,85,247,0.3);
+    transition: box-shadow .4s ease;
+  }
+  .c3 .card.notice {
+    box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05),
+                0 0 26px -6px rgba(244,63,94,0.3);
+  }
+  .c3 .card.glow { animation: c0glow 1.2s ease-out 0.05s; }
+  /* focused: the comet "parks" as a glowing underline */
+  .c3 .underline {
+    position: absolute; left: 0; right: 0; bottom: -4px;
+    height: 1.5px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, #c084fc 40%, #f3e8ff);
+    box-shadow: 0 1px 8px rgba(192,132,252,0.5);
+    transform: scaleX(0); transform-origin: right;
+    transition: transform .4s cubic-bezier(.3,.7,.3,1);
+  }
+  .c3 .card.focused .underline { transform: scaleX(1); }
+  .c3 .caret { background: #f3e8ff; box-shadow: 0 0 6px rgba(216,180,254,0.9); }
+  /* dot: red core with a tiny comet orbiting it */
+  .c3 .dot { width: 17px; height: 17px; }
+  .c3 .dot .core {
+    position: absolute; inset: 5px; border-radius: 999px;
+    background: #f43f5e; box-shadow: 0 0 7px rgba(244,63,94,0.8);
+  }
+  .c3 .dot .orb {
+    position: absolute; inset: 0; border-radius: 999px; padding: 1.5px;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 70%, rgba(251,113,133,0.6) 90%, #ffe4e6 98%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: spinang 1.6s linear infinite;
+  }
+
+  /* =================== C4 — Frosted Prism ================================= */
+  .c4 .card {
+    background: rgba(30, 30, 38, 0.55);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  }
+  .c4 .card::before {
+    content: ""; position: absolute; inset: 0; border-radius: 9px; padding: 1px;
+    background: conic-gradient(from var(--ang, 0deg),
+      rgba(216,68,221,0.5), rgba(139,92,246,0.2), rgba(243,232,255,0.55),
+      rgba(124,58,237,0.35), rgba(216,68,221,0.5));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0.3; transition: opacity .35s ease; pointer-events: none;
+  }
+  .c4 .card.saving::before { opacity: 0.95; animation: spinang 2.8s linear infinite; }
+  .c4 .card.flash::before { opacity: 0.95; animation: spinang 1s cubic-bezier(.3,.6,.3,1) 1, prismsettle 1.6s ease-out forwards; }
+  @keyframes prismsettle {
+    0%   { opacity: 1; filter: brightness(2) saturate(1.5); }
+    100% { opacity: 0.3; filter: brightness(1); }
+  }
+  .c4 .card.notice::before {
+    opacity: 0.85;
+    background: conic-gradient(from var(--ang, 0deg),
+      rgba(244,63,94,0.5), rgba(225,29,72,0.15), rgba(255,228,230,0.5),
+      rgba(190,18,60,0.3), rgba(244,63,94,0.5));
+    animation: spinang 3.4s linear infinite;
+  }
+  /* save payoff: title does a prism gradient wipe */
+  .c4 .title.wipe {
+    background: linear-gradient(100deg, #fff 20%, #e9d5ff 40%, #d844dd 50%, #e9d5ff 60%, #fff 80%);
+    background-size: 280% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+    animation: wipek 1.2s ease-out forwards;
+  }
+  @keyframes wipek { 0% { background-position: 130% 0; } 100% { background-position: -130% 0; } }
+  /* focused: inset glass field appears around the input */
+  .c4 .field {
+    position: absolute; inset: -4px -7px;
+    border-radius: 5px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.09);
+    opacity: 0; transition: opacity .25s ease;
+    pointer-events: none;
+  }
+  .c4 .card.focused .field { opacity: 1; }
+  .c4 .card.focused::before { opacity: 0.7; }
+  .c4 .caret { background: #fff; box-shadow: 0 0 5px rgba(255,255,255,0.7); }
+  /* dot: frosted pill with REC */
+  .c4 .dot {
+    padding: 4px 9px 4px 6px;
+    border-radius: 999px;
+    background: rgba(30,30,38,0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.08);
+    display: flex; gap: 5px; align-items: center;
+  }
+  .c4 .dot .core {
+    width: 8px; height: 8px; border-radius: 999px;
+    background: #f43f5e; box-shadow: 0 0 6px rgba(244,63,94,0.8);
+    animation: corebreathe 1.8s ease-in-out infinite;
+  }
+  .c4 .dot .lbl {
+    font: 700 9px/1 inherit; letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.65);
+  }
+
+  /* =================== C5 — Minimal Pulse ================================= */
+  .c5 .card { --line-c1: #c084fc; --line-c2: #f3e8ff; }
+  .c5 .card.notice { --line-c1: #fb7185; --line-c2: #ffe4e6; }
+  .c5 .line {
+    position: absolute; left: 9px; right: 9px; bottom: 3px;
+    height: 2px; border-radius: 2px;
+    background: rgba(255,255,255,0.06);
+    overflow: hidden; opacity: 0; transition: opacity .3s ease;
+    pointer-events: none;
+  }
+  .c5 .card.saving .line, .c5 .card.notice .line { opacity: 1; }
+  .c5 .line i {
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, var(--line-c1), var(--line-c2), transparent);
+    background-size: 55% 100%;
+    background-repeat: no-repeat;
+    animation: lineslide 1.3s ease-in-out infinite;
+  }
+  @keyframes lineslide {
+    0%   { background-position: -70% 0; }
+    100% { background-position: 175% 0; }
+  }
+  /* save payoff: one clean lavender ripple from the logo + crisp pop */
+  .c5 .ripple {
+    position: absolute; inset: -4px; border-radius: 999px;
+    border: 1.5px solid rgba(233,213,255,0.85);
+    opacity: 0; pointer-events: none;
+  }
+  .c5 .ripple.on { animation: ripplek 0.7s cubic-bezier(.2,.7,.3,1); }
+  @keyframes ripplek {
+    0%   { opacity: 0.9; transform: scale(0.5); border-width: 2px; }
+    100% { opacity: 0; transform: scale(2.4); border-width: 1px; }
+  }
+  .c5 .card.notice .title::before {
+    content: ""; display: inline-block;
+    width: 7px; height: 7px; border-radius: 999px;
+    background: #f43f5e; margin-right: 7px;
+    box-shadow: 0 0 6px rgba(244,63,94,0.7);
+    animation: corebreathe 1.6s ease-in-out infinite;
+  }
+  /* focused: the line stays lit as a steady underline */
+  .c5 .card.focused .line { opacity: 1; }
+  .c5 .card.focused .line i {
+    animation: none;
+    background: linear-gradient(90deg, var(--line-c1), var(--line-c2));
+    background-size: 100% 100%;
+  }
+  .c5 .caret { background: #e9d5ff; }
+  /* dot: quiet double ripple */
+  .c5 .dot { width: 13px; height: 13px; }
+  .c5 .dot .core {
+    position: absolute; inset: 2px; border-radius: 999px;
+    background: #f43f5e; box-shadow: 0 0 6px rgba(244,63,94,0.6);
+  }
+  .c5 .dot .core::before, .c5 .dot .core::after {
+    content: ""; position: absolute; inset: 0; border-radius: 999px;
+    border: 1px solid rgba(244,63,94,0.7);
+  }
+  .c5 .dot .core::before { animation: c5ring 2.4s ease-out infinite; }
+  .c5 .dot .core::after  { animation: c5ring 2.4s ease-out 1.2s infinite; }
+  @keyframes c5ring {
+    0%   { transform: scale(1); opacity: 0.8; }
+    80%, 100% { transform: scale(2.6); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+  <h1>ClipDip Overlay — Shimmer Luxe Playground</h1>
+  <p class="sub">
+    Baseline + six logo-themed variants. Each pane has three flows:
+    <b>Save</b> (saving → saved → auto-dismiss), <b>Record</b> (recording-started toast — deliberately red/rose so it never reads as "clip saved" — plus the recording dot), and
+    <b>Rename</b> (the focused typing experience, simulated). Pick and choose pieces across variants.
+  </p>
+  <div class="top-controls">
+    <button class="ctl primary" id="play-save-all">▶ Save — all</button>
+    <button class="ctl" id="play-rec-all">▶ Record — all</button>
+    <button class="ctl" id="play-ren-all">▶ Rename — all</button>
+    <label class="speed"><input type="checkbox" id="slowmo" /> Slow motion (3×)</label>
+  </div>
+  <div class="grid" id="grid"></div>
+
+<script>
+(function () {
+  const LOGO = "data:image/png;base64,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";
+  const grid = document.getElementById("grid");
+  const slowmo = document.getElementById("slowmo");
+  const speed = () => (slowmo.checked ? 3 : 1);
+  const applySpeed = (root) =>
+    root.getAnimations({ subtree: true }).forEach(a => { a.playbackRate = 1 / speed(); });
+
+  // Four-point sparkle matching the logo's star.
+  const starPath = "M12 0C13.2 7.4 16.6 10.8 24 12 16.6 13.2 13.2 16.6 12 24 10.8 16.6 7.4 13.2 0 12 7.4 10.8 10.8 7.4 12 0Z";
+  const starSVG = `<svg viewBox="0 0 24 24"><path d="${starPath}"/></svg>`;
+
+  // Calm twinkle: sparkles appear at set angles around the logo, scale in
+  // with a slight (≤25°) rotation so the star keeps its "+" silhouette,
+  // hold a beat, and dissolve in place. No scatter, no drift.
+  function spawnSparkles(host, angles, radius, baseSize) {
+    const colors = ["#f3e8ff", "#e9d5ff", "#d8b4fe", "#f3e8ff"];
+    angles.forEach((deg, i) => {
+      const w = document.createElement("div");
+      w.className = "sparkle";
+      w.innerHTML = starSVG;
+      const size = baseSize + (i % 2) * 3;
+      const a = (deg * Math.PI) / 180;
+      const r = radius + (i % 2) * 3;
+      w.style.width = size + "px"; w.style.height = size + "px";
+      w.style.left = `calc(50% + ${Math.cos(a) * r}px - ${size / 2}px)`;
+      w.style.top  = `calc(50% + ${Math.sin(a) * r}px - ${size / 2}px)`;
+      const c = colors[i % colors.length];
+      w.querySelector("path").setAttribute("fill", c);
+      w.style.filter = `drop-shadow(0 0 4px ${c})`;
+      host.appendChild(w);
+      const anim = w.animate([
+        { transform: "scale(0) rotate(-10deg)", opacity: 0 },
+        { transform: "scale(1.05) rotate(8deg)", opacity: 1, offset: 0.35 },
+        { transform: "scale(0.95) rotate(14deg)", opacity: 1, offset: 0.62 },
+        { transform: "scale(0) rotate(25deg)", opacity: 0 }
+      ], {
+        duration: 850 * speed(),
+        delay: (90 + i * 110) * speed(),
+        easing: "cubic-bezier(.35,.55,.3,1)",
+      });
+      anim.onfinish = () => w.remove();
+    });
+  }
+
+  // ---- card markup ---------------------------------------------------------
+  function cardHTML(v) {
+    return `
+      <div class="anchor">
+        <div class="card saving">
+          ${v.layers.cometglow ? '<div class="glowwrap"><i></i></div>' : ''}
+          ${v.layers.fxclip ? `<div class="fxclip">${v.layers.aurora ? '<div class="aurora"></div>' : ''}<div class="sheen"></div></div>` : ''}
+          <div class="logo-wrap">
+            <img class="logo" src="${LOGO}" alt="" draggable="false" />
+            ${v.layers.spinner ? '<span class="spinner"></span>' : ''}
+            ${v.layers.halo ? '<div class="halo"></div>' : ''}
+            ${v.layers.bloom ? '<div class="bloom"></div>' : ''}
+            ${v.layers.ripple ? '<div class="ripple"></div>' : ''}
+          </div>
+          <div class="cbody">
+            <span class="title">Saving clip…</span>
+            <div class="hintrow">
+              ${v.layers.field ? '<div class="field"></div>' : ''}
+              <div class="hint">
+                <span>Press</span><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span style="margin-left:1px">to rename</span>
+              </div>
+              <div class="typer"><span class="typed"></span><span class="caret"></span></div>
+              <span class="rename-display"></span>
+              ${v.layers.underline ? '<div class="underline"></div>' : ''}
+            </div>
+          </div>
+          ${v.layers.drain ? '<div class="drain"><i></i></div>' : ''}
+          ${v.layers.line ? '<div class="line"><i></i></div>' : ''}
+        </div>
+        <div class="dot">${v.dotHTML}</div>
+      </div>`;
+  }
+
+  // ---- title helpers -------------------------------------------------------
+  function setTitle(v, els, text) {
+    const t = els.title;
+    t.classList.remove("cascade", "swap", "wipe");
+    if (v.titleMode === "cascade") {
+      t.innerHTML = "";
+      [...text].forEach((ch, i) => {
+        const s = document.createElement("span");
+        s.style.setProperty("--i", i);
+        s.textContent = ch;
+        t.appendChild(s);
+      });
+      void t.offsetWidth;
+      t.classList.add("cascade");
+    } else {
+      t.textContent = text;
+      if (v.titleMode === "swap" || v.titleMode === "wipe") {
+        void t.offsetWidth;
+        t.classList.add(v.titleMode === "wipe" ? "wipe" : "swap");
+      }
+    }
+  }
+
+  // ---- variant definitions ---------------------------------------------------
+  const VARIANTS = [
+    {
+      id: "v0", cls: "v0", name: "Current", tag: "baseline",
+      desc: "What ships today: ease-out slide, plain spinner, single scale pop. Notice toast is the same card with just a title. Classic red pulsing dot. Rename is a bare caret.",
+      layers: { spinner: true },
+      dotHTML: '<div class="core"></div>',
+      titleMode: "plain",
+      onSaved(els) { els.card.classList.add("saved-pop"); },
+    },
+    {
+      id: "c0", cls: "c0 luxe", name: "Luxe Border", tag: "shimmer luxe · refined",
+      desc: "The one you liked, minus the orbiting star and with calmer sparkles. Saving: rotating logo-palette border + logo pulse. Save: bright border swirl, sheen, corner sparkles, cascading title, kbd pulse, drain bar. Recording: the same border in rose, slowly rotating. Focus: gradient underline slides in.",
+      layers: { fxclip: true, drain: true, underline: true },
+      dotHTML: '<div class="ringy"></div><div class="core"></div>',
+      titleMode: "cascade",
+      onSaved(els) {
+        els.card.classList.add("saved-pop", "glow", "flash");
+        els.sheen.classList.add("on");
+        spawnSparkles(els.logoWrap, [-100, -40, 25, 140, 205], 25, 7);
+        els.card.querySelectorAll(".kbd").forEach(k => k.classList.add("pulse"));
+        armDrain(els);
+      },
+    },
+    {
+      id: "c1", cls: "c1 luxe", name: "Aurora Wash", tag: "soft · atmospheric",
+      desc: "No border — the card's interior glows. Saving: a slow magenta/violet aurora drifts inside the card while the logo pulses. Save: the aurora flares and washes out, a lavender bloom swells from behind the logo, sheen sweeps. Recording: the aurora turns rose. Dot: a breathing ember. Focus: the aurora returns faintly while you type.",
+      layers: { fxclip: true, aurora: true, bloom: true, drain: true },
+      dotHTML: '<div class="core"></div>',
+      titleMode: "swap",
+      onSaved(els) {
+        els.card.classList.add("saved-pop", "flash");
+        els.sheen.classList.add("on");
+        els.card.querySelector(".bloom").classList.add("on");
+        armDrain(els);
+      },
+    },
+    {
+      id: "c2", cls: "c2 luxe", name: "Halo Snap", tag: "focused on the logo",
+      desc: "The card stays clean; the logo wears a rotating gradient halo while saving. Save: the halo does one fast bright lap and dissolves as four sparkles pop at its cardinal points — echoing the logo's own geometry. Recording: rose halo. Dot: radar sweep. Focus: a dim halo slowly circles while it 'listens' to your typing.",
+      layers: { fxclip: true, halo: true, drain: true },
+      dotHTML: '<div class="sweep"></div><div class="core"></div>',
+      titleMode: "swap",
+      onSaved(els) {
+        els.card.classList.add("saved-pop");
+        els.sheen.classList.add("on");
+        const halo = els.card.querySelector(".halo");
+        halo.classList.add("snap");
+        spawnSparkles(els.logoWrap, [-90, 0, 90, 180], 27, 8);
+        armDrain(els);
+      },
+    },
+    {
+      id: "c3", cls: "c3 luxe", name: "Comet", tag: "kinetic",
+      desc: "A bright comet of light with a violet tail circles the card border while saving, with a soft glow chasing it outside the card. Save: two fast laps and it burns out into the sheen. Recording: a slower red comet. Dot: a tiny comet orbits the red core. Focus: the comet parks as a glowing underline beneath your text.",
+      layers: { fxclip: true, drain: true, underline: true, cometglow: true },
+      dotHTML: '<div class="orb"></div><div class="core"></div>',
+      titleMode: "swap",
+      onSaved(els) {
+        els.card.classList.add("saved-pop", "flash", "glow");
+        els.sheen.classList.add("on");
+        spawnSparkles(els.logoWrap, [-60, 45, 160], 24, 7);
+        armDrain(els);
+      },
+    },
+    {
+      id: "c4", cls: "c4 luxe", name: "Frosted Prism", tag: "glassy",
+      desc: "The card itself changes: frosted glass with a faint ever-present gradient edge. Saving: the edge brightens and rotates. Save: a prism flash settles back to faint, and the title does a gradient wipe. Recording: rose-tinted glass edge. Dot: a frosted REC pill. Focus: an inset glass field appears around the input.",
+      layers: { fxclip: true, drain: true, field: true },
+      dotHTML: '<div class="core"></div><span class="lbl">REC</span>',
+      titleMode: "wipe",
+      onSaved(els) {
+        els.card.classList.add("saved-pop", "flash");
+        els.sheen.classList.add("on");
+        armDrain(els);
+      },
+    },
+    {
+      id: "c5", cls: "c5 luxe", name: "Minimal Pulse", tag: "quietest option",
+      desc: "For when less is more. Saving: the logo breathes while a thin gradient shimmer slides along the card's bottom edge. Save: one clean lavender ripple expands from the logo, crisp pop, the shimmer line becomes the drain bar. Recording: red shimmer line + pulsing dot beside the title. Dot: quiet double ripple. Focus: the line stays lit as a steady underline.",
+      layers: { fxclip: true, line: true, drain: true, ripple: true },
+      dotHTML: '<div class="core"></div>',
+      titleMode: "swap",
+      onSaved(els) {
+        els.card.classList.add("saved-pop");
+        els.sheen.classList.add("on");
+        const r = els.card.querySelector(".ripple");
+        r.classList.remove("on"); void r.offsetWidth; r.classList.add("on");
+        armDrain(els);
+      },
+    },
+  ];
+
+  function armDrain(els) {
+    const drain = els.card.querySelector(".drain");
+    if (!drain) return;
+    drain.style.setProperty("--drain-ms", (3600 * speed()) + "ms");
+    drain.classList.add("on");
+  }
+
+  // ---- pane construction + flows --------------------------------------------
+  VARIANTS.forEach((v) => {
+    const pane = document.createElement("div");
+    pane.className = "pane " + v.cls;
+    pane.innerHTML = `
+      <div class="pane-head"><h2>${v.name}</h2><span class="tag">${v.tag}</span></div>
+      <div class="pane-desc">${v.desc}</div>
+      <div class="stage"></div>
+      <div class="pane-actions">
+        <button class="flow" data-flow="save">▶ Save</button>
+        <button class="flow" data-flow="record">▶ Record</button>
+        <button class="flow" data-flow="rename">▶ Rename</button>
+        <button data-flow="reset">Reset</button>
+      </div>`;
+    grid.appendChild(pane);
+    const stage = pane.querySelector(".stage");
+
+    let els = null;
+    let token = 0;
+
+    function build() {
+      stage.innerHTML = cardHTML(v);
+      const card = stage.querySelector(".card");
+      els = {
+        card,
+        title: card.querySelector(".title"),
+        logo: card.querySelector(".logo"),
+        logoWrap: card.querySelector(".logo-wrap"),
+        sheen: card.querySelector(".sheen"),
+        typed: card.querySelector(".typed"),
+        display: card.querySelector(".rename-display"),
+        dot: stage.querySelector(".dot"),
+      };
+      return els;
+    }
+    build();
+
+    const wait = (ms) => new Promise(r => setTimeout(r, ms * speed()));
+    const fresh = () => { token++; build(); return token; };
+    const alive = (t) => t === token;
+
+    function enter(phase, titleText) {
+      els.card.className = "card " + phase;
+      setTitleNoFx(titleText);
+      void els.card.offsetWidth;
+      els.card.classList.add("entered");
+      applySpeed(stage);
+    }
+    function setTitleNoFx(text) { els.title.textContent = text; }
+
+    function toSaved() {
+      els.card.classList.remove("saving");
+      els.card.classList.add("saved");
+      setTitle(v, els, "Clip saved");
+      v.onSaved(els);
+      applySpeed(stage);
+    }
+    function leave() {
+      els.card.classList.remove("entered");
+      els.card.classList.add("leaving");
+      applySpeed(stage);
+    }
+
+    async function typeText(text, t) {
+      els.typed.textContent = "";
+      for (const ch of text) {
+        if (!alive(t)) return;
+        const s = document.createElement("span");
+        s.className = "ch";
+        s.textContent = ch;
+        els.typed.appendChild(s);
+        applySpeed(stage);
+        await wait(55 + Math.random() * 65);
+      }
+    }
+
+    async function playSave() {
+      const t = fresh();
+      await wait(100); if (!alive(t)) return;
+      enter("saving", "Saving clip…");
+      await wait(1600); if (!alive(t)) return;
+      toSaved();
+      await wait(3800); if (!alive(t)) return;
+      leave();
+    }
+
+    async function playRecord() {
+      const t = fresh();
+      await wait(100); if (!alive(t)) return;
+      enter("notice", "Recording started");
+      els.dot.classList.add("on");
+      applySpeed(stage);
+      await wait(2600); if (!alive(t)) return;
+      leave();                       // toast slides out, dot stays
+      await wait(3400); if (!alive(t)) return;
+      els.dot.classList.remove("on");
+    }
+
+    async function playRename() {
+      const t = fresh();
+      await wait(100); if (!alive(t)) return;
+      enter("saving", "Saving clip…");
+      await wait(1000); if (!alive(t)) return;
+      toSaved();
+      await wait(900); if (!alive(t)) return;
+      els.card.classList.add("focused");      // user hit Ctrl+F10
+      applySpeed(stage);
+      await wait(450); if (!alive(t)) return;
+      await typeText("pentakill lategame", t); if (!alive(t)) return;
+      await wait(500); if (!alive(t)) return;
+      // Enter pressed → renamed
+      els.card.classList.remove("focused");
+      els.card.classList.add("renamed");
+      els.display.textContent = "pentakill lategame";
+      setTitle(v, els, "Renamed!");
+      applySpeed(stage);
+      await wait(1500); if (!alive(t)) return;
+      leave();
+    }
+
+    const flows = { save: playSave, record: playRecord, rename: playRename, reset: () => { token++; build(); } };
+    pane.querySelectorAll("[data-flow]").forEach(b =>
+      b.addEventListener("click", () => flows[b.dataset.flow]()));
+    v._flows = flows;
+  });
+
+  document.getElementById("play-save-all").addEventListener("click", () => VARIANTS.forEach(v => v._flows.save()));
+  document.getElementById("play-rec-all").addEventListener("click", () => VARIANTS.forEach(v => v._flows.record()));
+  document.getElementById("play-ren-all").addEventListener("click", () => VARIANTS.forEach(v => v._flows.rename()));
+})();
+</script>
+</body>
+</html>

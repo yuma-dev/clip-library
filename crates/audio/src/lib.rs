@@ -200,9 +200,13 @@ fn run_capture(
     // Endpoint volume — polled per-buffer so mid-clip slider changes
     // take effect within one WASAPI period (~10ms). If activation fails
     // (rare; some virtual devices), fall back to unity gain.
-    let endpoint_volume: Option<IAudioEndpointVolume> =
-        unsafe { device.Activate(CLSCTX_ALL, None) }.ok();
-    if endpoint_volume.is_none() {
+    // For microphones, the audio engine/driver already applies the volume
+    // slider to the capture stream. Applying it again in software double-dips.
+    let endpoint_volume: Option<IAudioEndpointVolume> = match kind {
+        AudioKind::SystemLoopback => unsafe { device.Activate(CLSCTX_ALL, None) }.ok(),
+        AudioKind::Microphone => None,
+    };
+    if endpoint_volume.is_none() && matches!(kind, AudioKind::SystemLoopback) {
         warn!(?kind, "IAudioEndpointVolume unavailable; capturing at unity gain");
     }
 

@@ -97,6 +97,11 @@ pub fn mux_with_ffmpeg_cli(
     let do_mix = include_mix && audio_tracks.len() >= 2;
 
     let mut cmd = Command::new(ffmpeg);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     cmd.arg("-y").arg("-hide_banner").arg("-loglevel").arg("warning");
 
     // Input 0: raw video bitstream. Pin the demuxer format explicitly so

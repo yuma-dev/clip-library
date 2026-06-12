@@ -233,12 +233,16 @@ impl NvEncoderD3D11 {
         enc_cfg.rcParams.version = NV_ENC_RC_PARAMS_VER;
         match config.rate_control {
             RateControl::ConstantQp { qp } => {
-                let qp = clamp_qp_for_codec(active_codec, qp);
+                let scaled_qp = match active_codec {
+                    ActiveCodec::Av1 => qp * 4,
+                    _ => qp,
+                };
+                let final_qp = clamp_qp_for_codec(active_codec, scaled_qp);
                 enc_cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
                 enc_cfg.rcParams.constQP = NV_ENC_QP {
-                    qpInterP: qp,
-                    qpInterB: qp,
-                    qpIntra: qp,
+                    qpInterP: final_qp,
+                    qpInterB: final_qp,
+                    qpIntra: final_qp,
                 };
                 // CQP ignores these, but zero them for tidiness — the
                 // preset query may have left non-zero defaults behind.

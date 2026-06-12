@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use tracing::{info, warn};
@@ -31,6 +31,33 @@ use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack, VideoB
 use clipdip_ringbuf::{EncodedPacket, PacketRing, STREAM_VIDEO};
 
 use crate::config::{AudioSource, CodecPreferenceCfg, Config, RateControlCfg};
+use crate::filename::FilenameVars;
+
+/// Current QPC time in 100-ns ticks — the same clock and unit the ring
+/// buffer's packet PTS values use (WASAPI positions and DXGI present
+/// times are both QPC-derived). Callers stamp the hotkey moment with
+/// this so the saved clip can be clamped to end exactly at the press,
+/// excluding anything that happens during the save flow itself (e.g.
+/// the notification chirp leaking into the clip's system audio).
+pub fn qpc_now_100ns() -> i64 {
+    use windows::Win32::System::Performance::{
+        QueryPerformanceCounter, QueryPerformanceFrequency,
+    };
+    let mut counter = 0i64;
+    let mut freq = 0i64;
+    unsafe {
+        let _ = QueryPerformanceCounter(&mut counter);
+        let _ = QueryPerformanceFrequency(&mut freq);
+    }
+    if freq <= 0 {
+        return 0;
+    }
+    // Split to avoid overflow: counter * 1e7 can exceed i64 after ~10h
+    // of uptime if multiplied naively.
+    let secs = counter / freq;
+    let rem = counter % freq;
+    secs * 10_000_000 + rem * 10_000_000 / freq
+}
 
 /// Metadata about one running audio source, used at save time to size WAV
 /// headers correctly.
@@ -67,6 +94,10 @@ pub struct Pipeline {
     /// header at byte 0, even when the rolling buffer's first keyframe
     /// didn't repeat one. Empty until the video thread populates it.
     codec_header: Arc<Mutex<Vec<u8>>>,
+    /// PTS anchor of an in-progress manual recording. While `Some`, the
+    /// ring holds everything from this point on (no eviction past it);
+    /// `stop_recording_and_save_in` consumes it.
+    recording_from: Mutex<Option<i64>>,
 }
 
 impl Pipeline {
@@ -79,7 +110,10 @@ impl Pipeline {
     /// continues). Failure to start the video thread aborts the whole
     /// pipeline.
     pub fn start(cfg: Config) -> Result<Self> {
-        let ring = Arc::new(PacketRing::new(cfg.ring_byte_budget()));
+        let ring = Arc::new(PacketRing::with_time_window(
+            cfg.ring_byte_budget(),
+            cfg.ring_time_window_100ns(),
+        ));
 
         let (audio_meta, audio_handles) = start_audio(&cfg, Arc::clone(&ring));
 
@@ -113,6 +147,7 @@ impl Pipeline {
             reporter_thread,
             active_codec,
             codec_header,
+            recording_from: Mutex::new(None),
         })
     }
 
@@ -120,12 +155,18 @@ impl Pipeline {
         &self.cfg
     }
 
+    /// Shared handle to the packet ring, for live occupancy stats
+    /// (the settings UI's file-size estimate).
+    pub fn ring(&self) -> Arc<PacketRing> {
+        Arc::clone(&self.ring)
+    }
+
     /// Snapshot the ring, find the oldest video IDR, write temp `.h264` +
     /// per-source `.wav` sidecars trimmed to that IDR's PTS, then run
-    /// ffmpeg to produce a timestamped MP4 with a "Mix" track + one
-    /// stream per source. Returns the saved MP4 path.
+    /// ffmpeg to produce an MP4 with a "Mix" track + one stream per
+    /// source. Returns the saved MP4 path.
     pub fn save_clip(&self) -> Result<PathBuf> {
-        self.save_clip_in(None)
+        self.save_clip_in(None, &FilenameVars::default(), None)
     }
 
     /// Like [`save_clip`] but writes to `directory_override` instead of
@@ -133,12 +174,21 @@ impl Pipeline {
     /// to the output directory take effect on the next save without
     /// requiring a pipeline restart (which would tear down NVENC + the
     /// ring buffer for what is conceptually just a path change).
-    pub fn save_clip_in(&self, directory_override: Option<&std::path::Path>) -> Result<PathBuf> {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let stem = format!("{}-{}", self.cfg.output.filename_stem, ts);
+    ///
+    /// The filename comes from expanding the `output.filename_stem`
+    /// template against `vars` (focused app, etc.); a numeric suffix is
+    /// added only if that name is already taken.
+    ///
+    /// `end_at_100ns` (QPC, from [`qpc_now_100ns`]) clamps the clip to
+    /// end at that moment — pass the hotkey timestamp so nothing that
+    /// happens during the save flow (notification sound, overlay) makes
+    /// it into the clip.
+    pub fn save_clip_in(
+        &self,
+        directory_override: Option<&std::path::Path>,
+        vars: &FilenameVars,
+        end_at_100ns: Option<i64>,
+    ) -> Result<PathBuf> {
         let codec = *self.active_codec.lock().unwrap();
         let header = self.codec_header.lock().unwrap().clone();
         let mut cfg_ref = std::borrow::Cow::Borrowed(&self.cfg);
@@ -149,7 +199,93 @@ impl Pipeline {
                 cfg_ref = std::borrow::Cow::Owned(cloned);
             }
         }
-        save_clip_with_stem(&self.ring, &cfg_ref, &self.audio_meta, &stem, codec, &header)
+        let stem = crate::filename::unique_stem(
+            &cfg_ref.output.directory,
+            &crate::filename::expand(&cfg_ref.output.filename_stem, vars),
+        );
+        save_clip_with_stem(
+            &self.ring,
+            &cfg_ref,
+            &self.audio_meta,
+            &stem,
+            codec,
+            &header,
+            None,
+            end_at_100ns,
+        )
+    }
+
+    /// Begin a manual recording: pin the ring against eviction from the
+    /// newest buffered IDR onward. Returns an error if a recording is
+    /// already in progress. Memory grows with recording length (raw
+    /// encoded packets stay in RAM until the recording is saved).
+    pub fn start_recording(&self) -> Result<()> {
+        let mut rec = self.recording_from.lock().unwrap();
+        if rec.is_some() {
+            return Err(anyhow!("recording already in progress"));
+        }
+        // Anchor at the latest IDR (not "now") so the recording is
+        // decodable from its very first frame instead of losing up to
+        // one GOP at the start.
+        let anchor = self
+            .ring
+            .latest_keyframe_pts()
+            .ok_or_else(|| anyhow!("no video in buffer yet — wait ~1s after start and retry"))?;
+        self.ring.set_hold(Some(anchor));
+        *rec = Some(anchor);
+        info!(anchor_pts_100ns = anchor, "manual recording started");
+        Ok(())
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recording_from.lock().unwrap().is_some()
+    }
+
+    /// End a manual recording and save everything since the start anchor
+    /// as a clip (same mux path as `save_clip_in`). Releases the ring
+    /// hold whether or not the save succeeds.
+    pub fn stop_recording_and_save_in(
+        &self,
+        directory_override: Option<&std::path::Path>,
+        vars: &FilenameVars,
+        end_at_100ns: Option<i64>,
+    ) -> Result<PathBuf> {
+        let anchor = self
+            .recording_from
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| anyhow!("no recording in progress"))?;
+
+        let codec = *self.active_codec.lock().unwrap();
+        let header = self.codec_header.lock().unwrap().clone();
+        let mut cfg_ref = std::borrow::Cow::Borrowed(&self.cfg);
+        if let Some(dir) = directory_override {
+            if dir != self.cfg.output.directory.as_path() {
+                let mut cloned = self.cfg.clone();
+                cloned.output.directory = dir.to_path_buf();
+                cfg_ref = std::borrow::Cow::Owned(cloned);
+            }
+        }
+        let stem = crate::filename::unique_stem(
+            &cfg_ref.output.directory,
+            &crate::filename::expand(&cfg_ref.output.filename_stem, vars),
+        );
+        let result = save_clip_with_stem(
+            &self.ring,
+            &cfg_ref,
+            &self.audio_meta,
+            &stem,
+            codec,
+            &header,
+            Some(anchor),
+            end_at_100ns,
+        );
+        // Release the hold only after the snapshot inside the save has
+        // been taken (save_clip_with_stem snapshots synchronously before
+        // returning control here on the error path too).
+        self.ring.set_hold(None);
+        result
     }
 
     /// Like [`save_clip`] but writes to a fixed `{stem}.mp4` (overwriting
@@ -159,7 +295,16 @@ impl Pipeline {
     pub fn save_clip_as(&self, stem: &str) -> Result<PathBuf> {
         let codec = *self.active_codec.lock().unwrap();
         let header = self.codec_header.lock().unwrap().clone();
-        save_clip_with_stem(&self.ring, &self.cfg, &self.audio_meta, stem, codec, &header)
+        save_clip_with_stem(
+            &self.ring,
+            &self.cfg,
+            &self.audio_meta,
+            stem,
+            codec,
+            &header,
+            None,
+            None,
+        )
     }
 
     /// Signal the video thread to stop, join it, then drop audio handles
@@ -453,6 +598,7 @@ fn video_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn save_clip_with_stem(
     ring: &PacketRing,
     cfg: &Config,
@@ -460,17 +606,27 @@ fn save_clip_with_stem(
     stem: &str,
     active_codec: Option<ActiveCodec>,
     codec_header: &[u8],
+    t_min_override: Option<i64>,
+    t_max_override: Option<i64>,
 ) -> Result<PathBuf> {
     let codec = active_codec
         .ok_or_else(|| anyhow!("encoder not yet open — wait ~1s after start and retry"))?;
     let _t = clipdip_profile::start("pipeline.save_clip");
-    let snapshot = ring.snapshot();
-    // The ring is sized in bytes, not seconds: under CQP rate control the
-    // encoder undershoots `bitrate_bps` on low-motion content, so the ring
-    // can hold well over `replay_seconds` of footage. Bound the saved clip
-    // by time here instead of relying on byte-budget eviction. Pick the
-    // newest IDR whose PTS is still inside the window so the result is at
-    // most `replay_seconds` long (worst case: short by one GOP).
+    let mut snapshot = ring.snapshot();
+    // Clamp to the caller's end timestamp (the hotkey moment). Packets
+    // captured while the save flow itself runs — notification sound in
+    // the loopback, overlay paint — fall after this and are dropped.
+    // Truncating trailing P-frames mid-GOP is fine; decode just ends
+    // a few frames earlier.
+    if let Some(t_max) = t_max_override {
+        snapshot.retain(|p| p.pts_100ns <= t_max);
+    }
+    // Bound the saved clip by time. `t_min` is either the replay window
+    // start (hotkey save) or the manual-recording anchor (override). The
+    // ring's time-based eviction keeps a couple of seconds of slack beyond
+    // the replay window, so cutting at the *latest IDR at-or-before*
+    // `t_min` is normally possible — the clip then always covers the full
+    // configured window (it may run up to one GOP longer, never shorter).
     let t_last = snapshot
         .iter()
         .rev()
@@ -478,18 +634,28 @@ fn save_clip_with_stem(
         .map(|p| p.pts_100ns)
         .ok_or_else(|| anyhow!("no video packets in ring yet — wait ~1s after start and retry"))?;
     let window_100ns = (cfg.replay_seconds as i64) * 10_000_000;
-    let t_min = t_last - window_100ns;
-    let first_idr = snapshot
-        .iter()
-        .position(|p| p.stream_id == STREAM_VIDEO && p.is_keyframe && p.pts_100ns >= t_min)
-        .or_else(|| {
-            // Window contains no IDR (e.g. one very long GOP straddling the
-            // boundary) — fall back to the oldest IDR so we still emit a
-            // playable clip rather than refusing to save.
-            snapshot
-                .iter()
-                .position(|p| p.stream_id == STREAM_VIDEO && p.is_keyframe)
-        })
+    let t_min = t_min_override.unwrap_or(t_last - window_100ns);
+    let mut oldest_idr: Option<usize> = None;
+    let mut idr_at_or_before: Option<usize> = None;
+    for (i, p) in snapshot.iter().enumerate() {
+        if p.stream_id != STREAM_VIDEO || !p.is_keyframe {
+            continue;
+        }
+        if oldest_idr.is_none() {
+            oldest_idr = Some(i);
+        }
+        if p.pts_100ns <= t_min {
+            idr_at_or_before = Some(i);
+        } else {
+            break;
+        }
+    }
+    // No IDR at/before the window start means the buffer simply doesn't
+    // reach back that far yet (app just started, or recording anchor was
+    // the very first IDR) — fall back to the oldest IDR so we still emit
+    // a playable clip rather than refusing to save.
+    let first_idr = idr_at_or_before
+        .or(oldest_idr)
         .ok_or_else(|| anyhow!("no video IDR in ring yet — wait ~1s after start and retry"))?;
 
     let video_pkts: Vec<&EncodedPacket> = snapshot[first_idr..]

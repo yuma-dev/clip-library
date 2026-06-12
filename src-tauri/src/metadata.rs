@@ -70,6 +70,26 @@ impl ForegroundSnapshot {
     }
 }
 
+/// Quick name resolution for filename templating: the foreground exe's
+/// stem (e.g. `VALORANT`) and — only when `need_title` is set, because
+/// `WM_GETTEXT` against a hung window can block up to ~400 ms — the
+/// window title.
+pub fn filename_names(
+    snap: Option<ForegroundSnapshot>,
+    need_title: bool,
+) -> (Option<String>, Option<String>) {
+    let Some(snap) = snap else { return (None, None) };
+    let app = exe_path_for_pid(snap.pid).and_then(|p| {
+        p.file_stem().map(|s| s.to_string_lossy().to_string())
+    });
+    let title = if need_title {
+        window_title(HWND(snap.hwnd as *mut _))
+    } else {
+        None
+    };
+    (app, title)
+}
+
 /// Output of the heavy resolution work — title query, exe lookup, icon
 /// extraction. Computed up-front (in parallel with the mux) so the only
 /// thing left at save-completion is a cheap JSON write keyed by the

@@ -20,12 +20,51 @@
 
     /* Anchor: positions the card in one of the four screen corners. The
        overlay window is sized to the screen, so vh resolves to actual
-       physical screen-percentage units. */
-    .anchor { position: fixed; pointer-events: auto; }
-    .anchor.top_left     { top: 2.4vh;    left: 2.4vh; }
-    .anchor.top_right    { top: 2.4vh;    right: 2.4vh; }
-    .anchor.bottom_left  { bottom: 2.4vh; left: 2.4vh; }
-    .anchor.bottom_right { bottom: 2.4vh; right: 2.4vh; }
+       physical screen-percentage units. --off is the off-screen slide
+       direction; the comet/luxe keyframes read it so one set of
+       keyframes serves both left and right corners. */
+    .anchor {
+      position: fixed;
+      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1.2vh;
+      --off: 130%;
+    }
+    .anchor.top_left     { top: 2.4vh;    left: 2.4vh;  align-items: flex-start; --off: -130%; }
+    .anchor.top_right    { top: 2.4vh;    right: 2.4vh; align-items: flex-end; }
+    .anchor.bottom_left  { bottom: 2.4vh; left: 2.4vh;  align-items: flex-start; flex-direction: column-reverse; --off: -130%; }
+    .anchor.bottom_right { bottom: 2.4vh; right: 2.4vh; align-items: flex-end;   flex-direction: column-reverse; }
+
+    /* Rotating-angle custom property for all conic-gradient comets. */
+    @property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+    @keyframes spinang { to { --ang: 360deg; } }
+
+    /* Red recording indicator — lives outside the card so it survives
+       the toast dismissing while a manual recording keeps running.
+       Comet treatment: red core with a tiny comet orbiting it. */
+    .rec-dot {
+      display: none;
+      width: 1.8vh; height: 1.8vh;
+      position: relative;
+    }
+    .rec-dot .core {
+      position: absolute; inset: 0.5vh;
+      border-radius: 999px;
+      background: #f43f5e;
+      box-shadow: 0 0 0.7vh rgba(244, 63, 94, 0.8), 0 0 0 0.3vh rgba(20, 20, 24, 0.55);
+    }
+    .rec-dot .orb {
+      position: absolute; inset: 0;
+      border-radius: 999px;
+      padding: 0.16vh;
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 70%, rgba(251,113,133,0.6) 90%, #ffe4e6 98%, transparent 100%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+      animation: spinang 1.6s linear infinite;
+    }
+    body.recording .rec-dot { display: block; }
 
     .card {
       display: inline-flex;
@@ -38,26 +77,207 @@
         0 18px 40px -16px rgba(0, 0, 0, 0.7),
         0 0 0 1px rgba(255, 255, 255, 0.05);
       user-select: none;
+      position: relative;
       opacity: 0;
-      /* Default slide direction is from the right; left corners override
-         below. The transition only fires once the `.entered` class is
-         applied, which we gate on `document.fonts.ready` + 2 RAFs so it
-         can't get eaten by WebView2 startup flicker. */
-      transform: translateX(120%);
-      transition: opacity .28s ease-out, transform .42s cubic-bezier(.22, .9, .34, 1);
+      transform: translateX(var(--off));
       will-change: transform, opacity;
     }
-    .anchor.top_left .card, .anchor.bottom_left .card {
+    /* Entrance: slide + slight squash that settles (gated on
+       `document.fonts.ready` + 2 RAFs in JS so it can't get eaten by
+       WebView2 startup flicker). Exit: short wind-up, then out. */
+    .card.entered {
+      opacity: 1;
+      transform: translateX(0);
+      animation: luxein 0.6s cubic-bezier(.26,1.25,.42,1) both;
+    }
+    @keyframes luxein {
+      0%   { opacity: 0; transform: translateX(var(--off)) scaleX(1.05) scaleY(0.97); }
+      60%  { opacity: 1; transform: translateX(calc(var(--off) * -0.012)) scaleY(1.01); }
+      100% { opacity: 1; transform: translateX(0) scale(1); }
+    }
+    .card.leaving { animation: luxeout 0.42s cubic-bezier(.55,0,.8,.25) both; }
+    @keyframes luxeout {
+      0%   { opacity: 1; transform: translateX(0); }
+      22%  { transform: translateX(calc(var(--off) * -0.02)); }
+      100% { opacity: 0; transform: translateX(calc(var(--off) * 1.04)); }
+    }
+    /* Fully removed from layout after slide-out while the window stays
+       alive for the recording dot. */
+    .card.gone { display: none; }
+    /* Squash-pop when the save lands. Declared after .entered so it
+       wins the animation cascade while it runs, then control returns
+       to luxein's settled fill state. */
+    .card.saved-pop { animation: luxepop 0.45s cubic-bezier(.34,1.45,.64,1); }
+    @keyframes luxepop {
+      0%   { transform: scaleX(1) scaleY(1); }
+      35%  { transform: scaleX(1.035) scaleY(0.975); }
+      70%  { transform: scaleX(0.99) scaleY(1.012); }
+      100% { transform: scale(1); }
+    }
+
+    /* --- Comet border (::before) -------------------------------------
+       A bright head with a violet tail circling the card edge while
+       saving; rose variant for the recording notice; on save it does
+       two fast laps and burns out. */
+    .card::before {
+      content: "";
+      position: absolute; inset: 0;
+      border-radius: 0.85vh;
+      padding: 1.2px;
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, rgba(139,92,246,0.12) 75%,
+        rgba(216,68,221,0.55) 90%, #f3e8ff 98%, transparent 100%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+      opacity: 0;
+      transition: opacity .3s ease;
+      pointer-events: none;
+    }
+    .card.saving::before { opacity: 1; animation: spinang 1.4s linear infinite; }
+    .card.flash::before {
+      opacity: 1;
+      animation: spinang 0.42s cubic-bezier(.45,.05,.55,.95) 2, borderfade 1.1s ease-out forwards;
+    }
+    @keyframes borderfade {
+      0%   { opacity: 1; filter: brightness(1.9) saturate(1.4); }
+      40%  { opacity: 0.85; filter: brightness(1.3); }
+      100% { opacity: 0; filter: brightness(1); }
+    }
+    .card.notice::before {
+      opacity: 1;
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, rgba(225,29,72,0.12) 75%,
+        rgba(244,63,94,0.55) 90%, #ffe4e6 98%, transparent 100%);
+      animation: spinang 2.4s linear infinite;
+    }
+
+    /* --- Comet glow ---------------------------------------------------
+       Blurred twin of the comet orbiting behind the card. Two layers:
+       the inner <i> paints a thin, sharply-masked ring (hollow center,
+       so nothing washes over the card face), and the wrapper blurs that
+       ring as the FINAL step — soft falloff in both directions, a true
+       glow. Same spin animation as the border = the glow chases the
+       comet head in perfect sync. */
+    .glowwrap {
+      position: absolute; inset: -2.3vh;
+      filter: blur(1.4vh);
+      opacity: 0;
+      transition: opacity .3s ease;
+      pointer-events: none;
+      z-index: -1;
+    }
+    .glowwrap i {
+      position: absolute; inset: 1.7vh;      /* ≈0.6vh outside the card edge */
+      border-radius: 1.4vh;
+      padding: 0.95vh;                       /* ring thickness before blur */
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, rgba(139,92,246,0.25) 78%,
+        rgba(216,68,221,0.6) 90%, rgba(243,232,255,0.95) 98%, transparent 100%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+    }
+    .card.saving .glowwrap { opacity: 0.8; }
+    .card.saving .glowwrap i { animation: spinang 1.4s linear infinite; }
+    .card.flash .glowwrap { opacity: 1; animation: glowburn 1.1s ease-out forwards; }
+    .card.flash .glowwrap i { animation: spinang 0.42s cubic-bezier(.45,.05,.55,.95) 2; }
+    @keyframes glowburn {
+      0%   { opacity: 1; filter: blur(1.4vh) brightness(1.9) saturate(1.3); }
+      55%  { opacity: 0.8; filter: blur(1.5vh) brightness(1.4); }
+      100% { opacity: 0; filter: blur(1.7vh) brightness(1); }
+    }
+    .card.notice .glowwrap { opacity: 0.7; }
+    .card.notice .glowwrap i {
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, rgba(225,29,72,0.25) 78%,
+        rgba(244,63,94,0.6) 90%, rgba(255,228,230,0.9) 98%, transparent 100%);
+      animation: spinang 2.4s linear infinite;
+    }
+
+    /* Ambient under-glow while working / recording notice. */
+    .card.saving {
+      box-shadow:
+        0 18px 40px -16px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(255, 255, 255, 0.05),
+        0 0 3vh -0.6vh rgba(168, 85, 247, 0.3);
+      transition: box-shadow .4s ease;
+    }
+    .card.notice {
+      box-shadow:
+        0 18px 40px -16px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(255, 255, 255, 0.05),
+        0 0 2.8vh -0.6vh rgba(244, 63, 94, 0.3);
+    }
+    .card.glow { animation: savedglow 1.2s ease-out 0.05s; }
+    @keyframes savedglow {
+      0%   { box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05), 0 0 0 0 rgba(192,132,252,0); }
+      30%  { box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(216,180,254,0.4), 0 0 3.6vh -0.4vh rgba(192,132,252,0.55); }
+      100% { box-shadow: 0 18px 40px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05), 0 0 0 0 rgba(192,132,252,0); }
+    }
+
+    /* Lavender sheen sweeping the card on save (clipped to the card). */
+    .fxclip {
+      position: absolute; inset: 0;
+      border-radius: 0.85vh;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .sheen {
+      position: absolute; inset: 0;
+      background: linear-gradient(115deg,
+        transparent 30%, transparent 40%,
+        rgba(233, 213, 255, 0.18) 50%, transparent 60%, transparent 70%);
       transform: translateX(-120%);
     }
-    .card.entered { opacity: 1; transform: translateX(0); }
+    .sheen.on { animation: sheenk 0.9s cubic-bezier(.3,.6,.35,1) 0.15s; }
+    @keyframes sheenk { to { transform: translateX(120%); } }
 
-    .logo {
+    /* Auto-dismiss drain bar along the bottom edge (saved phase only). */
+    .drain {
+      position: absolute; left: 0.95vh; right: 0.95vh; bottom: 0.3vh;
+      height: 0.22vh; border-radius: 0.2vh;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity .3s ease;
+      pointer-events: none;
+    }
+    .drain.on { opacity: 1; }
+    .drain i {
+      position: absolute; inset: 0;
+      border-radius: 0.2vh;
+      transform-origin: left;
+      background: linear-gradient(90deg, #d844dd, #8b5cf6);
+    }
+    .drain.on i { animation: draink var(--drain-ms, 4000ms) linear forwards; }
+    @keyframes draink { to { transform: scaleX(0); } }
+
+    /* Sparkles (the logo's four-point star) twinkling on save —
+       spawned from JS, animated via the Web Animations API. */
+    .sparkle { position: absolute; pointer-events: none; z-index: 3; }
+    .sparkle svg { display: block; width: 100%; height: 100%; }
+
+    .logo-wrap {
+      position: relative;
       width: 4.2vh;
       height: 4.2vh;
       flex-shrink: 0;
+    }
+    .logo {
+      width: 100%;
+      height: 100%;
       user-select: none;
       display: block;
+      transition: opacity .25s ease, transform .25s ease;
+    }
+    /* While saving, the logo stays alive: gentle pulse + purple glow.
+       The comet border carries the "working" signal — no spinner. */
+    .card.saving .logo {
+      opacity: 0.95;
+      animation: logopulse 1.8s ease-in-out infinite;
+    }
+    @keyframes logopulse {
+      0%, 100% { transform: scale(0.96); filter: drop-shadow(0 0 0.2vh rgba(192,132,252,0)); }
+      50%      { transform: scale(1.05); filter: drop-shadow(0 0 0.85vh rgba(192,132,252,0.6)); }
     }
 
     .body {
@@ -73,16 +293,12 @@
       color: rgba(255, 255, 255, 0.96);
       letter-spacing: -0.005em;
     }
-    .spinner {
-      display: none;
-      width: 1.3vh; height: 1.3vh;
-      border-radius: 999px;
-      border: 0.18vh solid rgba(255, 255, 255, 0.18);
-      border-top-color: rgba(255, 255, 255, 0.85);
-      box-sizing: border-box;
-      animation: spin 0.75s linear infinite;
+    /* Blur-crossfade when the title text changes phase. */
+    .title.swap { animation: titleswap 0.4s ease both; }
+    @keyframes titleswap {
+      0%   { opacity: 0; filter: blur(4px); transform: translateY(0.5vh); }
+      100% { opacity: 1; filter: blur(0); transform: translateY(0); }
     }
-    .card.saving .spinner { display: inline-block; }
 
     .hint-row {
       position: relative;
@@ -126,8 +342,21 @@
       font: 500 1.45vh/1 inherit;
       letter-spacing: -0.005em;
       opacity: 0;
-      caret-color: #fff;
+      caret-color: #f3e8ff;
     }
+    /* Focused: the comet "parks" as a glowing underline beneath the
+       rename input. */
+    .underline {
+      position: absolute;
+      left: 0; right: 0; bottom: -0.4vh;
+      height: 0.18vh; border-radius: 0.2vh;
+      background: linear-gradient(90deg, transparent, #c084fc 40%, #f3e8ff);
+      box-shadow: 0 1px 0.85vh rgba(192, 132, 252, 0.5);
+      transform: scaleX(0); transform-origin: right;
+      transition: transform .4s cubic-bezier(.3,.7,.3,1);
+      pointer-events: none;
+    }
+    .card.focused .underline { transform: scaleX(1); }
     .rename-display {
       font: 500 1.45vh/1 inherit;
       color: rgba(255, 255, 255, 0.7);
@@ -140,7 +369,7 @@
     }
 
     /* Visibility per phase. Each phase reveals exactly one of:
-       spinner+title alone (saving), hint OR input (saved, depending on
+       title alone (saving), hint OR input (saved, depending on
        focus), or rename-display (renamed). */
     .card.saving   .hint,
     .card.saving   .rename-input,
@@ -149,22 +378,25 @@
     .card.renamed  .hint,
     .card.renamed  .rename-input   { display: none; }
     .card.renamed  .rename-display { display: inline; }
+    /* Notice phase: title-only toast ("Recording started"). */
+    .card.notice   .hint,
+    .card.notice   .rename-input,
+    .card.notice   .rename-display,
+    .card.notice   .hint-row       { display: none; }
     .card.focused  .hint           { display: none; }
     .card.focused  .rename-input   { opacity: 1; }
-
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
-    }
   </style>
 </head>
 <body>
   <div class="anchor bottom_right" id="anchor">
     <div class="card saving" id="card">
-      <img class="logo" src="/logo250x250.png" alt="" draggable="false" />
+      <div class="glowwrap"><i></i></div>
+      <div class="fxclip"><div class="sheen" id="sheen"></div></div>
+      <div class="logo-wrap" id="logo-wrap">
+        <img class="logo" src="/logo250x250.png" alt="" draggable="false" />
+      </div>
       <div class="body">
         <div class="title-row">
-          <span class="spinner"></span>
           <span class="title" id="title">Saving clip…</span>
         </div>
         <div class="hint-row" id="hint-row">
@@ -192,9 +424,12 @@
             maxlength="120"
           />
           <span class="rename-display" id="rename-display"></span>
+          <div class="underline"></div>
         </div>
       </div>
+      <div class="drain" id="drain"><i></i></div>
     </div>
+    <div class="rec-dot" title="Recording"><span class="orb"></span><span class="core"></span></div>
   </div>
 
   <script>
@@ -239,17 +474,128 @@
       const hintRow      = document.getElementById("hint-row");
       const input        = document.getElementById("rename-input");
       const displayEl    = document.getElementById("rename-display");
+      const sheen        = document.getElementById("sheen");
+      const drain        = document.getElementById("drain");
+      const logoWrap     = document.getElementById("logo-wrap");
+
+      // --- Saved-moment eye candy ---------------------------------------
+      // Four-point sparkle matching the logo's star; spawned around the
+      // icon when the save lands. Sizes derive from vh so they scale
+      // with the rest of the card on any screen.
+      const starSVG =
+        '<svg viewBox="0 0 24 24"><path fill="#f3e8ff" d="M12 0C13.2 7.4 16.6 10.8 24 12 16.6 13.2 13.2 16.6 12 24 10.8 16.6 7.4 13.2 0 12 7.4 10.8 10.8 7.4 12 0Z"/></svg>';
+      const spawnSparkles = () => {
+        const vh = window.innerHeight / 100;
+        const colors = ["#f3e8ff", "#e9d5ff", "#d8b4fe"];
+        [-60, 45, 160].forEach((deg, i) => {
+          const w = document.createElement("div");
+          w.className = "sparkle";
+          w.innerHTML = starSVG;
+          const size = (0.75 + (i % 2) * 0.3) * vh;
+          const a = (deg * Math.PI) / 180;
+          const r = (2.5 + (i % 2) * 0.3) * vh;
+          w.style.width = size + "px"; w.style.height = size + "px";
+          w.style.left = `calc(50% + ${Math.cos(a) * r}px - ${size / 2}px)`;
+          w.style.top  = `calc(50% + ${Math.sin(a) * r}px - ${size / 2}px)`;
+          const c = colors[i % colors.length];
+          w.querySelector("path").setAttribute("fill", c);
+          w.style.filter = `drop-shadow(0 0 0.4vh ${c})`;
+          logoWrap.appendChild(w);
+          const anim = w.animate([
+            { transform: "scale(0) rotate(-10deg)", opacity: 0 },
+            { transform: "scale(1.05) rotate(8deg)", opacity: 1, offset: 0.35 },
+            { transform: "scale(0.95) rotate(14deg)", opacity: 1, offset: 0.62 },
+            { transform: "scale(0) rotate(25deg)", opacity: 0 }
+          ], {
+            duration: 850,
+            delay: 90 + i * 110,
+            easing: "cubic-bezier(.35,.55,.3,1)",
+          });
+          anim.onfinish = () => w.remove();
+        });
+      };
+      const clearDrain = () => {
+        drain.classList.remove("on");
+        // Restart the drain animation cleanly next time it's armed.
+        const bar = drain.querySelector("i");
+        bar.style.animation = "none";
+        void bar.offsetWidth;
+        bar.style.animation = "";
+      };
+      const armDrain = (ms) => {
+        clearDrain();
+        drain.style.setProperty("--drain-ms", ms + "ms");
+        drain.classList.add("on");
+      };
+      const swapTitle = () => {
+        titleEl.classList.remove("swap");
+        void titleEl.offsetWidth;
+        titleEl.classList.add("swap");
+      };
 
       // --- State ------------------------------------------------------
       const state = {
-        phase: "saving",          // "saving" | "saved" | "renamed"
+        phase: "saving",          // "saving" | "saved" | "renamed" | "notice"
+        kind: "clip",             // "clip" | "recording" — words the titles
+        noticeMessage: "",
         path: null,
         autoDismissSecs: 0,
         corner: "bottom_right",
         focused: false,
+        recording: false,
+        sound: false,             // chirp on save? (from the saving payload)
       };
       let dismissTimer = null;
       let savingTimeoutTimer = null;
+
+      // --- Minimum saving-phase duration --------------------------------
+      // WebView2 cold start regularly outruns the entire mux, so by the
+      // time this script runs the save is already done and we'd hydrate
+      // straight into "saved" — the user would never see the comet. The
+      // save is finished on disk at that point; the toast is pure theater,
+      // so we hold the saving phase for a floor duration and defer the
+      // payoff. Slow saves are unaffected (elapsed >= floor → no wait).
+      const MIN_SAVING_MS = 800;
+      let savingShownAt = 0;       // performance.now() when saving phase painted
+      let savedTimer = null;       // pending deferred payoff
+      let savedApplyFn = null;
+      const cancelDeferredSaved = () => {
+        if (savedTimer) clearTimeout(savedTimer);
+        savedTimer = null;
+        savedApplyFn = null;
+      };
+      // Apply a deferred payoff immediately (user pressed the rename
+      // hotkey during the cosmetic wait — function over theater).
+      const flushDeferredSaved = () => {
+        if (!savedTimer) return;
+        clearTimeout(savedTimer);
+        const f = savedApplyFn;
+        savedTimer = null;
+        savedApplyFn = null;
+        if (f) f();
+      };
+      const scheduleSavedPhase = () => {
+        cancelDeferredSaved();
+        const apply = () => {
+          if (state.phase === "saved") return; // event + hydration double-fire
+          setPhase("saved");
+          scheduleDismiss();
+          // Chirp exactly when the payoff animation starts so audio and
+          // visuals land together. Playback stays on the backend —
+          // webview audio blocks the JS event loop mid-animation.
+          if (state.sound && state.kind === "clip") {
+            invoke("play_saved_sound").catch((e) => console.error("chirp:", e));
+          }
+        };
+        const wait = Math.max(0, MIN_SAVING_MS - (performance.now() - savingShownAt));
+        if (wait <= 0) { apply(); return; }
+        savedApplyFn = apply;
+        savedTimer = setTimeout(() => {
+          savedTimer = null;
+          savedApplyFn = null;
+          apply();
+        }, wait);
+      };
 
       // Upper bound on how long we'll show "Saving clip…" before
       // assuming the mux silently failed. Without this the spinner can
@@ -274,21 +620,55 @@
 
       const setPhase = (p) => {
         state.phase = p;
-        card.classList.remove("saving", "saved", "renamed");
+        if (p === "saving") savingShownAt = performance.now();
+        // Effect classes from a previous phase must not leak into the
+        // next one (e.g. a new clip-saving while the flash is mid-burn).
+        card.classList.remove("saving", "saved", "renamed", "notice", "flash", "glow", "saved-pop");
+        sheen.classList.remove("on");
+        clearDrain();
         card.classList.add(p);
+        const rec = state.kind === "recording";
         titleEl.textContent =
-          p === "saving"  ? "Saving clip…" :
+          p === "notice"  ? state.noticeMessage :
+          p === "saving"  ? (rec ? "Saving recording…" : "Saving clip…") :
           p === "renamed" ? "Renamed!" :
-                            "Clip saved";
+                            (rec ? "Recording saved" : "Clip saved");
+        if (p === "saved") {
+          // The payoff: comet does two fast laps and burns out, glow
+          // flash, sheen sweep, squash-pop, sparkles off the logo.
+          // Reflow first so the effect animations restart even when a
+          // previous save already played them on this card.
+          void card.offsetWidth;
+          card.classList.add("flash", "glow", "saved-pop");
+          sheen.classList.add("on");
+          swapTitle();
+          spawnSparkles();
+        } else if (p === "renamed") {
+          swapTitle();
+        }
       };
       const setFocused = (f) => {
         state.focused = f;
         card.classList.toggle("focused", f);
+        if (f) clearDrain();
       };
       const setCorner = (c) => {
         if (!c || c === state.corner) return;
         state.corner = c;
         anchor.className = "anchor " + c;
+      };
+      const setRecording = (v) => {
+        state.recording = !!v;
+        document.body.classList.toggle("recording", state.recording);
+      };
+      // Re-show the card on a window that stayed alive (recording dot)
+      // after a previous toast slid out.
+      const showCard = () => {
+        card.classList.remove("leaving");
+        if (!card.classList.contains("gone") && card.classList.contains("entered")) return;
+        card.classList.remove("gone");
+        void card.offsetWidth; // commit off-screen state before sliding in
+        card.classList.add("entered");
       };
       const setHotkey = (s) => {
         if (!s) return;
@@ -307,10 +687,30 @@
           dismissTimer = setTimeout(dismiss, 1200);
         } else if (state.phase === "saved" && state.autoDismissSecs > 0) {
           dismissTimer = setTimeout(dismiss, state.autoDismissSecs * 1000);
+          armDrain(state.autoDismissSecs * 1000);
+        } else if (state.phase === "notice") {
+          dismissTimer = setTimeout(dismiss, 2500);
         }
       };
-      const dismiss = () =>
-        invoke("dismiss_notification").catch((e) => console.error("dismiss:", e));
+      // Slide the card out, then let the backend decide whether the
+      // window dies (normal) or stays for the recording dot.
+      let dismissing = false;
+      const dismiss = () => {
+        if (dismissing) return;
+        dismissing = true;
+        // Drop finished effect animations first — a lingering
+        // `saved-pop` would win the animation cascade over `leaving`
+        // and the card would snap off instead of sliding out.
+        card.classList.remove("entered", "saved-pop", "flash", "glow");
+        card.classList.add("leaving");
+        setTimeout(() => {
+          dismissing = false;
+          // A new toast slid in while we were animating out — abort.
+          if (card.classList.contains("entered")) return;
+          if (state.recording) card.classList.add("gone");
+          invoke("dismiss_notification").catch((e) => console.error("dismiss:", e));
+        }, 440);
+      };
 
       // --- Pending hydration ------------------------------------------
       // Backend stashes BOTH the clip-saving and clip-saved payloads
@@ -324,40 +724,79 @@
           const saving = p.saving;
           const saved = p.saved;
           if (saving) {
+            state.kind = saving.kind || "clip";
             setHotkey(saving.rename_hotkey);
             setCorner(saving.corner);
             state.autoDismissSecs = saving.auto_dismiss_secs || 0;
+            state.sound = !!saving.sound;
             setPhase("saving");
             armSavingTimeout();
           }
           if (saved) {
-            // Saved already happened while we were booting — skip the
-            // spinner entirely and land on the rename UI.
+            // Saved already happened while we were booting. The save is
+            // done on disk, but jumping straight to "saved" would skip
+            // the comet entirely (the common case — cold start outruns
+            // the mux). Enter in the saving phase and let the deferred
+            // payoff land after the minimum comet time.
+            state.kind = saved.kind || state.kind;
             state.path = saved.path || null;
             clearSavingTimeout();
-            setPhase("saved");
+            if (!saving) setPhase("saving");
+            scheduleSavedPhase();
+          }
+          if (p.notice && !saving && !saved) {
+            // A transient toast ("Recording started") fired before we
+            // mounted — show it and auto-dismiss.
+            setCorner(p.notice.corner);
+            state.noticeMessage = p.notice.message || "";
+            setPhase("notice");
             scheduleDismiss();
           }
+          setRecording(p.recording);
         })
         .catch((e) => console.error("overlay_get_pending:", e));
 
       // --- Event listeners --------------------------------------------
       listen("clip-saving", (ev) => {
         const p = ev.payload || {};
+        if (dismissTimer) clearTimeout(dismissTimer);
+        cancelDeferredSaved(); // a new flow supersedes any pending payoff
         setFocused(false);
         input.value = "";
+        state.kind = p.kind || "clip";
         setHotkey(p.rename_hotkey);
         setCorner(p.corner);
         state.autoDismissSecs = p.auto_dismiss_secs || 0;
+        state.sound = !!p.sound;
         setPhase("saving");
+        showCard();
         armSavingTimeout();
+      });
+
+      listen("recording-state", (ev) => {
+        const p = ev.payload || {};
+        setRecording(p.recording);
       });
 
       listen("clip-saved", (ev) => {
         const p = ev.payload || {};
+        state.kind = p.kind || state.kind;
         state.path = p.path || null;
         clearSavingTimeout();
-        setPhase("saved");
+        // Defer the payoff if the comet hasn't had its minimum screen
+        // time yet (fast mux); applies immediately on slow saves.
+        scheduleSavedPhase();
+      });
+
+      listen("overlay-notice", (ev) => {
+        const p = ev.payload || {};
+        clearSavingTimeout();
+        cancelDeferredSaved();
+        setFocused(false);
+        setCorner(p.corner);
+        state.noticeMessage = p.message || "";
+        setPhase("notice");
+        showCard();
         scheduleDismiss();
       });
 
@@ -365,10 +804,15 @@
         // Backend also destroys the window from its side, but invoking
         // dismiss here is harmless and keeps the React-era behavior.
         clearSavingTimeout();
+        cancelDeferredSaved();
         dismiss();
       });
 
       listen("activate-rename", () => {
+        // The save may be done but its payoff still deferred for comet
+        // screen time — function beats theater, flush it now so the
+        // rename UI is real.
+        flushDeferredSaved();
         if (state.phase !== "saved" || state.focused) return;
         invoke("set_overlay_input_mode", { enabled: true }).catch(console.error);
         setTimeout(() => input.focus(), 50);
