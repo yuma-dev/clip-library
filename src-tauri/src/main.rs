@@ -965,13 +965,14 @@ impl HealthMonitor {
         app: AppHandle,
         ring: Arc<clipdip_ringbuf::PacketRing>,
         liveness: Arc<std::sync::atomic::AtomicI64>,
+        phase: Arc<std::sync::atomic::AtomicU8>,
         replay_seconds: u32,
     ) -> Self {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name("clipdip-health".into())
-            .spawn(move || health_loop(app, ring, liveness, replay_seconds, stop_thread))
+            .spawn(move || health_loop(app, ring, liveness, phase, replay_seconds, stop_thread))
             .ok();
         Self { stop, handle }
     }
@@ -991,10 +992,11 @@ fn health_loop(
     app: AppHandle,
     ring: Arc<clipdip_ringbuf::PacketRing>,
     liveness: Arc<std::sync::atomic::AtomicI64>,
+    phase: Arc<std::sync::atomic::AtomicU8>,
     replay_seconds: u32,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
-    use clipdip_core::pipeline::qpc_now_100ns;
+    use clipdip_core::pipeline::{capture_phase, qpc_now_100ns};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
@@ -1002,6 +1004,13 @@ fn health_loop(
     // acquire stalls that happen under load, and above the video thread's own
     // 0.5s stall-compensation threshold.
     const STALL_IDLE_100NS: i64 = 20_000_000; // 2s
+    // No frame for THIS long ⇒ the capture thread is wedged inside a GPU call
+    // that never returned (the "1-second clip" root cause). It can't self-heal
+    // — the thread holds the DXGI duplication and can't be torn down — so the
+    // only reliable recovery is restarting the process. 15s is unambiguous: no
+    // legitimate gap lasts that long, and the media clock already absorbs real
+    // stalls shorter than the window.
+    const WEDGE_RESTART_100NS: i64 = 150_000_000; // 15s
     let window_100ns = replay_seconds as i64 * 10_000_000;
     // "Low" = the buffer dropped more than max(10%, 5s) below the window.
     let underfull_floor = window_100ns - (window_100ns / 10).max(50_000_000);
@@ -1010,6 +1019,9 @@ fn health_loop(
     let mut bad = 0u32; // consecutive degraded ticks (debounce in)
     let mut good = 0u32; // consecutive healthy ticks (debounce out)
     let mut degraded = false;
+    // Only auto-restart once capture has actually worked this session, so a
+    // wedge that somehow happens at startup can't cause a restart loop.
+    let mut seen_healthy = false;
     let mut since_poll = Duration::ZERO;
     let tick = Duration::from_millis(250); // short slices so stop is prompt
 
@@ -1044,11 +1056,39 @@ fn health_loop(
                 frame_idle_secs = idle_secs,
                 ring_span_secs = stats.video_span_100ns as f64 / 1e7,
                 ring_video_mb = stats.video_bytes / 1_000_000,
+                phase = capture_phase::name(phase.load(Ordering::Relaxed)),
                 "capture heartbeat"
             );
         }
 
         let live = liveness.load(Ordering::Relaxed);
+
+        // Wedge recovery: capture thread alive but producing nothing for a
+        // long time ⇒ stuck in a GPU call that won't return. Restart the
+        // process to bring capture back (last-resort, but the only thing that
+        // works — see WEDGE_RESTART_100NS).
+        if live != 0 {
+            let idle = qpc_now_100ns() - live;
+            if idle < STALL_IDLE_100NS {
+                seen_healthy = true;
+            }
+            if seen_healthy && idle > WEDGE_RESTART_100NS {
+                let stuck_in = capture_phase::name(phase.load(Ordering::Relaxed));
+                error!(
+                    idle_secs = idle as f64 / 1e7,
+                    stuck_in,
+                    "capture wedged (no frames; thread stuck in this stage) — restarting Clipdip to recover"
+                );
+                notify_native(
+                    &app,
+                    "Clipdip — capture froze",
+                    "Screen capture stopped responding. Restarting Clipdip to recover…",
+                );
+                // Let the toast surface before the process exits.
+                std::thread::sleep(Duration::from_millis(1200));
+                app.restart();
+            }
+        }
         let issue: Option<(String, String)> = if live == 0 {
             // No frame produced yet — still starting up.
             None
@@ -1164,6 +1204,7 @@ fn run_capture_loop(
                     app.clone(),
                     p.ring(),
                     p.frame_liveness(),
+                    p.capture_phase(),
                     replay_seconds,
                 ));
             }
@@ -1543,6 +1584,7 @@ fn run_capture_loop(
                                 app.clone(),
                                 p.ring(),
                                 p.frame_liveness(),
+                                p.capture_phase(),
                                 replay_seconds,
                             ));
                         }

@@ -16,7 +16,7 @@
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -107,6 +107,30 @@ pub struct Pipeline {
     /// writes it every frame; a health monitor compares it against
     /// `qpc_now_100ns()` to detect a live capture stall.
     frame_liveness: Arc<AtomicI64>,
+    /// Which stage the video loop is currently in (see [`CapturePhase`]).
+    /// If frame production wedges, this pins down *which* GPU call hung —
+    /// the loop sets it before each call but can't clear it if the call
+    /// never returns.
+    capture_phase: Arc<AtomicU8>,
+}
+
+/// Stage values stored in [`Pipeline::capture_phase`]. A health watchdog
+/// reads this when frames stop to report where the loop is stuck.
+pub mod capture_phase {
+    pub const SLEEP: u8 = 0;
+    pub const ACQUIRE: u8 = 1;
+    pub const ENCODE: u8 = 2;
+    pub const PUSH: u8 = 3;
+
+    pub fn name(v: u8) -> &'static str {
+        match v {
+            SLEEP => "sleep",
+            ACQUIRE => "acquire_frame",
+            ENCODE => "encode_frame",
+            PUSH => "ring_push",
+            _ => "unknown",
+        }
+    }
 }
 
 impl Pipeline {
@@ -135,6 +159,7 @@ impl Pipeline {
         let active_codec: Arc<Mutex<Option<ActiveCodec>>> = Arc::new(Mutex::new(None));
         let codec_header: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let frame_liveness = Arc::new(AtomicI64::new(0));
+        let capture_phase = Arc::new(AtomicU8::new(capture_phase::SLEEP));
         let video_thread = spawn_video_thread(
             cfg.clone(),
             Arc::clone(&ring),
@@ -143,6 +168,7 @@ impl Pipeline {
             Arc::clone(&codec_header),
             Arc::clone(&media_clock),
             Arc::clone(&frame_liveness),
+            Arc::clone(&capture_phase),
         )?;
 
         let reporter_thread = if clipdip_profile::enabled() {
@@ -167,6 +193,7 @@ impl Pipeline {
             recording_from: Mutex::new(None),
             _media_clock: media_clock,
             frame_liveness,
+            capture_phase,
         })
     }
 
@@ -186,6 +213,13 @@ impl Pipeline {
     /// detect a capture stall while the app is running.
     pub fn frame_liveness(&self) -> Arc<AtomicI64> {
         Arc::clone(&self.frame_liveness)
+    }
+
+    /// Shared handle to the video loop's current stage (see
+    /// [`capture_phase`]). A watchdog reads this when frames have stopped to
+    /// report which call wedged.
+    pub fn capture_phase(&self) -> Arc<AtomicU8> {
+        Arc::clone(&self.capture_phase)
     }
 
     /// Snapshot the ring, find the oldest video IDR, write temp `.h264` +
@@ -482,6 +516,7 @@ fn spawn_video_thread(
     codec_header: Arc<Mutex<Vec<u8>>>,
     media_clock: Arc<MediaClock>,
     frame_liveness: Arc<AtomicI64>,
+    capture_phase: Arc<AtomicU8>,
 ) -> Result<JoinHandle<Result<()>>> {
     std::thread::Builder::new()
         .name("clipdip-video".into())
@@ -494,6 +529,7 @@ fn spawn_video_thread(
                 codec_header,
                 media_clock,
                 frame_liveness,
+                capture_phase,
             )
         })
         .context("spawn video capture thread")
@@ -514,6 +550,7 @@ fn warn_if_slow(stage: &str, elapsed: Duration) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn video_loop(
     cfg: Config,
     ring: Arc<PacketRing>,
@@ -522,6 +559,7 @@ fn video_loop(
     codec_header: Arc<Mutex<Vec<u8>>>,
     media_clock: Arc<MediaClock>,
     frame_liveness: Arc<AtomicI64>,
+    capture_phase: Arc<AtomicU8>,
 ) -> Result<()> {
     let (mut dup, device, _ctx) = DesktopDuplicator::with_default_device(cfg.video.output_index)
         .with_context(|| {
@@ -620,11 +658,15 @@ fn video_loop(
         // only ~5 fps no matter the target. The outer `next_at` sleep
         // already handles pacing, so DXGI doesn't need to.
         let t_acq = Instant::now();
+        capture_phase.store(capture_phase::ACQUIRE, Ordering::Relaxed);
         let acquired = dup.acquire_frame(0).context("acquire frame")?;
         warn_if_slow("acquire_frame", t_acq.elapsed());
         let frame = match acquired {
             Some(f) => f,
-            None => continue,
+            None => {
+                capture_phase.store(capture_phase::SLEEP, Ordering::Relaxed);
+                continue;
+            }
         };
 
         // PTS: stamp every frame — real or repeat — with QPC at emit
@@ -667,6 +709,7 @@ fn video_loop(
         last_emitted_pts = pts;
 
         let t_enc = Instant::now();
+        capture_phase.store(capture_phase::ENCODE, Ordering::Relaxed);
         let packets = encoder
             .encode_frame(&frame.texture, pts)
             .context("encode frame")?;
@@ -674,11 +717,13 @@ fn video_loop(
 
         let _t_push = clipdip_profile::start("pipeline.ring_push");
         let t_push = Instant::now();
+        capture_phase.store(capture_phase::PUSH, Ordering::Relaxed);
         for p in packets {
             ring.push(p);
         }
         warn_if_slow("ring_push", t_push.elapsed());
         drop(_t_push);
+        capture_phase.store(capture_phase::SLEEP, Ordering::Relaxed);
         frames += 1;
     }
 
