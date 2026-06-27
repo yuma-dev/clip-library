@@ -376,6 +376,12 @@ pub struct NotificationsConfig {
     pub corner: NotificationCorner,
     /// Seconds before the notification auto-dismisses (0 = stay until renamed or dismissed).
     pub auto_dismiss_secs: u32,
+    /// Whether the background health monitor raises a native Windows toast
+    /// when capture degrades at runtime (capture stall, replay buffer
+    /// dropping below the configured window). Independent of the per-save
+    /// overlay notification above — this is the "something is going wrong
+    /// right now" alert, not a save confirmation.
+    pub health_alerts: bool,
 }
 
 impl Default for NotificationsConfig {
@@ -385,6 +391,7 @@ impl Default for NotificationsConfig {
             sound: true,
             corner: NotificationCorner::TopRight,
             auto_dismiss_secs: 10,
+            health_alerts: true,
         }
     }
 }

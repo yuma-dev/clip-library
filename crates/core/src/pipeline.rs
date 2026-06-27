@@ -16,7 +16,7 @@
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ use clipdip_audio::{list_devices, AudioCapture, AudioDeviceInfo, AudioKind, Devi
 use clipdip_capture::DesktopDuplicator;
 use clipdip_encoder::{ActiveCodec, CodecPreference, EncoderConfig, NvEncoderD3D11, RateControl};
 use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack, VideoBitstream};
-use clipdip_ringbuf::{EncodedPacket, PacketRing, STREAM_VIDEO};
+use clipdip_ringbuf::{EncodedPacket, MediaClock, PacketRing, STREAM_VIDEO};
 
 use crate::config::{AudioSource, CodecPreferenceCfg, Config, RateControlCfg};
 use crate::filename::FilenameVars;
@@ -98,6 +98,15 @@ pub struct Pipeline {
     /// ring holds everything from this point on (no eviction past it);
     /// `stop_recording_and_save_in` consumes it.
     recording_from: Mutex<Option<i64>>,
+    /// Shared clock that folds capture stalls out of the PTS timeline. Held
+    /// here so it lives as long as the pipeline; the video and audio threads
+    /// hold their own clones.
+    _media_clock: Arc<MediaClock>,
+    /// Raw (uncompensated) QPC timestamp of the most recently captured video
+    /// frame, in 100-ns ticks; 0 until the first frame. The video thread
+    /// writes it every frame; a health monitor compares it against
+    /// `qpc_now_100ns()` to detect a live capture stall.
+    frame_liveness: Arc<AtomicI64>,
 }
 
 impl Pipeline {
@@ -115,17 +124,25 @@ impl Pipeline {
             cfg.ring_time_window_100ns(),
         ));
 
-        let (audio_meta, audio_handles) = start_audio(&cfg, Arc::clone(&ring));
+        // One clock shared by every capture thread so audio and video stay
+        // on a single, gap-free timebase across a stall.
+        let media_clock = Arc::new(MediaClock::new());
+
+        let (audio_meta, audio_handles) =
+            start_audio(&cfg, Arc::clone(&ring), Arc::clone(&media_clock));
 
         let stop = Arc::new(AtomicBool::new(false));
         let active_codec: Arc<Mutex<Option<ActiveCodec>>> = Arc::new(Mutex::new(None));
         let codec_header: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let frame_liveness = Arc::new(AtomicI64::new(0));
         let video_thread = spawn_video_thread(
             cfg.clone(),
             Arc::clone(&ring),
             Arc::clone(&stop),
             Arc::clone(&active_codec),
             Arc::clone(&codec_header),
+            Arc::clone(&media_clock),
+            Arc::clone(&frame_liveness),
         )?;
 
         let reporter_thread = if clipdip_profile::enabled() {
@@ -148,6 +165,8 @@ impl Pipeline {
             active_codec,
             codec_header,
             recording_from: Mutex::new(None),
+            _media_clock: media_clock,
+            frame_liveness,
         })
     }
 
@@ -161,12 +180,20 @@ impl Pipeline {
         Arc::clone(&self.ring)
     }
 
+    /// Shared handle to the raw-QPC timestamp (100-ns ticks) of the most
+    /// recently captured video frame; 0 until the first frame. A health
+    /// monitor compares `qpc_now_100ns() - this` against a threshold to
+    /// detect a capture stall while the app is running.
+    pub fn frame_liveness(&self) -> Arc<AtomicI64> {
+        Arc::clone(&self.frame_liveness)
+    }
+
     /// Snapshot the ring, find the oldest video IDR, write temp `.h264` +
     /// per-source `.wav` sidecars trimmed to that IDR's PTS, then run
     /// ffmpeg to produce an MP4 with a "Mix" track + one stream per
     /// source. Returns the saved MP4 path.
     pub fn save_clip(&self) -> Result<PathBuf> {
-        self.save_clip_in(None, &FilenameVars::default(), None)
+        self.save_clip_in(None, &FilenameVars::default())
     }
 
     /// Like [`save_clip`] but writes to `directory_override` instead of
@@ -179,15 +206,14 @@ impl Pipeline {
     /// template against `vars` (focused app, etc.); a numeric suffix is
     /// added only if that name is already taken.
     ///
-    /// `end_at_100ns` (QPC, from [`qpc_now_100ns`]) clamps the clip to
-    /// end at that moment — pass the hotkey timestamp so nothing that
-    /// happens during the save flow (notification sound, overlay) makes
-    /// it into the clip.
+    /// The clip always covers the full configured replay window ending at
+    /// the newest buffered frame. The notification chirp can't leak in: it
+    /// only plays after the save completes, well after the ring snapshot is
+    /// taken synchronously at the start of the save.
     pub fn save_clip_in(
         &self,
         directory_override: Option<&std::path::Path>,
         vars: &FilenameVars,
-        end_at_100ns: Option<i64>,
     ) -> Result<PathBuf> {
         let codec = *self.active_codec.lock().unwrap();
         let header = self.codec_header.lock().unwrap().clone();
@@ -211,7 +237,6 @@ impl Pipeline {
             codec,
             &header,
             None,
-            end_at_100ns,
         )
     }
 
@@ -248,7 +273,6 @@ impl Pipeline {
         &self,
         directory_override: Option<&std::path::Path>,
         vars: &FilenameVars,
-        end_at_100ns: Option<i64>,
     ) -> Result<PathBuf> {
         let anchor = self
             .recording_from
@@ -279,7 +303,6 @@ impl Pipeline {
             codec,
             &header,
             Some(anchor),
-            end_at_100ns,
         );
         // Release the hold only after the snapshot inside the save has
         // been taken (save_clip_with_stem snapshots synchronously before
@@ -302,7 +325,6 @@ impl Pipeline {
             stem,
             codec,
             &header,
-            None,
             None,
         )
     }
@@ -341,7 +363,11 @@ impl Drop for Pipeline {
     }
 }
 
-fn start_audio(cfg: &Config, ring: Arc<PacketRing>) -> (Vec<AudioMeta>, Vec<AudioCapture>) {
+fn start_audio(
+    cfg: &Config,
+    ring: Arc<PacketRing>,
+    clock: Arc<MediaClock>,
+) -> (Vec<AudioMeta>, Vec<AudioCapture>) {
     // One-shot enumeration so we can stamp each track with its device's
     // friendly name (used as the MP4 track title). Falls back to an empty
     // list on failure — capture still works, titles just lose the device
@@ -367,7 +393,8 @@ fn start_audio(cfg: &Config, ring: Arc<PacketRing>) -> (Vec<AudioMeta>, Vec<Audi
         };
         let friendly_name = resolve_friendly_name(kind, device_id.as_deref(), &devices)
             .unwrap_or_else(|| fallback_friendly_name(kind));
-        match AudioCapture::start(kind, stream_id, device_id, Arc::clone(&ring)) {
+        match AudioCapture::start(kind, stream_id, device_id, Arc::clone(&ring), Arc::clone(&clock))
+        {
             Ok(cap) => {
                 let fmt = cap.format();
                 info!(stream_id, %label, %friendly_name, ?fmt, "audio source started");
@@ -446,17 +473,45 @@ fn spawn_reporter(stop: Arc<AtomicBool>, interval_ms: u64) -> Result<JoinHandle<
         .context("spawn profile reporter thread")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_video_thread(
     cfg: Config,
     ring: Arc<PacketRing>,
     stop: Arc<AtomicBool>,
     active_codec: Arc<Mutex<Option<ActiveCodec>>>,
     codec_header: Arc<Mutex<Vec<u8>>>,
+    media_clock: Arc<MediaClock>,
+    frame_liveness: Arc<AtomicI64>,
 ) -> Result<JoinHandle<Result<()>>> {
     std::thread::Builder::new()
         .name("clipdip-video".into())
-        .spawn(move || video_loop(cfg, ring, stop, active_codec, codec_header))
+        .spawn(move || {
+            video_loop(
+                cfg,
+                ring,
+                stop,
+                active_codec,
+                codec_header,
+                media_clock,
+                frame_liveness,
+            )
+        })
         .context("spawn video capture thread")
+}
+
+/// Log a WARN if one video-loop stage blocked far longer than a frame should
+/// take. The loop is otherwise a black box: we know it stalls (the health
+/// monitor sees frames stop) but not *where*. With non-blocking logging this
+/// WARN never blocks capture itself, so the next real stall pins the culprit:
+/// `acquire_frame` slow ⇒ DXGI / GPU / capture-blocking software; `encode_frame`
+/// slow ⇒ NVENC / GPU; neither slow but the stall detector still fires ⇒ the
+/// thread was descheduled (OS scheduling / power), not any capture call.
+fn warn_if_slow(stage: &str, elapsed: Duration) {
+    const SLOW_MS: u128 = 250;
+    let ms = elapsed.as_millis();
+    if ms >= SLOW_MS {
+        warn!(stage, ms, "video loop stage blocked unusually long");
+    }
 }
 
 fn video_loop(
@@ -465,6 +520,8 @@ fn video_loop(
     stop: Arc<AtomicBool>,
     active_codec: Arc<Mutex<Option<ActiveCodec>>>,
     codec_header: Arc<Mutex<Vec<u8>>>,
+    media_clock: Arc<MediaClock>,
+    frame_liveness: Arc<AtomicI64>,
 ) -> Result<()> {
     let (mut dup, device, _ctx) = DesktopDuplicator::with_default_device(cfg.video.output_index)
         .with_context(|| {
@@ -513,17 +570,22 @@ fn video_loop(
     );
 
     let frame_interval = Duration::from_secs_f64(1.0 / cfg.video.fps as f64);
-    let frame_interval_100ns: i64 = (1e7 / cfg.video.fps as f64).round() as i64;
+    let frame_interval_100ns = (10_000_000 / cfg.video.fps.max(1) as i64).max(1);
+    // A jump larger than this between two consecutive frames' raw QPC
+    // readings means capture stalled (GPU/display power transition blocking
+    // DXGI/NVENC) rather than just a busy-frame hiccup — DXGI acquire can
+    // legitimately stall a couple hundred ms under load, so the threshold
+    // sits well above that.
+    let stall_threshold_100ns = (frame_interval_100ns * 8).max(5_000_000);
     let mut next_at = Instant::now();
     let mut frames: u32 = 0;
-    // Last PTS handed to the encoder. Real frames use DXGI's
-    // LastPresentTime (QPC, same clock as audio). Repeats — emitted
-    // when the desktop didn't change — carry the *same* LastPresentTime
-    // from `emit_repeat`, so we synthesize a monotonically increasing
-    // PTS for them instead. Audio still uses true QPC, but on an idle
-    // screen real desktop activity is sparse so DXGI's clock would
-    // otherwise stall and the two would drift apart.
+    // Last PTS handed to the encoder, used only to keep the stream
+    // strictly monotonic. Every frame is timestamped with QPC at emit
+    // time (see the loop below) — the same clock WASAPI audio positions
+    // use — so video and audio share one timebase and can't drift.
     let mut last_emitted_pts: i64 = 0;
+    // Last raw (uncompensated) QPC reading, for stall detection.
+    let mut last_raw_pts: Option<i64> = None;
 
     info!(
         width = w,
@@ -557,36 +619,65 @@ fn video_loop(
         // is static — which on an idle screen meant the loop produced
         // only ~5 fps no matter the target. The outer `next_at` sleep
         // already handles pacing, so DXGI doesn't need to.
-        let frame = match dup.acquire_frame(0).context("acquire frame")? {
+        let t_acq = Instant::now();
+        let acquired = dup.acquire_frame(0).context("acquire frame")?;
+        warn_if_slow("acquire_frame", t_acq.elapsed());
+        let frame = match acquired {
             Some(f) => f,
             None => continue,
         };
 
-        // PTS rule:
-        // - Real frame (DXGI returned new content): use its
-        //   LastPresentTime — same QPC clock as audio.
-        // - Repeat (desktop static): DXGI's LastPresentTime is stale,
-        //   so advance synthetically by one frame_interval to keep
-        //   PTS monotonic and CFR-shaped. Without this, many repeats
-        //   share one PTS, the measured fps at save time collapses,
-        //   and the muxer lays the clip out at the wrong rate.
-        let pts = if frame.was_repeat {
-            last_emitted_pts + frame_interval_100ns
-        } else {
-            // Guard against a real frame whose LastPresentTime hasn't
-            // advanced past our synthetic clock (can happen the very
-            // first time activity resumes after a long static stretch).
-            frame.pts_100ns.max(last_emitted_pts + 1)
-        };
+        // PTS: stamp every frame — real or repeat — with QPC at emit
+        // time. This is the single clock the whole pipeline uses: audio
+        // packets carry WASAPI's QPC position (same epoch, same 100ns
+        // units), so video and audio never drift and the replay-window
+        // math compares like with like. We deliberately ignore DXGI's
+        // LastPresentTime: mixing it (real frames) with a synthetic CFR
+        // counter (repeats) meant two different clocks, whose drift could
+        // mis-bound the saved window. `.max(last + 1)` keeps PTS strictly
+        // monotonic for NVENC even if two QPC reads land on the same tick.
+        // Detect a capture stall: between two real iterations the raw QPC
+        // delta should be ~one frame interval. A delta of many intervals
+        // means the GPU/display powered down and DXGI/NVENC blocked while
+        // QPC kept advancing. Fold the excess into the shared media clock so
+        // the emitted timeline stays continuous — otherwise the first
+        // resumed frame jumps the clock forward and the ring's time-window
+        // eviction wipes the whole buffer, collapsing the next clip to ~1s.
+        let raw = qpc_now_100ns();
+        if let Some(prev) = last_raw_pts {
+            let delta = raw - prev;
+            if delta > stall_threshold_100ns {
+                let paused = delta - frame_interval_100ns;
+                let total = media_clock.add_pause(paused);
+                warn!(
+                    stall_secs = paused as f64 / 1e7,
+                    total_pause_secs = total as f64 / 1e7,
+                    "video capture stalled (GPU/display power transition?) — \
+                     compensating media clock so the replay buffer isn't wiped"
+                );
+            }
+        }
+        last_raw_pts = Some(raw);
+        // Liveness beacon for the health monitor: raw QPC keeps advancing
+        // during a stall, but this only updates when a frame is actually
+        // produced, so `now - this` is the true time since last capture.
+        frame_liveness.store(raw, Ordering::Relaxed);
+
+        let pts = media_clock.to_media(raw).max(last_emitted_pts + 1);
         last_emitted_pts = pts;
 
+        let t_enc = Instant::now();
         let packets = encoder
             .encode_frame(&frame.texture, pts)
             .context("encode frame")?;
+        warn_if_slow("encode_frame", t_enc.elapsed());
+
         let _t_push = clipdip_profile::start("pipeline.ring_push");
+        let t_push = Instant::now();
         for p in packets {
             ring.push(p);
         }
+        warn_if_slow("ring_push", t_push.elapsed());
         drop(_t_push);
         frames += 1;
     }
@@ -607,20 +698,11 @@ fn save_clip_with_stem(
     active_codec: Option<ActiveCodec>,
     codec_header: &[u8],
     t_min_override: Option<i64>,
-    t_max_override: Option<i64>,
 ) -> Result<PathBuf> {
     let codec = active_codec
         .ok_or_else(|| anyhow!("encoder not yet open — wait ~1s after start and retry"))?;
     let _t = clipdip_profile::start("pipeline.save_clip");
-    let mut snapshot = ring.snapshot();
-    // Clamp to the caller's end timestamp (the hotkey moment). Packets
-    // captured while the save flow itself runs — notification sound in
-    // the loopback, overlay paint — fall after this and are dropped.
-    // Truncating trailing P-frames mid-GOP is fine; decode just ends
-    // a few frames earlier.
-    if let Some(t_max) = t_max_override {
-        snapshot.retain(|p| p.pts_100ns <= t_max);
-    }
+    let snapshot = ring.snapshot();
     // Bound the saved clip by time. `t_min` is either the replay window
     // start (hotkey save) or the manual-recording anchor (override). The
     // ring's time-based eviction keeps a couple of seconds of slack beyond
@@ -654,6 +736,24 @@ fn save_clip_with_stem(
     // reach back that far yet (app just started, or recording anchor was
     // the very first IDR) — fall back to the oldest IDR so we still emit
     // a playable clip rather than refusing to save.
+    if t_min_override.is_none() && idr_at_or_before.is_none() {
+        // This is the "short clip" symptom. With the media-clock stall
+        // compensation in place it should only happen in the first seconds
+        // after start; if it shows up otherwise, capture lost more time
+        // than the clock could fold out (e.g. a stall longer than the whole
+        // window) and the log below pins down how short the buffer was.
+        let oldest_video_pts = snapshot
+            .iter()
+            .find(|p| p.stream_id == STREAM_VIDEO)
+            .map(|p| p.pts_100ns)
+            .unwrap_or(t_last);
+        warn!(
+            requested_window_secs = cfg.replay_seconds,
+            buffered_secs = (t_last - oldest_video_pts) as f64 / 1e7,
+            "replay buffer shorter than configured window — clip will be \
+             truncated (capture stall or app just started)"
+        );
+    }
     let first_idr = idr_at_or_before
         .or(oldest_idr)
         .ok_or_else(|| anyhow!("no video IDR in ring yet — wait ~1s after start and retry"))?;

@@ -10,14 +10,14 @@
 //! using the format reported by [`AudioCapture::format`].
 
 use anyhow::{anyhow, Context, Result};
-use clipdip_ringbuf::{EncodedPacket, PacketRing};
+use clipdip_ringbuf::{EncodedPacket, MediaClock, PacketRing};
 use crossbeam_channel::{bounded, Sender};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 use windows::core::GUID;
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice,
@@ -85,6 +85,7 @@ impl AudioCapture {
         stream_id: u8,
         device_id: Option<String>,
         ring: Arc<PacketRing>,
+        clock: Arc<MediaClock>,
     ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
@@ -99,7 +100,7 @@ impl AudioCapture {
             .name(label.into())
             .spawn(move || {
                 let result =
-                    run_capture(kind, stream_id, device_id, ring, stop_thread, &fmt_tx);
+                    run_capture(kind, stream_id, device_id, ring, clock, stop_thread, &fmt_tx);
                 // If init failed before we sent the format, surface the
                 // error on the format channel so start() doesn't hang.
                 if let Err(e) = &result {
@@ -160,6 +161,7 @@ fn run_capture(
     stream_id: u8,
     device_id: Option<String>,
     ring: Arc<PacketRing>,
+    clock: Arc<MediaClock>,
     stop: Arc<AtomicBool>,
     fmt_tx: &Sender<Result<WaveFormat>>,
 ) -> Result<()> {
@@ -306,15 +308,23 @@ fn run_capture(
                 };
 
                 if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
-                    debug!(?kind, "WASAPI reported data discontinuity");
+                    // TRACE, not DEBUG: WASAPI flags a discontinuity on nearly
+                    // every buffer in some setups (millions of lines/day),
+                    // which floods the file log. The silence-padding in the
+                    // WAV writer already compensates for the gap; this is only
+                    // useful at the finest verbosity.
+                    trace!(?kind, "WASAPI reported data discontinuity");
                 }
 
+                // QPC position is already in 100ns units, but stamp it
+                // through the shared media clock so a capture stall the
+                // video thread compensated for shifts audio by the same
+                // amount — keeping the two streams on one timeline.
+                let pts = clock.to_media(qpc_pos as i64);
                 ring.push(EncodedPacket {
                     bytes,
-                    // QPC position is already in 100ns units — matches
-                    // our ring-buffer convention exactly.
-                    pts_100ns: qpc_pos as i64,
-                    dts_100ns: qpc_pos as i64,
+                    pts_100ns: pts,
+                    dts_100ns: pts,
                     // Every PCM frame is independent. Same will be true
                     // of AAC frames once we encode in task #5.
                     is_keyframe: true,

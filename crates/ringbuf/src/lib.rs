@@ -32,7 +32,52 @@
 //! grows beyond both the time window and the byte budget.
 
 use parking_lot::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+
+/// Shared "media clock" that maps raw QueryPerformanceCounter timestamps
+/// (100-ns ticks) onto a gap-free presentation timeline.
+///
+/// Capture can stall for seconds-to-minutes when the GPU/display drops to a
+/// low-power state: DXGI stops delivering desktop frames and the DXGI/NVENC
+/// calls in the video thread block, all while QPC keeps advancing. When
+/// capture resumes, the first frame's raw QPC has jumped far ahead of the
+/// last one. Stamping that raw value would (a) make the ring's time-window
+/// eviction treat the *entire* buffered window as stale and wipe it —
+/// collapsing the next saved clip to ~1 second — and (b) inflate the
+/// measured span so the muxed fps comes out wrong.
+///
+/// The video thread (the constant-frame-rate heartbeat) detects these jumps
+/// and folds them into `pause_offset` so the emitted timeline stays
+/// continuous: `media = raw - pause_offset`. Every stream stamps through the
+/// same clock, so audio and video stay on one timebase across a stall.
+#[derive(Debug, Default)]
+pub struct MediaClock {
+    pause_offset_100ns: AtomicI64,
+}
+
+impl MediaClock {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Current accumulated pause offset (100-ns ticks).
+    pub fn offset(&self) -> i64 {
+        self.pause_offset_100ns.load(Ordering::Relaxed)
+    }
+
+    /// Map a raw QPC timestamp (100-ns ticks) onto the gap-free media
+    /// timeline.
+    pub fn to_media(&self, raw_qpc_100ns: i64) -> i64 {
+        raw_qpc_100ns - self.offset()
+    }
+
+    /// Grow the pause offset by `extra` ticks — called by the video thread
+    /// when it detects a capture stall. Returns the new total offset.
+    pub fn add_pause(&self, extra: i64) -> i64 {
+        self.pause_offset_100ns.fetch_add(extra, Ordering::Relaxed) + extra
+    }
+}
 
 pub const STREAM_VIDEO: u8 = 0;
 pub const STREAM_AUDIO_SYSTEM: u8 = 1;
@@ -127,11 +172,22 @@ impl PacketRing {
     pub fn push(&self, packet: EncodedPacket) {
         let mut g = self.inner.lock();
         g.bytes_used += packet.size_in_bytes();
-        if packet.stream_id == STREAM_VIDEO && packet.pts_100ns > g.newest_video_pts {
+        let is_video = packet.stream_id == STREAM_VIDEO;
+        if is_video && packet.pts_100ns > g.newest_video_pts {
             g.newest_video_pts = packet.pts_100ns;
         }
         g.packets.push_back(packet);
-        g.evict_to_budget();
+        // Time-based staleness is anchored on `newest_video_pts`, which only
+        // advances on video pushes — so audio pushes can never make a GOP
+        // newly stale, they can only ever trip the byte-budget safety cap.
+        // Skipping the O(GOP) eviction scan on the (far more frequent) audio
+        // pushes unless we're actually over budget keeps `push` O(1) in the
+        // common case. Without this, every tiny audio packet — hundreds per
+        // second across two producer threads — re-scanned the front GOP and
+        // dominated the CPU profile.
+        if is_video || g.bytes_used > g.byte_budget {
+            g.evict_to_budget();
+        }
     }
 
     /// Snapshot the current contents. Cheap because packet bytes are Arc'd.
@@ -387,6 +443,64 @@ mod tests {
         r.set_hold(None);
         r.push(video_idr(50, 1000));
         assert!(r.bytes_used() <= 50 + 1000 + 2 * std::mem::size_of::<EncodedPacket>() + 1000);
+    }
+
+    #[test]
+    fn media_clock_folds_out_a_stall() {
+        let c = MediaClock::new();
+        // Steady state: raw == media.
+        assert_eq!(c.to_media(1_000), 1_000);
+        // A 30s stall is folded in, minus one 60fps frame interval.
+        let frame = 10_000_000 / 60;
+        c.add_pause(30 * 10_000_000 - frame);
+        // The frame right after the stall lands one interval past the last
+        // pre-stall frame, not 30s ahead.
+        let raw_after = 1_000 + 30 * 10_000_000;
+        assert_eq!(c.to_media(raw_after), 1_000 + frame);
+    }
+
+    #[test]
+    fn raw_stall_jump_wipes_buffer_but_compensated_does_not() {
+        // 62-tick window (mirrors `replay_seconds + 2` in 100ns scaled down).
+        // Lay down GOPs at pts 0,10,20,30,40,50,60 — a full window.
+        let fill = |r: &PacketRing| {
+            for gop in 0..=6 {
+                r.push(video_idr(gop * 10, 10));
+                r.push(video_p(gop * 10 + 5, 10));
+            }
+        };
+
+        // Raw timeline: a frame jumps 1000 ticks ahead (the stall). The
+        // window is 62, so everything older than 1000-62 is wiped.
+        let bug = PacketRing::with_time_window(usize::MAX, 62);
+        fill(&bug);
+        bug.push(video_idr(1000, 10));
+        let snap = bug.snapshot();
+        // The window (GOPs 0..50) is gone — only the last pre-stall GOP and
+        // the jumped one survive, which is exactly the ~1s clip.
+        assert_eq!(snap[0].pts_100ns, 60, "raw jump wipes the buffered window");
+        let bug_idrs = snap
+            .iter()
+            .filter(|p| p.is_keyframe && p.stream_id == STREAM_VIDEO)
+            .count();
+        assert_eq!(bug_idrs, 2);
+
+        // Compensated timeline: the media clock folded the jump out, so the
+        // post-stall frame lands at 70, contiguous with the rest. Nothing
+        // before it is stale, so the window is preserved.
+        let fixed = PacketRing::with_time_window(usize::MAX, 62);
+        fill(&fixed);
+        fixed.push(video_idr(70, 10));
+        let snap = fixed.snapshot();
+        // Window start = 70-62 = 8, inside GOP 0 — so the whole window is
+        // retained and the post-stall frame extends it, instead of wiping it.
+        assert_eq!(snap[0].pts_100ns, 0);
+        assert!(snap.iter().any(|p| p.pts_100ns == 70));
+        let fixed_idrs = snap
+            .iter()
+            .filter(|p| p.is_keyframe && p.stream_id == STREAM_VIDEO)
+            .count();
+        assert_eq!(fixed_idrs, 8);
     }
 
     #[test]

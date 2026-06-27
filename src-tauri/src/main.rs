@@ -2,7 +2,7 @@
 
 mod metadata;
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -128,6 +128,11 @@ struct AppState {
     /// Control channel into `run_capture_loop` — lets commands ask the
     /// capture loop to restart the pipeline after config changes.
     loop_tx: crossbeam_channel::Sender<LoopEvent>,
+    /// Set true once the overlay webview reports in via `overlay_get_pending`
+    /// (i.e. its page actually loaded). A boot watchdog uses this to
+    /// force-close an overlay whose page failed to load, so a broken webview
+    /// can never leave a stuck (potentially fullscreen) error page on screen.
+    overlay_booted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -274,6 +279,35 @@ fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::Webview
     exclude_from_capture(&w);
     disable_webview_autofill(&w);
     let _ = w.show();
+
+    // Boot watchdog: a fresh overlay must report in via `overlay_get_pending`
+    // (it calls that on mount) within a few seconds. If it doesn't, the page
+    // failed to load — e.g. the dev server is down (404), or WebView2 wedged —
+    // and the window would otherwise sit on screen showing a broken,
+    // full-window error page that no JS can dismiss. Force-destroy it so a
+    // failed load can never leave a stuck overlay over the user's game.
+    // In the installed build the overlay is bundled and always loads, so this
+    // never fires there — it's purely a safety net.
+    if let Some(state) = app.try_state::<AppState>() {
+        use std::sync::atomic::Ordering;
+        state.overlay_booted.store(false, Ordering::SeqCst);
+        let booted = Arc::clone(&state.overlay_booted);
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            if !booted.load(Ordering::SeqCst) {
+                warn!("overlay webview did not load within 6s — closing it to avoid a stuck overlay");
+                if let Some(w) = app2.get_webview_window("overlay") {
+                    let _ = w.destroy();
+                }
+                if let Some(state) = app2.try_state::<AppState>() {
+                    *state.pending_saving.lock().unwrap() = None;
+                    *state.pending_saved.lock().unwrap() = None;
+                    *state.pending_notice.lock().unwrap() = None;
+                }
+            }
+        });
+    }
     Some(w)
 }
 
@@ -532,6 +566,11 @@ struct PendingState {
 /// spinner forever after a late mount.
 #[tauri::command]
 fn overlay_get_pending(state: State<'_, AppState>) -> PendingState {
+    // The overlay calls this on mount — proof its page loaded. Clears the
+    // boot watchdog so it won't force-close a healthy overlay.
+    state
+        .overlay_booted
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     PendingState {
         saving: state.pending_saving.lock().unwrap().clone(),
         saved: state.pending_saved.lock().unwrap().clone(),
@@ -540,58 +579,114 @@ fn overlay_get_pending(state: State<'_, AppState>) -> PendingState {
     }
 }
 
-/// Trigger a fake save-flow for design / smoke testing. Emits the same
-/// `clip-saving` + (after a short delay) `clip-saved` payloads the real
-/// pipeline would. From the main window's devtools call it via the
-/// `testNotification()` global, or directly with
-/// `__TAURI_INTERNALS__.invoke('test_notification')`.
+/// Trigger a fake overlay flow for design / smoke testing. `stage` picks
+/// what to preview:
+/// - `"flow"`     — full save flow: `clip-saving` then `clip-saved` 900 ms
+///                  later, exactly like a real save.
+/// - `"notice"`   — transient "Recording started" toast.
+/// - `"rec_on"` / `"rec_off"` — toggle the red recording dot.
+///
+/// MUST be `async`: synchronous commands run on the main thread, and
+/// `ensure_overlay_window` builds a webview window — window creation from
+/// a sync command deadlocks the main thread on Windows (frozen UI, dead
+/// IPC). Async commands run on the runtime thread pool, where the build
+/// call can safely dispatch to the main thread.
 #[tauri::command]
-fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn test_overlay(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    stage: String,
+) -> Result<(), String> {
     let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
         .map_err(|e| e.to_string())?;
     if !cfg.notifications.enabled {
         return Err("notifications are disabled in config".into());
     }
-
     let corner = corner_slug(&cfg.notifications.corner);
 
-    let saving_payload = ClipSavingPayload {
-        thumbnail: None,
-        rename_hotkey: format!("Press {} to rename", cfg.hotkey.rename_clip),
-        auto_dismiss_secs: cfg.notifications.auto_dismiss_secs,
-        corner: corner.clone(),
-        sound: cfg.notifications.sound,
-        profile: false,
-        kind: "clip".into(),
-    };
+    match stage.as_str() {
+        "flow" => {
+            let saving_payload = ClipSavingPayload {
+                thumbnail: None,
+                rename_hotkey: format!("Press {} to rename", cfg.hotkey.rename_clip),
+                auto_dismiss_secs: cfg.notifications.auto_dismiss_secs,
+                corner: corner.clone(),
+                sound: cfg.notifications.sound,
+                profile: false,
+                kind: "clip".into(),
+            };
 
-    *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
-    *state.pending_saved.lock().unwrap() = None;
+            *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
+            *state.pending_saved.lock().unwrap() = None;
+            *state.pending_notice.lock().unwrap() = None;
 
-    // No chirp here — the overlay invokes `play_saved_sound` when its
-    // saved-state animation actually shows.
+            // No chirp here — the overlay invokes `play_saved_sound` when
+            // its saved-state animation actually shows.
 
-    if let Some(overlay) = ensure_overlay_window(&app, &corner) {
-        let _ = overlay.emit("clip-saving", saving_payload);
+            if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                let _ = overlay.emit("clip-saving", saving_payload);
+            }
+
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(900));
+                let saved = ClipSavedPayload {
+                    path: "C:\\Users\\Demo\\Videos\\Clipdip\\demo_clip.mp4".into(),
+                    title: "demo_clip".into(),
+                    kind: "clip".into(),
+                };
+                if let Some(state) = app2.try_state::<AppState>() {
+                    *state.pending_saved.lock().unwrap() = Some(saved.clone());
+                }
+                if let Some(overlay) = app2.get_webview_window("overlay") {
+                    let _ = overlay.emit("clip-saved", saved);
+                }
+            });
+        }
+        "notice" => {
+            let notice = NoticePayload {
+                message: "Recording started".into(),
+                corner: corner.clone(),
+            };
+            *state.pending_notice.lock().unwrap() = Some(notice.clone());
+            *state.pending_saving.lock().unwrap() = None;
+            *state.pending_saved.lock().unwrap() = None;
+            if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                let _ = overlay.emit("overlay-notice", notice);
+            }
+        }
+        "rec_on" | "rec_off" => {
+            let on = stage == "rec_on";
+            // Mirror the real recording flow's UI state so the dot
+            // survives overlay re-mounts and keeps the window alive.
+            *state.recording_active.lock().unwrap() = on;
+            if on {
+                if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                    let _ = overlay
+                        .emit("recording-state", serde_json::json!({"recording": true}));
+                }
+            } else if let Some(overlay) = app.get_webview_window("overlay") {
+                let _ = overlay.emit("recording-state", serde_json::json!({"recording": false}));
+                // No toast on screen and the dot just went away — drop the
+                // window like the real flow does after a recording ends.
+                let no_toast = state.pending_saving.lock().unwrap().is_none()
+                    && state.pending_saved.lock().unwrap().is_none()
+                    && state.pending_notice.lock().unwrap().is_none();
+                if no_toast {
+                    let _ = overlay.destroy();
+                }
+            }
+        }
+        other => return Err(format!("unknown overlay test stage '{other}'")),
     }
-
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(900));
-        let saved = ClipSavedPayload {
-            path: "C:\\Users\\Demo\\Videos\\Clipdip\\demo_clip.mp4".into(),
-            title: "demo_clip".into(),
-            kind: "clip".into(),
-        };
-        if let Some(state) = app2.try_state::<AppState>() {
-            *state.pending_saved.lock().unwrap() = Some(saved.clone());
-        }
-        if let Some(overlay) = app2.get_webview_window("overlay") {
-            let _ = overlay.emit("clip-saved", saved);
-        }
-    });
-
     Ok(())
+}
+
+/// Back-compat alias for the devtools `testNotification()` global —
+/// previews the full save flow.
+#[tauri::command]
+async fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    test_overlay(app, state, "flow".into()).await
 }
 
 #[tauri::command]
@@ -673,6 +768,16 @@ fn restart_pipeline(state: State<'_, AppState>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Ask the capture loop to re-register global hotkeys from the saved
+/// config. Cheap — the replay buffer keeps running.
+#[tauri::command]
+fn reload_hotkeys(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .loop_tx
+        .send(LoopEvent::ReloadHotkeys)
+        .map_err(|e| e.to_string())
+}
+
 /// Live size estimate for the settings UI, measured from the ring buffer:
 /// real encoded video bytes over the buffered time span, plus the AAC
 /// bitrate the audio tracks will encode to at save time.
@@ -745,6 +850,10 @@ enum LoopEvent {
     /// Sent by the `restart_pipeline` command after capture settings
     /// change (encoder options only apply at pipeline start).
     Restart,
+    /// Re-register the global hotkey listener with freshly-loaded config.
+    /// Sent by the `reload_hotkeys` command when the user edits a hotkey,
+    /// so the change applies without restarting the pipeline (or the app).
+    ReloadHotkeys,
 }
 
 /// What the shared save flow below is saving — a replay-buffer clip or a
@@ -761,6 +870,248 @@ impl SaveKind {
         match self {
             SaveKind::Clip => "clip",
             SaveKind::Recording => "recording",
+        }
+    }
+}
+
+/// Parse the configured hotkeys and spawn the single Raw Input listener
+/// for all of them. A single HotkeyListener handles all bindings —
+/// RegisterRawInputDevices only supports one registration per device type
+/// per process, so splitting them across multiple listeners would
+/// silently discard all but the last. Fired hotkeys are forwarded into
+/// the capture loop via `ev_tx`; the forwarder threads exit on their own
+/// when the returned listener is dropped (their receivers disconnect).
+fn spawn_hotkey_listener(
+    cfg: &clipdip_core::config::Config,
+    ev_tx: &crossbeam_channel::Sender<LoopEvent>,
+    app: &AppHandle,
+) -> Option<clipdip_hotkey::HotkeyListener> {
+    info!(
+        "hotkeys — save: {}  rename: {}  record: {}",
+        cfg.hotkey.save_clip, cfg.hotkey.rename_clip, cfg.hotkey.toggle_recording
+    );
+
+    let mut binding_events: Vec<LoopEvent> = Vec::new();
+    let mut binding_defs: Vec<clipdip_hotkey::HotkeyBinding> = Vec::new();
+    for (name, s, event) in [
+        ("save", &cfg.hotkey.save_clip, LoopEvent::Save),
+        ("rename", &cfg.hotkey.rename_clip, LoopEvent::Rename),
+        ("record", &cfg.hotkey.toggle_recording, LoopEvent::ToggleRecording),
+    ] {
+        match clipdip_hotkey::HotkeyBinding::parse(s) {
+            Ok(b) => {
+                binding_events.push(event);
+                binding_defs.push(b);
+            }
+            Err(e) => warn!("{name} hotkey parse failed: {e:#}"),
+        }
+    }
+    if binding_defs.is_empty() {
+        return None;
+    }
+
+    match clipdip_hotkey::HotkeyListener::spawn(&binding_defs) {
+        Ok((listener, rxs)) => {
+            info!("hotkey listener spawned ok ({} binding(s))", binding_defs.len());
+            for (event, rx) in binding_events.into_iter().zip(rxs) {
+                let tx = ev_tx.clone();
+                std::thread::spawn(move || {
+                    while rx.recv().is_ok() {
+                        if tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            Some(listener)
+        }
+        Err(e) => {
+            warn!("hotkey listener spawn failed: {e:#}");
+            let _ = app.emit("pipeline-error", format!("hotkeys: {e:#}"));
+            None
+        }
+    }
+}
+
+/// Native Windows toast. No-op-safe: failure to show is swallowed (a missing
+/// notification must never take down capture).
+fn notify_native(app: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        warn!("native notification failed: {e:#}");
+    }
+}
+
+/// Background watchdog that turns silent capture degradation into an instant,
+/// proactive Windows toast — independent of the clip/save flow. Runs on its
+/// own ~1 Hz timer for the lifetime of one pipeline; dropping it stops and
+/// joins the thread (so a pipeline Restart cleanly replaces the monitor).
+///
+/// Two signals, both read from data the pipeline already exposes:
+/// - **Capture stall** — `qpc_now - frame_liveness` exceeds a threshold, i.e.
+///   no frame has been produced for seconds (GPU/display power transition).
+/// - **Replay buffer low** — the buffered video span has dropped well below
+///   the configured window, so a clip saved *right now* would be short.
+///
+/// Hysteresis (fire only after the condition persists, clear only after it's
+/// been gone a few ticks) keeps a flaky moment from spamming toasts.
+struct HealthMonitor {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HealthMonitor {
+    fn spawn(
+        app: AppHandle,
+        ring: Arc<clipdip_ringbuf::PacketRing>,
+        liveness: Arc<std::sync::atomic::AtomicI64>,
+        replay_seconds: u32,
+    ) -> Self {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("clipdip-health".into())
+            .spawn(move || health_loop(app, ring, liveness, replay_seconds, stop_thread))
+            .ok();
+        Self { stop, handle }
+    }
+}
+
+impl Drop for HealthMonitor {
+    fn drop(&mut self) {
+        self.stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+fn health_loop(
+    app: AppHandle,
+    ring: Arc<clipdip_ringbuf::PacketRing>,
+    liveness: Arc<std::sync::atomic::AtomicI64>,
+    replay_seconds: u32,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use clipdip_core::pipeline::qpc_now_100ns;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    // No frame for this long ⇒ capture stalled. Well above the ~200ms DXGI
+    // acquire stalls that happen under load, and above the video thread's own
+    // 0.5s stall-compensation threshold.
+    const STALL_IDLE_100NS: i64 = 20_000_000; // 2s
+    let window_100ns = replay_seconds as i64 * 10_000_000;
+    // "Low" = the buffer dropped more than max(10%, 5s) below the window.
+    let underfull_floor = window_100ns - (window_100ns / 10).max(50_000_000);
+
+    let mut polls: u64 = 0; // ~one per second
+    let mut bad = 0u32; // consecutive degraded ticks (debounce in)
+    let mut good = 0u32; // consecutive healthy ticks (debounce out)
+    let mut degraded = false;
+    let mut since_poll = Duration::ZERO;
+    let tick = Duration::from_millis(250); // short slices so stop is prompt
+
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(tick);
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        since_poll += tick;
+        if since_poll < Duration::from_secs(1) {
+            continue;
+        }
+        since_poll = Duration::ZERO;
+        polls += 1;
+
+        // Independent capture heartbeat (~every 10s). Logged from this thread,
+        // NOT the video loop, so it keeps reporting even if capture freezes —
+        // a gap in heartbeats means the *process* froze; a heartbeat showing
+        // frame_idle climbing while ring_span shrinks means frame production
+        // stopped while the ring drained. This is the trail that pins down the
+        // "ring emptied to <1s" failure the per-frame logs used to (noisily)
+        // reveal.
+        if polls % 10 == 0 {
+            let live_now = liveness.load(Ordering::Relaxed);
+            let idle_secs = if live_now == 0 {
+                -1.0
+            } else {
+                (qpc_now_100ns() - live_now) as f64 / 1e7
+            };
+            let stats = ring.stats();
+            debug!(
+                frame_idle_secs = idle_secs,
+                ring_span_secs = stats.video_span_100ns as f64 / 1e7,
+                ring_video_mb = stats.video_bytes / 1_000_000,
+                "capture heartbeat"
+            );
+        }
+
+        let live = liveness.load(Ordering::Relaxed);
+        let issue: Option<(String, String)> = if live == 0 {
+            // No frame produced yet — still starting up.
+            None
+        } else {
+            let idle = qpc_now_100ns() - live;
+            let span = ring.stats().video_span_100ns;
+            if idle > STALL_IDLE_100NS {
+                Some((
+                    "Clipdip — capture stalled".into(),
+                    format!(
+                        "No frames captured for {:.0}s. Clips saved now won't show \
+                         the screen until capture resumes.",
+                        idle as f64 / 1e7
+                    ),
+                ))
+            } else if polls as i64 > replay_seconds as i64 + 5 && span < underfull_floor {
+                // Only judge "low" once the buffer has had a full window to
+                // fill, so normal startup doesn't trip it.
+                Some((
+                    "Clipdip — replay buffer low".into(),
+                    format!(
+                        "Buffer holds only {:.0}s of your {}s replay window. A clip \
+                         saved now would be short.",
+                        span as f64 / 1e7,
+                        replay_seconds
+                    ),
+                ))
+            } else {
+                None
+            }
+        };
+
+        match (issue, degraded) {
+            (Some((title, body)), false) => {
+                bad += 1;
+                good = 0;
+                if bad >= 2 {
+                    degraded = true;
+                    warn!("health: degraded — {body}");
+                    notify_native(&app, &title, &body);
+                }
+            }
+            (None, true) => {
+                good += 1;
+                bad = 0;
+                if good >= 3 {
+                    degraded = false;
+                    info!("health: capture recovered");
+                    notify_native(
+                        &app,
+                        "Clipdip — capture recovered",
+                        "Replay capture is healthy again and the buffer is refilling.",
+                    );
+                }
+            }
+            // Already alerted and still bad, or healthy and still fine: reset
+            // the opposing streak and stay quiet.
+            (Some(_), true) => {
+                good = 0;
+            }
+            (None, false) => {
+                bad = 0;
+            }
         }
     }
 }
@@ -783,73 +1134,39 @@ fn run_capture_loop(
         }
     };
 
-    let save_hk = cfg.hotkey.save_clip.clone();
-    let rename_hk = cfg.hotkey.rename_clip.clone();
-    let record_hk = cfg.hotkey.toggle_recording.clone();
-    info!(
-        "hotkeys — save: {}  rename: {}  record: {}",
-        save_hk, rename_hk, record_hk
-    );
-
     // Register hotkeys BEFORE starting the pipeline so they work even if
     // the pipeline fails to initialise (e.g. NVENC unavailable).
-    // A single HotkeyListener handles all bindings — RegisterRawInputDevices
-    // only supports one registration per device type per process, so splitting
-    // them across multiple listeners would silently discard all but the last.
-    let mut binding_events: Vec<LoopEvent> = Vec::new();
-    let mut binding_defs: Vec<clipdip_hotkey::HotkeyBinding> = Vec::new();
+    // The listener stays alive until run_capture_loop returns (or until it
+    // is replaced by a ReloadHotkeys event), keeping the Raw Input thread
+    // running for the entire session.
+    let mut listener = spawn_hotkey_listener(&cfg, &ev_tx, &app);
 
-    match clipdip_hotkey::HotkeyBinding::parse(&save_hk) {
-        Ok(b) => { binding_events.push(LoopEvent::Save); binding_defs.push(b); }
-        Err(e) => warn!("save hotkey parse failed: {e:#}"),
-    }
-    match clipdip_hotkey::HotkeyBinding::parse(&rename_hk) {
-        Ok(b) => { binding_events.push(LoopEvent::Rename); binding_defs.push(b); }
-        Err(e) => warn!("rename hotkey parse failed: {e:#}"),
-    }
-    match clipdip_hotkey::HotkeyBinding::parse(&record_hk) {
-        Ok(b) => { binding_events.push(LoopEvent::ToggleRecording); binding_defs.push(b); }
-        Err(e) => warn!("record hotkey parse failed: {e:#}"),
-    }
+    // ev_tx stays alive for ReloadHotkeys re-registration. Loop shutdown
+    // is unaffected: AppState holds a loop_tx clone for the whole process
+    // lifetime anyway.
 
-    // _listener stays alive until run_capture_loop returns, keeping the
-    // Raw Input thread running for the entire session.
-    let _listener = if !binding_defs.is_empty() {
-        match clipdip_hotkey::HotkeyListener::spawn(&binding_defs) {
-            Ok((listener, rxs)) => {
-                info!("hotkey listener spawned ok ({} binding(s))", binding_defs.len());
-                for (event, rx) in binding_events.into_iter().zip(rxs) {
-                    let tx = ev_tx.clone();
-                    std::thread::spawn(move || {
-                        while rx.recv().is_ok() {
-                            if tx.send(event).is_err() {
-                                break;
-                            }
-                        }
-                    });
-                }
-                Some(listener)
-            }
-            Err(e) => {
-                warn!("hotkey listener spawn failed: {e:#}");
-                let _ = app.emit("pipeline-error", format!("hotkeys: {e:#}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    drop(ev_tx);
+    // Read the values the health monitor needs before `cfg` is moved into the
+    // pipeline.
+    let mut replay_seconds = cfg.replay_seconds;
+    let mut health_alerts = cfg.notifications.enabled && cfg.notifications.health_alerts;
 
     // Start the pipeline after hotkeys are live. On failure we emit the error
     // and keep the event loop running so hotkeys remain registered.
+    let mut monitor: Option<HealthMonitor> = None;
     let mut pipeline = match clipdip_core::Pipeline::start(cfg) {
         Ok(p) => {
             info!("pipeline started");
             *ring_handle.lock().unwrap() = Some(p.ring());
             *pipeline_running.lock().unwrap() = true;
             let _ = app.emit("pipeline-status", serde_json::json!({"running": true}));
+            if health_alerts {
+                monitor = Some(HealthMonitor::spawn(
+                    app.clone(),
+                    p.ring(),
+                    p.frame_liveness(),
+                    replay_seconds,
+                ));
+            }
             Some(p)
         }
         Err(e) => {
@@ -862,10 +1179,6 @@ fn run_capture_loop(
     for event in &ev_rx {
         match event {
             LoopEvent::Save | LoopEvent::ToggleRecording => {
-                // Stamp the press the instant it arrives — the saved clip
-                // is clamped to end here, so the notification chirp and
-                // overlay can't leak into it.
-                let t_hotkey_100ns = clipdip_core::pipeline::qpc_now_100ns();
                 let Some(ref pipeline) = pipeline else {
                     warn!("save/record hotkey fired but pipeline is not running");
                     continue;
@@ -950,9 +1263,10 @@ fn run_capture_loop(
                 // invokes `play_saved_sound` at the exact moment its
                 // "saved" payoff animation starts, so audio and visuals
                 // land together even when WebView2 cold start outruns the
-                // mux. The clip itself is clamped to `t_hotkey_100ns`, so
-                // the chirp can't leak into it. Recordings stay silent
-                // (the overlay only chirps for kind == "clip").
+                // mux. The chirp can't leak into the clip because it only
+                // plays after the save completes, well after the ring
+                // snapshot was taken. Recordings stay silent (the overlay
+                // only chirps for kind == "clip").
                 if prof { info!("config reloaded [t+{}ms]", t0.elapsed().as_millis()); }
 
                 // Pre-compute the static phase-1 fields so the scope block
@@ -1056,12 +1370,10 @@ fn run_capture_loop(
                             SaveKind::Clip => pipeline.save_clip_in(
                                 Some(&save_dir),
                                 &vars,
-                                Some(t_hotkey_100ns),
                             ),
                             SaveKind::Recording => pipeline.stop_recording_and_save_in(
                                 Some(&save_dir),
                                 &vars,
-                                Some(t_hotkey_100ns),
                             ),
                         };
                         if prof {
@@ -1197,6 +1509,9 @@ fn run_capture_loop(
                     continue;
                 }
                 info!("restarting pipeline to apply changed capture settings");
+                // Drop the old monitor first (stops + joins its thread) so it
+                // can't fire on the torn-down pipeline.
+                drop(monitor.take());
                 *ring_handle.lock().unwrap() = None;
                 *pipeline_running.lock().unwrap() = false;
                 if let Some(p) = pipeline.take() {
@@ -1212,6 +1527,8 @@ fn run_capture_loop(
                         continue;
                     }
                 };
+                replay_seconds = cfg.replay_seconds;
+                health_alerts = cfg.notifications.enabled && cfg.notifications.health_alerts;
                 pipeline = match clipdip_core::Pipeline::start(cfg) {
                     Ok(p) => {
                         info!("pipeline restarted");
@@ -1221,6 +1538,14 @@ fn run_capture_loop(
                             "pipeline-status",
                             serde_json::json!({"running": true}),
                         );
+                        if health_alerts {
+                            monitor = Some(HealthMonitor::spawn(
+                                app.clone(),
+                                p.ring(),
+                                p.frame_liveness(),
+                                replay_seconds,
+                            ));
+                        }
                         Some(p)
                     }
                     Err(e) => {
@@ -1230,8 +1555,25 @@ fn run_capture_loop(
                     }
                 };
             }
+            LoopEvent::ReloadHotkeys => {
+                let cfg = match clipdip_core::config::Config::load_or_default(&config_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("config load for hotkey reload: {e:#}");
+                        continue;
+                    }
+                };
+                info!("reloading global hotkeys");
+                // Drop the old Raw Input window before registering the new
+                // one — only one raw-input registration exists per process.
+                drop(listener.take());
+                listener = spawn_hotkey_listener(&cfg, &ev_tx, &app);
+            }
         }
     }
+    // Stop the health monitor (and its thread) before tearing down hotkeys.
+    drop(monitor.take());
+    drop(listener);
 }
 
 /// Grab a single frame from the primary desktop via ffmpeg's `gdigrab` and
@@ -1300,41 +1642,14 @@ fn open_main_window(app: &AppHandle) {
     }
 }
 
-struct SharedFileWriter {
-    file: Arc<Mutex<std::fs::File>>,
-}
-
-impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for SharedFileWriter {
-    type Writer = SharedFileWriter;
-
-    fn make_writer(&self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl Write for SharedFileWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.file.lock().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.file.lock().unwrap().flush()
-    }
-}
-
-impl Clone for SharedFileWriter {
-    fn clone(&self) -> Self {
-        Self {
-            file: Arc::clone(&self.file),
-        }
-    }
-}
-
 // ---------- main ----------------------------------------------------------
 
 fn main() {
     use tracing_subscriber::prelude::*;
 
+    // Held for the whole process: dropping this guard flushes and stops the
+    // non-blocking log writer's background thread.
+    let mut _log_guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
     let mut file_layer = None;
 
     if let Some(dirs) = directories::ProjectDirs::from("", "", "clipdip") {
@@ -1342,7 +1657,7 @@ fn main() {
         if std::fs::create_dir_all(&log_dir).is_ok() {
             let log_path = log_dir.join("clipdip.log");
 
-            // Rotate if the file exceeds 10MB
+            // Rotate at startup if the file exceeds 10MB.
             if let Ok(metadata) = std::fs::metadata(&log_path) {
                 if metadata.len() > 10 * 1024 * 1024 {
                     let old_path = log_dir.join("clipdip.log.old");
@@ -1356,14 +1671,23 @@ fn main() {
                 .append(true)
                 .open(&log_path)
             {
-                let writer = SharedFileWriter {
-                    file: Arc::new(Mutex::new(file)),
-                };
+                // Non-blocking writer: capture/audio/hotkey threads hand a
+                // formatted line to a bounded queue drained by one dedicated
+                // background thread, instead of each doing a synchronous
+                // write() under a shared mutex. This is critical for capture
+                // reliability — with the old blocking writer, a disk hitch
+                // (anti-cheat/AV scanning the growing log, an NTFS flush, disk
+                // contention mid-game) would stall *every* capture thread
+                // mid-log, freezing frame production and collapsing the replay
+                // buffer to ~1s. DEBUG (not TRACE) also keeps the per-frame
+                // encoder traces and per-buffer audio spam off the disk.
+                let (non_blocking, guard) = tracing_appender::non_blocking(file);
+                _log_guard = Some(guard);
 
                 let layer = tracing_subscriber::fmt::layer()
-                    .with_writer(writer)
+                    .with_writer(non_blocking)
                     .with_ansi(false)
-                    .with_filter(tracing_subscriber::filter::LevelFilter::TRACE);
+                    .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG);
                 file_layer = Some(layer);
             }
         }
@@ -1403,6 +1727,7 @@ fn main() {
     let (loop_tx, loop_rx) = unbounded::<LoopEvent>();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             config_path: config_path.clone(),
             active_clip: active_clip.clone(),
@@ -1413,6 +1738,7 @@ fn main() {
             ring: ring_handle.clone(),
             recording_active: Arc::new(Mutex::new(false)),
             loop_tx: loop_tx.clone(),
+            overlay_booted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
         .setup(move |app| {
             // Log configured hotkeys so the user can confirm them in the console.
@@ -1494,8 +1820,10 @@ fn main() {
             forward_console,
             overlay_get_pending,
             test_notification,
+            test_overlay,
             get_autostart_info,
             set_autostart_status,
+            reload_hotkeys,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")
