@@ -414,11 +414,11 @@ async function createWindow() {
     width: 1024,
     height: 768,
     titleBarStyle: "hidden",
-    backgroundColor: '#141414',
+    backgroundColor: '#050608',
     autoHideMenuBar: true,
     frame: false,
     titleBarOverlay: {
-      color: '#1a1a1a',
+      color: '#050608',
       symbolColor: '#c8c8c8',
       height: 34
     },

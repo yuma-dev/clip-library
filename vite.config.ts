@@ -17,6 +17,8 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    // Allow importing assets from the project root (root is src/renderer).
+    fs: { allow: [path.resolve(__dirname)] },
   },
   build: {
     // Separate from electron-builder's own output dir (`dist/`) to avoid

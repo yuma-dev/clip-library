@@ -1,4 +1,6 @@
 import { routes, type Route } from "../routes";
+import { useToast } from "../ui/Toast";
+import logoUrl from "../../../assets/title.png";
 
 interface SidebarProps {
   route: Route;
@@ -6,27 +8,25 @@ interface SidebarProps {
   clipCount: number;
 }
 
-// Hynite-style nav rail (patterns from Game Launcher App.tsx `.rail`).
+// Nav rail — structure from Hynite's `.rail`, styled per D10 (dark, ◇ accent).
 export default function Sidebar({ route, onNavigate, clipCount }: SidebarProps) {
+  const toast = useToast();
   return (
     <aside className="rail">
       <div className="rail-brand">
-        <span className="dia">◇</span>
-        <span>CLIPS</span>
+        <img className="rail-logo" src={logoUrl} alt="Clips" draggable={false} />
       </div>
       <nav className="rail-nav">
         {routes.map(({ id, label, icon: Icon, disabled }) => (
           <button
             key={id}
             type="button"
-            className={`rail-item${route === id ? " active" : ""}`}
-            disabled={disabled}
-            title={disabled ? "Coming soon" : undefined}
+            className={`rail-item${route === id ? " active" : ""}${disabled ? " soon" : ""}`}
             onClick={() => {
-              if (!disabled) onNavigate(id);
+              if (disabled) toast.show(`${label} is coming soon`);
+              else onNavigate(id);
             }}
           >
-            <span className="rail-marker" aria-hidden="true">◇</span>
             <Icon size={17} />
             <span className="rail-label">{label}</span>
             {id === "library" ? <span className="rail-count-pill">{clipCount}</span> : null}
