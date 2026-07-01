@@ -1,7 +1,6 @@
 if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
-const { setupTitlebar, attachTitlebarToWindow } = require("custom-electron-titlebar/main");
 const logger = require('./utils/logger');
 const consoleBuffer = require('./utils/console-log-buffer');
 consoleBuffer.patchConsole();
@@ -356,8 +355,6 @@ function queueProtocolUrl(protocolUrl) {
   });
 }
 
-setupTitlebar();
-
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
@@ -417,13 +414,13 @@ async function createWindow() {
     width: 1024,
     height: 768,
     titleBarStyle: "hidden",
-    backgroundColor: '#1e1e1e',
+    backgroundColor: '#141414',
     autoHideMenuBar: true,
     frame: false,
     titleBarOverlay: {
-      color: '#1e1e1e',
-      symbolColor: '#e0e0e0',
-      height: 30
+      color: '#1a1a1a',
+      symbolColor: '#c8c8c8',
+      height: 34
     },
     show: false,
     webPreferences: {
@@ -435,7 +432,9 @@ async function createWindow() {
     },
   });
 
-  attachTitlebarToWindow(mainWindow);
+  // Renderer rewrite: the React renderer draws its own titlebar strip; native
+  // window controls come from `titleBarOverlay` above. custom-electron-titlebar
+  // is no longer used (its renderer-side Titlebar went away with the legacy UI).
   // Renderer rewrite (plan D9): plain Vite serves the React renderer.
   // Dev -> Vite dev server; packaged -> the built bundle in dist/.
   if (isDev) {

@@ -6,24 +6,26 @@
   fold in Hynite's chrome later. Extend here as the shell is built.
 */
 @theme {
-  /* Surfaces */
-  --color-bg-primary: #1e1e1e;
-  --color-bg-secondary: #252525;
-  --color-bg-card: #2a2a2a;
+  /* Surfaces — deep, restrained dark (plan D10). */
+  --color-bg-primary: #141414;
+  --color-bg-secondary: #1a1a1a;
+  --color-bg-card: #1f1f1f;
 
   /* Lines / borders */
-  --color-border: #333333;
-  --color-border-hover: #444444;
+  --color-border: #272727;
+  --color-border-hover: #383838;
 
-  /* Accent (purple) */
+  /* Accent (purple) — use SPARINGLY, never as large fills (plan D10). */
   --color-accent: #8e329b;
   --color-accent-hover: #c026d3;
   --color-accent-subtle: #9333ea;
+  /* Bright on-brand purple reserved for the ◇ glyph accent + small markers. */
+  --color-accent-glyph: #c774e0;
 
   /* Text */
-  --color-text-primary: #f5f5f5;
-  --color-text-secondary: #a3a3a3;
-  --color-text-muted: #737373;
+  --color-text-primary: #f2f2f2;
+  --color-text-secondary: #9a9a9a;
+  --color-text-muted: #6b6b6b;
 
   /* Typography (Inter is bundled in a later phase; falls back to system UI) */
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -46,4 +48,278 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Structural (non-color) tokens for the shell chrome. */
+:root {
+  --line: rgba(255, 255, 255, 0.08);
+  --rail-width: 208px;
+  --titlebar-height: 34px;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* ◇ diamond accent (plan D10) — the recurring purple mark echoing the logo.
+   Use tastefully: brand, titlebar, active markers, section/empty-state marks. */
+.dia {
+  color: var(--color-accent-glyph);
+  font-style: normal;
+  line-height: 1;
+}
+
+/* ---- App shell layout ---- */
+.app-shell {
+  display: grid;
+  grid-template-rows: var(--titlebar-height) 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  min-height: 0;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---- Titlebar (drag strip; native overlay draws min/max/close at right) ---- */
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: var(--titlebar-height);
+  padding: 0 14px;
+  -webkit-app-region: drag;
+  user-select: none;
+  border-bottom: 0.5px solid var(--line);
+  background: var(--color-bg-secondary);
+}
+
+.titlebar-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.titlebar-drag {
+  flex: 1;
+}
+
+/* ---- Sidebar / nav rail ---- */
+.rail {
+  width: var(--rail-width);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  border-right: 0.5px solid var(--line);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+}
+
+.rail-brand {
+  min-height: 36px;
+  margin: 0 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--color-text-primary);
+}
+
+.rail-brand .dia {
+  font-size: 15px;
+}
+
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-item {
+  width: 100%;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 11px 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.rail-item:hover:not(:disabled),
+.rail-item:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--color-text-primary);
+  transform: translateX(1px);
+  outline: 0;
+}
+
+/* Selected = subtle neutral highlight + a small purple ◇ marker (plan D10) —
+   NOT a purple fill. */
+.rail-item.active {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+}
+
+/* Leading marker slot: transparent by default, purple ◇ when active. */
+.rail-marker {
+  width: 11px;
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+  color: transparent;
+}
+
+.rail-item.active .rail-marker {
+  color: var(--color-accent-glyph);
+}
+
+.rail-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rail-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rail-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-text-muted);
+}
+
+.rail-item.active .rail-count-pill {
+  color: var(--color-text-secondary);
+}
+
+.rail-soon {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+/* ---- Library top bar ---- */
+.library-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 0.5px solid var(--line);
+}
+
+.search-box {
+  height: 34px;
+  min-width: min(340px, 52vw);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-secondary);
+}
+
+.search-box input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.search-box input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 0.5px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.filter-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.clip-counter {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* ---- View bodies / placeholders ---- */
+.library-body {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+.view-placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+}
+
+.placeholder-mark {
+  font-size: 30px;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.view-placeholder .muted,
+.muted {
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
