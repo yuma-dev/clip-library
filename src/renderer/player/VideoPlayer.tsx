@@ -30,6 +30,8 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
   renameRef.current = renameClip;
   // Pending debounced title save (also cleared by the legacy flush-on-close path).
   const titleTimerRef = useRef<number | undefined>(undefined);
+  // Hidden video used to render timeline hover-preview frames.
+  const tempVideoRef = useRef<HTMLVideoElement | null>(null);
 
   // Move to the prev (-1) / next (+1) clip in the current display order.
   // Reads live from the shared legacy state so it never captures a stale list.
@@ -93,7 +95,18 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
     void initKeybindings();
 
     const byId = (id: string) => document.getElementById(id);
-    const tempVideo = document.createElement("video");
+    // Hidden scrubbing video for the timeline hover preview (see the preview
+    // effect below). Kept in a ref so both effects share the same element.
+    if (!tempVideoRef.current) {
+      const tv = document.createElement("video");
+      tv.crossOrigin = "anonymous";
+      tv.preload = "auto";
+      tv.muted = true;
+      tv.style.display = "none";
+      document.body.appendChild(tv);
+      tempVideoRef.current = tv;
+    }
+    const tempVideo = tempVideoRef.current;
 
     const elements = {
       videoPlayer: byId("video-player"),
@@ -255,6 +268,85 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
       input.removeEventListener("input", onInput);
       input.removeEventListener("blur", onBlur);
       input.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  // Timeline hover preview: a hidden temp <video> is pointed at the current
+  // clip; hovering the progress bar seeks it (throttled) and each seeked frame
+  // is drawn into #preview-canvas. The player's updatePreview handles the seek
+  // + timestamp; we own positioning + the canvas draw (ported from the legacy
+  // renderer, which is where this wiring used to live).
+  useEffect(() => {
+    const container = document.getElementById("progress-bar-container");
+    const preview = document.getElementById("timeline-preview") as HTMLElement | null;
+    const canvas = document.getElementById("preview-canvas") as HTMLCanvasElement | null;
+    const video = document.getElementById("video-player") as HTMLVideoElement | null;
+    const temp = tempVideoRef.current;
+    if (!container || !preview || !canvas || !video || !temp) return;
+
+    const onSeeked = () => {
+      const ctx = canvas.getContext("2d");
+      if (ctx && temp.readyState >= 2) ctx.drawImage(temp, 0, 0, canvas.width, canvas.height);
+    };
+    temp.addEventListener("seeked", onSeeked);
+
+    // Point the temp video at each newly-loaded clip; size the canvas once.
+    const onLoaded = () => {
+      if (video.src && temp.src !== video.src) temp.src = video.src;
+      canvas.width = 160;
+      canvas.height = 90;
+      preview.style.display = "none";
+    };
+    video.addEventListener("loadedmetadata", onLoaded);
+
+    // Hover → position horizontally on the cursor + throttled frame seek.
+    let half = 0;
+    let lastSeek = 0;
+    let trailing: number | undefined;
+    const seekAt = (clientX: number) => {
+      // updatePreview only reads e.clientX; the legacy module is loosely typed.
+      window.legacyPlayer?.updatePreview?.({ clientX }, { skipPosition: true });
+    };
+    const onMove = (e: MouseEvent) => {
+      // Don't fight the volume-range drag controls that live on the bar.
+      const t = e.target as HTMLElement;
+      if (
+        t.closest(".volume-drag-control") ||
+        t.classList.contains("volume-region") ||
+        t.classList.contains("volume-start") ||
+        t.classList.contains("volume-end")
+      ) {
+        return;
+      }
+      preview.style.display = "block";
+      if (!half) half = preview.offsetWidth / 2 || 100;
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      preview.style.left = "0px";
+      preview.style.transform = `translate3d(${x - half}px, 0, 0)`;
+
+      const now = performance.now();
+      window.clearTimeout(trailing);
+      const clientX = e.clientX;
+      trailing = window.setTimeout(() => seekAt(clientX), 90);
+      if (now - lastSeek >= 60) {
+        lastSeek = now;
+        seekAt(clientX);
+      }
+    };
+    const onLeave = () => {
+      preview.style.display = "none";
+      window.clearTimeout(trailing);
+    };
+    container.addEventListener("mousemove", onMove);
+    container.addEventListener("mouseleave", onLeave);
+
+    return () => {
+      temp.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("loadedmetadata", onLoaded);
+      container.removeEventListener("mousemove", onMove);
+      container.removeEventListener("mouseleave", onLeave);
+      window.clearTimeout(trailing);
     };
   }, []);
 
