@@ -421,7 +421,9 @@ button {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  /* Above the video player overlay (z-index 3000) so confirm/alert dialogs
+     opened from the player (e.g. delete) are visible and clickable. */
+  z-index: 4000;
   display: grid;
   place-items: center;
   padding: 32px;

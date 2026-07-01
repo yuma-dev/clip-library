@@ -31,7 +31,12 @@ export default function App() {
         </main>
       </div>
       {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened). */}
-      <VideoPlayer clipLocation={lib.clipLocation} clips={lib.clips} renameClip={lib.renameClip} />
+      <VideoPlayer
+        clipLocation={lib.clipLocation}
+        clips={lib.clips}
+        renameClip={lib.renameClip}
+        removeClips={lib.removeClips}
+      />
     </div>
   );
 }
