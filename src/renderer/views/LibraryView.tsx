@@ -25,7 +25,12 @@ export default function LibraryView({ lib }: LibraryViewProps) {
           </div>
         </div>
       ) : (
-        <ClipGrid clips={lib.clips} thumbnails={lib.thumbnails} clipLocation={lib.clipLocation} />
+        <ClipGrid
+          clips={lib.clips}
+          thumbnails={lib.thumbnails}
+          clipLocation={lib.clipLocation}
+          removeClips={lib.removeClips}
+        />
       )}
 
       {lib.generatingCount > 0 ? (

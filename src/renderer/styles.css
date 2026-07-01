@@ -9,8 +9,10 @@
   /* Surfaces — Hynite's REAL near-black (its actual painted color, not the
      --bg-1 token, which is misleading — verified against the running app). */
   --color-bg-primary: rgba(5, 6, 8, 0.94);
-  --color-bg-secondary: rgba(11, 13, 17, 0.94);
-  --color-bg-card: #14161c;
+  --color-bg-secondary: #141414;
+  /* Elevated surfaces (menus/modals/toasts) — neutral gray, brighter than the
+     bg but NOT blue-tinted (plan D10). */
+  --color-bg-card: #1c1c1c;
 
   /* Lines / borders — hairline white-alpha over near-black. */
   --color-border: rgba(255, 255, 255, 0.07);
@@ -762,6 +764,20 @@ button {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* Multi-select highlight — accent outline + faint purple wash (plan D10). */
+.clip-item.selected .clip-item-media-container {
+  outline: 2px solid var(--color-accent-glyph);
+  outline-offset: 2px;
+  border-color: transparent;
+}
+.clip-item.selected .clip-item-media-container::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  pointer-events: none;
 }
 
 .tag-container {
