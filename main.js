@@ -429,6 +429,10 @@ async function createWindow() {
       spellcheck: false,
       enableRemoteModule: true,
       preload: path.join(__dirname, "preload.js"),
+      // Dev serves the renderer from http://127.0.0.1:5173, so file:// thumbnails
+      // /videos would be blocked as cross-origin. Relax only in dev; the packaged
+      // app loads from file:// where same-scheme access already works.
+      webSecurity: !isDev,
     },
   });
 
