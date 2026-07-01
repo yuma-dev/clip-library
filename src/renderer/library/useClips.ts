@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { LocalClip } from "./types";
 
 export interface UseClips {
@@ -9,6 +9,8 @@ export interface UseClips {
   thumbnails: Map<string, string | null>;
   /** How many thumbnails are still being generated (0 = idle). */
   generatingCount: number;
+  /** Remove clips from the list (e.g. after a successful delete). */
+  removeClips: (names: string[]) => void;
 }
 
 /**
@@ -108,5 +110,10 @@ export function useClips(): UseClips {
     };
   }, []);
 
-  return { clips, clipLocation, loading, thumbnails, generatingCount };
+  const removeClips = useCallback((names: string[]) => {
+    const set = new Set(names);
+    setClips((prev) => prev.filter((c) => !set.has(c.originalName)));
+  }, []);
+
+  return { clips, clipLocation, loading, thumbnails, generatingCount, removeClips };
 }

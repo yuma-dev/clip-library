@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useObserve } from "./visibility";
 import { useHover } from "./hoverContext";
+import { useSelection } from "./selectionContext";
 import { absoluteTime, relativeTime } from "./time";
 import Tooltip from "../ui/Tooltip";
 import type { LocalClip } from "./types";
@@ -12,16 +13,21 @@ interface ClipCardProps {
   thumbnailPath: string | null;
 }
 
-export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
+function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const observe = useObserve();
   const hover = useHover();
+  const selection = useSelection();
   const [errored, setErrored] = useState(false);
 
-  // Register with the shared visibility observer (toggles .cv-offscreen).
+  // Register with the shared visibility observer (toggles .cv-offscreen), and
+  // re-apply the selected class if this card (re)mounts while selected.
   useEffect(() => {
-    if (ref.current && observe) return observe(ref.current);
-  }, [observe]);
+    const el = ref.current;
+    if (!el) return;
+    if (selection?.isSelected(clip.originalName)) el.classList.add("selected");
+    return observe ? observe(el) : undefined;
+  }, [observe, selection, clip.originalName]);
 
   const src = errored ? fallbackUrl : thumbnailPath ? `file://${thumbnailPath}` : shimmerUrl;
   const visibleTags = clip.tags.slice(0, 3);
@@ -38,6 +44,8 @@ export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
       onMouseLeave={() => {
         if (hover) hover.leave();
       }}
+      onClick={(e) => selection?.onCardClick(e, clip)}
+      onContextMenu={(e) => selection?.onCardContextMenu(e, clip)}
     >
       <div className="clip-item-media-container">
         <img
@@ -50,8 +58,7 @@ export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
             if (thumbnailPath && !errored) setErrored(true);
           }}
         />
-        {/* Imperative hover-preview <video> is mounted here (display:contents),
-            so React never reconciles it. */}
+        {/* Imperative hover-preview <video> mounts here (display:contents). */}
         <div className="clip-preview-mount" />
       </div>
 
@@ -81,3 +88,5 @@ export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
     </div>
   );
 }
+
+export default memo(ClipCard);

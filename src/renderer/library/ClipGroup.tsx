@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ChevronDown } from "lucide-react";
 import ClipCard from "./ClipCard";
 import type { ClipGroupData } from "./grouping";
@@ -6,13 +7,18 @@ interface ClipGroupProps {
   group: ClipGroupData;
   thumbnails: Map<string, string | null>;
   collapsed: boolean;
-  onToggle: () => void;
+  onToggle: (name: string) => void;
 }
 
-export default function ClipGroup({ group, thumbnails, collapsed, onToggle }: ClipGroupProps) {
+function ClipGroup({ group, thumbnails, collapsed, onToggle }: ClipGroupProps) {
   return (
     <section className="clip-group">
-      <button type="button" className="clip-group-header" onClick={onToggle} aria-expanded={!collapsed}>
+      <button
+        type="button"
+        className="clip-group-header"
+        onClick={() => onToggle(group.name)}
+        aria-expanded={!collapsed}
+      >
         <ChevronDown size={16} className={`clip-group-chevron${collapsed ? " collapsed" : ""}`} />
         <h2 className="clip-group-title">{group.name}</h2>
         <span className="clip-group-count">{group.clips.length}</span>
@@ -29,3 +35,5 @@ export default function ClipGroup({ group, thumbnails, collapsed, onToggle }: Cl
     </section>
   );
 }
+
+export default memo(ClipGroup);
