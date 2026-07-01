@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
+import { getActionFromEvent, initKeybindings } from "./keybindings";
 import "./player.css";
 
 interface VideoPlayerProps {
@@ -88,6 +89,9 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
         state.settings = state.settings ?? {};
       });
 
+    // Load player keybindings (Space/f/,/./[/] etc.) from settings.
+    void initKeybindings();
+
     const byId = (id: string) => document.getElementById(id);
     const tempVideo = document.createElement("video");
 
@@ -131,7 +135,7 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
       showCustomConfirm: (msg: unknown) => window.confirm(String(msg)),
       isBenchmarkMode: false,
       updateDiscordPresence: noop,
-      getActionFromEvent: () => null,
+      getActionFromEvent: (e: KeyboardEvent) => getActionFromEvent(e),
       navigateToVideo: (direction: number) => navigate(direction),
       updateNavigationButtons: () => updateNavButtons(),
       exportAudioWithFileSelection: noop,
@@ -155,6 +159,19 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
 
     try {
       player.init(elements, callbacks);
+
+      // The legacy player's key handlers (Space/f/,/./[/] …) were attached to
+      // `document` by the old renderer right before each open, and detached by
+      // closePlayer. Mirror that by wrapping openClip — the single chokepoint
+      // all opens (grid click, prev/next) funnel through — so the handlers are
+      // (re)bound every time. addEventListener dedupes identical listeners.
+      const rawOpenClip = player.openClip.bind(player);
+      player.openClip = (originalName: string, customName: string) => {
+        document.addEventListener("keydown", player.handleKeyPress);
+        document.addEventListener("keyup", player.handleKeyRelease);
+        return rawOpenClip(originalName, customName);
+      };
+
       // Volume-range controls create their own DOM (state.volumeStart/End/Region
       // elements) that the player's hideVolumeControls() expects to exist.
       window.legacyVolumeRange?.init({
@@ -183,16 +200,8 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
     if (window.legacyState) window.legacyState.clipLocation = clipLocation;
   }, [clipLocation]);
 
-  // Escape closes the player (until real keybindings land in Phase 6).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && document.body.classList.contains("player-open")) {
-        window.legacyPlayer?.closePlayer();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // (Escape-to-close is now handled by the player's own keybindings, bound on
+  // open; backdrop click remains as a fallback.)
 
   // Inline title editing on the legacy #clip-title input: live debounced save,
   // Enter commits, Escape cancels. Persists + propagates via renameClip.
