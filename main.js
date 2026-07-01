@@ -430,12 +430,19 @@ async function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
       spellcheck: false,
-      enableRemoteModule: true
+      enableRemoteModule: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
   attachTitlebarToWindow(mainWindow);
-  mainWindow.loadFile("index.html");
+  // Renderer rewrite (plan D9): plain Vite serves the React renderer.
+  // Dev -> Vite dev server; packaged -> the built bundle in dist/.
+  if (isDev) {
+    mainWindow.loadURL("http://127.0.0.1:5173");
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "renderer-dist", "index.html"));
+  }
   Menu.setApplicationMenu(null);
 
   // Renderer signals when clips are loaded and UI is fully ready
@@ -461,7 +468,9 @@ async function createWindow() {
     try {
       require("electron-reloader")(module, {
         debug: process.env.CLIPS_RELOADER_DEBUG === '1',
-        watchRenderer: true,
+        // Vite owns renderer reloading now; only reload for main-process changes.
+        watchRenderer: false,
+        ignore: ['src/**', 'dist/**', 'legacy/**'],
       });
     } catch (_) {
       logger.info("Error");
