@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
+import {
+  exportAudio,
+  exportAudioWithFileSelection,
+  exportTrimmedVideo,
+  exportVideoWithFileSelection,
+  type ProgressFn,
+} from "./playerExport";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { useToast } from "../ui/Toast";
 import "./player.css";
 
 interface VideoPlayerProps {
@@ -10,6 +19,8 @@ interface VideoPlayerProps {
   clips: LocalClip[];
   /** Persist + propagate a title change (player title edits funnel through this). */
   renameClip: (originalName: string, newName: string) => Promise<boolean>;
+  /** Remove clips from the library list after a successful delete. */
+  removeClips: (names: string[]) => void;
 }
 
 /**
@@ -23,8 +34,12 @@ interface VideoPlayerProps {
  * fullscreen come from the legacy code once initialized; callbacks + faithful
  * CSS + keybindings are filled in across 4b–4d.
  */
-export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPlayerProps) {
+export default function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlayerProps) {
   const initedRef = useRef(false);
+  const { confirm } = useConfirm();
+  const toast = useToast();
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const exportTimerRef = useRef<number | undefined>(undefined);
   // Latest renameClip, read from the once-only init callbacks without stale closures.
   const renameRef = useRef(renameClip);
   renameRef.current = renameClip;
@@ -68,6 +83,54 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
     if (window.legacyState) window.legacyState.currentClipList = clips;
     updateNavButtons();
   }, [clips, updateNavButtons]);
+
+  // Transient export toast (also driven by the player's context-menu export).
+  const showExportProgress = useCallback<ProgressFn>((current, total, clipboard) => {
+    window.clearTimeout(exportTimerRef.current);
+    if (current >= total) {
+      setExportMsg(clipboard ? "Copied to clipboard" : "Exported");
+      exportTimerRef.current = window.setTimeout(() => setExportMsg(null), 1600);
+    } else {
+      setExportMsg(clipboard ? "Copying to clipboard…" : "Exporting…");
+    }
+  }, []);
+
+  const runExport = useCallback(
+    (fn: (p: ProgressFn) => Promise<void>) => {
+      fn(showExportProgress).catch((err) => {
+        window.clearTimeout(exportTimerRef.current);
+        setExportMsg(null);
+        toast.show(err?.message ? `Export failed: ${err.message}` : "Export failed", "error");
+      });
+    },
+    [showExportProgress, toast],
+  );
+
+  // Delete the open clip: confirm, close the player, delete on disk, drop from list.
+  const handleDelete = useCallback(async () => {
+    const clip = window.legacyState?.currentClip;
+    if (!clip) return;
+    const ok = await confirm({
+      title: "Delete clip",
+      message: `Delete “${clip.customName}”? This permanently removes the file.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    const originalName = clip.originalName as string;
+    try {
+      await window.legacyPlayer?.closePlayer();
+      const res = await window.clips.deleteClip(originalName);
+      if (res && res.success === false) throw new Error(res.error);
+      removeClips([originalName]);
+      toast.show("Clip deleted", "success");
+    } catch (err) {
+      toast.show(
+        (err as Error)?.message ? `Failed to delete: ${(err as Error).message}` : "Failed to delete clip",
+        "error",
+      );
+    }
+  }, [confirm, removeClips, toast]);
 
   useEffect(() => {
     const player = window.legacyPlayer;
@@ -144,18 +207,19 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
       getThumbnailPath: (name: string) => window.clips.getThumbnailPath(name),
       updateDiscordPresenceForClip: noop,
       showCustomAlert: (msg: unknown) => window.alert(String(msg)),
-      showExportProgress: noop,
       showCustomConfirm: (msg: unknown) => window.confirm(String(msg)),
       isBenchmarkMode: false,
       updateDiscordPresence: noop,
       getActionFromEvent: (e: KeyboardEvent) => getActionFromEvent(e),
       navigateToVideo: (direction: number) => navigate(direction),
       updateNavigationButtons: () => updateNavButtons(),
-      exportAudioWithFileSelection: noop,
-      exportVideoWithFileSelection: noop,
-      exportAudioToClipboard: noop,
-      exportDefault: noop,
-      confirmAndDeleteClip: noop,
+      showExportProgress: (current: number, total: number, clipboard?: boolean) =>
+        showExportProgress(current, total, Boolean(clipboard)),
+      exportAudioWithFileSelection: () => runExport(exportAudioWithFileSelection),
+      exportVideoWithFileSelection: () => runExport(exportVideoWithFileSelection),
+      exportAudioToClipboard: () => runExport((p) => exportAudio(null, p)),
+      exportDefault: () => runExport(exportTrimmedVideo),
+      confirmAndDeleteClip: () => void handleDelete(),
       enableGridNavigation: noop,
       disableGridNavigation: noop,
       openCurrentGridSelection: noop,
@@ -401,13 +465,34 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
             <div id="top-controls">
               <input type="text" id="clip-title" placeholder="Clip Title" />
               <div className="player-actions">
-                <button id="export-button" type="button" aria-label="Export" title="Export">
+                <button
+                  id="export-button"
+                  type="button"
+                  aria-label="Export"
+                  title="Export (Ctrl: video file · Shift: audio to clipboard · Ctrl+Shift: audio file)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (e.ctrlKey && e.shiftKey) runExport(exportAudioWithFileSelection);
+                    else if (e.ctrlKey) runExport(exportVideoWithFileSelection);
+                    else if (e.shiftKey) runExport((p) => exportAudio(null, p));
+                    else runExport(exportTrimmedVideo);
+                  }}
+                >
                   <Copy size={18} />
                 </button>
                 <button id="share-button" className="share-hidden" type="button" aria-label="Publish" title="Publish">
                   <Upload size={18} />
                 </button>
-                <button id="delete-button" type="button" aria-label="Delete" title="Delete">
+                <button
+                  id="delete-button"
+                  type="button"
+                  aria-label="Delete"
+                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDelete();
+                  }}
+                >
                   <Trash2 size={18} />
                 </button>
               </div>
@@ -452,6 +537,11 @@ export default function VideoPlayer({ clipLocation, clips, renameClip }: VideoPl
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Export progress / result toast. */}
+      <div className={`export-toast${exportMsg ? " show" : ""}`}>
+        <div className="export-toast-content">{exportMsg}</div>
       </div>
     </div>
   );
