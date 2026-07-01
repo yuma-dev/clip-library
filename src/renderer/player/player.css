@@ -1540,7 +1540,8 @@ body.player-open .cet-titlebar {
   margin: 0;
 }
 
-/* Timeline hover preview is broken in the wrap (black square) — hidden until 4b. */
+/* Timeline hover preview: hidden by default, revealed on progress-bar hover
+   (positioned imperatively by VideoPlayer's mousemove handler). */
 #timeline-preview {
-  display: none !important;
+  display: none;
 }
