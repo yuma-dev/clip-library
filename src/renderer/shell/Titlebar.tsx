@@ -7,9 +7,6 @@
 export default function Titlebar() {
   return (
     <header className="titlebar">
-      <div className="titlebar-title">
-        <span className="dia">◇</span> Clips
-      </div>
       <div className="titlebar-drag" />
     </header>
   );

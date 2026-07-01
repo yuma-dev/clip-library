@@ -1,4 +1,5 @@
 import { Search, SlidersHorizontal } from "lucide-react";
+import Tooltip from "../ui/Tooltip";
 
 interface TopBarProps {
   query: string;
@@ -19,10 +20,12 @@ export default function TopBar({ query, onQueryChange, clipCount }: TopBarProps)
           placeholder="Search clips..."
         />
       </label>
-      <button type="button" className="filter-trigger" disabled title="Tag filtering — Phase 5">
-        <SlidersHorizontal size={14} />
-        Tags
-      </button>
+      <Tooltip label="Tag filtering — Phase 5">
+        <button type="button" className="filter-trigger" disabled>
+          <SlidersHorizontal size={14} />
+          Tags
+        </button>
+      </Tooltip>
       <div className="clip-counter">{clipCount} clips</div>
     </div>
   );
