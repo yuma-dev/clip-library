@@ -1258,6 +1258,21 @@ body.player-open .cet-titlebar {
   fill: none;
 }
 
+.export-title {
+  color: white;
+  font-weight: 100;
+  margin: 0;
+  font-size: 14px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.export-progress-text {
+  color: #e2e2e2;
+  font-size: 12px;
+  margin: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
 /* ===== legacy/styles.css 2555-2596 ===== */
 .button-tooltip-container {
   position: relative;
