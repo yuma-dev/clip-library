@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
@@ -38,7 +38,6 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
   const initedRef = useRef(false);
   const { confirm } = useConfirm();
   const toast = useToast();
-  const [exportMsg, setExportMsg] = useState<string | null>(null);
   const exportTimerRef = useRef<number | undefined>(undefined);
   // Latest renameClip, read from the once-only init callbacks without stale closures.
   const renameRef = useRef(renameClip);
@@ -84,26 +83,57 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
     updateNavButtons();
   }, [clips, updateNavButtons]);
 
-  // Transient export toast (also driven by the player's context-menu export).
-  const showExportProgress = useCallback<ProgressFn>((current, total, clipboard) => {
-    window.clearTimeout(exportTimerRef.current);
-    if (current >= total) {
-      setExportMsg(clipboard ? "Copied to clipboard" : "Exported");
-      exportTimerRef.current = window.setTimeout(() => setExportMsg(null), 1600);
+  // Export progress toast — drives the legacy #export-toast markup imperatively
+  // (icon + title + %, with a --progress bar), matching the original wording.
+  const showExportProgress = useCallback<ProgressFn>((current, total, clipboard = false) => {
+    const toastEl = document.getElementById("export-toast");
+    const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;
+    const title = toastEl?.querySelector(".export-title") as HTMLElement | null;
+    const progressText = toastEl?.querySelector(".export-progress-text") as HTMLElement | null;
+    if (!toastEl || !content || !title || !progressText) return;
+
+    toastEl.classList.add("show");
+    const pct = Math.min(Math.round((current / total) * 100), 100);
+    content.style.setProperty("--progress", `${pct}%`);
+    progressText.textContent = `${pct}%`;
+
+    if (pct >= 100) {
+      content.classList.add("complete");
+      title.textContent = clipboard ? "Copied to clipboard!" : "Export complete!";
+      window.clearTimeout(exportTimerRef.current);
+      exportTimerRef.current = window.setTimeout(() => {
+        toastEl.classList.remove("show");
+        window.setTimeout(() => {
+          title.textContent = "Exporting...";
+          content.style.setProperty("--progress", "0%");
+          progressText.textContent = "0%";
+          content.classList.remove("complete");
+        }, 300);
+      }, 3000);
     } else {
-      setExportMsg(clipboard ? "Copying to clipboard…" : "Exporting…");
+      title.textContent = "Exporting...";
+      content.classList.remove("complete");
     }
+  }, []);
+
+  // Hide + reset the export toast (on error).
+  const hideExportProgress = useCallback(() => {
+    const toastEl = document.getElementById("export-toast");
+    const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;
+    window.clearTimeout(exportTimerRef.current);
+    toastEl?.classList.remove("show");
+    content?.classList.remove("complete");
+    content?.style.setProperty("--progress", "0%");
   }, []);
 
   const runExport = useCallback(
     (fn: (p: ProgressFn) => Promise<void>) => {
       fn(showExportProgress).catch((err) => {
-        window.clearTimeout(exportTimerRef.current);
-        setExportMsg(null);
+        hideExportProgress();
         toast.show(err?.message ? `Export failed: ${err.message}` : "Export failed", "error");
       });
     },
-    [showExportProgress, toast],
+    [showExportProgress, hideExportProgress, toast],
   );
 
   // Delete the open clip: confirm, close the player, delete on disk, drop from list.
@@ -277,6 +307,16 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
     if (window.legacyState) window.legacyState.clipLocation = clipLocation;
   }, [clipLocation]);
 
+  // Live export progress streamed from the main process (fills the toast bar
+  // between the 0% start and 100% completion set by the export helpers).
+  useEffect(() => {
+    const unsub = window.clips.onExportProgress((progress: number) => {
+      const pct = Math.max(0, Math.min(100, Number(progress) || 0));
+      if (pct < 100) showExportProgress(pct, 100, false);
+    });
+    return unsub;
+  }, [showExportProgress]);
+
   // (Escape-to-close is now handled by the player's own keybindings, bound on
   // open; backdrop click remains as a fallback.)
 
@@ -415,6 +455,7 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
   }, []);
 
   return (
+    <>
     <div
       id="player-overlay"
       onClick={(e) => {
@@ -538,11 +579,23 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
           </div>
         </div>
       </div>
+    </div>
 
-      {/* Export progress / result toast. */}
-      <div className={`export-toast${exportMsg ? " show" : ""}`}>
-        <div className="export-toast-content">{exportMsg}</div>
+    {/* Export progress toast — legacy markup, positioned fixed at document
+        level (outside the overlay's stacking context) so it stays visible. */}
+    <div id="export-toast" className="export-toast">
+      <div className="export-toast-content">
+        <div className="export-toast-header">
+          <svg className="export-icon" viewBox="0 0 24 24">
+            <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+          <div className="export-text">
+            <h3 className="export-title">Exporting...</h3>
+            <p className="export-progress-text">0%</p>
+          </div>
+        </div>
       </div>
     </div>
+    </>
   );
 }
