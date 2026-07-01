@@ -6,6 +6,7 @@ import { ClipGlow } from "./ClipGlow";
 import { LibraryHover } from "./hoverController";
 import { HoverContext } from "./hoverContext";
 import { SelectionContext, type SelectionApi } from "./selectionContext";
+import { RenameContext, type RenameFn } from "./renameContext";
 import ContextMenuHost, { type ContextMenuHandle } from "./ContextMenuHost";
 import { useToast } from "../ui/Toast";
 import type { LocalClip } from "./types";
@@ -15,6 +16,7 @@ interface ClipGridProps {
   thumbnails: Map<string, string | null>;
   clipLocation: string;
   removeClips: (names: string[]) => void;
+  renameClip: RenameFn;
 }
 
 const COLLAPSE_KEY = "clip-library:collapsed-groups";
@@ -27,7 +29,7 @@ function loadCollapsed(): Record<string, boolean> {
   }
 }
 
-export default function ClipGrid({ clips, thumbnails, clipLocation, removeClips }: ClipGridProps) {
+export default function ClipGrid({ clips, thumbnails, clipLocation, removeClips, renameClip }: ClipGridProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const glowCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -126,9 +128,10 @@ export default function ClipGrid({ clips, thumbnails, clipLocation, removeClips 
           if (!anchorRef.current) anchorRef.current = name;
         } else if (selectedRef.current.size > 0) {
           clearSelection();
+        } else if (window.legacyPlayer) {
+          void window.legacyPlayer.openClip(clip.originalName, clip.customName);
         } else {
-          // Opening the player lands in Phase 4.
-          toast.show(`“${clip.customName}” — the player arrives in Phase 4`);
+          toast.show("Player is still loading…");
         }
       },
       onCardContextMenu: (e, clip) => {
@@ -164,23 +167,25 @@ export default function ClipGrid({ clips, thumbnails, clipLocation, removeClips 
   return (
     <ObserveContext.Provider value={observe}>
       <HoverContext.Provider value={hover}>
-        <SelectionContext.Provider value={selectionApi}>
-          <div className="clip-scroll" ref={scrollRef}>
-            <div className="clip-grid" ref={gridRef}>
-              <canvas className="clip-glow-canvas" ref={glowCanvasRef} width={16} height={9} aria-hidden="true" />
-              {groups.map((group) => (
-                <ClipGroup
-                  key={group.name}
-                  group={group}
-                  thumbnails={thumbnails}
-                  collapsed={Boolean(collapsed[group.name])}
-                  onToggle={toggle}
-                />
-              ))}
+        <RenameContext.Provider value={renameClip}>
+          <SelectionContext.Provider value={selectionApi}>
+            <div className="clip-scroll" ref={scrollRef}>
+              <div className="clip-grid" ref={gridRef}>
+                <canvas className="clip-glow-canvas" ref={glowCanvasRef} width={16} height={9} aria-hidden="true" />
+                {groups.map((group) => (
+                  <ClipGroup
+                    key={group.name}
+                    group={group}
+                    thumbnails={thumbnails}
+                    collapsed={Boolean(collapsed[group.name])}
+                    onToggle={toggle}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-          <ContextMenuHost ref={menuHostRef} onDeleted={handleDeleted} />
-        </SelectionContext.Provider>
+            <ContextMenuHost ref={menuHostRef} onDeleted={handleDeleted} />
+          </SelectionContext.Provider>
+        </RenameContext.Provider>
       </HoverContext.Provider>
     </ObserveContext.Provider>
   );

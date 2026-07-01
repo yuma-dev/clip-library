@@ -33,6 +33,7 @@
       "assets/**/*",
       "main/**/*",
       "utils/**/*",
+      "player-legacy/**/*",
       "renderer-dist/**/*",
       "diagnostics/**/*.js",
       "*.js",
@@ -84,6 +85,7 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
+    "@fontsource-variable/inter": "^5.2.8",
     "archiver": "^7.0.1",
     "axios": "^1.7.2",
     "chokidar": "^3.6.0",

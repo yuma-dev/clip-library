@@ -11,6 +11,11 @@ export interface UseClips {
   generatingCount: number;
   /** Remove clips from the list (e.g. after a successful delete). */
   removeClips: (names: string[]) => void;
+  /**
+   * Rename a clip's custom title. Persists via IPC, updates the list, and
+   * reflects the change into the open legacy player. Returns true on success.
+   */
+  renameClip: (originalName: string, newName: string) => Promise<boolean>;
 }
 
 /**
@@ -31,11 +36,15 @@ export function useClips(): UseClips {
     const unsubs: Array<() => void> = [];
 
     (async () => {
-      const [loc, raw] = await Promise.all([
+      const [loc, raw, newInfo] = await Promise.all([
         window.clips.getClipLocation().catch(() => ""),
         window.clips.getClips().catch(() => []),
+        window.clips.getNewClipsInfo().catch(() => ({ newClips: [] })),
       ]);
       if (cancelled) return;
+
+      // Clips added since the last session — used to highlight them on load.
+      const newSet = new Set<string>(Array.isArray(newInfo?.newClips) ? newInfo.newClips : []);
 
       const rawList: Record<string, unknown>[] = Array.isArray(raw) ? raw : [];
       const list: LocalClip[] = rawList.map((c) => ({
@@ -45,11 +54,47 @@ export function useClips(): UseClips {
         thumbnailPath: (c.thumbnailPath as string | null) ?? null,
         isTrimmed: Boolean(c.isTrimmed),
         tags: [],
+        isNewSinceLastSession: newSet.has(String(c.originalName ?? "")),
       }));
 
       setClipLocation(loc);
       setClips(list);
       setLoading(false);
+
+      // Live: a clip file lands while the app is running. Fetch its info, mark
+      // it new, prepend it (dedup), then fill in its thumbnail + tags.
+      unsubs.push(
+        window.clips.onNewClipAdded(async (fileName: string) => {
+          if (!fileName || cancelled) return;
+          const info = (await window.clips.getNewClipInfo(fileName).catch(() => null)) as Record<
+            string,
+            unknown
+          > | null;
+          if (!info || cancelled) return;
+          const clip: LocalClip = {
+            originalName: String(info.originalName ?? fileName),
+            customName: String(info.customName ?? ""),
+            createdAt: Number(info.createdAt ?? 0),
+            thumbnailPath: null,
+            isTrimmed: false,
+            tags: Array.isArray(info.tags) ? (info.tags as string[]) : [],
+            isNewSinceLastSession: true,
+          };
+          setClips((prev) =>
+            prev.some((c) => c.originalName === clip.originalName) ? prev : [clip, ...prev],
+          );
+          window.clips.generateThumbnailsProgressively([clip.originalName]).catch(() => {});
+          const tags = await window.clips.getClipTags(clip.originalName).catch(() => []);
+          if (cancelled) return;
+          setClips((prev) =>
+            prev.map((c) =>
+              c.originalName === clip.originalName
+                ? { ...c, tags: Array.isArray(tags) ? (tags as string[]) : [] }
+                : c,
+            ),
+          );
+        }),
+      );
 
       const names = list.map((c) => c.originalName);
 
@@ -115,5 +160,25 @@ export function useClips(): UseClips {
     setClips((prev) => prev.filter((c) => !set.has(c.originalName)));
   }, []);
 
-  return { clips, clipLocation, loading, thumbnails, generatingCount, removeClips };
+  const renameClip = useCallback(async (originalName: string, rawName: string) => {
+    const newName = rawName.trim();
+    const res = await window.clips.saveCustomName(originalName, newName).catch(() => null);
+    if (!res?.success) return false;
+
+    setClips((prev) =>
+      prev.map((c) => (c.originalName === originalName ? { ...c, customName: newName } : c)),
+    );
+
+    // Reflect into the open legacy player, if it's showing this clip.
+    const state = window.legacyState;
+    if (state?.currentClip?.originalName === originalName) {
+      state.currentClip.customName = newName;
+      const input = document.getElementById("clip-title") as HTMLInputElement | null;
+      // Don't stomp the field the user is actively typing in.
+      if (input && document.activeElement !== input) input.value = newName;
+    }
+    return true;
+  }, []);
+
+  return { clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip };
 }

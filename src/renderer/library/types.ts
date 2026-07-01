@@ -10,4 +10,6 @@ export interface LocalClip {
   thumbnailPath: string | null;
   isTrimmed: boolean;
   tags: string[];
+  /** True for clips added since the last session, or added live while running. Drives new-clip highlighting. */
+  isNewSinceLastSession?: boolean;
 }

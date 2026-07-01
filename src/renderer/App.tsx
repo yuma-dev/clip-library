@@ -3,6 +3,7 @@ import Titlebar from "./shell/Titlebar";
 import Sidebar from "./shell/Sidebar";
 import LibraryView from "./views/LibraryView";
 import SettingsView from "./views/SettingsView";
+import VideoPlayer from "./player/VideoPlayer";
 import { useClips } from "./library/useClips";
 import type { Route } from "./routes";
 
@@ -29,6 +30,8 @@ export default function App() {
           {route === "settings" ? <SettingsView /> : null}
         </main>
       </div>
+      {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened). */}
+      <VideoPlayer clipLocation={lib.clipLocation} clips={lib.clips} renameClip={lib.renameClip} />
     </div>
   );
 }
