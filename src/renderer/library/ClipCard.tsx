@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useObserve } from "./visibility";
+import { useHover } from "./hoverContext";
 import { absoluteTime, relativeTime } from "./time";
 import Tooltip from "../ui/Tooltip";
 import type { LocalClip } from "./types";
@@ -14,6 +15,7 @@ interface ClipCardProps {
 export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const observe = useObserve();
+  const hover = useHover();
   const [errored, setErrored] = useState(false);
 
   // Register with the shared visibility observer (toggles .cv-offscreen).
@@ -26,7 +28,17 @@ export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
   const extraTags = clip.tags.slice(3);
 
   return (
-    <div className="clip-item" ref={ref} data-original-name={clip.originalName}>
+    <div
+      className="clip-item"
+      ref={ref}
+      data-original-name={clip.originalName}
+      onMouseEnter={() => {
+        if (ref.current && hover) hover.enter(ref.current, clip);
+      }}
+      onMouseLeave={() => {
+        if (hover) hover.leave();
+      }}
+    >
       <div className="clip-item-media-container">
         <img
           src={src}
@@ -38,6 +50,9 @@ export default function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
             if (thumbnailPath && !errored) setErrored(true);
           }}
         />
+        {/* Imperative hover-preview <video> is mounted here (display:contents),
+            so React never reconciles it. */}
+        <div className="clip-preview-mount" />
       </div>
 
       {visibleTags.length > 0 ? (

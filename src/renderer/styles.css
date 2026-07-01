@@ -618,10 +618,54 @@ button {
 }
 
 .clip-grid {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 14px 22px 48px;
+}
+
+/* Shared card glow — one 16x9 canvas behind the cards, unclipped, repositioned
+   over the hovered card with a 55px overflow (see ClipGlow.ts). */
+.clip-glow-canvas {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  filter: blur(var(--glow-blur, 45px)) saturate(var(--glow-sat, 1.6)) brightness(var(--glow-bright, 1));
+  mix-blend-mode: screen;
+  transform: scale(0.95);
+  will-change: transform, opacity;
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 35%, black 85%, transparent),
+    linear-gradient(to bottom, transparent, black 35%, black 85%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, black 35%, black 85%, transparent),
+    linear-gradient(to bottom, transparent, black 35%, black 85%, transparent);
+  mask-composite: intersect;
+}
+.clip-glow-canvas.visible {
+  opacity: var(--glow-opacity, 0.6);
+  transform: scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .clip-glow-canvas {
+    display: none !important;
+  }
+}
+
+/* Imperative preview mount is layout-transparent; the video positions against
+   the media container (which clips it to the rounded corners). */
+.clip-preview-mount {
+  display: contents;
+}
+.clip-preview-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .clip-group {
@@ -683,6 +727,7 @@ button {
 
 .clip-item {
   position: relative;
+  z-index: 1; /* above the glow canvas (z-index: 0) */
   display: flex;
   flex-direction: column;
   gap: 8px;
