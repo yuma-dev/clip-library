@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/*
+  Unified design tokens (plan D5). Base palette matches the current Clip Library
+  dark + purple theme (from cliplib-share's @theme), with structural tokens to
+  fold in Hynite's chrome later. Extend here as the shell is built.
+*/
+@theme {
+  /* Surfaces */
+  --color-bg-primary: #1e1e1e;
+  --color-bg-secondary: #252525;
+  --color-bg-card: #2a2a2a;
+
+  /* Lines / borders */
+  --color-border: #333333;
+  --color-border-hover: #444444;
+
+  /* Accent (purple) */
+  --color-accent: #8e329b;
+  --color-accent-hover: #c026d3;
+  --color-accent-subtle: #9333ea;
+
+  /* Text */
+  --color-text-primary: #f5f5f5;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #737373;
+
+  /* Typography (Inter is bundled in a later phase; falls back to system UI) */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
