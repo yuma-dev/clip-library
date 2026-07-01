@@ -1,43 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Titlebar from "./shell/Titlebar";
 import Sidebar from "./shell/Sidebar";
 import LibraryView from "./views/LibraryView";
 import SettingsView from "./views/SettingsView";
+import { useClips } from "./library/useClips";
 import type { Route } from "./routes";
 
 export default function App() {
   const [route, setRoute] = useState<Route>("library");
-  const [clipCount, setClipCount] = useState(0);
-  const [ready, setReady] = useState(false);
+  const lib = useClips();
+  const readySent = useRef(false);
 
+  // Dismiss the splash once the first clip load resolves.
   useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const clips = await window.clips.getClips();
-        if (!cancelled) setClipCount(Array.isArray(clips) ? clips.length : 0);
-      } catch {
-        // Non-fatal for the shell; the Library view surfaces load state.
-      } finally {
-        if (!cancelled) setReady(true);
-        // Dismiss the splash once the shell has its first data.
-        window.clips?.rendererReady();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (!lib.loading && !readySent.current) {
+      readySent.current = true;
+      window.clips?.rendererReady();
+    }
+  }, [lib.loading]);
 
   return (
     <div className="app-shell">
       <Titlebar />
       <div className="app-body">
-        <Sidebar route={route} onNavigate={setRoute} clipCount={clipCount} />
+        <Sidebar route={route} onNavigate={setRoute} clipCount={lib.clips.length} />
         <main className="app-main">
-          {route === "library" ? <LibraryView clipCount={clipCount} ready={ready} /> : null}
+          {route === "library" ? <LibraryView lib={lib} /> : null}
           {route === "settings" ? <SettingsView /> : null}
         </main>
       </div>
