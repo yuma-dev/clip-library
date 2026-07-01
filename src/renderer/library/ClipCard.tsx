@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useObserve } from "./visibility";
 import { useHover } from "./hoverContext";
 import { useSelection } from "./selectionContext";
+import { useRename } from "./renameContext";
 import { absoluteTime, relativeTime } from "./time";
 import Tooltip from "../ui/Tooltip";
 import type { LocalClip } from "./types";
@@ -18,7 +19,18 @@ function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
   const observe = useObserve();
   const hover = useHover();
   const selection = useSelection();
+  const rename = useRename();
   const [errored, setErrored] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const editRef = useRef<HTMLInputElement>(null);
+
+  // Focus + select the whole title when entering edit mode.
+  useEffect(() => {
+    if (editing && editRef.current) {
+      editRef.current.focus();
+      editRef.current.select();
+    }
+  }, [editing]);
 
   // Register with the shared visibility observer (toggles .cv-offscreen), and
   // re-apply the selected class if this card (re)mounts while selected.
@@ -35,7 +47,7 @@ function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
 
   return (
     <div
-      className="clip-item"
+      className={`clip-item${clip.isNewSinceLastSession ? " is-new" : ""}`}
       ref={ref}
       data-original-name={clip.originalName}
       onMouseEnter={() => {
@@ -78,9 +90,46 @@ function ClipCard({ clip, thumbnailPath }: ClipCardProps) {
       ) : null}
 
       <div className="clip-info">
-        <p className="clip-name" title={clip.customName}>
-          {clip.customName}
-        </p>
+        {editing ? (
+          <input
+            ref={editRef}
+            className="clip-name clip-name-edit"
+            defaultValue={clip.customName}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.currentTarget.value = clip.customName; // revert -> blur skips save
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={(e) => {
+              const value = e.currentTarget.value.trim();
+              setEditing(false);
+              if (rename && value && value !== clip.customName) {
+                void rename(clip.originalName, value);
+              }
+            }}
+          />
+        ) : (
+          <p
+            className="clip-name"
+            title={clip.customName}
+            onClick={(e) => {
+              // Click the title to rename; don't open the player.
+              e.stopPropagation();
+              if (rename) setEditing(true);
+            }}
+          >
+            {clip.customName}
+          </p>
+        )}
         <p className="clip-time" title={absoluteTime(clip.createdAt)}>
           {relativeTime(clip.createdAt)}
         </p>

@@ -34,6 +34,7 @@ const api = {
   getGameIcon: invoke("get-game-icon"),
 
   // --- Per-clip metadata ---
+  saveCustomName: invoke("save-custom-name"),
   getClipInfo: invoke("get-clip-info"),
   getTrim: invoke("get-trim"),
   saveTrim: invoke("save-trim"),
@@ -141,3 +142,17 @@ const api = {
 
 // contextIsolation is OFF, so a direct assignment is visible to the renderer.
 window.clips = api;
+
+// Legacy video player (plan D1/Phase 4): run the crown-jewel player + audio
+// engine VERBATIM. Required here (preload has Node + a real __dirname) and
+// exposed on window; contextIsolation is off so these modules share the
+// renderer's window/document once init() is called from React. Copied under
+// player-legacy/ (only patch: `../utils/logger` -> `./logger`).
+try {
+  window.legacyState = require("./player-legacy/state.js");
+  window.legacyPlayer = require("./player-legacy/video-player.js");
+  window.legacyVolumeRange = require("./player-legacy/volume-range-controls.js");
+} catch (err) {
+  // Non-fatal: the library still works; the player just won't open.
+  console.error("[preload] failed to load legacy player:", err);
+}

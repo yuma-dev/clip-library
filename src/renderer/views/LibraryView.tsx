@@ -30,6 +30,7 @@ export default function LibraryView({ lib }: LibraryViewProps) {
           thumbnails={lib.thumbnails}
           clipLocation={lib.clipLocation}
           removeClips={lib.removeClips}
+          renameClip={lib.renameClip}
         />
       )}
 

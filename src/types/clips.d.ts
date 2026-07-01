@@ -17,7 +17,7 @@ export interface ClipsApi {
   // --- Clips ---
   getClips(): Promise<any[]>;
   getNewClipInfo(fileName: string): Promise<any>;
-  getNewClipsInfo(fileNames: string[]): Promise<any>;
+  getNewClipsInfo(): Promise<{ newClips: string[]; totalNewCount?: number }>;
   deleteClip(clip: any): Promise<any>;
   saveClipListImmediately(): Promise<any>;
   getClipLocation(): Promise<string>;
@@ -25,6 +25,7 @@ export interface ClipsApi {
   getGameIcon(game: string): Promise<any>;
 
   // --- Per-clip metadata ---
+  saveCustomName(originalName: string, customName: string): Promise<{ success: boolean; customName?: string; error?: string }>;
   getClipInfo(clip: any): Promise<any>;
   getTrim(clipName: string): Promise<any>;
   saveTrim(clipName: string, start: number, end: number): Promise<any>;
@@ -131,9 +132,27 @@ export interface ClipsApi {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+// Legacy video player (Phase 4) — loaded verbatim via preload; loosely typed.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export interface LegacyPlayerModule {
+  init(elements: Record<string, unknown>, callbacks: Record<string, unknown>): void;
+  openClip(originalName: string, customName: string): Promise<void>;
+  closePlayer(): Promise<void>;
+  getElements(): Record<string, HTMLElement | null>;
+  applyAmbientGlowSettings(settings: unknown): void;
+  handleKeyPress(e: KeyboardEvent): void;
+  handleKeyRelease(e: KeyboardEvent): void;
+  [key: string]: any;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 declare global {
   interface Window {
     clips: ClipsApi;
+    legacyPlayer?: LegacyPlayerModule;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    legacyState?: Record<string, any>;
+    legacyVolumeRange?: { init(opts: Record<string, unknown>): void };
   }
 }
 
