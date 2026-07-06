@@ -1,20 +1,17 @@
-import { useState } from "react";
-import TopBar from "../shell/TopBar";
 import ClipGrid from "../library/ClipGrid";
 import type { UseClips } from "../library/useClips";
+import type { LocalClip } from "../library/types";
 
 interface LibraryViewProps {
   lib: UseClips;
+  /** Clips after search + tag + collection filtering. */
+  clips: LocalClip[];
+  grayscaleIcons: boolean;
 }
 
-export default function LibraryView({ lib }: LibraryViewProps) {
-  // Search is wired up in Phase 5; the query is captured here for now.
-  const [query, setQuery] = useState("");
-
+export default function LibraryView({ lib, clips, grayscaleIcons }: LibraryViewProps) {
   return (
     <div className="library-view">
-      <TopBar query={query} onQueryChange={setQuery} clipCount={lib.clips.length} />
-
       {lib.loading ? (
         <div className="library-body">
           <div className="view-placeholder">
@@ -26,8 +23,9 @@ export default function LibraryView({ lib }: LibraryViewProps) {
         </div>
       ) : (
         <ClipGrid
-          clips={lib.clips}
+          clips={clips}
           thumbnails={lib.thumbnails}
+          grayscaleIcons={grayscaleIcons}
           clipLocation={lib.clipLocation}
           removeClips={lib.removeClips}
           renameClip={lib.renameClip}

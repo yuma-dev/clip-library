@@ -56,7 +56,10 @@ body {
 /* Structural (non-color) tokens for the shell chrome. */
 :root {
   --line: rgba(255, 255, 255, 0.08);
-  --rail-width: 208px;
+  --rail-width: 300px;
+  --rail-collapsed: 58px;
+  /* Snappy-but-smooth easing for the rail collapse/expand. */
+  --rail-ease: cubic-bezier(0.33, 1, 0.68, 1);
   --titlebar-height: 34px;
   /* Legacy player CSS references this; point it at our font. */
   --app-font-family: var(--font-sans);
@@ -85,6 +88,25 @@ button {
 .app-body {
   display: flex;
   min-height: 0;
+  position: relative;
+}
+
+/* Dynamic mode: the rail floats OVER the grid (absolute overlay) so hovering it
+   flies out on top instead of resizing the grid. The grid reserves only the
+   collapsed footprint. */
+.app-body.rail-floating .rail.dynamic {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 60;
+  background: #060708; /* solid so the expanded rail fully covers the grid */
+}
+.app-body.rail-floating .rail.dynamic:hover {
+  box-shadow: 10px 0 44px rgba(0, 0, 0, 0.55);
+}
+.app-body.rail-floating .app-main {
+  margin-left: var(--rail-collapsed);
 }
 
 .app-main {
@@ -101,12 +123,36 @@ button {
   display: flex;
   align-items: center;
   height: var(--titlebar-height);
-  padding: 0 14px;
+  padding: 0 8px;
   -webkit-app-region: drag;
   user-select: none;
   border-bottom: 0.5px solid var(--line);
   /* One unified near-black across all chrome; borders separate surfaces. */
   background: var(--color-bg-primary);
+}
+
+/* Far-left rail controls (width button + pin). No-drag so they're clickable. */
+.titlebar-btn {
+  -webkit-app-region: no-drag;
+  flex: none;
+  width: 26px;
+  height: 22px;
+  margin-right: 2px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-text-primary);
+}
+.titlebar-btn.active {
+  color: var(--color-accent-glyph);
 }
 
 .titlebar-title {
@@ -121,35 +167,88 @@ button {
   flex: 1;
 }
 
-/* ---- Sidebar / nav rail ---- */
+/* ---- Sidebar / nav rail (design handoff — 300px primary surface) ---- */
 .rail {
   width: var(--rail-width);
   flex: none;
   display: flex;
   flex-direction: column;
-  padding: 16px 12px;
+  padding: 14px 10px;
   border-right: 0.5px solid var(--line);
   background: var(--color-bg-primary);
   overflow: hidden;
-  transition: width 180ms ease, padding 180ms ease;
+  position: relative;
+  transition: width 180ms var(--rail-ease), padding 180ms var(--rail-ease);
 }
 
-/* Brand = the logo mark (itself a ◇), centered — Hynite-style. */
-.rail-brand {
-  min-height: 40px;
-  margin: 0 0 16px;
+/* Dynamic mode: collapse to an icon rail, expand to full on hover. */
+.rail.dynamic {
+  width: var(--rail-collapsed);
+}
+.rail.dynamic:hover {
+  width: var(--rail-width);
+}
+
+/* Collapse helpers. `.r-label` fades inline text/pills; `.r-extra` fades whole
+   sections (tags, stats). Both restore on hover. */
+.r-label {
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+}
+.r-extra {
+  transition: opacity 140ms ease;
+}
+.rail.dynamic:not(:hover) .r-label,
+.rail.dynamic:not(:hover) .r-extra,
+.rail.collapsed .r-label,
+.rail.collapsed .r-extra {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.r-ico {
+  width: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: currentColor;
+}
+
+/* Merged logo + search field. */
+.r-search {
+  width: 100%;
+  height: 40px;
+  flex: none;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 9px;
+  padding: 0 11px;
+  margin-bottom: 12px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  transition: width 180ms var(--rail-ease), background 160ms ease, padding 180ms var(--rail-ease);
 }
-
-.rail-logo {
-  width: 34px;
-  height: 34px;
+.r-search-logo {
+  width: 22px;
+  height: 22px;
+  flex: none;
   object-fit: contain;
-  user-select: none;
   -webkit-user-drag: none;
-  filter: drop-shadow(0 0 14px rgba(199, 116, 224, 0.22));
+  filter: drop-shadow(0 0 12px rgba(199, 116, 224, 0.35));
+}
+.r-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+.r-search input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .rail-nav {
@@ -162,11 +261,10 @@ button {
   position: relative;
   width: 100%;
   min-height: 36px;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px;
+  gap: 11px;
+  padding: 0 11px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -174,46 +272,51 @@ button {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: width 180ms var(--rail-ease), padding 180ms var(--rail-ease),
+    background 120ms ease, color 120ms ease;
 }
-
 .rail-item:hover,
 .rail-item:focus-visible {
   background: rgba(255, 255, 255, 0.055);
   color: var(--color-text-primary);
   outline: 0;
 }
-
-/* Selected = subtle highlight + a purple accent bar and accent-tinted icon
-   (plan D10 — accent colour for selection, not a purple fill). */
 .rail-item.active {
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--color-text-primary);
+  font-weight: 500;
+}
+.rail-item.active .r-ico {
+  color: var(--color-accent-glyph);
+}
+.rail-item.soon {
+  color: var(--color-text-muted);
 }
 
-.rail-item.active::before {
-  content: "";
+/* Purple accent bar marks the active nav item (D10 — accent, not fill). */
+.rail-item-mark {
   position: absolute;
-  left: 2px;
+  left: -11px;
   top: 50%;
   transform: translateY(-50%);
   width: 3px;
   height: 18px;
-  border-radius: 3px;
+  border-radius: 0 3px 3px 0;
   background: var(--color-accent-glyph);
 }
 
-.rail-item.active > svg {
-  color: var(--color-accent-glyph);
-}
-
 .rail-label {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  transition: opacity 120ms ease;
 }
 
 .rail-count-pill {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -224,48 +327,565 @@ button {
   background: rgba(255, 255, 255, 0.07);
   color: var(--color-text-muted);
 }
-
 .rail-item.active .rail-count-pill {
   color: var(--color-text-secondary);
 }
 
 .rail-soon {
+  margin-left: auto;
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-muted);
 }
 
-/* Responsive: collapse the rail to icons-only when the window gets small. */
-@media (max-width: 780px) {
-  :root {
-    --rail-width: 58px;
-  }
+.rail-divider {
+  height: 0.5px;
+  flex: none;
+  background: var(--line);
+  margin: 11px 4px;
+}
 
-  .rail {
-    padding: 14px 9px;
-  }
+/* Collections stay pinned above the (scrolling) tag list. */
+.rail-section-fixed {
+  flex: none;
+}
+/* Tag section fills the remaining rail height; only its list scrolls. */
+.rail-tags {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
-  .rail-item {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    padding: 0;
-    gap: 0;
-  }
+/* Rail section shell (Collections, Tags). */
+.rail-section {
+  margin-bottom: 4px;
+}
+.rail-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 8px;
+  max-height: 60px;
+  overflow: hidden;
+  transition: max-height 180ms var(--rail-ease), padding 180ms var(--rail-ease),
+    opacity 140ms ease;
+}
+.rail-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.rail-section-count {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.rail-section-action {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-glyph);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.rail-section-action:hover {
+  text-decoration: underline;
+}
 
-  .rail-item > .rail-label,
-  .rail-item > .rail-count-pill,
-  .rail-item > .rail-soon {
-    display: none;
-  }
+/* Collections — quick top-level filters. */
+.rail-collections {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rail-collection {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: width 180ms var(--rail-ease), padding 180ms var(--rail-ease),
+    background 120ms ease, color 120ms ease;
+}
+.rail-collection:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--color-text-primary);
+}
+.rail-collection.active {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+}
+.rail-collection.active .r-ico {
+  color: var(--color-accent-glyph);
+}
+.rail-collection-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
 
-  /* In the collapsed rail the accent icon alone marks selection. */
-  .rail-item.active::before {
-    display: none;
+/* Tag filter (the liked purple system, rehomed into the rail). */
+.tagf-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  margin: 0 4px 8px;
+  padding: 0 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-muted);
+}
+.tagf-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+.tagf-search input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.tagf-actions {
+  display: flex;
+  gap: 6px;
+  margin: 0 4px 8px;
+}
+.tagf-actions button {
+  flex: 1;
+  height: 26px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms ease, color 120ms ease;
+}
+.tagf-actions button:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-text-primary);
+}
+
+/* Only the list scrolls; it fades at top/bottom instead of hard-cutting, and
+   hides its scrollbar (rail stays chrome-free). */
+.tagf-list-wrap {
+  flex: 1;
+  min-height: 0;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 10px,
+    black calc(100% - 24px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 10px,
+    black calc(100% - 24px),
+    transparent 100%
+  );
+}
+.tagf-list {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 2px 22px;
+  scrollbar-width: none;
+}
+.tagf-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Tag rows — the bar indicator (left) carries selection; rows have no fill. */
+.tagf-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 1px 0;
+  padding: 7px 10px 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background 140ms ease, color 140ms ease;
+}
+.tagf-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tagf-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-primary);
+}
+/* Selected = included: the bar lights up, the label brightens. No row fill. */
+.tagf-item.selected {
+  color: var(--color-text-primary);
+}
+/* Focused = temporary "only show this tag": purple bar + purple label. */
+.tagf-item.focused {
+  color: #e9b8f5;
+}
+
+/* Left bar indicator — marks inclusion; click to focus a single tag. */
+.tagf-indicator {
+  position: relative;
+  flex: none;
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: transform 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+}
+.tagf-item.selected .tagf-indicator {
+  background: rgba(255, 255, 255, 0.85);
+}
+.tagf-item:not(.selected):hover .tagf-indicator {
+  background: rgba(147, 51, 234, 0.35);
+  transform: scale(1.1);
+  box-shadow: 0 0 8px rgba(147, 51, 234, 0.2);
+}
+.tagf-item:hover .tagf-indicator {
+  animation: tagIndicatorPulse 1.5s infinite;
+}
+.tagf-indicator:hover {
+  transform: scale(1.2);
+  background: rgba(147, 51, 234, 0.85) !important;
+  box-shadow: 0 0 12px rgba(147, 51, 234, 0.35);
+  animation: none;
+}
+.tagf-item.focused .tagf-indicator {
+  background: linear-gradient(180deg, #9333ea, #c084fc);
+  box-shadow: 0 0 10px rgba(147, 51, 234, 0.4);
+  animation: none;
+}
+/* "Only show this tag" hint, opening to the left so it stays inside the rail. */
+.tagf-indicator::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.85);
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: #0a0a0a;
+  border: 0.5px solid rgba(147, 51, 234, 0.35);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 20;
+}
+.tagf-indicator:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) scale(1);
+}
+@keyframes tagIndicatorPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(147, 51, 234, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0);
+  }
+}
+.tagf-divider {
+  height: 0.5px;
+  background: var(--color-border);
+  margin: 6px 8px;
+}
+
+/* Stat cards. */
+.rail-stats {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  flex: none;
+  max-height: 120px;
+  overflow: hidden;
+  transition: max-height 180ms var(--rail-ease), margin 180ms var(--rail-ease),
+    opacity 140ms ease;
+}
+.rail-stat {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.rail-stat-figure {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.rail-stat-figure.accent {
+  color: #d9a6ef;
+}
+.rail-stat-label {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  margin-top: 1px;
+  white-space: nowrap;
+}
+
+/* Profile card (real ClipLib account). */
+.rail-profile {
+  width: 100%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  margin-top: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0.5px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  text-align: left;
+  transition: width 180ms var(--rail-ease), padding 180ms var(--rail-ease),
+    background 160ms ease, border-color 160ms ease;
+}
+.rail-profile-connect {
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+}
+.rail-profile-connect:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.rail-profile-connect:disabled {
+  cursor: default;
+}
+.rail-avatar {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+.rail-avatar img {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #17171b;
+  box-shadow: 0 0 0 1.5px rgba(199, 116, 224, 0.55);
+}
+.rail-avatar-empty {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  color: var(--color-text-muted);
+}
+.rail-avatar-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #4ccf7a;
+  border: 2px solid var(--color-bg-primary);
+}
+.rail-profile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.rail-profile-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-profile-sub {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sign-out button on the connected profile card. */
+.rail-logout {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.rail-logout:hover {
+  background: rgba(240, 138, 122, 0.12);
+  color: #f08a7a;
+}
+
+/* ================= Collapsed rail =================
+   Applies when a Dynamic rail isn't hovered, or a rail is statically collapsed.
+   Everything shrinks to a centered 40px icon column; labels/backgrounds that
+   would spill are removed so only glyphs (and the avatar) remain. */
+.rail.collapsed {
+  width: var(--rail-collapsed);
+}
+.rail.dynamic:not(:hover),
+.rail.collapsed {
+  padding-left: 9px;
+  padding-right: 9px;
+}
+
+/* Labels/pills/counts cross-fade — never display:none (that pops). */
+.rail.dynamic:not(:hover) .r-label,
+.rail.dynamic:not(:hover) .rail-label,
+.rail.collapsed .r-label,
+.rail.collapsed .rail-label {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Nav + collection rows trim to a 40px square from the RIGHT. The icon sits at
+   the (unchanged) left padding, so it never moves — only the trailing label
+   area collapses. 11+18+11 = 40 → the icon lands centered in the square. */
+.rail.dynamic:not(:hover) .rail-item,
+.rail.collapsed .rail-item,
+.rail.dynamic:not(:hover) .rail-collection,
+.rail.collapsed .rail-collection {
+  width: 40px;
+}
+.rail.dynamic:not(:hover) .rail-item.active,
+.rail.collapsed .rail-item.active,
+.rail.dynamic:not(:hover) .rail-collection.active,
+.rail.collapsed .rail-collection.active {
+  background: rgba(255, 255, 255, 0.06);
+}
+.rail.dynamic:not(:hover) .rail-item-mark,
+.rail.collapsed .rail-item-mark {
+  opacity: 0;
+}
+
+/* Search + profile center their single glyph via symmetric padding (animated),
+   not justify-content (which would snap). */
+.rail.dynamic:not(:hover) .r-search,
+.rail.collapsed .r-search {
+  width: 40px;
+  padding-left: 9px;
+  padding-right: 9px;
+  gap: 0;
+  background: transparent;
+}
+.rail.dynamic:not(:hover) .rail-profile,
+.rail.collapsed .rail-profile {
+  width: 40px;
+  padding-left: 5px;
+  padding-right: 5px;
+  gap: 0;
+  background: transparent;
+  border-color: transparent;
+  overflow: visible;
+}
+
+/* Collections header collapses its height smoothly — the rows slide up rather
+   than snap. */
+.rail.dynamic:not(:hover) .rail-section-head,
+.rail.collapsed .rail-section-head {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+
+/* Tag section is an invisible flex spacer; stats collapse their height away. */
+.rail.dynamic:not(:hover) .rail-tags,
+.rail.collapsed .rail-tags {
+  opacity: 0;
+  pointer-events: none;
+}
+.rail.dynamic:not(:hover) .rail-stats,
+.rail.collapsed .rail-stats {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+}
+
+/* Collapsed-rail hover title — flies out to the right, over the grid. Rendered
+   as a fixed sibling of the rail so the rail's overflow:hidden can't clip it. */
+.rail-fly-tip {
+  position: fixed;
+  left: calc(var(--rail-collapsed) + 10px);
+  transform: translateY(-50%);
+  z-index: 500;
+  pointer-events: none;
+  padding: 6px 11px;
+  border-radius: 8px;
+  background: var(--color-bg-card);
+  border: 0.5px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  animation: railTipIn 120ms var(--rail-ease);
+}
+@keyframes railTipIn {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
   }
 }
 
-/* ---- Library top bar ---- */
+/* ---- Library view ---- */
 .library-view {
   position: relative;
   display: flex;
@@ -274,63 +894,6 @@ button {
   flex: 1;
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 0.5px solid var(--line);
-}
-
-.search-box {
-  height: 34px;
-  min-width: min(340px, 52vw);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--color-text-secondary);
-}
-
-.search-box input {
-  width: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--color-text-primary);
-  font-size: 13px;
-}
-
-.search-box input::placeholder {
-  color: var(--color-text-muted);
-}
-
-.filter-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 9px;
-  border: 0.5px solid var(--line);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.filter-trigger:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.clip-counter {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
 
 /* ---- View bodies / placeholders ---- */
 .library-body {
@@ -622,6 +1185,23 @@ button {
   overflow-y: auto;
   overflow-x: hidden;
 }
+/* Slim, self-effacing grid scrollbar (handoff style). */
+.clip-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.clip-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.clip-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.clip-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+  background-clip: content-box;
+}
 
 .clip-grid {
   position: relative;
@@ -692,18 +1272,24 @@ button {
   text-align: left;
 }
 
-.clip-group-chevron {
+/* ◆ gradient diamond — echoes the logo; rotates 45° when the group is open. */
+.clip-group-diamond {
   flex: none;
-  color: var(--color-text-muted);
-  transition: transform 160ms ease;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #be29e8, #740acc);
+  box-shadow: 0 0 8px rgba(155, 16, 222, 0.55);
+  transform: rotate(0deg);
+  transition: transform 320ms cubic-bezier(0.4, 0, 0.2, 1);
 }
-.clip-group-chevron.collapsed {
-  transform: rotate(-90deg);
+.clip-group-diamond.open {
+  transform: rotate(45deg);
 }
 
 .clip-group-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 650;
 }
 
@@ -719,8 +1305,13 @@ button {
 .clip-group-divider {
   flex: 1;
   height: 1px;
-  background: var(--color-border);
   margin-left: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(190, 41, 232, 0.55),
+    rgba(155, 16, 222, 0.3) 40%,
+    rgba(116, 10, 204, 0.02)
+  );
 }
 
 .clip-group-content {
@@ -784,33 +1375,19 @@ button {
   pointer-events: none;
 }
 
-.tag-container {
+/* Card footer: text column + game icon (design). */
+.clip-foot {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  align-items: center;
+  gap: 9px;
   padding: 0 2px;
 }
-.tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--color-text-secondary);
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tag.more-tags {
-  cursor: default;
-  color: var(--color-text-muted);
-}
-
 .clip-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 2px;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
 }
 .clip-name {
   margin: 0;
@@ -821,10 +1398,64 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Inline new-clip dot preceding the name. */
+.clip-new-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: #be29e8;
+  box-shadow: 0 0 6px #be29e8;
+  vertical-align: middle;
+}
+.clip-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .clip-time {
   margin: 0;
   font-size: 11px;
   color: var(--color-text-muted);
+  flex: none;
+}
+.tag {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-secondary);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag.more-tags {
+  cursor: default;
+  color: var(--color-text-muted);
+}
+
+/* Game / application icon (get-game-icon). */
+.clip-game {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  display: grid;
+  place-items: center;
+}
+.clip-game img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.clip-game img.grayscale {
+  filter: grayscale(1) contrast(1.02);
+  opacity: 0.9;
 }
 
 /* Inline title editing (click the name). Matches .clip-name metrics. */
@@ -850,16 +1481,29 @@ button {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-glyph) 45%, transparent),
     0 10px 28px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
-.clip-item.is-new .clip-name::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--color-accent-glyph);
-  box-shadow: 0 0 6px var(--color-accent-glyph);
-  vertical-align: middle;
+/* Empty state — no clips match the current search/tag filters. */
+.clip-empty {
+  min-height: 55vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.clip-empty-mark {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--color-accent-subtle);
+}
+.clip-empty-title {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+.clip-empty-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 
 .thumb-gen-indicator {

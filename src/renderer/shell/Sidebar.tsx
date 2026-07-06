@@ -1,39 +1,188 @@
+import { useCallback, useMemo, useState } from "react";
+import { CircleDashed, Layers, Scissors, Sparkles } from "lucide-react";
 import { routes, type Route } from "../routes";
 import { useToast } from "../ui/Toast";
-import logoUrl from "../../../assets/title.png";
+import RailTags from "./RailTags";
+import RailProfile from "./RailProfile";
+import type { UseLibraryFilter } from "../library/useLibraryFilter";
+import type { Collection } from "../library/filter";
+import type { LocalClip } from "../library/types";
+import logoUrl from "../../../assets/logo.png";
 
 interface SidebarProps {
   route: Route;
   onNavigate: (route: Route) => void;
-  clipCount: number;
+  clips: LocalClip[];
+  filter: UseLibraryFilter;
+  /** Dynamic (hover-to-expand) rail. */
+  dynamic: boolean;
+  /** Statically collapsed rail (no hover-expand). */
+  collapsed: boolean;
 }
 
-// Nav rail — structure from Hynite's `.rail`, styled per D10 (dark, ◇ accent).
-export default function Sidebar({ route, onNavigate, clipCount }: SidebarProps) {
+const COLLECTIONS: { id: Collection; label: string; icon: typeof Layers }[] = [
+  { id: "all", label: "All clips", icon: Layers },
+  { id: "new", label: "New", icon: Sparkles },
+  { id: "untagged", label: "Untagged", icon: CircleDashed },
+  { id: "trimmed", label: "Trimmed", icon: Scissors },
+];
+
+const WEEK_MS = 7 * 86_400_000;
+
+// Nav rail — 300px primary surface (design handoff): merged logo+search, nav,
+// scrollable collections + tag filter, stat cards, real profile card.
+export default function Sidebar({
+  route,
+  onNavigate,
+  clips,
+  filter,
+  dynamic,
+  collapsed,
+}: SidebarProps) {
   const toast = useToast();
+
+  const counts = useMemo(() => {
+    const now = Date.now();
+    let week = 0;
+    let untagged = 0;
+    let trimmed = 0;
+    let isNew = 0;
+    let tagged = 0;
+    for (const c of clips) {
+      if (now - c.createdAt <= WEEK_MS) week++;
+      if (c.tags.length === 0) untagged++;
+      else tagged++;
+      if (c.isTrimmed) trimmed++;
+      if (c.isNewSinceLastSession) isNew++;
+    }
+    return { total: clips.length, week, untagged, trimmed, isNew, tagged };
+  }, [clips]);
+
+  // Collapsed-rail hover title — flies out to the right, over the grid. The
+  // rail clips its own overflow, so the tip is rendered as a fixed sibling and
+  // positioned from the hovered row's rect (delegated so every row is covered).
+  const [tip, setTip] = useState<{ label: string; y: number } | null>(null);
+  const onRailOver = useCallback(
+    (e: React.MouseEvent) => {
+      if (!collapsed) return;
+      const el = (e.target as HTMLElement).closest<HTMLElement>("[data-rail-tip]");
+      if (!el) {
+        setTip(null);
+        return;
+      }
+      const label = el.getAttribute("data-rail-tip") ?? "";
+      const r = el.getBoundingClientRect();
+      const y = r.top + r.height / 2;
+      setTip((prev) => (prev && prev.label === label && prev.y === y ? prev : { label, y }));
+    },
+    [collapsed],
+  );
+
+  const collectionCount = (id: Collection) => {
+    switch (id) {
+      case "new":
+        return counts.isNew;
+      case "untagged":
+        return counts.untagged;
+      case "trimmed":
+        return counts.trimmed;
+      default:
+        return counts.total;
+    }
+  };
+
   return (
-    <aside className="rail">
-      <div className="rail-brand">
-        <img className="rail-logo" src={logoUrl} alt="Clips" draggable={false} />
-      </div>
+    <>
+    <aside
+      className={`rail${dynamic ? " dynamic" : ""}${collapsed ? " collapsed" : ""}`}
+      onMouseOver={onRailOver}
+      onMouseLeave={() => setTip(null)}
+    >
+      {/* Merged logo → search field. */}
+      <label className="r-search" data-rail-tip="Search clips">
+        <img className="r-search-logo" src={logoUrl} alt="Clips" draggable={false} />
+        <input
+          className="r-label"
+          value={filter.query}
+          onChange={(e) => filter.setQuery(e.target.value)}
+          placeholder="Search clips…"
+        />
+      </label>
+
       <nav className="rail-nav">
         {routes.map(({ id, label, icon: Icon, disabled }) => (
           <button
             key={id}
             type="button"
+            data-rail-tip={disabled ? `${label} (soon)` : label}
             className={`rail-item${route === id ? " active" : ""}${disabled ? " soon" : ""}`}
             onClick={() => {
               if (disabled) toast.show(`${label} is coming soon`);
               else onNavigate(id);
             }}
           >
-            <Icon size={17} />
+            {route === id ? <span className="rail-item-mark" aria-hidden="true" /> : null}
+            <span className="r-ico">
+              <Icon size={17} />
+            </span>
             <span className="rail-label">{label}</span>
-            {id === "library" ? <span className="rail-count-pill">{clipCount}</span> : null}
-            {disabled ? <span className="rail-soon">soon</span> : null}
+            {id === "library" ? <span className="rail-count-pill r-label">{counts.total}</span> : null}
+            {disabled ? <span className="rail-soon r-label">soon</span> : null}
           </button>
         ))}
       </nav>
+
+      <div className="rail-divider" />
+
+      {/* Collections stay pinned; only the tag list below scrolls. */}
+      <div className="rail-section rail-section-fixed">
+        <div className="rail-section-head">
+          <span className="rail-section-title">Collections</span>
+        </div>
+        <div className="rail-collections">
+          {COLLECTIONS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              data-rail-tip={label}
+              className={`rail-collection${filter.collection === id ? " active" : ""}`}
+              onClick={() => filter.setCollection(id)}
+            >
+              <span className="r-ico">
+                <Icon size={15} />
+              </span>
+              <span className="rail-label">{label}</span>
+              <span className="rail-collection-count r-label">{collectionCount(id)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <RailTags filter={filter} />
+
+      <div className="rail-stats r-extra">
+        <div className="rail-stat">
+          <div className="rail-stat-figure">{counts.total}</div>
+          <div className="rail-stat-label">clips</div>
+        </div>
+        <div className="rail-stat">
+          <div className="rail-stat-figure accent">{counts.week}</div>
+          <div className="rail-stat-label">this week</div>
+        </div>
+        <div className="rail-stat">
+          <div className="rail-stat-figure">{counts.tagged}</div>
+          <div className="rail-stat-label">tagged</div>
+        </div>
+      </div>
+
+      <RailProfile />
     </aside>
+
+    {collapsed && tip ? (
+      <div className="rail-fly-tip" style={{ top: tip.y }} role="tooltip">
+        {tip.label}
+      </div>
+    ) : null}
+    </>
   );
 }
