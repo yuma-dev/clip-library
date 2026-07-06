@@ -14,6 +14,7 @@ import type { LocalClip } from "./types";
 interface ClipGridProps {
   clips: LocalClip[];
   thumbnails: Map<string, string | null>;
+  grayscaleIcons: boolean;
   clipLocation: string;
   removeClips: (names: string[]) => void;
   renameClip: RenameFn;
@@ -29,7 +30,14 @@ function loadCollapsed(): Record<string, boolean> {
   }
 }
 
-export default function ClipGrid({ clips, thumbnails, clipLocation, removeClips, renameClip }: ClipGridProps) {
+export default function ClipGrid({
+  clips,
+  thumbnails,
+  grayscaleIcons,
+  clipLocation,
+  removeClips,
+  renameClip,
+}: ClipGridProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const glowCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -177,10 +185,20 @@ export default function ClipGrid({ clips, thumbnails, clipLocation, removeClips,
                     key={group.name}
                     group={group}
                     thumbnails={thumbnails}
+                    grayscaleIcons={grayscaleIcons}
                     collapsed={Boolean(collapsed[group.name])}
                     onToggle={toggle}
                   />
                 ))}
+                {groups.length === 0 ? (
+                  <div className="clip-empty">
+                    <span className="clip-empty-mark dia" aria-hidden="true">
+                      ◇
+                    </span>
+                    <p className="clip-empty-title">No clips match</p>
+                    <p className="clip-empty-sub">Try a different search or clear your tag filters.</p>
+                  </div>
+                ) : null}
               </div>
             </div>
             <ContextMenuHost ref={menuHostRef} onDeleted={handleDeleted} />
