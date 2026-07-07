@@ -28,7 +28,7 @@ export class ClipGlow {
   }
 
   show(cardEl: HTMLElement): void {
-    if (this.reducedMotion || !this.ctx) return;
+    if (this.reducedMotion || !this.ctx || !glowConfig.enabled) return;
     const img = cardEl.querySelector<HTMLImageElement>(".clip-item-media-container img");
     if (img && img.complete && img.naturalWidth > 0) {
       this.currentSource = img;

@@ -10,6 +10,12 @@ import {
 } from "react";
 import { applyUiFont, UI_FONT_DEFAULT } from "./fonts";
 import { EXPORT_SETTING_DEFAULTS } from "./exportPresets";
+import { applyKeybindings } from "../player/keybindings";
+import {
+  applyCardGlowSettings,
+  CARD_GLOW_DEFAULTS,
+  type CardGlowSettings,
+} from "../library/glowConfig";
 
 // The persisted settings object (main process settings-manager). Loosely typed
 // on purpose — main owns the file; we only read/patch the keys we know.
@@ -22,6 +28,8 @@ export interface AmbientGlowSettings {
   opacity: number;
 }
 
+export type { CardGlowSettings };
+
 export interface AppSettings {
   enableDiscordRPC: boolean;
   uiFont: string;
@@ -29,6 +37,7 @@ export interface AppSettings {
   showNewClipsIndicators: boolean;
   previewVolume: number;
   ambientGlow: AmbientGlowSettings;
+  cardGlow: CardGlowSettings;
   exportPreset: string;
   exportQuality: string;
   exportSizeGoal: string;
@@ -48,7 +57,9 @@ export const AMBIENT_GLOW_DEFAULTS: AmbientGlowSettings = {
   opacity: 0.7,
 };
 
-const DEFAULTS: AppSettings = {
+export { CARD_GLOW_DEFAULTS };
+
+export const SETTINGS_DEFAULTS: AppSettings = {
   enableDiscordRPC: false,
   uiFont: UI_FONT_DEFAULT,
   // Legacy defaulted greyscale off; the new design defaults it ON (matches the
@@ -57,12 +68,14 @@ const DEFAULTS: AppSettings = {
   showNewClipsIndicators: true,
   previewVolume: 0.1,
   ambientGlow: { ...AMBIENT_GLOW_DEFAULTS },
+  cardGlow: { ...CARD_GLOW_DEFAULTS },
   ...EXPORT_SETTING_DEFAULTS,
 };
 
 function withDefaults(raw: Record<string, unknown> | null | undefined): AppSettings {
-  const merged: AppSettings = { ...DEFAULTS, ...(raw ?? {}) } as AppSettings;
+  const merged: AppSettings = { ...SETTINGS_DEFAULTS, ...(raw ?? {}) } as AppSettings;
   merged.ambientGlow = { ...AMBIENT_GLOW_DEFAULTS, ...((raw?.ambientGlow as object) ?? {}) };
+  merged.cardGlow = { ...CARD_GLOW_DEFAULTS, ...((raw?.cardGlow as object) ?? {}) };
   return merged;
 }
 
@@ -77,8 +90,11 @@ interface SettingsApi {
    * rather than reverting mid-interaction).
    */
   set: (path: string, value: unknown) => Promise<boolean>;
-  /** Update several top-level keys at once (export presets). */
+  /** Update several top-level keys at once (export presets, resets). */
   patch: (partial: Record<string, unknown>) => Promise<boolean>;
+  /** Step back/forward through this session's settings changes (Ctrl+Z / Ctrl+Shift+Z). */
+  undo: () => boolean;
+  redo: () => boolean;
 }
 
 const SettingsContext = createContext<SettingsApi | null>(null);
@@ -89,16 +105,30 @@ export function useSettings(): SettingsApi {
   return ctx;
 }
 
-/** Mirror the canonical object into the wrapped legacy player's shared state. */
-function syncLegacyState(settings: AppSettings): void {
-  if (window.legacyState) window.legacyState.settings = settings;
+const HISTORY_LIMIT = 100;
+
+/**
+ * All cross-cutting side effects of a settings object live here, so every
+ * write path (set / patch / undo / redo / initial load) behaves identically:
+ * font, legacy-player state, player keybindings, ambient glow, card glow.
+ */
+function applySideEffects(next: AppSettings, prev: AppSettings | null): void {
+  if (window.legacyState) window.legacyState.settings = next;
+  applyUiFont(next.uiFont);
+  applyKeybindings(next.keybindings ?? {});
+  applyCardGlowSettings(next.cardGlow);
+  if (!prev || prev.ambientGlow !== next.ambientGlow) {
+    window.legacyPlayer?.applyAmbientGlowSettings(next.ambientGlow);
+  }
 }
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<AppSettings>(DEFAULTS);
+  const [settings, setSettings] = useState<AppSettings>(SETTINGS_DEFAULTS);
   const [ready, setReady] = useState(false);
   // Canonical copy for read-modify-write saves (state updates are async).
-  const canonical = useRef<AppSettings>(DEFAULTS);
+  const canonical = useRef<AppSettings>(SETTINGS_DEFAULTS);
+  const undoStack = useRef<AppSettings[]>([]);
+  const redoStack = useRef<AppSettings[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,8 +140,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         canonical.current = merged;
         setSettings(merged);
         setReady(true);
-        applyUiFont(merged.uiFont);
-        syncLegacyState(merged);
+        applySideEffects(merged, null);
       })
       .catch(() => {
         if (!cancelled) setReady(true);
@@ -121,11 +150,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const save = useCallback(async (next: AppSettings): Promise<boolean> => {
+  const commit = useCallback(async (next: AppSettings, fromHistory: boolean): Promise<boolean> => {
+    const prev = canonical.current;
+    if (!fromHistory) {
+      undoStack.current.push(prev);
+      if (undoStack.current.length > HISTORY_LIMIT) undoStack.current.shift();
+      redoStack.current = [];
+    }
     canonical.current = next;
     setSettings(next);
-    syncLegacyState(next);
-    if (next.uiFont !== undefined) applyUiFont(next.uiFont);
+    applySideEffects(next, prev);
     try {
       await window.clips.saveSettings(next);
       return true;
@@ -145,17 +179,37 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         target = target[keys[i]];
       }
       target[keys[keys.length - 1]] = value;
-      return save(next);
+      return commit(next, false);
     },
-    [save],
+    [commit],
   );
 
   const patch = useCallback(
-    (partial: Record<string, unknown>): Promise<boolean> => save({ ...canonical.current, ...partial }),
-    [save],
+    (partial: Record<string, unknown>): Promise<boolean> =>
+      commit({ ...canonical.current, ...partial }, false),
+    [commit],
   );
 
-  const api = useMemo(() => ({ settings, ready, set, patch }), [settings, ready, set, patch]);
+  const undo = useCallback((): boolean => {
+    const prev = undoStack.current.pop();
+    if (!prev) return false;
+    redoStack.current.push(canonical.current);
+    void commit(prev, true);
+    return true;
+  }, [commit]);
+
+  const redo = useCallback((): boolean => {
+    const next = redoStack.current.pop();
+    if (!next) return false;
+    undoStack.current.push(canonical.current);
+    void commit(next, true);
+    return true;
+  }, [commit]);
+
+  const api = useMemo(
+    () => ({ settings, ready, set, patch, undo, redo }),
+    [settings, ready, set, patch, undo, redo],
+  );
 
   return <SettingsContext.Provider value={api}>{children}</SettingsContext.Provider>;
 }

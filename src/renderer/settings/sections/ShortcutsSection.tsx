@@ -24,7 +24,7 @@ import { SetGroup } from "../rows";
 import { useSettings } from "../SettingsContext";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { useToast } from "../../ui/Toast";
-import { DEFAULT_KEYBINDINGS, applyKeybindings } from "../../player/keybindings";
+import { DEFAULT_KEYBINDINGS } from "../../player/keybindings";
 
 const ACTIONS: { id: string; title: string; description: string; icon: LucideIcon }[] = [
   { id: "playPause", title: "Play / Pause", description: "Toggle video playback", icon: Play },
@@ -90,8 +90,9 @@ export default function ShortcutsSection() {
     return flagged;
   }, [bindings]);
 
+  // The provider applies the map to the live player on every commit (and on
+  // undo/redo), so persisting is all that's needed here.
   const persist = (next: Record<string, string>) => {
-    applyKeybindings(next);
     void set("keybindings", next);
   };
 
@@ -174,6 +175,7 @@ export default function ShortcutsSection() {
   return (
     <SetGroup
       title="Player shortcuts"
+      span2
       aside={
         <button type="button" className="btn btn-ghost kb-reset" onClick={() => void resetAll()}>
           <RotateCcw size={13} /> Reset to defaults
