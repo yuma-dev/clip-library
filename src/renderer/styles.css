@@ -31,7 +31,17 @@
   --color-text-muted: rgba(255, 255, 255, 0.34);
 
   /* Typography — Inter is bundled (@fontsource-variable/inter). */
-  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif,
+    "Apple Color Emoji";
+}
+
+/* Apple-style emoji everywhere (reactions, badges, names) — deliberate brand
+   choice shared with the ClipLib website; without it Windows falls back to
+   Segoe UI Emoji. Listed last in the stacks so it only serves emoji. */
+@font-face {
+  font-family: "Apple Color Emoji";
+  src: url("../../assets/AppleColorEmoji.ttf") format("truetype");
+  font-display: swap;
 }
 
 :root {
@@ -48,8 +58,9 @@ body {
   margin: 0;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
-  /* Settings → App font overrides --app-font-family at runtime. */
-  font-family: var(--app-font-family, var(--font-sans));
+  /* Settings → App font overrides --app-font-family at runtime; Apple Color
+     Emoji rides along regardless of the chosen UI font. */
+  font-family: var(--app-font-family, var(--font-sans)), "Apple Color Emoji";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -752,6 +763,30 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Connected profile card: the avatar/name area is a button that opens your own
+   ClipLib profile. It fills the row so the whole left side feels clickable; the
+   sign-out button sits beside it (its own click, stopPropagation). */
+.rail-profile-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.rail-profile-open:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* Sign-out button on the connected profile card. */
@@ -1537,6 +1572,377 @@ button {
   inset: 0;
   background: color-mix(in srgb, var(--color-accent) 16%, transparent);
   pointer-events: none;
+}
+
+/* ---- Publish-to-ClipLib modal (player/ShareModal.tsx) ---- */
+.share-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+.share-modal {
+  width: min(440px, calc(100vw - 48px));
+  max-height: min(600px, calc(100vh - 48px));
+  overflow-y: auto;
+  padding: 18px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.share-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.share-modal-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.share-modal-close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.share-modal-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-text-primary);
+}
+.share-modal-label {
+  display: block;
+  margin: 10px 0 5px;
+  font-size: 11px;
+  font-weight: 550;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.share-modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+.share-modal-input:focus {
+  border-color: var(--color-border-hover);
+}
+.share-modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.share-modal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.share-modal-chip img {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+.share-modal-users {
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.share-modal-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.share-modal-user:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.share-modal-user.is-selected {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.share-modal-user img,
+.share-modal-user-fallback {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  flex: none;
+}
+.share-modal-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-modal-user-handle {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.share-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.share-modal-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.share-modal-primary:hover {
+  background: var(--color-accent-hover, var(--color-accent));
+}
+.share-modal-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.share-modal-secondary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.share-modal-progress {
+  padding: 10px 0 4px;
+}
+.share-modal-progress p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+.share-modal-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.share-modal-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-accent);
+  transition: width 200ms ease;
+}
+.share-modal-result p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+.share-modal-error {
+  color: #f08a7a !important;
+}
+.share-modal-muted {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* Discord call participants — stacked avatars, top-left of the thumbnail
+   (mirrors the ClipLib website mention stack: 32px, -8px overlap, +X bubble). */
+.clip-participants {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3; /* above thumbnail img and hover-preview video */
+  display: flex;
+  align-items: center;
+}
+.clip-participants .user-popover-anchor {
+  position: relative;
+}
+.clip-participants .user-popover-anchor + .user-popover-anchor {
+  margin-left: -8px;
+}
+.clip-participant {
+  display: inline-flex;
+}
+.clip-participant img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  object-fit: cover;
+  display: block;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
+}
+.clip-participants-more {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  margin-left: -8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 500;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
+}
+
+/* Hover profile popover (ui/UserPopover.tsx) — portaled to <body>. */
+.user-popover-anchor {
+  display: inline-flex;
+}
+.user-popover {
+  position: fixed;
+  z-index: 9999;
+  min-width: 200px;
+  max-width: 260px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+}
+.user-popover-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.user-popover-head.is-link {
+  cursor: pointer;
+}
+.user-popover-head.is-link:hover .user-popover-display {
+  color: var(--color-accent-glyph);
+}
+.user-popover-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.user-popover-names {
+  min-width: 0;
+}
+.user-popover-display {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-popover-handle {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-popover-cliplib {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.user-popover-cliplib-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-glyph);
+}
+
+/* Rich card additions (registered ClipLib user with an online profile). */
+.user-popover-bio {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.user-popover-stats {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.user-popover-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.user-popover-badges {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.user-popover-badge {
+  font-size: 13px;
+  line-height: 1;
+}
+.user-popover-joined {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 /* Card footer: text column + game icon (design). */

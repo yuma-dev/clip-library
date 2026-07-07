@@ -8,14 +8,18 @@
 // per clip (2,000 concurrent get-game-icon calls used to saturate the main
 // process for minutes).
 
+import type { ClipDiscordInfo } from "./discord";
+
 export interface GameIcon {
   /** Absolute icon path, or null when the clip has no resolvable icon. */
   path: string | null;
   /** Window/game title (tooltip), or null. */
   title: string | null;
+  /** Discord voice-call context recorded with the clip, or null. */
+  discord: ClipDiscordInfo | null;
 }
 
-const EMPTY: GameIcon = { path: null, title: null };
+const EMPTY: GameIcon = { path: null, title: null, discord: null };
 
 const cache = new Map<string, GameIcon>();
 const inflight = new Map<string, Promise<GameIcon>>();
@@ -33,10 +37,10 @@ export function getCachedGameIcon(name: string): GameIcon | undefined {
 
 function normalize(data: unknown): GameIcon {
   if (data && typeof data === "object") {
-    const obj = data as { path?: string | null; title?: string | null };
-    return { path: obj.path ?? null, title: obj.title ?? null };
+    const obj = data as { path?: string | null; title?: string | null; discord?: ClipDiscordInfo | null };
+    return { path: obj.path ?? null, title: obj.title ?? null, discord: obj.discord ?? null };
   }
-  if (typeof data === "string") return { path: data, title: null };
+  if (typeof data === "string") return { path: data, title: null, discord: null };
   return EMPTY;
 }
 

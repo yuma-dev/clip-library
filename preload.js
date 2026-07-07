@@ -102,6 +102,7 @@ const api = {
   disconnectCliplibAuth: invoke("disconnect-cliplib-auth"),
   shareClip: invoke("share-clip"),
   getShareUsers: invoke("get-share-users"),
+  shareApiRequest: invoke("share-api-request"),
 
   // --- Updates ---
   checkForUpdates: invoke("check-for-updates"),

@@ -1,0 +1,528 @@
+/* ===================== In-app ClipLib feed =====================
+   Follows styles.css conventions: design tokens, kebab-case classes prefixed
+   `feed-`, and the same radius / border / hover language as .clip-item. */
+
+.feed-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrolls in the main area like the library grid (reuses .clip-scroll rules). */
+.feed-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.feed-inner {
+  padding: 18px 22px 48px;
+}
+
+/* ---- Filter bar ---- */
+.feed-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.feed-dropdown {
+  position: relative;
+}
+
+.feed-filter-btn,
+.feed-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 0.5px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+.feed-filter-btn:hover,
+.feed-select:hover {
+  border-color: var(--color-border-hover);
+}
+.feed-filter-btn.active {
+  border-color: color-mix(in srgb, var(--color-accent-glyph) 45%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-card));
+  color: var(--color-text-primary);
+}
+.feed-filter-btn-label {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feed-filter-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.feed-filter-chevron {
+  opacity: 0.5;
+  flex: none;
+}
+
+.feed-select {
+  outline: none;
+  padding-right: 8px;
+}
+.feed-select:focus {
+  border-color: var(--color-border-hover);
+}
+
+.feed-dropdown-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 50;
+  width: 192px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 12px;
+  border: 0.5px solid var(--color-border);
+  background: var(--color-bg-card);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+}
+.feed-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.feed-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.feed-dropdown-item.active {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-text-primary);
+}
+.feed-dropdown-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-clear-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+.feed-clear-btn:hover {
+  color: var(--color-text-secondary);
+}
+
+/* ---- Card ----
+   The card shares .clip-item / .clip-item-media-container with the library grid
+   (see styles.css) so sizing, radius, gap and hover behaviour are IDENTICAL.
+   Only the feed-specific overlays + footer are styled here; the `feed-card` /
+   `feed-card-media` classes are kept for overlay scoping but no longer redefine
+   the shared metrics. */
+.feed-card-media-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+}
+
+.feed-card-duration {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.feed-card-reactions {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.feed-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+.feed-reaction:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+.feed-reaction.active {
+  background: color-mix(in srgb, var(--color-accent) 55%, rgba(0, 0, 0, 0.4));
+  color: #fff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-glyph) 55%, transparent);
+}
+
+.feed-card-comments {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+}
+
+.feed-card-processing {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 13px;
+}
+.feed-card-processing span {
+  animation: feed-pulse 1.6s ease-in-out infinite;
+}
+@keyframes feed-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* ---- Card footer ---- */
+.feed-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+.feed-card-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+/* Uploader link — same text scale as the meta row so "Name · 2mo ago" reads
+   as one aligned line (the name previously inherited the body font size). */
+.feed-card-uploader-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1;
+}
+.feed-card-uploader-link:hover .feed-card-uploader {
+  color: var(--color-text-primary);
+}
+.feed-card-foot-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+}
+.feed-card-uploader {
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+  max-width: 120px;
+}
+.feed-card-dot {
+  color: var(--color-text-muted);
+  flex: none;
+}
+.feed-card-time {
+  color: var(--color-text-muted);
+  flex: none;
+}
+.feed-card-game {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.feed-card-fav {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+.feed-card-fav:hover {
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+.feed-card-fav.active {
+  color: var(--color-accent-glyph);
+}
+
+.feed-card-title {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Infinite-scroll sentinel + spinner ---- */
+.feed-sentinel {
+  display: flex;
+  justify-content: center;
+  padding: 20px 0;
+}
+.feed-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--color-text-muted);
+  border-top-color: transparent;
+  animation: feed-spin 0.7s linear infinite;
+}
+@keyframes feed-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Empty / connect states ---- */
+.feed-empty-icon {
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+.feed-connect-btn {
+  margin-top: 14px;
+  padding: 9px 18px;
+  border: none;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+.feed-connect-btn:hover {
+  background: var(--color-accent-hover);
+}
+
+/* ---- Sidebar feed filters (FeedRailFilters, route === "feed") ----
+   flex:1 fills the rail's remaining height exactly like .rail-tags does on the
+   library route, so RailProfile stays pinned to the bottom of the rail (instead
+   of floating up right under the filters). */
+/* .rail prefix beats styles.css's `.rail-section-fixed { flex: none }` in the
+   cascade — without it the computed flex is 0 0 auto and the profile floats. */
+.rail .fr-rail {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px;
+  min-height: 0;
+}
+.fr-clear {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.fr-clear:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+.fr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fr-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+.fr-picker {
+  position: relative;
+}
+.fr-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.fr-picker-btn:hover {
+  border-color: var(--color-border-hover);
+}
+.fr-picker-btn.active {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+.fr-picker-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: none;
+}
+.fr-picker-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fr-picker-label.muted {
+  color: var(--color-text-muted);
+}
+.fr-picker-chevron {
+  color: var(--color-text-muted);
+  flex: none;
+}
+.fr-picker-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--color-text-muted);
+  flex: none;
+}
+.fr-picker-clear:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.09);
+}
+.fr-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.fr-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.fr-picker-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.fr-picker-item.active {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.fr-select {
+  width: 100%;
+  padding: 6px 9px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+.fr-select:hover {
+  border-color: var(--color-border-hover);
+}
+/* Collapsed / hover-rail modes hide the filter panel like other r-labels. */
+.rail.dynamic:not(:hover) .fr-rail,
+.rail.collapsed .fr-rail {
+  display: none;
+}

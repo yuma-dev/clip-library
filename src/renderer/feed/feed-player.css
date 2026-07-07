@@ -1,0 +1,512 @@
+/* ================= Feed player (FeedPlayer.tsx) =================
+   The overlay reuses the crown-jewel player's IDs so player.css provides the
+   entire base look (controls gradient, sliders, nav buttons, progress bar).
+   Everything here is scoped under .feed-player and covers only:
+     1. the overlay-as-scroll-container (stage + bottom details sheet),
+     2. re-anchoring #fullscreen-player from fixed to the scrollable stage,
+     3. the fp-* feed-specific pieces (title, actions, sheet, comments).   */
+
+/* ---- 1. Overlay: vertical scroll container with two snap regions ---- */
+#player-overlay.feed-player {
+  display: block;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y proximity;
+  background: rgba(8, 8, 10, 0.72);
+  backdrop-filter: blur(22px) saturate(130%);
+  -webkit-backdrop-filter: blur(22px) saturate(130%);
+}
+#player-overlay.feed-player::-webkit-scrollbar {
+  display: none;
+}
+
+/* Height reserved for the peeking sheet header below the stage. */
+.feed-player .fp-stage {
+  position: relative;
+  height: calc(100vh - 76px);
+  scroll-snap-align: start;
+}
+
+.feed-player #player-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- 2. Player re-anchored inside the stage (player.css makes it fixed).
+   Same 90%-width 16:9 look as the local player, but capped so the whole
+   player fits the slightly shorter stage. Fullscreen keeps player.css's
+   fixed full-bleed rules. ---- */
+.feed-player #fullscreen-player:not(.custom-fullscreen) {
+  position: absolute;
+  top: 50%;
+  width: min(90%, calc((100vh - 148px) * 1.7778));
+}
+
+.feed-player .fp-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Nav chevrons: player.css positions #prev-video/#next-video by id at 3% —
+   the feed player is a touch narrower, so 7% keeps the buttons peeking out
+   from behind the player edges just like the local layout. */
+.feed-player .fp-nav-prev {
+  left: 7%;
+}
+.feed-player .fp-nav-next {
+  right: 7%;
+}
+
+/* Ambient glow behind the player — mirror of #ambient-glow-canvas (player.css):
+   10×6 buffer scaled to player-width + 200px, blurred + saturated via inline
+   style from settings.ambientGlow. */
+.feed-player .fp-ambient-glow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(min(90%, (100vh - 148px) * 1.7778) + 200px);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  z-index: 0;
+  pointer-events: none;
+  will-change: contents;
+  contain: strict;
+}
+.feed-player #player-container {
+  position: relative;
+  z-index: 1;
+}
+
+.feed-player .fp-processing {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+/* Title: same metrics as the local #clip-title (14px/400). */
+.feed-player .fp-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 400;
+  color: #f4f4f6;
+  padding: 4px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Action buttons in the top-right (favorite / details / close) — matches the
+   local player's export/delete button feel. */
+.feed-player .fp-action {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #e0e0e0;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.feed-player .fp-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.feed-player .fp-action-on {
+  color: var(--color-accent-glyph);
+}
+.feed-player .fp-fav-active {
+  color: var(--color-accent-glyph);
+}
+.feed-player .fp-close:hover {
+  background: rgba(240, 80, 80, 0.25);
+}
+
+.feed-player .fp-progress-wrap {
+  width: 100%;
+}
+
+/* ---- 3. Details sheet ----
+   Content-sized (no artificial min-height) and exactly as wide as the player
+   above it (same width formula as #fullscreen-player). */
+.feed-player .fp-sheet {
+  scroll-snap-align: end;
+  display: flex;
+  flex-direction: column;
+  width: min(90%, calc((100vh - 148px) * 1.7778));
+  margin: 0 auto;
+  background:
+    linear-gradient(180deg, rgba(24, 24, 30, 0.82) 0%, rgba(18, 18, 22, 0.92) 100%);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 0.5px solid var(--color-border);
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.45);
+}
+
+/* Header — the part that peeks below the stage. */
+.feed-player .fp-sheet-head {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 9px 22px 13px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.feed-player .fp-sheet-head:hover .fp-sheet-grip {
+  background: rgba(255, 255, 255, 0.32);
+}
+.feed-player .fp-sheet-grip {
+  width: 38px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  transition: background 160ms ease;
+}
+.feed-player .fp-sheet-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+.feed-player .fp-sheet-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.feed-player .fp-sheet-uploader {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feed-player .fp-sheet-dot,
+.feed-player .fp-sheet-muted {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  flex: none;
+}
+.feed-player .fp-sheet-spacer {
+  flex: 1;
+}
+.feed-player .fp-sheet-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 0.5px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  flex: none;
+}
+.feed-player .fp-sheet-chevron {
+  color: var(--color-text-muted);
+  flex: none;
+  transition: transform 220ms ease;
+}
+.feed-player .fp-sheet-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* Body — two columns: clip info | comments. */
+.feed-player .fp-sheet-body {
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) 1fr;
+  gap: 34px;
+  padding: 8px 26px 30px;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .feed-player .fp-sheet-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Left column — info. */
+.feed-player .fp-info-title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+}
+.feed-player .fp-uploader {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.feed-player .fp-uploader-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  cursor: pointer;
+}
+.feed-player .fp-uploader-info {
+  min-width: 0;
+}
+.feed-player .fp-uploader-name {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.feed-player .fp-uploader-name:hover {
+  color: var(--color-accent-glyph);
+}
+.feed-player .fp-uploader-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.feed-player .fp-dot {
+  color: var(--color-text-muted);
+}
+.feed-player .fp-muted {
+  color: var(--color-text-muted);
+}
+.feed-player .fp-description {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+.feed-player .fp-featuring {
+  margin-top: 16px;
+}
+.feed-player .fp-featuring-label {
+  margin-bottom: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.feed-player .fp-featuring-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.feed-player .fp-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px 4px 5px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.feed-player .fp-mention-chip:hover {
+  border-color: var(--color-border-hover);
+  background: rgba(255, 255, 255, 0.07);
+}
+.feed-player .fp-mention-chip img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+/* Reaction bar. */
+.feed-player .fp-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+.feed-player .fp-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 90ms ease;
+}
+.feed-player .fp-reaction:hover {
+  border-color: var(--color-border-hover);
+}
+.feed-player .fp-reaction:active {
+  transform: scale(0.93);
+}
+.feed-player .fp-reaction.active {
+  border-color: color-mix(in srgb, var(--color-accent-glyph) 50%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-text-primary);
+}
+.feed-player .fp-reaction:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.feed-player .fp-reaction-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* Right column — comments. */
+.feed-player .fp-comments {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.feed-player .fp-comments-header {
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.feed-player .fp-comments-list {
+  flex: 1;
+  min-height: 120px;
+  max-height: 46vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding-right: 6px;
+}
+.feed-player .fp-comments-empty {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.feed-player .fp-comment {
+  display: flex;
+  gap: 10px;
+}
+.feed-player .fp-comment-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  margin-top: 2px;
+}
+.feed-player .fp-comment-body {
+  min-width: 0;
+  flex: 1;
+}
+.feed-player .fp-comment-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.feed-player .fp-comment-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.feed-player .fp-comment-time {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.feed-player .fp-comment-delete {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 3px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: color 140ms ease, opacity 140ms ease;
+}
+.feed-player .fp-comment:hover .fp-comment-delete {
+  opacity: 1;
+}
+.feed-player .fp-comment-delete:hover {
+  color: #f08a7a;
+}
+.feed-player .fp-comment-content {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Composer. */
+.feed-player .fp-composer {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.feed-player .fp-composer-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.feed-player .fp-composer-input:focus {
+  border-color: var(--color-border-hover);
+}
+.feed-player .fp-composer-post {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms ease, opacity 160ms ease;
+}
+.feed-player .fp-composer-post:hover {
+  background: var(--color-accent-hover);
+}
+.feed-player .fp-composer-post:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

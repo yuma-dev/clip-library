@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "./settings/SettingsContext";
 import Titlebar from "./shell/Titlebar";
 import Sidebar from "./shell/Sidebar";
 import LibraryView from "./views/LibraryView";
 import SettingsView from "./views/SettingsView";
+import FeedPage from "./feed/FeedPage";
+import FeedPlayer from "./feed/FeedPlayer";
+import ProfilePage from "./feed/ProfilePage";
+import { AppNavContext, type AppNav } from "./shell/appNav";
 import VideoPlayer from "./player/VideoPlayer";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
@@ -24,9 +28,44 @@ const writeBool = (key: string, value: boolean) => {
 
 export default function App() {
   const [route, setRoute] = useState<Route>("library");
+  // Profile overlay (rendered over the routed view when set). Navigating via
+  // the sidebar clears it (see `navigate`). Wired to deep children via AppNav.
+  const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  const navigate = useCallback((next: Route) => {
+    setProfileUserId(null);
+    setRoute(next);
+  }, []);
+  const appNav = useMemo<AppNav>(
+    () => ({
+      openProfile: (userId: string) => setProfileUserId(userId),
+      closeProfile: () => setProfileUserId(null),
+      openLibrary: () => {
+        setProfileUserId(null);
+        setRoute("library");
+      },
+    }),
+    [],
+  );
   const lib = useClips();
   const filter = useLibraryFilter(lib.clips);
   const readySent = useRef(false);
+
+  // Warm the online data shortly after launch, off the startup path: the
+  // registered-user map (grid popovers), own account, and the default feed
+  // page — so Feed/popovers open instantly instead of waiting ~1s each.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void import("./library/shareIdentity").then((m) => m.loadShareUsers());
+      void import("./feed/me").then((m) => m.fetchMe());
+      void Promise.all([
+        import("./feed/useFeedClips"),
+        import("./feed/feedFilters"),
+      ]).then(([hook, ff]) =>
+        hook.prefetchFeedList(ff.getFeedFilters(), ff.feedPersistKey()),
+      );
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // Rail mode. Two axes: `pinned` picks what the titlebar button toggles —
   //   unpinned → button toggles `dynamic` (auto-collapse, hover to expand);
@@ -96,6 +135,7 @@ export default function App() {
   }, [lib.loading]);
 
   return (
+    <AppNavContext.Provider value={appNav}>
     <div className="app-shell">
       <Titlebar
         pinned={pinned}
@@ -107,25 +147,33 @@ export default function App() {
       <div className={`app-body${railDynamic ? " rail-floating" : ""}`}>
         <Sidebar
           route={route}
-          onNavigate={setRoute}
+          onNavigate={navigate}
           clips={lib.clips}
           filter={filter}
           dynamic={railDynamic}
           collapsed={railCollapsed}
         />
         <main className="app-main">
-          {route === "library" ? (
-            <LibraryView
-              lib={lib}
-              clips={filter.filteredClips}
-              grayscaleIcons={grayscaleIcons}
-              showNewIndicators={showNewIndicators}
-              previewVolume={previewVolume}
-              globalTags={filter.globalTags}
-              addGlobalTag={filter.addGlobalTag}
-            />
-          ) : null}
-          {route === "settings" ? <SettingsView lib={lib} filter={filter} /> : null}
+          {/* Profile overlay takes precedence over the routed view. */}
+          {profileUserId ? (
+            <ProfilePage userId={profileUserId} />
+          ) : (
+            <>
+              {route === "library" ? (
+                <LibraryView
+                  lib={lib}
+                  clips={filter.filteredClips}
+                  grayscaleIcons={grayscaleIcons}
+                  showNewIndicators={showNewIndicators}
+                  previewVolume={previewVolume}
+                  globalTags={filter.globalTags}
+                  addGlobalTag={filter.addGlobalTag}
+                />
+              ) : null}
+              {route === "feed" ? <FeedPage /> : null}
+              {route === "settings" ? <SettingsView lib={lib} filter={filter} /> : null}
+            </>
+          )}
         </main>
       </div>
       {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened).
@@ -137,6 +185,10 @@ export default function App() {
         renameClip={lib.renameClip}
         removeClips={lib.removeClips}
       />
+      {/* Feed player mounts once app-wide so any grid (feed route, profile
+          overlay) can open remote clips through the feedPlayerBus. */}
+      <FeedPlayer />
     </div>
+    </AppNavContext.Provider>
   );
 }

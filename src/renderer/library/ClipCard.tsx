@@ -5,6 +5,7 @@ import { useSelection } from "./selectionContext";
 import { useRename } from "./renameContext";
 import { absoluteTime, relativeTime } from "./time";
 import { getCachedGameIcon, loadGameIcon, type GameIcon } from "./gameIcon";
+import ParticipantAvatars from "./ParticipantAvatars";
 import Tooltip from "../ui/Tooltip";
 import type { LocalClip } from "./types";
 import shimmerUrl from "../../../assets/loading-thumbnail.gif";
@@ -52,7 +53,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
     void loadGameIcon(clip.originalName).then((res) => {
       // Most clips resolve to "no icon" — skip the state update (and the
       // card re-render) unless there's actually something to show.
-      if (alive && (res.path || res.title)) setIcon(res);
+      if (alive && (res.path || res.title || res.discord)) setIcon(res);
     });
     return () => {
       alive = false;
@@ -90,6 +91,9 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
         />
         {/* Imperative hover-preview <video> mounts here (display:contents). */}
         <div className="clip-preview-mount" />
+        {icon?.discord ? (
+          <ParticipantAvatars discord={icon.discord} clipCreatedAt={clip.createdAt} />
+        ) : null}
       </div>
 
       <div className="clip-foot">

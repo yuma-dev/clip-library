@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
@@ -11,6 +11,8 @@ import {
 } from "./playerExport";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
+import { useProfile } from "../shell/useProfile";
+import ShareModal from "./ShareModal";
 import "./player.css";
 
 interface VideoPlayerProps {
@@ -38,6 +40,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlay
   const initedRef = useRef(false);
   const { confirm } = useConfirm();
   const toast = useToast();
+  const { connected: shareConnected } = useProfile();
+  const [shareOpen, setShareOpen] = useState(false);
   const exportTimerRef = useRef<number | undefined>(undefined);
   // Latest renameClip, read from the once-only init callbacks without stale closures.
   const renameRef = useRef(renameClip);
@@ -524,7 +528,17 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlay
                 >
                   <Copy size={18} />
                 </button>
-                <button id="share-button" className="share-hidden" type="button" aria-label="Publish" title="Publish">
+                <button
+                  id="share-button"
+                  className={shareConnected ? undefined : "share-hidden"}
+                  type="button"
+                  aria-label="Publish"
+                  title="Publish to ClipLib"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShareOpen(true);
+                  }}
+                >
                   <Upload size={18} />
                 </button>
                 <button
@@ -599,6 +613,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlay
         </div>
       </div>
     </div>
+
+    <ShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
     </>
   );
 }
