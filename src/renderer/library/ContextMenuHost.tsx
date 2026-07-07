@@ -199,11 +199,19 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
                     else setView("root");
                   } else if (e.key === "Enter") {
                     e.preventDefault();
-                    // Enter toggles the closest existing match; never creates.
+                    // Shift+Enter always creates; plain Enter toggles the
+                    // closest existing match, falling back to create when there
+                    // is no match at all.
+                    if (e.shiftKey) {
+                      createTag();
+                      return;
+                    }
                     const match = closestMatch();
                     if (match) {
                       toggleTag(match);
                       setQuery("");
+                    } else {
+                      createTag();
                     }
                   }
                 }}
