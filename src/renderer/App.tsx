@@ -71,6 +71,23 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Escape exits an active tag focus ("only show this tag") — but not while the
+  // player is open, where Escape closes the player (handled by its own
+  // keybindings, bound on document only while a clip is open).
+  const isTemporary = filter.tags.isTemporary;
+  const clearFocus = filter.clearFocus;
+  useEffect(() => {
+    if (!isTemporary) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const overlay = document.getElementById("player-overlay");
+      if (overlay && overlay.style.display !== "none") return;
+      clearFocus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isTemporary, clearFocus]);
+
   // Dismiss the splash once the first clip load resolves.
   useEffect(() => {
     if (!lib.loading && !readySent.current) {
@@ -104,10 +121,12 @@ export default function App() {
           {route === "settings" ? <SettingsView /> : null}
         </main>
       </div>
-      {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened). */}
+      {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened).
+          Fed the *filtered* list so prev/next walks the same clips the grid
+          shows (respecting the active search / tag focus), not the full library. */}
       <VideoPlayer
         clipLocation={lib.clipLocation}
-        clips={lib.clips}
+        clips={filter.filteredClips}
         renameClip={lib.renameClip}
         removeClips={lib.removeClips}
       />
