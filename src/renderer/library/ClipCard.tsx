@@ -14,9 +14,10 @@ interface ClipCardProps {
   clip: LocalClip;
   thumbnailPath: string | null;
   grayscaleIcons: boolean;
+  showNewIndicators: boolean;
 }
 
-function ClipCard({ clip, thumbnailPath, grayscaleIcons }: ClipCardProps) {
+function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: ClipCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const observe = useObserve();
   const hover = useHover();
@@ -64,7 +65,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons }: ClipCardProps) {
 
   return (
     <div
-      className={`clip-item${clip.isNewSinceLastSession ? " is-new" : ""}`}
+      className={`clip-item${showNewIndicators && clip.isNewSinceLastSession ? " is-new" : ""}`}
       ref={ref}
       data-original-name={clip.originalName}
       onMouseEnter={() => {
@@ -130,7 +131,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons }: ClipCardProps) {
                 if (rename) setEditing(true);
               }}
             >
-              {clip.isNewSinceLastSession ? (
+              {showNewIndicators && clip.isNewSinceLastSession ? (
                 <span className="clip-new-dot" aria-hidden="true" />
               ) : null}
               {clip.customName}

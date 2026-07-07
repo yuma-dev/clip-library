@@ -96,6 +96,7 @@ export interface ClipsApi {
 
   // --- Updates ---
   checkForUpdates(): Promise<any>;
+  openUpdatePage(url?: string | null): Promise<{ success: boolean; url?: string; error?: string }>;
   getAppVersion(): Promise<string>;
 
   // --- Diagnostics / misc ---

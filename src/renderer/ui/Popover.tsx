@@ -49,6 +49,12 @@ export default function Popover({ open, onClose, anchorRef, children, align = "s
   useEffect(() => {
     if (!open) return;
     const close = () => onClose();
+    // Scrolling the page dismisses; scrolling a list INSIDE the popover
+    // (e.g. a long <Select> menu) must not.
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Node && ref.current?.contains(event.target)) return;
+      onClose();
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
@@ -60,12 +66,12 @@ export default function Popover({ open, onClose, anchorRef, children, align = "s
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
   }, [open, onClose, anchorRef]);

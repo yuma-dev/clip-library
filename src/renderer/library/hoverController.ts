@@ -36,6 +36,12 @@ export class LibraryHover {
     this.clipLocation = loc;
   }
 
+  /** Settings → preview volume; also applied live to a playing preview. */
+  setPreviewVolume(volume: number): void {
+    this.previewVolume = volume;
+    if (this.activePreview?.video) this.activePreview.video.volume = volume;
+  }
+
   enter(cardEl: HTMLElement, clip: LocalClip): void {
     this.glow.show(cardEl);
     this.cleanupPreview();

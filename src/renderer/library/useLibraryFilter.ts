@@ -30,6 +30,10 @@ export interface UseLibraryFilter {
   clearFocus: () => void;
   /** Create a new global tag (persists it and enables it in the filter). */
   addGlobalTag: (tag: string) => void;
+  /** Rename a tag in the global list + selections (disk scan done by caller). */
+  renameGlobalTag: (oldTag: string, newTag: string) => void;
+  /** Remove a tag from the global list + selections (disk scan done by caller). */
+  removeGlobalTag: (tag: string) => void;
 
   /** clips run through search + tag + collection filters (newest-first). */
   filteredClips: LocalClip[];
@@ -158,6 +162,58 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     [persist],
   );
 
+  const renameGlobalTag = useCallback(
+    (oldTag: string, newTag: string) => {
+      setLoadedTags((prev) => {
+        const next = prev.map((t) => (t === oldTag ? newTag : t));
+        if (!next.includes(newTag)) next.push(newTag);
+        window.clips.saveGlobalTags(next).catch(() => {});
+        return next;
+      });
+      setSaved((prev) => {
+        if (!prev.has(oldTag)) return prev;
+        const next = new Set(prev);
+        next.delete(oldTag);
+        next.add(newTag);
+        persist(next);
+        return next;
+      });
+      setTemporary((prev) => {
+        if (!prev.has(oldTag)) return prev;
+        const next = new Set(prev);
+        next.delete(oldTag);
+        next.add(newTag);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const removeGlobalTag = useCallback(
+    (tag: string) => {
+      setLoadedTags((prev) => {
+        const next = prev.filter((t) => t !== tag);
+        window.clips.saveGlobalTags(next).catch(() => {});
+        return next;
+      });
+      setSaved((prev) => {
+        if (!prev.has(tag)) return prev;
+        const next = new Set(prev);
+        next.delete(tag);
+        persist(next);
+        return next;
+      });
+      setTemporary((prev) => {
+        if (!prev.has(tag)) return prev;
+        const next = new Set(prev);
+        next.delete(tag);
+        if (next.size === 0) setIsTemporary(false);
+        return next;
+      });
+    },
+    [persist],
+  );
+
   const tags: TagFilterState = useMemo(
     () => ({ saved, temporary, isTemporary }),
     [saved, temporary, isTemporary],
@@ -199,6 +255,8 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       hideAllTags,
       clearFocus,
       addGlobalTag,
+      renameGlobalTag,
+      removeGlobalTag,
       filteredClips,
     }),
     [
@@ -214,6 +272,8 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       hideAllTags,
       clearFocus,
       addGlobalTag,
+      renameGlobalTag,
+      removeGlobalTag,
       filteredClips,
     ],
   );

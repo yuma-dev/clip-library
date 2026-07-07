@@ -105,6 +105,7 @@ const api = {
 
   // --- Updates ---
   checkForUpdates: invoke("check-for-updates"),
+  openUpdatePage: invoke("open-update-page"),
   getAppVersion: invoke("get-app-version"),
 
   // --- Diagnostics / misc ---
