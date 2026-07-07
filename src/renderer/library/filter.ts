@@ -45,25 +45,30 @@ export function parseSearchTerms(raw: string): SearchTerms {
  * shows — deselecting a tag hides every clip carrying it.
  */
 export function matchesTagFilter(clip: LocalClip, tags: TagFilterState): boolean {
-  const selected = activeSelection(tags);
-  if (selected.size === 0) return false;
-
   const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
   const isUntagged = clipTags.length === 0;
 
-  // The Untagged/Unnamed system-tag visibility guards are ALWAYS governed by
-  // the persisted selection, even in focus (temporary) mode — focusing a tag
-  // must not hide an unnamed or untagged clip that carries it. Only the actual
-  // tag-membership test below switches to the temporary set. (Legacy
-  // matchesCurrentTagFilter checks state.selectedTags for these guards.)
-  if (isUntagged && !tags.saved.has("Untagged")) return false;
-  if (isUnnamedClip(clip) && !tags.saved.has("Unnamed")) return false;
-
-  if (clipTags.length > 0) {
-    if (tags.isTemporary) return clipTags.some((t) => tags.temporary.has(t));
-    return clipTags.every((t) => selected.has(t));
+  // Focus mode ("only show this tag", OR over the focus set): a clip matches
+  // iff it carries a focused tag. "Untagged"/"Unnamed" act as focusable
+  // pseudo-tags. Crucially, the AND-exclusion Untagged/Unnamed guards below do
+  // NOT apply here — focusing a real tag must show every clip carrying it,
+  // including unnamed ones (freshly captured clips have no custom name yet).
+  if (tags.isTemporary) {
+    const focus = tags.temporary;
+    if (focus.size === 0) return false;
+    if (isUntagged && focus.has("Untagged")) return true;
+    if (isUnnamedClip(clip) && focus.has("Unnamed")) return true;
+    return clipTags.some((t) => focus.has(t));
   }
-  return tags.saved.has("Untagged");
+
+  // Persisted AND-exclusion mode: with an empty selection nothing shows, and
+  // deselecting any tag a clip carries hides that clip.
+  const selected = tags.saved;
+  if (selected.size === 0) return false;
+  if (isUntagged && !selected.has("Untagged")) return false;
+  if (isUnnamedClip(clip) && !selected.has("Unnamed")) return false;
+  if (clipTags.length > 0) return clipTags.every((t) => selected.has(t));
+  return selected.has("Untagged");
 }
 
 // --- Collections (quick top-level filters, ANDed with search + tags) ---
