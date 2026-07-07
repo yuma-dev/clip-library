@@ -16,21 +16,24 @@
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use clipdip_audio::{list_devices, AudioCapture, AudioDeviceInfo, AudioKind, DeviceFlow, WaveFormat};
-use clipdip_capture::DesktopDuplicator;
+use clipdip_capture::{CaptureBackend, Capturer};
 use clipdip_encoder::{ActiveCodec, CodecPreference, EncoderConfig, NvEncoderD3D11, RateControl};
 use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack, VideoBitstream};
 use clipdip_ringbuf::{EncodedPacket, MediaClock, PacketRing, STREAM_VIDEO};
 
-use crate::config::{AudioSource, CodecPreferenceCfg, Config, RateControlCfg};
+use crate::config::{
+    AudioSource, CaptureBackendCfg, CodecPreferenceCfg, Config, RateControlCfg,
+    RecordingQualityCfg,
+};
 use crate::filename::FilenameVars;
 
 /// Current QPC time in 100-ns ticks — the same clock and unit the ring
@@ -107,12 +110,36 @@ pub struct Pipeline {
     /// writes it every frame; a health monitor compares it against
     /// `qpc_now_100ns()` to detect a live capture stall.
     frame_liveness: Arc<AtomicI64>,
+    /// Like [`frame_liveness`] but only updated on frames with *new
+    /// content* (`was_repeat == false`). If this stops advancing while
+    /// `frame_liveness` keeps ticking, the capturer is running but the
+    /// captured image never changes — the signature of a capture backend
+    /// that can't see a fullscreen game (frozen-frame / desktop-only
+    /// clips). A health monitor alerts on that divergence.
+    real_frame_liveness: Arc<AtomicI64>,
+    /// Set (once) by the video thread if it exits with an error, so a
+    /// supervisor can react immediately instead of waiting to join the
+    /// thread at shutdown — before this existed, a dead capture thread
+    /// looked identical to a wedged one for 15s and the error text was
+    /// lost until process exit.
+    video_error: Arc<Mutex<Option<String>>>,
     /// Which stage the video loop is currently in (see [`CapturePhase`]).
     /// If frame production wedges, this pins down *which* GPU call hung —
     /// the loop sets it before each call but can't clear it if the call
     /// never returns.
     capture_phase: Arc<AtomicU8>,
+    /// QP the encoder should run at *right now* (H.264 scale), or
+    /// [`QP_BOOST_OFF`] for the configured base quality. Written by
+    /// `start_recording` / `stop_recording_and_save_in`; the video thread
+    /// polls it once per frame and reconfigures NVENC on change, so manual
+    /// recordings encode at `video.recording_quality` while replay-buffer
+    /// footage stays at the cheaper clip quality.
+    recording_qp_boost: Arc<AtomicU32>,
 }
+
+/// Sentinel in [`Pipeline::recording_qp_boost`]: no boost, run at the
+/// configured base rate control.
+const QP_BOOST_OFF: u32 = u32::MAX;
 
 /// Stage values stored in [`Pipeline::capture_phase`]. A health watchdog
 /// reads this when frames stop to report where the loop is stuck.
@@ -159,7 +186,10 @@ impl Pipeline {
         let active_codec: Arc<Mutex<Option<ActiveCodec>>> = Arc::new(Mutex::new(None));
         let codec_header: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let frame_liveness = Arc::new(AtomicI64::new(0));
+        let real_frame_liveness = Arc::new(AtomicI64::new(0));
+        let video_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let capture_phase = Arc::new(AtomicU8::new(capture_phase::SLEEP));
+        let recording_qp_boost = Arc::new(AtomicU32::new(QP_BOOST_OFF));
         let video_thread = spawn_video_thread(
             cfg.clone(),
             Arc::clone(&ring),
@@ -168,7 +198,10 @@ impl Pipeline {
             Arc::clone(&codec_header),
             Arc::clone(&media_clock),
             Arc::clone(&frame_liveness),
+            Arc::clone(&real_frame_liveness),
             Arc::clone(&capture_phase),
+            Arc::clone(&recording_qp_boost),
+            Arc::clone(&video_error),
         )?;
 
         let reporter_thread = if clipdip_profile::enabled() {
@@ -193,7 +226,10 @@ impl Pipeline {
             recording_from: Mutex::new(None),
             _media_clock: media_clock,
             frame_liveness,
+            real_frame_liveness,
+            video_error,
             capture_phase,
+            recording_qp_boost,
         })
     }
 
@@ -213,6 +249,22 @@ impl Pipeline {
     /// detect a capture stall while the app is running.
     pub fn frame_liveness(&self) -> Arc<AtomicI64> {
         Arc::clone(&self.frame_liveness)
+    }
+
+    /// Shared handle to the raw-QPC timestamp of the most recent frame
+    /// with *new content* (not a CFR repeat). If [`frame_liveness`]
+    /// advances while this doesn't, capture is running but blind — e.g. a
+    /// fullscreen game presenting on a path the capture API can't see.
+    pub fn real_frame_liveness(&self) -> Arc<AtomicI64> {
+        Arc::clone(&self.real_frame_liveness)
+    }
+
+    /// The error the video thread died with, if it has died. A health
+    /// monitor polls this to alert + restart the pipeline immediately
+    /// (the thread's `JoinHandle` result is otherwise only observed at
+    /// shutdown, so without this a capture failure is silent).
+    pub fn video_error(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.video_error)
     }
 
     /// Shared handle to the video loop's current stage (see
@@ -292,6 +344,23 @@ impl Pipeline {
             .ok_or_else(|| anyhow!("no video in buffer yet — wait ~1s after start and retry"))?;
         self.ring.set_hold(Some(anchor));
         *rec = Some(anchor);
+        // Boost encode quality for the recording's duration. CQP only —
+        // NVENC can't switch rate-control mode on a live session — and
+        // never *worse* than the clip quality (a recording QP above the
+        // clip QP is treated as "match clips"). The video thread picks the
+        // new target up on its next frame and reconfigures NVENC; the
+        // first ≤1 GOP of the recording (the pre-anchor footage) stays at
+        // clip quality.
+        if let (
+            RateControlCfg::ConstantQp { qp },
+            RecordingQualityCfg::ConstantQp { qp: rec_qp },
+        ) = (self.cfg.video.rate_control, self.cfg.video.recording_quality)
+        {
+            if rec_qp < qp {
+                self.recording_qp_boost.store(rec_qp, Ordering::Relaxed);
+                info!(clip_qp = qp, recording_qp = rec_qp, "recording quality boost requested");
+            }
+        }
         info!(anchor_pts_100ns = anchor, "manual recording started");
         Ok(())
     }
@@ -314,6 +383,12 @@ impl Pipeline {
             .unwrap()
             .take()
             .ok_or_else(|| anyhow!("no recording in progress"))?;
+
+        // Drop the encoder back to clip quality right away. Reconfigure
+        // only affects frames encoded from here on; everything already in
+        // the ring keeps the boosted quality for the save below.
+        self.recording_qp_boost
+            .store(QP_BOOST_OFF, Ordering::Relaxed);
 
         let codec = *self.active_codec.lock().unwrap();
         let header = self.codec_header.lock().unwrap().clone();
@@ -516,12 +591,15 @@ fn spawn_video_thread(
     codec_header: Arc<Mutex<Vec<u8>>>,
     media_clock: Arc<MediaClock>,
     frame_liveness: Arc<AtomicI64>,
+    real_frame_liveness: Arc<AtomicI64>,
     capture_phase: Arc<AtomicU8>,
+    recording_qp_boost: Arc<AtomicU32>,
+    video_error: Arc<Mutex<Option<String>>>,
 ) -> Result<JoinHandle<Result<()>>> {
     std::thread::Builder::new()
         .name("clipdip-video".into())
         .spawn(move || {
-            video_loop(
+            let result = video_loop(
                 cfg,
                 ring,
                 stop,
@@ -529,8 +607,18 @@ fn spawn_video_thread(
                 codec_header,
                 media_clock,
                 frame_liveness,
+                real_frame_liveness,
                 capture_phase,
-            )
+                recording_qp_boost,
+            );
+            if let Err(e) = &result {
+                // Surface the failure NOW — the JoinHandle result is only
+                // read at shutdown, and a silently dead capture thread is
+                // exactly how we recorded desktop wallpaper for two hours.
+                error!("video capture thread exited with error: {e:#}");
+                *video_error.lock().unwrap() = Some(format!("{e:#}"));
+            }
+            result
         })
         .context("spawn video capture thread")
 }
@@ -559,17 +647,27 @@ fn video_loop(
     codec_header: Arc<Mutex<Vec<u8>>>,
     media_clock: Arc<MediaClock>,
     frame_liveness: Arc<AtomicI64>,
+    real_frame_liveness: Arc<AtomicI64>,
     capture_phase: Arc<AtomicU8>,
+    recording_qp_boost: Arc<AtomicU32>,
 ) -> Result<()> {
-    let (mut dup, device, _ctx) = DesktopDuplicator::with_default_device(cfg.video.output_index)
-        .with_context(|| {
-            format!(
-                "create D3D11 device + DXGI duplicator on output {} \
-                 (run `clipdip --list-outputs` to see valid indices)",
-                cfg.video.output_index
-            )
-        })?;
-    dup.set_include_cursor(cfg.video.include_cursor);
+    let backend = match cfg.video.capture_backend {
+        CaptureBackendCfg::Auto => CaptureBackend::Auto,
+        CaptureBackendCfg::Wgc => CaptureBackend::Wgc,
+        CaptureBackendCfg::Dxgi => CaptureBackend::Dxgi,
+    };
+    let (mut dup, device, context) = Capturer::create(
+        backend,
+        cfg.video.output_index,
+        cfg.video.include_cursor,
+    )
+    .with_context(|| {
+        format!(
+            "create D3D11 device + capturer on output {} \
+             (run `clipdip --list-outputs` to see valid indices)",
+            cfg.video.output_index
+        )
+    })?;
     let (w, h) = (dup.width(), dup.height());
 
     let codec_preference = match cfg.video.codec {
@@ -583,7 +681,7 @@ fn video_loop(
     };
 
     let mut encoder = NvEncoderD3D11::new(
-        device,
+        device.clone(),
         EncoderConfig {
             width: w,
             height: h,
@@ -624,6 +722,11 @@ fn video_loop(
     let mut last_emitted_pts: i64 = 0;
     // Last raw (uncompensated) QPC reading, for stall detection.
     let mut last_raw_pts: Option<i64> = None;
+    // QP override currently applied to the encoder session (None = base
+    // config). Tracks `recording_qp_boost` so we only pay the NVENC
+    // reconfigure when the target actually changes — and don't retry
+    // every frame if the driver rejects it.
+    let mut applied_qp_boost: Option<u32> = None;
 
     info!(
         width = w,
@@ -649,6 +752,29 @@ fn video_loop(
 
         let _t_frame = clipdip_profile::start("pipeline.video_frame");
 
+        // Apply any pending recording-quality change before encoding this
+        // frame. The reconfigure keeps the NVENC session (and bitstream
+        // continuity) intact and forces an IDR, so the new quality starts
+        // on a clean GOP boundary within one frame of the hotkey.
+        let boost = recording_qp_boost.load(Ordering::Relaxed);
+        let target = if boost == QP_BOOST_OFF { None } else { Some(boost) };
+        if target != applied_qp_boost {
+            if let RateControlCfg::ConstantQp { qp: base_qp } = cfg.video.rate_control {
+                let qp = target.unwrap_or(base_qp);
+                match encoder.reconfigure_rate_control(RateControl::ConstantQp { qp }) {
+                    Ok(()) => info!(qp, boosted = target.is_some(), "encoder quality reconfigured"),
+                    Err(e) => warn!(
+                        qp,
+                        "encoder quality reconfigure failed — recording continues at \
+                         the previous quality: {e:#}"
+                    ),
+                }
+            }
+            // Mark handled even on failure so we don't hammer the driver
+            // with a doomed reconfigure every frame.
+            applied_qp_boost = target;
+        }
+
         // Timeout=0: DXGI returns immediately, either with a fresh frame
         // (desktop changed since the last acquire) or with TIMEOUT, in
         // which case `acquire_frame` re-emits the last captured texture
@@ -659,7 +785,73 @@ fn video_loop(
         // already handles pacing, so DXGI doesn't need to.
         let t_acq = Instant::now();
         capture_phase.store(capture_phase::ACQUIRE, Ordering::Relaxed);
-        let acquired = dup.acquire_frame(0).context("acquire frame")?;
+        let acquired = match dup.acquire_frame(0) {
+            Ok(a) => a,
+            Err(e) => {
+                // ACCESS_LOST (game switched display modes, HDR toggle,
+                // monitor re-plug) or a WGC item close. Rebuild the
+                // capturer on the SAME device — the NVENC session stays
+                // open, so once capture is back the ring keeps filling and
+                // the media clock folds the gap out of the timeline.
+                // Before this existed the thread just died here, silently,
+                // and the watchdog restarted the whole app 15s later.
+                error!(
+                    backend = dup.backend_name(),
+                    "capture failed: {e:#} — rebuilding capturer"
+                );
+                let mut rebuilt = None;
+                for attempt in 1..=120u32 {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                    match Capturer::with_device(
+                        device.clone(),
+                        context.clone(),
+                        backend,
+                        cfg.video.output_index,
+                        cfg.video.include_cursor,
+                    ) {
+                        Ok(c) => {
+                            if (c.width(), c.height()) != (w, h) {
+                                return Err(anyhow!(
+                                    "display mode changed to {}x{} while the encoder \
+                                     runs at {}x{} — pipeline restart required",
+                                    c.width(),
+                                    c.height(),
+                                    w,
+                                    h
+                                ));
+                            }
+                            info!(
+                                attempt,
+                                backend = c.backend_name(),
+                                "capture rebuilt after error"
+                            );
+                            rebuilt = Some(c);
+                            break;
+                        }
+                        Err(e2) if attempt % 10 == 1 => {
+                            warn!(attempt, "capture rebuild failed (retrying): {e2:#}");
+                        }
+                        Err(_) => {}
+                    }
+                }
+                match rebuilt {
+                    Some(c) => dup = c,
+                    None => {
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        return Err(anyhow!(
+                            "could not rebuild capture after 60s of retries \
+                             (last capture error: {e:#})"
+                        ));
+                    }
+                }
+                continue;
+            }
+        };
         warn_if_slow("acquire_frame", t_acq.elapsed());
         let frame = match acquired {
             Some(f) => f,
@@ -704,6 +896,13 @@ fn video_loop(
         // during a stall, but this only updates when a frame is actually
         // produced, so `now - this` is the true time since last capture.
         frame_liveness.store(raw, Ordering::Relaxed);
+        // Content beacon: only frames that carried a NEW image. Repeats
+        // keep the CFR stream alive even when the capturer sees nothing,
+        // so `frame_liveness` alone can look perfectly healthy while every
+        // clip comes out frozen — the health monitor compares the two.
+        if !frame.was_repeat {
+            real_frame_liveness.store(raw, Ordering::Relaxed);
+        }
 
         let pts = media_clock.to_media(raw).max(last_emitted_pts + 1);
         last_emitted_pts = pts;

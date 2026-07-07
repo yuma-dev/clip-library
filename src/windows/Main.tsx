@@ -6,13 +6,22 @@ import {
   Monitor, Cpu, Gauge, MousePointer2, Music2,
   KeyRound, Volume2, MapPin, Timer, Disc,
   Settings2, Sparkles, ChevronRight, ChevronLeft, Check, X,
-  AlertTriangle, CircleCheck, RefreshCw, Headphones,
+  AlertTriangle, CircleCheck, RefreshCw, Headphones, Users,
 } from "lucide-react";
 
 // ---------- design tokens ---------------------------------------------------
+// The overlay notification is the visual identity: charcoal card, violet
+// comet body, magenta comet head, lavender-white tip. The settings UI
+// borrows the same palette. Hex (not oklch) so the `${ACCENT}22`
+// alpha-suffix pattern used throughout produces valid 8-digit hex colors.
 
-const TEAL = "oklch(0.74 0.13 195)";
-const TEAL_DIM = "oklch(0.62 0.11 195)";
+const ACCENT = "#8b5cf6";      // violet — comet body
+const ACCENT_DIM = "#6d44c9";  // deeper violet — gradient tails
+const ACCENT_HOT = "#d844dd";  // magenta — comet head
+const ACCENT_TIP = "#f3e8ff";  // lavender white — comet tip / highlights
+const REC_ROSE = "#f43f5e";    // overlay recording dot
+
+const MONO = '"Cascadia Mono", Consolas, "JetBrains Mono", ui-monospace, monospace';
 
 // ---------- types -----------------------------------------------------------
 
@@ -27,16 +36,24 @@ type RateControl =
   | { mode: "constant_qp"; qp: number }
   | { mode: "vbr"; avg_bps: number };
 
+type RecordingQuality =
+  | { mode: "match_clips" }
+  | { mode: "constant_qp"; qp: number };
+
+type CaptureBackend = "auto" | "wgc" | "dxgi";
+
 interface Config {
   replay_seconds: number;
   video: {
     output_index: number;
+    capture_backend: CaptureBackend;
     fps: number;
     bitrate_bps: number;
     include_cursor: boolean;
     gop_seconds: number;
     codec: CodecPreference;
     rate_control: RateControl;
+    recording_quality: RecordingQuality;
   };
   audio: { sources: AudioSource[]; include_mix: boolean };
   output: {
@@ -57,6 +74,9 @@ interface Config {
     enabled: boolean;
     capture_icon: boolean;
     ignored_processes: string[];
+  };
+  discord: {
+    enabled: boolean;
   };
 }
 
@@ -88,12 +108,12 @@ function PanelHeader({
 }: { Icon: typeof Film; title: string; subtitle?: string }) {
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 24 }}>
-      <div style={{
-        width: 38, height: 38, borderRadius: 9,
+      <div className="comet-tile" style={{
+        width: 38, height: 38, borderRadius: 10,
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: `linear-gradient(135deg, ${TEAL}22, ${TEAL_DIM}11)`,
-        border: `1px solid ${TEAL}33`,
-        color: TEAL,
+        background: `linear-gradient(145deg, ${ACCENT}26, ${ACCENT_HOT}14), rgb(28,28,32)`,
+        boxShadow: `0 8px 22px -10px ${ACCENT}66`,
+        color: ACCENT_TIP,
         flexShrink: 0,
       }}>
         <Icon size={18} strokeWidth={1.8} />
@@ -128,27 +148,36 @@ function Row({
   vertical?: boolean;
   badge?: string;
 }) {
+  // Each row is a miniature of the overlay card: charcoal surface, hairline
+  // ring instead of a border, soft drop shadow, violet whisper on hover.
+  const [hover, setHover] = useState(false);
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: vertical ? "column" : "row",
-      alignItems: vertical ? "stretch" : "center",
-      gap: vertical ? 10 : 16,
-      padding: "12px 14px",
-      borderRadius: 9,
-      background: "rgba(255,255,255,0.018)",
-      border: "1px solid rgba(255,255,255,0.045)",
-      transition: "background .14s, border-color .14s",
-    }}>
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "flex",
+        flexDirection: vertical ? "column" : "row",
+        alignItems: vertical ? "stretch" : "center",
+        gap: vertical ? 10 : 16,
+        padding: "13px 15px",
+        borderRadius: 10,
+        background: hover ? "rgb(26,26,31)" : "rgb(23,23,28)",
+        boxShadow: hover
+          ? `0 0 0 1px rgba(255,255,255,0.08), 0 14px 28px -18px rgba(0,0,0,0.7), 0 0 24px -14px ${ACCENT}55`
+          : "0 0 0 1px rgba(255,255,255,0.05), 0 10px 24px -18px rgba(0,0,0,0.6)",
+        transition: "background .16s, box-shadow .16s",
+      }}>
       <div style={{ flex: vertical ? "0 0 auto" : 1, minWidth: 0, display: "flex", alignItems: "flex-start", gap: 11 }}>
         {Icon && (
           <span style={{
             display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 22, height: 22, borderRadius: 5,
-            background: "rgba(255,255,255,0.04)",
-            color: "rgba(255,255,255,0.55)",
+            width: 22, height: 22, borderRadius: 6,
+            background: hover ? `linear-gradient(145deg, ${ACCENT}26, ${ACCENT_HOT}12)` : "rgba(255,255,255,0.04)",
+            color: hover ? ACCENT_TIP : "rgba(255,255,255,0.55)",
             flexShrink: 0,
             marginTop: 1,
+            transition: "background .16s, color .16s",
           }}>
             <Icon size={12} strokeWidth={1.9} />
           </span>
@@ -194,6 +223,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
       padding: "30px 38px 38px",
       maxWidth: 880,
       margin: "0 auto",
+      animation: "panel-in .28s cubic-bezier(.26,1,.42,1) both",
     }}>
       {children}
     </div>
@@ -274,7 +304,8 @@ function DesignSlider({
         <div style={{
           position: "absolute", left: 0, width: `${pct}%`, height: 4,
           borderRadius: 2,
-          background: `linear-gradient(90deg, ${TEAL_DIM}, ${TEAL})`,
+          background: `linear-gradient(90deg, ${ACCENT_DIM}, ${ACCENT} 70%, ${ACCENT_HOT})`,
+          boxShadow: `0 0 10px ${ACCENT}66`,
         }} />
         <input
           type="range" min={min} max={max} step={step} value={value}
@@ -287,8 +318,8 @@ function DesignSlider({
         <div style={{
           position: "absolute", left: `calc(${pct}% - 7px)`,
           width: 14, height: 14, borderRadius: 999,
-          background: "#fff",
-          boxShadow: "0 0 0 1px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5)",
+          background: ACCENT_TIP,
+          boxShadow: `0 0 0 1px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5), 0 0 10px ${ACCENT}55`,
           pointerEvents: "none",
         }} />
       </div>
@@ -315,10 +346,10 @@ function DesignToggle({ value, onChange, disabled }: { value: boolean; onChange:
         width: 34, height: 20, padding: 2,
         borderRadius: 999, border: 0,
         background: value
-          ? `linear-gradient(180deg, ${TEAL}, ${TEAL_DIM})`
+          ? `linear-gradient(135deg, ${ACCENT}, ${ACCENT_HOT})`
           : "rgba(255,255,255,0.09)",
         boxShadow: value
-          ? `0 0 12px ${TEAL}55, inset 0 0 0 1px rgba(255,255,255,0.1)`
+          ? `0 0 14px ${ACCENT}66, inset 0 0 0 1px rgba(255,255,255,0.12)`
           : "inset 0 0 0 1px rgba(255,255,255,0.06)",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.4 : 1,
@@ -404,7 +435,7 @@ function DesignSelect<T extends string | number>({
               >
                 <span style={{
                   width: 4, height: 4, borderRadius: 999, flexShrink: 0,
-                  background: o.value === value ? TEAL : "transparent",
+                  background: o.value === value ? ACCENT : "transparent",
                 }} />
                 <span style={{ flex: 1 }}>
                   <span style={{ display: "block" }}>{o.label}</span>
@@ -448,7 +479,7 @@ function DesignTextInput({
       borderRadius: 7,
       background: "rgba(255,255,255,0.045)",
       border: `1px solid ${focused ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.09)"}`,
-      boxShadow: focused ? `0 0 0 3px ${TEAL}22` : "none",
+      boxShadow: focused ? `0 0 0 3px ${ACCENT}22` : "none",
       transition: "border-color .12s, box-shadow .12s",
     }}>
       <input
@@ -474,74 +505,172 @@ function DesignTextInput({
 
 // ---------- hotkey capture --------------------------------------------------
 
+// Physical-key (`e.code`) → canonical token understood by the Rust parser
+// (crates/hotkey parse_vk). Using `e.code` instead of `e.key` makes capture
+// immune to Shift mutations ("Shift+1" used to record as "Shift+!") and to
+// keyboard layouts. Only keys in this map can be recorded, so anything we
+// save is guaranteed to register on the backend.
+const CODE_TO_TOKEN: Record<string, string> = (() => {
+  const m: Record<string, string> = {
+    Space: "Space", Tab: "Tab", Enter: "Enter", NumpadEnter: "Enter",
+    Backspace: "Backspace", Insert: "Insert", Delete: "Delete",
+    Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+    ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+    PrintScreen: "PrintScreen", ScrollLock: "ScrollLock", Pause: "Pause",
+    CapsLock: "CapsLock", NumLock: "NumLock",
+    NumpadAdd: "NumPlus", NumpadSubtract: "NumMinus",
+    NumpadMultiply: "NumMult", NumpadDivide: "NumDiv", NumpadDecimal: "NumDot",
+    Semicolon: ";", Equal: "=", Comma: ",", Minus: "-", Period: ".",
+    Slash: "/", Backquote: "`", BracketLeft: "[", Backslash: "\\",
+    BracketRight: "]", Quote: "'",
+  };
+  for (let i = 0; i < 26; i++) {
+    const c = String.fromCharCode(65 + i);
+    m[`Key${c}`] = c;
+  }
+  for (let i = 0; i <= 9; i++) {
+    m[`Digit${i}`] = String(i);
+    m[`Numpad${i}`] = `Num${i}`;
+  }
+  for (let i = 1; i <= 24; i++) m[`F${i}`] = `F${i}`;
+  return m;
+})();
+
+const MODIFIER_CODES = new Set([
+  "ControlLeft", "ControlRight", "AltLeft", "AltRight",
+  "ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight",
+]);
+
+function modifierTokens(e: KeyboardEvent): string[] {
+  const mods: string[] = [];
+  if (e.ctrlKey)  mods.push("Ctrl");
+  if (e.altKey)   mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
+  if (e.metaKey)  mods.push("Win");
+  return mods;
+}
+
+function KeyChip({ children, ghost }: { children: React.ReactNode; ghost?: boolean }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      minWidth: 22, height: 22, padding: "0 6px",
+      borderRadius: 4,
+      background: "rgba(255,255,255,0.07)",
+      border: "1px solid rgba(255,255,255,0.1)",
+      font: `500 11px/1 ${MONO}`,
+      color: ghost ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.9)",
+    }}>{children}</span>
+  );
+}
+
 function HotkeyCapture({
   value, onChange, minWidth = 168,
 }: { value: string; onChange: (v: string) => void; minWidth?: number }) {
   const [recording, setRecording] = useState(false);
-  const parts = value ? value.split("+").map(s => s.trim()) : [];
+  const [heldMods, setHeldMods] = useState<string[]>([]);
+  const [rejected, setRejected] = useState(false);
+  const rejectTimer = useRef<number | null>(null);
+  const parts = value ? value.split("+").map(s => s.trim()).filter(Boolean) : [];
 
   useEffect(() => {
-    if (!recording) return;
-    const handler = (e: KeyboardEvent) => {
-      e.preventDefault();
-      const pressed: string[] = [];
-      if (e.ctrlKey)  pressed.push("Ctrl");
-      if (e.altKey)   pressed.push("Alt");
-      if (e.shiftKey) pressed.push("Shift");
-      if (e.metaKey)  pressed.push("Win");
-      const key = e.key;
-      if (!["Control", "Alt", "Shift", "Meta"].includes(key)) {
-        pressed.push(key.length === 1 ? key.toUpperCase() : key);
-        onChange(pressed.join("+"));
-        setRecording(false);
-      }
+    if (!recording) {
+      setHeldMods([]);
+      return;
+    }
+    const flashRejected = () => {
+      setRejected(true);
+      if (rejectTimer.current) clearTimeout(rejectTimer.current);
+      rejectTimer.current = window.setTimeout(() => setRejected(false), 1100);
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === "Escape") {
+        setRecording(false);
+        return;
+      }
+      if (MODIFIER_CODES.has(e.code)) {
+        setHeldMods(modifierTokens(e));
+        return;
+      }
+      const token = CODE_TO_TOKEN[e.code];
+      if (!token) {
+        flashRejected();
+        return;
+      }
+      onChange([...modifierTokens(e), token].join("+"));
+      setRecording(false);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (MODIFIER_CODES.has(e.code)) setHeldMods(modifierTokens(e));
+    };
+    // Capture phase so the recorder beats any other in-app shortcut.
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
   }, [recording, onChange]);
+
+  useEffect(() => () => {
+    if (rejectTimer.current) clearTimeout(rejectTimer.current);
+  }, []);
 
   return (
     <button
       onClick={() => setRecording(!recording)}
       style={{
-        height: 32, padding: "0 6px 0 10px",
+        height: 34, padding: "0 6px 0 10px",
         display: "flex", alignItems: "center", gap: 8,
-        borderRadius: 7,
-        background: recording ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.045)",
-        border: `1px solid ${recording ? TEAL + "88" : "rgba(255,255,255,0.09)"}`,
-        boxShadow: recording ? `0 0 0 3px ${TEAL}22` : "none",
+        borderRadius: 8,
+        background: recording ? "rgba(139,92,246,0.08)" : "rgba(255,255,255,0.045)",
+        border: `1px solid ${rejected ? REC_ROSE + "aa" : recording ? ACCENT + "88" : "rgba(255,255,255,0.09)"}`,
+        boxShadow: rejected
+          ? `0 0 0 3px ${REC_ROSE}22`
+          : recording ? `0 0 0 3px ${ACCENT}22, 0 0 18px ${ACCENT}33` : "none",
         cursor: "pointer",
-        transition: "all .12s",
+        transition: "all .15s",
         minWidth,
       }}
     >
       {recording ? (
-        <span style={{
-          font: "500 11.5px/1 Inter, sans-serif",
-          color: "rgba(255,255,255,0.78)",
-          display: "flex", alignItems: "center", gap: 6,
-        }}>
+        rejected ? (
           <span style={{
-            width: 6, height: 6, borderRadius: 999,
-            background: TEAL,
-            animation: "pulse 1.2s infinite",
-          }} />
-          Press keys…
-        </span>
+            font: "500 11.5px/1 Inter, sans-serif",
+            color: REC_ROSE,
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <AlertTriangle size={11} />
+            Key not supported
+          </span>
+        ) : (
+          <span style={{
+            font: "500 11.5px/1 Inter, sans-serif",
+            color: "rgba(255,255,255,0.78)",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: 999,
+              background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT_HOT})`,
+              boxShadow: `0 0 8px ${ACCENT}aa`,
+              animation: "pulse 1.2s infinite",
+            }} />
+            {heldMods.length ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {heldMods.map(mod => <KeyChip key={mod} ghost>{mod}</KeyChip>)}
+                <span style={{ color: "rgba(255,255,255,0.35)" }}>+ …</span>
+              </span>
+            ) : "Press keys…"}
+          </span>
+        )
       ) : (
         <span style={{ display: "flex", alignItems: "center", gap: 3, flex: 1 }}>
           {parts.map((p, i) => (
             <span key={i} style={{ display: "flex", alignItems: "center", gap: 3 }}>
               {i > 0 && <span style={{ color: "rgba(255,255,255,0.3)", font: "500 11px/1 Inter, sans-serif" }}>+</span>}
-              <span style={{
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                minWidth: 22, height: 22, padding: "0 6px",
-                borderRadius: 4,
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                font: '500 11px/1 "JetBrains Mono", monospace',
-                color: "rgba(255,255,255,0.9)",
-              }}>{p}</span>
+              <KeyChip>{p}</KeyChip>
             </span>
           ))}
           {!parts.length && (
@@ -553,7 +682,7 @@ function HotkeyCapture({
         marginLeft: "auto",
         width: 22, height: 22, borderRadius: 4,
         display: "inline-flex", alignItems: "center", justifyContent: "center",
-        color: "rgba(255,255,255,0.45)",
+        color: recording ? ACCENT_TIP : "rgba(255,255,255,0.45)",
       }}>
         <KeyRound size={11} />
       </span>
@@ -591,8 +720,8 @@ function CornerPicker({ value, onChange }: { value: string; onChange: (v: string
               left:   c.x === 0 ? 6 : "auto",
               right:  c.x === 1 ? 6 : "auto",
               width: 24, height: 14, padding: 0, border: 0, borderRadius: 2,
-              background: active ? `linear-gradient(180deg, ${TEAL}, ${TEAL_DIM})` : "rgba(255,255,255,0.07)",
-              boxShadow: active ? `0 0 8px ${TEAL}66, inset 0 0 0 1px rgba(255,255,255,0.2)` : "inset 0 0 0 1px rgba(255,255,255,0.04)",
+              background: active ? `linear-gradient(135deg, ${ACCENT}, ${ACCENT_HOT})` : "rgba(255,255,255,0.07)",
+              boxShadow: active ? `0 0 10px ${ACCENT}77, inset 0 0 0 1px rgba(255,255,255,0.2)` : "inset 0 0 0 1px rgba(255,255,255,0.04)",
               cursor: "pointer", transition: "all .12s",
             }}
           />
@@ -632,7 +761,8 @@ function TitleBar({
         padding: "0 14px",
         pointerEvents: "none",
       }}>
-        <img src="/logo250x250.png" width="16" height="16" draggable={false} style={{ imageRendering: "auto" }} />
+        <img src="/logo250x250.png" width="16" height="16" draggable={false}
+          style={{ imageRendering: "auto", filter: `drop-shadow(0 0 6px ${ACCENT}66)` }} />
         <span style={{
           font: "600 12px/1 Inter, sans-serif",
           color: "rgba(255,255,255,0.78)",
@@ -648,7 +778,7 @@ function TitleBar({
         <div style={{
           font: "500 11px/1 Inter, sans-serif",
           color: saveStatus === "error" ? "#ef4444"
-               : saveStatus === "saved" ? "#22c55e"
+               : saveStatus === "saved" ? "#d8b4fe"
                : "rgba(255,255,255,0.5)",
           display: "flex", alignItems: "center", gap: 5,
           marginRight: 12,
@@ -754,10 +884,10 @@ function TopTabs({
             key={t.id}
             onClick={() => onChange(t.id)}
             style={{
+              position: "relative",
               display: "inline-flex", alignItems: "center", gap: 7,
               padding: "9px 13px 11px",
               border: 0, background: "transparent",
-              borderBottom: `2px solid ${isActive ? TEAL : "transparent"}`,
               marginBottom: -1,
               cursor: "pointer",
               color: isActive ? "rgba(255,255,255,0.96)" : "rgba(255,255,255,0.55)",
@@ -768,15 +898,30 @@ function TopTabs({
             onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.82)"; }}
             onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.55)"; }}
           >
-            <Icon size={14} strokeWidth={isActive ? 2.1 : 1.8} />
+            <Icon size={14} strokeWidth={isActive ? 2.1 : 1.8}
+              style={{ color: isActive ? ACCENT_TIP : undefined, transition: "color .12s" }} />
             {t.label}
+            {/* Comet-trail underline: violet tail fading into magenta head */}
+            <span style={{
+              position: "absolute", left: 10, right: 10, bottom: 0, height: 2,
+              borderRadius: 2,
+              background: `linear-gradient(90deg, ${ACCENT}00, ${ACCENT} 35%, ${ACCENT_HOT})`,
+              boxShadow: `0 0 8px ${ACCENT}aa`,
+              opacity: isActive ? 1 : 0,
+              transform: isActive ? "scaleX(1)" : "scaleX(0.4)",
+              transformOrigin: "center",
+              transition: "opacity .18s, transform .22s cubic-bezier(.26,1.25,.42,1)",
+              pointerEvents: "none",
+            }} />
           </button>
         );
       })}
 
       <div style={{ flex: 1 }} />
 
-      {/* Pipeline status pill */}
+      {/* Pipeline status pill — the rose dot mirrors the overlay's
+          recording indicator, so "capture is live" reads the same in
+          both surfaces. */}
       <div style={{
         marginBottom: 8,
         padding: "5px 10px",
@@ -784,19 +929,20 @@ function TopTabs({
         background: pipelineError
           ? "rgba(239,68,68,0.1)"
           : pipelineRunning
-          ? "rgba(34,197,94,0.08)"
+          ? `${REC_ROSE}14`
           : "rgba(255,255,255,0.03)",
-        border: `1px solid ${pipelineError ? "rgba(239,68,68,0.22)" : pipelineRunning ? "rgba(34,197,94,0.18)" : "rgba(255,255,255,0.06)"}`,
+        border: `1px solid ${pipelineError ? "rgba(239,68,68,0.22)" : pipelineRunning ? `${REC_ROSE}33` : "rgba(255,255,255,0.06)"}`,
         display: "flex", alignItems: "center", gap: 7,
       }}>
         <span style={{
           width: 6, height: 6, borderRadius: 999, flexShrink: 0,
-          background: pipelineError ? "#ef4444" : pipelineRunning ? "#22c55e" : "rgba(255,255,255,0.3)",
+          background: pipelineError ? "#ef4444" : pipelineRunning ? REC_ROSE : "rgba(255,255,255,0.3)",
+          boxShadow: pipelineRunning && !pipelineError ? `0 0 7px ${REC_ROSE}cc` : "none",
           animation: pipelineRunning && !pipelineError ? "pulse 2s infinite" : "none",
         }} />
         <span style={{
           font: "500 10.5px/1 Inter, sans-serif",
-          color: pipelineError ? "#ef4444" : pipelineRunning ? "#22c55e" : "rgba(255,255,255,0.5)",
+          color: pipelineError ? "#ef4444" : pipelineRunning ? REC_ROSE : "rgba(255,255,255,0.5)",
         }}>
           {pipelineError ? "Capture error" : pipelineRunning ? "Recording" : "Starting…"}
         </span>
@@ -885,8 +1031,8 @@ function AudioSourcesList({
                 <span style={{
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
                   width: 26, height: 26, borderRadius: 6,
-                  background: `${TEAL}1f`,
-                  color: TEAL,
+                  background: `${ACCENT}1f`,
+                  color: ACCENT,
                   flexShrink: 0,
                 }}>
                   <KindIcon size={13} strokeWidth={1.9} />
@@ -1063,9 +1209,25 @@ function OnboardingModal({
     { id: "hotkey",  title: "Set your save key",   Icon: Keyboard,   blurb: "When you press this, the last few seconds of gameplay are written to disk. Use something rare so it doesn't clash with in-game keys." },
     { id: "folder",  title: "Where do clips go?",  Icon: FolderOpen, blurb: "Pick a folder you'll actually find later. You can always change this." },
     { id: "audio",   title: "What sound to record?", Icon: Mic,      blurb: "Mix any number of sources. Most people want both: the game's audio plus their mic." },
+    { id: "discord", title: "Connect Discord",     Icon: Users,      blurb: "Save who you were in a call with, on every clip. One-time connect — approve the popup in Discord. Optional; skip if you don't want it." },
   ];
   const cur = steps[step];
   const isLast = step === steps.length - 1;
+
+  // Live Discord connection status for the connect step.
+  const [discordStatus, setDiscordStatus] = useState<DiscordStatus | null>(null);
+  const [discordBusy, setDiscordBusy] = useState(false);
+  useEffect(() => {
+    const refresh = () => invoke<DiscordStatus>("discord_status").then(setDiscordStatus).catch(() => {});
+    refresh();
+    const id = setInterval(refresh, 1500);
+    return () => clearInterval(id);
+  }, []);
+  const connectDiscord = async () => {
+    setDiscordBusy(true);
+    try { await invoke("discord_connect"); } catch (e) { console.error("discord_connect:", e); }
+    finally { setDiscordBusy(false); }
+  };
 
   const patchVideo = (k: keyof Config["video"], v: unknown) =>
     setConfig(prev => prev ? { ...prev, video: { ...prev.video, [k]: v } } : prev);
@@ -1108,9 +1270,9 @@ function OnboardingModal({
           <div style={{
             width: 42, height: 42, borderRadius: 10,
             display: "flex", alignItems: "center", justifyContent: "center",
-            background: `linear-gradient(135deg, ${TEAL}33, ${TEAL_DIM}18)`,
-            border: `1px solid ${TEAL}44`,
-            color: TEAL,
+            background: `linear-gradient(135deg, ${ACCENT}33, ${ACCENT_DIM}18)`,
+            border: `1px solid ${ACCENT}44`,
+            color: ACCENT,
             flexShrink: 0,
           }}>
             <cur.Icon size={20} strokeWidth={1.8} />
@@ -1174,14 +1336,14 @@ function OnboardingModal({
                       display: "flex", alignItems: "center", gap: 12,
                       padding: "12px 14px",
                       borderRadius: 9,
-                      border: `1px solid ${isActive ? TEAL + "66" : "rgba(255,255,255,0.08)"}`,
-                      background: isActive ? `${TEAL}14` : "rgba(255,255,255,0.025)",
-                      boxShadow: isActive ? `0 0 0 3px ${TEAL}22` : "none",
+                      border: `1px solid ${isActive ? ACCENT + "66" : "rgba(255,255,255,0.08)"}`,
+                      background: isActive ? `${ACCENT}14` : "rgba(255,255,255,0.025)",
+                      boxShadow: isActive ? `0 0 0 3px ${ACCENT}22` : "none",
                       cursor: "pointer", textAlign: "left",
                       transition: "all .12s",
                     }}
                   >
-                    <Monitor size={18} color={isActive ? TEAL : "rgba(255,255,255,0.5)"} strokeWidth={1.8} />
+                    <Monitor size={18} color={isActive ? ACCENT : "rgba(255,255,255,0.5)"} strokeWidth={1.8} />
                     <div style={{ flex: 1 }}>
                       <div style={{
                         font: "600 13px/1.2 Inter, sans-serif",
@@ -1197,7 +1359,7 @@ function OnboardingModal({
                         {m.width} × {m.height}{m.name ? ` · ${m.name}` : ""}
                       </div>
                     </div>
-                    {isActive && <CircleCheck size={16} color={TEAL} />}
+                    {isActive && <CircleCheck size={16} color={ACCENT} />}
                   </button>
                 );
               })}
@@ -1280,6 +1442,60 @@ function OnboardingModal({
               onRefreshDevices={onRefreshDevices}
             />
           )}
+
+          {cur.id === "discord" && (() => {
+            const st = discordStatus?.state;
+            const featureOff = st === "disabled";
+            const connected = st === "connected";
+            const statusText =
+              st === "connected" ? `Connected as ${discordStatus?.user ?? "?"}`
+              : st === "connecting" ? "Connecting… approve the popup in Discord"
+              : st === "discord_not_running" ? "Discord isn't running"
+              : st === "needs_authorization" ? "Not connected yet"
+              : st === "error" ? "Connection error — try again"
+              : featureOff ? "Unavailable in this build"
+              : "Checking…";
+            return (
+              <div style={{
+                padding: "16px 16px",
+                borderRadius: 10,
+                background: "rgba(255,255,255,0.025)",
+                border: `1px solid ${connected ? "rgba(120,220,150,0.35)" : "rgba(255,255,255,0.07)"}`,
+                display: "flex", alignItems: "center", gap: 14,
+              }}>
+                <div style={{
+                  width: 40, height: 40, borderRadius: 9, flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: connected ? "rgba(120,220,150,0.14)" : "rgba(255,255,255,0.04)",
+                  color: connected ? "rgb(120,220,150)" : "rgba(255,255,255,0.5)",
+                }}>
+                  {connected ? <CircleCheck size={20} /> : <Users size={20} strokeWidth={1.8} />}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: "600 13px/1.2 Inter, sans-serif", color: "rgba(255,255,255,0.92)" }}>
+                    {connected ? "Discord connected" : "Discord"}
+                  </div>
+                  <div style={{ font: "400 11.5px/1.3 Inter, sans-serif", color: "rgba(255,255,255,0.5)", marginTop: 4 }}>
+                    {statusText}
+                  </div>
+                </div>
+                {!featureOff && !connected && (
+                  <button
+                    onClick={connectDiscord}
+                    disabled={discordBusy}
+                    style={{
+                      padding: "9px 16px", borderRadius: 7, border: 0, flexShrink: 0,
+                      background: `linear-gradient(180deg, ${ACCENT}, ${ACCENT_DIM})`,
+                      color: "#0a1416", font: "600 12px/1 Inter, sans-serif",
+                      cursor: discordBusy ? "default" : "pointer", opacity: discordBusy ? 0.6 : 1,
+                    }}
+                  >
+                    {discordBusy ? "…" : "Connect"}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Step dots */}
@@ -1287,7 +1503,7 @@ function OnboardingModal({
           {steps.map((_, i) => (
             <span key={i} style={{
               width: i === step ? 18 : 6, height: 6, borderRadius: 999,
-              background: i === step ? TEAL : i < step ? `${TEAL}55` : "rgba(255,255,255,0.12)",
+              background: i === step ? ACCENT : i < step ? `${ACCENT}55` : "rgba(255,255,255,0.12)",
               transition: "all .18s",
             }} />
           ))}
@@ -1337,12 +1553,12 @@ function OnboardingModal({
               padding: "10px 16px",
               display: "inline-flex", alignItems: "center", gap: 6,
               borderRadius: 7,
-              background: `linear-gradient(180deg, ${TEAL}, ${TEAL_DIM})`,
+              background: `linear-gradient(180deg, ${ACCENT}, ${ACCENT_DIM})`,
               border: 0,
               color: "#0a1416",
               font: "600 12.5px/1 Inter, sans-serif",
               cursor: "pointer",
-              boxShadow: `0 4px 16px ${TEAL}33`,
+              boxShadow: `0 4px 16px ${ACCENT}33`,
             }}
           >
             {isLast ? <>Finish <Check size={13} /></> : <>Next <ChevronRight size={13} /></>}
@@ -1365,6 +1581,17 @@ const QUALITY_PRESETS = [
   { qp: 26, label: "Balanced",     desc: "Looks great in motion at about half of High quality's file size." },
   { qp: 20, label: "High quality", desc: "Crisp, clean picture — the default." },
   { qp: 16, label: "Maximum",      desc: "Near-perfect picture. Files get large." },
+];
+
+// Quality used while a manual recording (start/stop hotkey) is running.
+// Recordings are meant to be kept and uploaded, so they get their own —
+// typically higher — quality than the always-on replay buffer. qp: null
+// means "match clips" (no boost).
+const RECORDING_PRESETS: { qp: number | null; label: string; desc: string }[] = [
+  { qp: null, label: "Match clips",   desc: "Recordings use the same quality as replay clips." },
+  { qp: 16,   label: "High",          desc: "Noticeably crisper than clips with a modest size bump." },
+  { qp: 14,   label: "Studio",        desc: "About twice the clip bitrate — clean enough to master a YouTube upload from. The default." },
+  { qp: 12,   label: "Near-lossless", desc: "Practically indistinguishable from the source. Files get very large on long recordings." },
 ];
 
 type BufferStats = {
@@ -1397,14 +1624,14 @@ function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
     <div style={{
       marginTop: 2,
       padding: "10px 12px",
-      borderRadius: 7,
-      background: "rgba(255,255,255,0.035)",
-      border: "1px solid rgba(255,255,255,0.08)",
+      borderRadius: 10,
+      background: "rgb(20,20,25)",
+      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.045)",
       display: "flex", gap: 9, alignItems: "flex-start",
       font: "400 11.5px/1.45 Inter, sans-serif",
       color: "rgba(255,255,255,0.62)",
     }}>
-      <Gauge size={13} style={{ flexShrink: 0, marginTop: 1, color: "rgba(255,255,255,0.45)" }} />
+      <Gauge size={13} style={{ flexShrink: 0, marginTop: 1, color: ACCENT_TIP + "99" }} />
       {stats?.measuring ? (
         <span>
           At current screen activity: ≈{" "}
@@ -1452,6 +1679,11 @@ function VideoPanel({
   const presetIdx = config.video.rate_control.mode === "constant_qp"
     ? QUALITY_PRESETS.findIndex(p => p.qp === (config.video.rate_control as { mode: "constant_qp"; qp: number }).qp)
     : -1;
+
+  // Which recording-quality preset is active; -1 = custom QP set via Advanced.
+  const recPresetIdx = config.video.recording_quality.mode === "match_clips"
+    ? 0
+    : RECORDING_PRESETS.findIndex(p => p.qp === (config.video.recording_quality as { mode: "constant_qp"; qp: number }).qp);
 
   return (
     <PanelShell>
@@ -1507,6 +1739,28 @@ function VideoPanel({
             format={i => (presetIdx === -1 ? "Custom" : QUALITY_PRESETS[i]?.label ?? "Custom")}
           />
         </Row>
+        <Row
+          Icon={Disc}
+          label="Recording quality"
+          hint={config.video.rate_control.mode !== "constant_qp"
+            ? "Only applies in Constant quality mode — variable bitrate can't be boosted mid-session."
+            : recPresetIdx === -1
+              ? "A custom recording QP is active (see Advanced). Moving this slider replaces it with a preset."
+              : RECORDING_PRESETS[recPresetIdx].desc}
+        >
+          <DesignSlider
+            value={recPresetIdx === -1 ? 2 : recPresetIdx}
+            onChange={i => {
+              const p = RECORDING_PRESETS[i];
+              patchVideo(
+                "recording_quality",
+                p.qp === null ? { mode: "match_clips" } : { mode: "constant_qp", qp: p.qp },
+              );
+            }}
+            min={0} max={RECORDING_PRESETS.length - 1} step={1}
+            format={i => (recPresetIdx === -1 ? "Custom" : RECORDING_PRESETS[i]?.label ?? "Custom")}
+          />
+        </Row>
         <SizeEstimate replaySeconds={config.replay_seconds} />
         <Row Icon={MousePointer2} label="Include cursor" hint="Draws the mouse cursor into the captured frame.">
           <DesignToggle value={config.video.include_cursor} onChange={v => patchVideo("include_cursor", v)} />
@@ -1552,12 +1806,35 @@ function VideoPanel({
               />
             </Row>
           )}
+          {config.video.rate_control.mode === "constant_qp" &&
+            config.video.recording_quality.mode === "constant_qp" && (
+            <Row Icon={Gauge} label="Recording QP" hint="QP used while a manual recording is running. Values above the clip QP are treated as ‘match clips’ — a recording never encodes worse than clips." badge="adv">
+              <DesignSlider
+                value={config.video.recording_quality.qp}
+                onChange={qp => patchVideo("recording_quality", { mode: "constant_qp", qp })}
+                min={1} max={51} step={1}
+                format={v => `QP ${v}`}
+              />
+            </Row>
+          )}
           <Row Icon={Timer} label="Keyframe interval" hint="How often the encoder writes a full frame. Lower is more seek-friendly but heavier." badge="adv">
             <DesignSlider
               value={config.video.gop_seconds}
               onChange={v => patchVideo("gop_seconds", v)}
               min={0.5} max={5} step={0.1}
               format={v => `${v.toFixed(1)} s`}
+            />
+          </Row>
+          <Row Icon={Monitor} label="Capture method" hint="Auto is recommended. Windows Graphics Capture sees fullscreen games that the legacy DXGI path records as a desktop or frozen image — only pick DXGI if capture misbehaves on your setup." badge="adv">
+            <DesignSelect<CaptureBackend>
+              value={config.video.capture_backend ?? "auto"}
+              onChange={v => patchVideo("capture_backend", v)}
+              options={[
+                { value: "auto", label: "Auto",                     sub: "Recommended — WGC, falls back to DXGI" },
+                { value: "wgc",  label: "Windows Graphics Capture", sub: "Captures fullscreen games reliably" },
+                { value: "dxgi", label: "DXGI Desktop Duplication", sub: "Legacy — blind to fullscreen games" },
+              ]}
+              width={240}
             />
           </Row>
         </AdvancedDisclosure>
@@ -1659,9 +1936,9 @@ function FilenameTemplateHelp({ template, onInsert }: {
     <div style={{
       marginTop: 2,
       padding: "10px 12px",
-      borderRadius: 7,
-      background: "rgba(255,255,255,0.035)",
-      border: "1px solid rgba(255,255,255,0.08)",
+      borderRadius: 10,
+      background: "rgb(20,20,25)",
+      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.045)",
       font: "400 11.5px/1.5 Inter, sans-serif",
       color: "rgba(255,255,255,0.62)",
     }}>
@@ -1676,7 +1953,7 @@ function FilenameTemplateHelp({ template, onInsert }: {
           onClick={() => setOpen(!open)}
           style={{
             background: "none", border: "none", padding: 0, flexShrink: 0,
-            color: "rgba(122,162,255,0.85)", cursor: "pointer",
+            color: "#c4b5fd", cursor: "pointer",
             font: "500 11.5px/1.4 Inter, sans-serif",
           }}
         >
@@ -1708,13 +1985,104 @@ function FilenameTemplateHelp({ template, onInsert }: {
   );
 }
 
+interface DiscordStatus {
+  state: "disabled" | "connecting" | "discord_not_running" | "needs_authorization" | "connected" | "error";
+  user?: string;
+  message?: string;
+}
+
+/// Discord call-roster capture: enable toggle + a live connection status
+/// and Connect/Disconnect controls. Status is polled from the backend
+/// manager so it reflects the real RPC state (Discord closed, awaiting the
+/// authorize popup, connected as user, …).
+function DiscordSettings({ enabled, onToggle }: { enabled: boolean; onToggle: (v: boolean) => void }) {
+  const [status, setStatus] = useState<DiscordStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    invoke<DiscordStatus>("discord_status").then(setStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 2000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  const st = status?.state;
+  const featureOff = st === "disabled";
+  const connected = st === "connected";
+
+  const statusText =
+    st === "connected" ? `Connected as ${status?.user ?? "?"}`
+    : st === "connecting" ? "Connecting…"
+    : st === "discord_not_running" ? "Discord not running"
+    : st === "needs_authorization" ? "Not connected"
+    : st === "error" ? "Connection error"
+    : featureOff ? "Unavailable in this build"
+    : "…";
+
+  const connect = async () => {
+    setBusy(true);
+    try { await invoke("discord_connect"); } catch (e) { console.error("discord_connect:", e); }
+    finally { setBusy(false); setTimeout(refresh, 300); }
+  };
+  const disconnect = async () => {
+    try { await invoke("discord_disconnect"); } catch (e) { console.error("discord_disconnect:", e); }
+    finally { setTimeout(refresh, 300); }
+  };
+
+  const btnStyle: React.CSSProperties = {
+    height: 26, padding: "0 12px", borderRadius: 5, border: 0,
+    background: `linear-gradient(145deg, ${ACCENT}, ${ACCENT_HOT})`,
+    color: "#fff", font: "600 11px/1 Inter, sans-serif",
+    cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+    display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
+  };
+  const ghostBtn: React.CSSProperties = {
+    height: 26, padding: "0 12px", borderRadius: 5,
+    border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.05)",
+    color: "rgba(255,255,255,0.8)", font: "600 11px/1 Inter, sans-serif",
+    cursor: "pointer", flexShrink: 0,
+  };
+
+  return (
+    <>
+      <Row
+        Icon={Users}
+        label="Save Discord call infos"
+        hint="Saves who you were in a call with on clip capture."
+      >
+        <DesignToggle value={enabled} onChange={onToggle} disabled={featureOff} />
+      </Row>
+      {enabled && (
+        <Row Icon={Users} label="Discord connection" hint={status?.message ?? "Status of the background connection to your Discord client."}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{
+              font: "500 11.5px/1 Inter, sans-serif",
+              color: connected ? "rgba(120,220,150,0.95)" : "rgba(255,255,255,0.55)",
+            }}>{statusText}</span>
+            {!featureOff && (connected
+              ? <button style={ghostBtn} onClick={disconnect}>Disconnect</button>
+              : <button style={btnStyle} onClick={connect} disabled={busy}>
+                  {busy ? "…" : "Connect"}
+                </button>
+            )}
+          </div>
+        </Row>
+      )}
+    </>
+  );
+}
+
 function OutputPanel({
-  config, patchOutput, patchMetadata, advanced, setAdvanced,
+  config, patchOutput, patchMetadata, patchDiscord, advanced, setAdvanced,
   autostartEnabled, autostartIsDev, onToggleAutostart,
 }: {
   config: Config;
   patchOutput: (k: keyof Config["output"], v: unknown) => void;
   patchMetadata: (k: keyof Config["metadata"], v: unknown) => void;
+  patchDiscord: (k: keyof Config["discord"], v: unknown) => void;
   advanced: boolean;
   setAdvanced: (v: boolean) => void;
   autostartEnabled: boolean;
@@ -1784,6 +2152,11 @@ function OutputPanel({
           />
         </Row>
 
+        <DiscordSettings
+          enabled={config.discord.enabled}
+          onToggle={v => patchDiscord("enabled", v)}
+        />
+
         <Row
           Icon={Settings2}
           label="Start with Windows"
@@ -1826,7 +2199,7 @@ function HotkeysPanel({ config, patchHotkey }: {
 }) {
   return (
     <PanelShell>
-      <PanelHeader Icon={Keyboard} title="Hotkeys" subtitle="Global shortcuts. Click any field and press the keys you want." />
+      <PanelHeader Icon={Keyboard} title="Hotkeys" subtitle="Global shortcuts — they work even inside fullscreen games. Click a field, press the combo you want, or Esc to cancel. Letters, digits, F1–F24, numpad, arrows and most punctuation are all fair game." />
       <PanelBody>
         <Row Icon={Film} label="Save clip" hint="Captures the replay buffer into a new clip.">
           <HotkeyCapture value={config.hotkey.save_clip} onChange={v => patchHotkey("save_clip", v)} />
@@ -1840,20 +2213,108 @@ function HotkeysPanel({ config, patchHotkey }: {
         <div style={{
           marginTop: 8,
           padding: "10px 12px",
-          borderRadius: 7,
+          borderRadius: 10,
           background: "rgba(245,158,11,0.06)",
-          border: "1px solid rgba(245,158,11,0.16)",
+          boxShadow: "inset 0 0 0 1px rgba(245,158,11,0.16)",
           display: "flex", gap: 9,
           font: "400 11.5px/1.45 Inter, sans-serif",
           color: "rgba(255,255,255,0.62)",
         }}>
           <AlertTriangle size={13} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            Pick combos that games are unlikely to use. Ctrl+Alt+F9 through F12 are typically safe.
+            ClipDip only listens — it can't stop the game from also seeing the key. Pick combos games
+            are unlikely to use; Ctrl+Alt+F9 through F12 are typically safe.
           </span>
         </div>
       </PanelBody>
     </PanelShell>
+  );
+}
+
+// ---------- overlay preview --------------------------------------------------
+
+/// Stage buttons that fire the real overlay on screen via `test_overlay`
+/// — the actual toast, in the configured corner, with current settings.
+function OverlayPreviewRow({ enabled }: { enabled: boolean }) {
+  const [recDot, setRecDot] = useState(false);
+  const fire = (stage: string) =>
+    invoke("test_overlay", { stage }).catch(err => console.error("test_overlay:", err));
+
+  const stageBtn = (primary: boolean): React.CSSProperties => ({
+    height: 30, padding: "0 13px",
+    display: "inline-flex", alignItems: "center", gap: 6,
+    borderRadius: 8, border: 0,
+    background: !enabled
+      ? "rgba(255,255,255,0.05)"
+      : primary
+      ? `linear-gradient(135deg, ${ACCENT}, ${ACCENT_HOT})`
+      : "rgba(255,255,255,0.06)",
+    boxShadow: !enabled
+      ? "none"
+      : primary
+      ? `0 0 16px ${ACCENT}55`
+      : "inset 0 0 0 1px rgba(255,255,255,0.09)",
+    color: !enabled ? "rgba(255,255,255,0.35)" : primary ? "#fff" : "rgba(255,255,255,0.82)",
+    font: "600 11.5px/1 Inter, sans-serif",
+    cursor: enabled ? "pointer" : "not-allowed",
+    transition: "filter .12s, box-shadow .12s",
+  });
+  const hoverable = (e: React.MouseEvent, on: boolean) => {
+    if (enabled) (e.currentTarget as HTMLElement).style.filter = on ? "brightness(1.15)" : "none";
+  };
+
+  return (
+    <Row
+      Icon={Sparkles}
+      label="Preview on screen"
+      hint="Fires the real overlay in the configured corner — position, timing, animation and sound, no clip required. The save flow includes the rename field, so you can try that too."
+      vertical
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <button
+          onClick={() => fire("flow")}
+          disabled={!enabled}
+          style={stageBtn(true)}
+          onMouseEnter={e => hoverable(e, true)}
+          onMouseLeave={e => hoverable(e, false)}
+        >
+          <Film size={11} />
+          Clip saved
+        </button>
+        <button
+          onClick={() => fire("notice")}
+          disabled={!enabled}
+          style={stageBtn(false)}
+          onMouseEnter={e => hoverable(e, true)}
+          onMouseLeave={e => hoverable(e, false)}
+        >
+          <Disc size={11} />
+          Recording started
+        </button>
+        <div style={{
+          display: "inline-flex", alignItems: "center", gap: 8,
+          height: 30, padding: "0 11px",
+          borderRadius: 8,
+          background: "rgba(255,255,255,0.03)",
+          boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.07)",
+        }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: 999,
+            background: recDot && enabled ? REC_ROSE : "rgba(255,255,255,0.18)",
+            boxShadow: recDot && enabled ? `0 0 7px ${REC_ROSE}cc` : "none",
+            transition: "background .15s, box-shadow .15s",
+          }} />
+          <span style={{ font: "500 11.5px/1 Inter, sans-serif", color: "rgba(255,255,255,0.7)" }}>
+            Recording dot
+          </span>
+          <DesignToggle
+            value={recDot && enabled}
+            disabled={!enabled}
+            onChange={v => { setRecDot(v); fire(v ? "rec_on" : "rec_off"); }}
+          />
+        </div>
+      </div>
+    </Row>
   );
 }
 
@@ -1884,6 +2345,7 @@ function NotificationsPanel({ config, patchNotif }: {
             format={v => v === 0 ? "Never" : `${v} s`}
           />
         </Row>
+        <OverlayPreviewRow enabled={config.notifications.enabled} />
       </PanelBody>
     </PanelShell>
   );
@@ -1915,8 +2377,18 @@ export default function MainWindow() {
   // settings to take effect (encoder/audio/replay length only apply at
   // pipeline start).
   const captureCfgRef = useRef<string | null>(null);
+  // Everything the pipeline bakes in at start: capture settings plus the
+  // mux-bound output options (audio bitrate, sidecars, ffmpeg path read
+  // from the pipeline's startup config — directory/filename are re-read
+  // per save and don't belong here).
   const captureSlice = (c: Config) =>
-    JSON.stringify({ v: c.video, r: c.replay_seconds, a: c.audio });
+    JSON.stringify({
+      v: c.video, r: c.replay_seconds, a: c.audio,
+      ab: c.output.audio_bitrate_bps, ks: c.output.keep_sidecars, fp: c.output.ffmpeg_path,
+    });
+  // Hotkeys re-register without a pipeline restart — track them separately.
+  const hotkeyCfgRef = useRef<string | null>(null);
+  const hotkeySlice = (c: Config) => JSON.stringify(c.hotkey);
 
   // Load config
   useEffect(() => {
@@ -1930,12 +2402,13 @@ export default function MainWindow() {
       .catch(() => {
         setConfig({
           replay_seconds: 60,
-          video: { output_index: 0, fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 } },
+          video: { output_index: 0, capture_backend: "auto", fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 }, recording_quality: { mode: "constant_qp", qp: 14 } },
           audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }], include_mix: true },
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10", toggle_recording: "Ctrl+Alt+F9" },
           notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
           metadata: { enabled: false, capture_icon: true, ignored_processes: [] },
+          discord: { enabled: false },
         });
       });
   }, []);
@@ -1982,6 +2455,7 @@ export default function MainWindow() {
     if (!loadedRef.current) {
       loadedRef.current = true;
       captureCfgRef.current = captureSlice(config);
+      hotkeyCfgRef.current = hotkeySlice(config);
       return;
     }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -1997,6 +2471,13 @@ export default function MainWindow() {
         if (captureCfgRef.current !== slice) {
           captureCfgRef.current = slice;
           invoke("restart_pipeline").catch(() => {});
+        }
+        // Re-register global hotkeys live — without this, an edited
+        // hotkey only took effect after an app restart.
+        const hkSlice = hotkeySlice(config);
+        if (hotkeyCfgRef.current !== hkSlice) {
+          hotkeyCfgRef.current = hkSlice;
+          invoke("reload_hotkeys").catch(() => {});
         }
       } catch {
         setSaveStatus("error");
@@ -2044,6 +2525,10 @@ export default function MainWindow() {
     setConfig(prev => prev ? { ...prev, metadata: { ...prev.metadata, [k]: v } } : prev);
   }, []);
 
+  const patchDiscord = useCallback((k: keyof Config["discord"], v: unknown) => {
+    setConfig(prev => prev ? { ...prev, discord: { ...prev.discord, [k]: v } as Config["discord"] } : prev);
+  }, []);
+
   const setSources = useCallback((srcs: AudioSource[]) => {
     setConfig(prev => prev ? { ...prev, audio: { ...prev.audio, sources: srcs } } : prev);
   }, []);
@@ -2075,7 +2560,12 @@ export default function MainWindow() {
     <div style={{
       width: "100%", height: "100%",
       display: "flex", flexDirection: "column",
-      background: "rgb(10,10,14)",
+      // Charcoal base with two faint comet-colored auroras — enough to
+      // tint the room, not enough to fight the content.
+      background: `
+        radial-gradient(900px 420px at 85% -10%, ${ACCENT}14, transparent 65%),
+        radial-gradient(700px 380px at -10% 110%, ${ACCENT_HOT}0d, transparent 60%),
+        rgb(10,10,14)`,
       backdropFilter: "blur(30px) saturate(140%)",
       WebkitBackdropFilter: "blur(30px) saturate(140%)",
       color: "rgba(255,255,255,0.9)",
@@ -2104,6 +2594,7 @@ export default function MainWindow() {
             config={config}
             patchOutput={patchOutput}
             patchMetadata={patchMetadata}
+            patchDiscord={patchDiscord}
             advanced={outputAdv}
             setAdvanced={setOutputAdv}
             autostartEnabled={autostartEnabled}

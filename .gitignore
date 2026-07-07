@@ -4,6 +4,9 @@ src-tauri/target
 **/*.rs.bk
 Cargo.lock.bak
 
+# Local build env — holds the Discord client secret (never commit)
+.cargo/config.toml
+
 # Node / frontend
 node_modules/
 dist/
@@ -41,3 +44,4 @@ package-lock.json
 vendor/
 /ffmpeg-cache/
 
+build-installer.log

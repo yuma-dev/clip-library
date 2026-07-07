@@ -38,9 +38,12 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Shell::ExtractIconExW;
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowThreadProcessId, IsWindow,
-    SendMessageTimeoutW, HICON, ICONINFO, SMTO_ABORTIFHUNG, SMTO_NORMAL, WM_GETTEXT,
+    DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowRect, GetWindowThreadProcessId,
+    IsWindow, SendMessageTimeoutW, HICON, ICONINFO, SMTO_ABORTIFHUNG, SMTO_NORMAL, WM_GETTEXT,
     WM_GETTEXTLENGTH,
 };
 
@@ -172,8 +175,20 @@ pub fn resolve(snap: ForegroundSnapshot, cfg: &MetadataConfig) -> ResolvedMetada
 /// directories derive from `clip_path.parent()` so they follow the
 /// clip's actual location, even if the user changed the output dir
 /// mid-flight.
-pub fn write_gameinfo(clip_path: &Path, resolved: &ResolvedMetadata) -> Result<()> {
-    if resolved.ignored {
+///
+/// Game metadata (`resolved`) and the Discord call roster (`discord`) are
+/// independent: either, both, or neither may be present. With a `resolved`
+/// that matched the ignore list, the game fields are dropped but the
+/// Discord roster is still recorded. When there's nothing to write at all,
+/// no sidecar (and no `.clip_metadata/` dir) is created.
+pub fn write_gameinfo(
+    clip_path: &Path,
+    resolved: Option<&ResolvedMetadata>,
+    discord: Option<&serde_json::Value>,
+) -> Result<()> {
+    // Game fields only when we have a non-ignored resolution.
+    let game = resolved.filter(|r| !r.ignored);
+    if game.is_none() && discord.is_none() {
         return Ok(());
     }
     let dir = clip_path
@@ -182,13 +197,15 @@ pub fn write_gameinfo(clip_path: &Path, resolved: &ResolvedMetadata) -> Result<(
 
     // Icon: write only if we have bytes and the file doesn't already
     // exist (deduped per-exe across clips in the same folder).
-    if let (Some(name), Some(bytes)) = (resolved.icon_filename.as_deref(), resolved.icon_png.as_deref()) {
-        let icons_dir = dir.join("icons");
-        fs::create_dir_all(&icons_dir).context("create icons directory")?;
-        let icon_path = icons_dir.join(name);
-        if !icon_path.exists() {
-            fs::write(&icon_path, bytes)
-                .with_context(|| format!("write {}", icon_path.display()))?;
+    if let Some(r) = game {
+        if let (Some(name), Some(bytes)) = (r.icon_filename.as_deref(), r.icon_png.as_deref()) {
+            let icons_dir = dir.join("icons");
+            fs::create_dir_all(&icons_dir).context("create icons directory")?;
+            let icon_path = icons_dir.join(name);
+            if !icon_path.exists() {
+                fs::write(&icon_path, bytes)
+                    .with_context(|| format!("write {}", icon_path.display()))?;
+            }
         }
     }
 
@@ -202,16 +219,74 @@ pub fn write_gameinfo(clip_path: &Path, resolved: &ResolvedMetadata) -> Result<(
     name_os.push(".gameinfo");
     out_path.set_file_name(name_os);
 
-    let json = serde_json::json!({
-        "window_title": resolved.title,
-        "icon_file": resolved.icon_filename,
-        "exe_path": resolved.exe_path.as_ref().map(|p| p.to_string_lossy().to_string()),
-    });
-    let body = serde_json::to_string_pretty(&json).context("serialize metadata JSON")?;
+    let mut json = serde_json::Map::new();
+    if let Some(r) = game {
+        json.insert("window_title".into(), r.title.clone().into());
+        json.insert(
+            "icon_file".into(),
+            serde_json::to_value(&r.icon_filename).unwrap_or(serde_json::Value::Null),
+        );
+        json.insert(
+            "exe_path".into(),
+            r.exe_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .into(),
+        );
+    }
+    if let Some(d) = discord {
+        json.insert("discord".into(), d.clone());
+    }
+    let body = serde_json::to_string_pretty(&serde_json::Value::Object(json))
+        .context("serialize metadata JSON")?;
     let mut f = fs::File::create(&out_path)
         .with_context(|| format!("create {}", out_path.display()))?;
     f.write_all(body.as_bytes())?;
     Ok(())
+}
+
+/// If the foreground window belongs to a non-system app AND covers its
+/// whole monitor (fullscreen or borderless), return the exe stem (e.g.
+/// `VALORANT-Win64-Shipping`). Used by the health monitor's blind-capture
+/// check: a fullscreen game repaints constantly, so "fullscreen app
+/// focused + captured image never changes" means capture can't see it.
+/// Returns `None` for windowed/system/desktop foregrounds so a static
+/// desktop never trips the alert.
+pub fn foreground_fullscreen_app(ignored: &[String]) -> Option<String> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut rect = windows::Win32::Foundation::RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return None;
+        }
+        let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(hmon, &mut mi).as_bool() {
+            return None;
+        }
+        let covers_monitor = rect.left <= mi.rcMonitor.left
+            && rect.top <= mi.rcMonitor.top
+            && rect.right >= mi.rcMonitor.right
+            && rect.bottom >= mi.rcMonitor.bottom;
+        if !covers_monitor {
+            return None;
+        }
+
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let exe = exe_path_for_pid(pid)?;
+        let name = file_name_lossy(&exe)?;
+        if is_ignored(&name, ignored) {
+            return None;
+        }
+        exe.file_stem().map(|s| s.to_string_lossy().to_string())
+    }
 }
 
 fn is_ignored(exe_name: &str, ignored: &[String]) -> bool {

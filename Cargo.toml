@@ -9,6 +9,7 @@ members = [
     "crates/hotkey",
     "crates/core",
     "crates/profile",
+    "crates/discord",
     "src-tauri",
 ]
 
@@ -36,6 +37,11 @@ ctrlc = "3"
 # Windows bindings — pin a single version across the workspace so COM
 # interfaces from different crates are ABI-compatible.
 windows = { version = "0.58", features = [
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Fxc",
@@ -55,6 +61,8 @@ windows = { version = "0.58", features = [
     "Win32_System_Performance",
     "Win32_System_Variant",
     "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
     "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -75,6 +83,7 @@ clipdip-muxer   = { path = "crates/muxer" }
 clipdip-hotkey  = { path = "crates/hotkey" }
 clipdip-core    = { path = "crates/core" }
 clipdip-profile = { path = "crates/profile" }
+clipdip-discord = { path = "crates/discord" }
 
 [profile.release]
 opt-level = 3

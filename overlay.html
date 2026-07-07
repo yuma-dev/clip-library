@@ -402,9 +402,9 @@
         <div class="hint-row" id="hint-row">
           <div class="hint" id="hint">
             <span>Press</span>
-            <span class="kbd" id="kbd-1">Ctrl</span>
+            <span class="kbd">Ctrl</span>
             <span style="opacity:.5">+</span>
-            <span class="kbd" id="kbd-2">F10</span>
+            <span class="kbd">F10</span>
             <span style="margin-left:0.1vh">to rename</span>
           </div>
           <!-- autocomplete="new-password" is the canonical Chromium hack
@@ -469,8 +469,7 @@
       const anchor       = document.getElementById("anchor");
       const card         = document.getElementById("card");
       const titleEl      = document.getElementById("title");
-      const kbd1         = document.getElementById("kbd-1");
-      const kbd2         = document.getElementById("kbd-2");
+      const hintEl       = document.getElementById("hint");
       const hintRow      = document.getElementById("hint-row");
       const input        = document.getElementById("rename-input");
       const displayEl    = document.getElementById("rename-display");
@@ -670,15 +669,37 @@
         void card.offsetWidth; // commit off-screen state before sliding in
         card.classList.add("entered");
       };
+      // Rebuild the hint from the actual hotkey string — one chip per
+      // token, however many there are. A single-key hotkey like "F15"
+      // renders exactly one chip (the old markup hardcoded two and
+      // padded missing ones with "F10").
       const setHotkey = (s) => {
         if (!s) return;
         const cleaned = String(s)
           .replace(/^Press\s+/i, "")
           .replace(/\s+to\s+rename$/i, "")
           .trim();
-        const parts = cleaned ? cleaned.split("+").map((x) => x.trim()) : ["Ctrl", "F10"];
-        kbd1.textContent = parts[0] || "Ctrl";
-        kbd2.textContent = parts[1] || "F10";
+        const parts = (cleaned ? cleaned.split("+") : [])
+          .map((x) => x.trim())
+          .filter(Boolean);
+        if (!parts.length) return;
+        hintEl.textContent = "";
+        const span = (text, cls, style) => {
+          const el = document.createElement("span");
+          if (cls) el.className = cls;
+          if (style) el.style.cssText = style;
+          el.textContent = text;
+          hintEl.appendChild(el);
+        };
+        span("Press");
+        parts.forEach((p, i) => {
+          if (i > 0) span("+", "", "opacity:.5");
+          span(p, "kbd");
+        });
+        span("to rename", "", "margin-left:0.1vh");
+        // The card body is width-locked to the hint; re-measure now
+        // that the hint content changed.
+        lockBodyWidth();
       };
       const scheduleDismiss = () => {
         if (dismissTimer) clearTimeout(dismissTimer);

@@ -83,6 +83,13 @@ pub struct NvEncoderD3D11 {
     /// fullscreen-triangle pixel-shader passes — Y plane, then UV.
     nv12_converter: Nv12Converter,
     config: EncoderConfig,
+    /// The NV_ENC_CONFIG submitted at init, kept boxed (stable address)
+    /// because `reconfigure_rate_control` re-submits it — with updated
+    /// `rcParams` — through NVENC's Reconfigure API.
+    enc_cfg: Box<NV_ENC_CONFIG>,
+    /// The init params submitted at init, re-used verbatim (except for the
+    /// `encodeConfig` pointer, refreshed each call) on reconfigure.
+    init_params: NV_ENC_INITIALIZE_PARAMS,
     /// Codec actually negotiated at session open. Drives the keyframe
     /// scanner and any caller that needs to know whether the bitstream is
     /// AVC NAL units or AV1 OBUs.
@@ -186,7 +193,10 @@ impl NvEncoderD3D11 {
         nvenc_check(&api, encoder, status, "GetEncodePresetConfigEx")?;
 
         // ---- override the knobs we care about ---------------------------
-        let mut enc_cfg = preset.presetCfg;
+        // Boxed so the pointer handed to NVENC in `encodeConfig` stays
+        // valid for the encoder's lifetime — `reconfigure_rate_control`
+        // re-submits the same config with updated rcParams.
+        let mut enc_cfg = Box::new(preset.presetCfg);
         enc_cfg.version = NV_ENC_CONFIG_VER;
         enc_cfg.gopLength = config.gop_length;
         enc_cfg.frameIntervalP = 1; // IPP... (no B-frames in low-latency)
@@ -231,34 +241,7 @@ impl NvEncoderD3D11 {
         }
 
         enc_cfg.rcParams.version = NV_ENC_RC_PARAMS_VER;
-        match config.rate_control {
-            RateControl::ConstantQp { qp } => {
-                let scaled_qp = match active_codec {
-                    ActiveCodec::Av1 => qp * 4,
-                    _ => qp,
-                };
-                let final_qp = clamp_qp_for_codec(active_codec, scaled_qp);
-                enc_cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
-                enc_cfg.rcParams.constQP = NV_ENC_QP {
-                    qpInterP: final_qp,
-                    qpInterB: final_qp,
-                    qpIntra: final_qp,
-                };
-                // CQP ignores these, but zero them for tidiness — the
-                // preset query may have left non-zero defaults behind.
-                enc_cfg.rcParams.averageBitRate = 0;
-                enc_cfg.rcParams.maxBitRate = 0;
-            }
-            RateControl::Vbr { avg_bps } => {
-                // VBR with a hard average target. CBR would honor bitrate
-                // even more strictly but produces filler bits on quiet
-                // content. Allow short-term overshoot up to ~1.5× average
-                // so motion bursts don't smear.
-                enc_cfg.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
-                enc_cfg.rcParams.averageBitRate = avg_bps;
-                enc_cfg.rcParams.maxBitRate = avg_bps.saturating_add(avg_bps / 2);
-            }
-        }
+        apply_rate_control(&mut enc_cfg.rcParams, active_codec, config.rate_control);
 
         // ---- initialize -------------------------------------------------
         let mut init = NV_ENC_INITIALIZE_PARAMS::default();
@@ -282,7 +265,7 @@ impl NvEncoderD3D11 {
         // 3D engine internally, which is roughly the entire 5–10% delta
         // we measured against OBS.
         init.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
-        init.encodeConfig = &mut enc_cfg as *mut _ as *mut std::ffi::c_void;
+        init.encodeConfig = enc_cfg.as_mut() as *mut NV_ENC_CONFIG as *mut std::ffi::c_void;
         // Async mode: NVENC signals a per-frame completion event when the
         // bitstream is ready instead of making LockBitstream block. Lets
         // us submit frame N+1 while frame N is still encoding — saves the
@@ -440,6 +423,8 @@ impl NvEncoderD3D11 {
             nv12_registered,
             nv12_converter,
             config,
+            enc_cfg,
+            init_params: init,
             active_codec,
             pool,
             next_slot: 0,
@@ -476,6 +461,56 @@ impl NvEncoderD3D11 {
     /// or recovery after a network blip.
     pub fn force_idr_next_frame(&mut self) {
         self.force_idr = true;
+    }
+
+    /// Change rate-control *parameters* on the live session without
+    /// resetting it — used to boost quality for the duration of a manual
+    /// recording. The bitstream stays continuous (same sequence header,
+    /// same reference state), so packets from before and after the switch
+    /// mux into one playable file.
+    ///
+    /// NVENC cannot switch rate-control *mode* dynamically, so `rc` must be
+    /// the same variant the session was opened with (CQP→CQP or VBR→VBR).
+    /// Forces an IDR so the new quality takes effect on a clean GOP
+    /// boundary instead of mid-GOP.
+    pub fn reconfigure_rate_control(&mut self, rc: RateControl) -> Result<()> {
+        if std::mem::discriminant(&rc) != std::mem::discriminant(&self.config.rate_control) {
+            bail!(
+                "NVENC can't switch rate-control mode on a live session \
+                 (session: {:?}, requested: {:?})",
+                self.config.rate_control,
+                rc
+            );
+        }
+        let reconfigure = self
+            .api
+            .functions
+            .nvEncReconfigureEncoder
+            .ok_or_else(|| anyhow!("driver did not populate nvEncReconfigureEncoder"))?;
+
+        let prev_rc_params = self.enc_cfg.rcParams;
+        apply_rate_control(&mut self.enc_cfg.rcParams, self.active_codec, rc);
+
+        let mut params = NV_ENC_RECONFIGURE_PARAMS::default();
+        params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+        params.reInitEncodeParams = self.init_params;
+        params.reInitEncodeParams.encodeConfig =
+            self.enc_cfg.as_mut() as *mut NV_ENC_CONFIG as *mut std::ffi::c_void;
+        // No resetEncoder: keep reference state + sequence header so the
+        // in-flight bitstream stays decodable across the switch.
+        params.bitfields = NV_ENC_RECONFIGURE_FLAG_FORCE_IDR;
+
+        // SAFETY: encoder is a live session handle; `params` is a
+        // well-formed #[repr(C)] struct whose encodeConfig points at the
+        // boxed NV_ENC_CONFIG owned by `self`, alive for the whole call.
+        let status = unsafe { (reconfigure)(self.encoder, &mut params) };
+        if let Err(e) = nvenc_check(&self.api, self.encoder, status, "ReconfigureEncoder") {
+            // Session unchanged on failure — keep our mirror in sync.
+            self.enc_cfg.rcParams = prev_rc_params;
+            return Err(e);
+        }
+        self.config.rate_control = rc;
+        Ok(())
     }
 
     /// Submit one captured texture. Returns zero or more encoded packets —
@@ -1095,6 +1130,53 @@ fn resolve_codec(pref: CodecPreference, supported: &[GUID]) -> Result<ActiveCode
             } else {
                 bail!("driver reports neither AV1 nor H.264 NVENC support");
             }
+        }
+    }
+}
+
+/// Write `rc` into `rc_params`. Shared by session init and
+/// [`NvEncoderD3D11::reconfigure_rate_control`] so both paths scale and
+/// clamp QP identically.
+fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: RateControl) {
+    match rc {
+        RateControl::ConstantQp { qp } => {
+            let scaled_qp = match codec {
+                ActiveCodec::Av1 => qp * 4,
+                _ => qp,
+            };
+            let final_qp = clamp_qp_for_codec(codec, scaled_qp);
+            // Keyframes get a better (lower) QP than delta frames. Every
+            // GOP references its IDR, so intra quality is the ceiling for
+            // everything that follows — most visibly on static content,
+            // where deltas are pure skips and the picture IS the keyframe
+            // re-encoded once per GOP (blocky text + once-a-second
+            // "pumping" at equal QP). ~4 H.264 QP steps of headroom; the
+            // size cost is small because keyframes are a tiny share of
+            // motion clips (~7%) and static clips are tiny anyway.
+            let intra_qp = match codec {
+                ActiveCodec::Av1 => final_qp.saturating_sub(16),
+                _ => final_qp.saturating_sub(4),
+            }
+            .max(1);
+            rc_params.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
+            rc_params.constQP = NV_ENC_QP {
+                qpInterP: final_qp,
+                qpInterB: final_qp,
+                qpIntra: intra_qp,
+            };
+            // CQP ignores these, but zero them for tidiness — the
+            // preset query may have left non-zero defaults behind.
+            rc_params.averageBitRate = 0;
+            rc_params.maxBitRate = 0;
+        }
+        RateControl::Vbr { avg_bps } => {
+            // VBR with a hard average target. CBR would honor bitrate
+            // even more strictly but produces filler bits on quiet
+            // content. Allow short-term overshoot up to ~1.5× average
+            // so motion bursts don't smear.
+            rc_params.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+            rc_params.averageBitRate = avg_bps;
+            rc_params.maxBitRate = avg_bps.saturating_add(avg_bps / 2);
         }
     }
 }

@@ -28,6 +28,7 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     pub profile: ProfileConfig,
     pub metadata: MetadataConfig,
+    pub discord: DiscordConfig,
     /// Replay window in seconds. Ring buffer is sized for this duration at
     /// `video.bitrate_bps` (plus ~20% headroom for audio + muxer overhead).
     pub replay_seconds: u32,
@@ -43,6 +44,7 @@ impl Default for Config {
             notifications: NotificationsConfig::default(),
             profile: ProfileConfig::default(),
             metadata: MetadataConfig::default(),
+            discord: DiscordConfig::default(),
             replay_seconds: 60,
         }
     }
@@ -116,6 +118,13 @@ impl Config {
 pub struct VideoConfig {
     /// DXGI output index — which monitor to capture. 0 = primary.
     pub output_index: u32,
+    /// Which capture API to use. `auto` (default) tries
+    /// Windows.Graphics.Capture — which sees fullscreen-exclusive /
+    /// independent-flip / MPO-presented games that DXGI Desktop Duplication
+    /// is blind to (those clips showed the desktop or a frozen frame) —
+    /// and falls back to DXGI Desktop Duplication when WGC can't start.
+    /// `wgc` / `dxgi` force a specific backend.
+    pub capture_backend: CaptureBackendCfg,
     pub fps: u32,
     /// Used to size the packet ring buffer ([`Config::ring_byte_budget`]).
     /// Under the default CQP rate-control this is a *hint*, not the actual
@@ -134,20 +143,38 @@ pub struct VideoConfig {
     /// Rate-control mode. Default is CQP (constant quality, bitrate floats
     /// with scene complexity) — same model as NVIDIA ShadowPlay.
     pub rate_control: RateControlCfg,
+    /// Encode quality while a *manual recording* is in progress. Manual
+    /// recordings are meant to be kept and uploaded, so they default to a
+    /// noticeably higher quality (QP 14 ≈ 2× the bitrate of the QP-20
+    /// clip default) than the always-on replay buffer. Applied via NVENC
+    /// reconfigure when the recording starts, reverted when it stops.
+    pub recording_quality: RecordingQualityCfg,
 }
 
 impl Default for VideoConfig {
     fn default() -> Self {
         Self {
             output_index: 0,
+            capture_backend: CaptureBackendCfg::default(),
             fps: 60,
             bitrate_bps: 30_000_000,
             include_cursor: true,
             gop_seconds: 1.0,
             codec: CodecPreferenceCfg::default(),
             rate_control: RateControlCfg::default(),
+            recording_quality: RecordingQualityCfg::default(),
         }
     }
+}
+
+/// Serde-friendly mirror of `clipdip_capture::CaptureBackend`.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureBackendCfg {
+    #[default]
+    Auto,
+    Wgc,
+    Dxgi,
 }
 
 /// Serde-friendly mirror of [`clipdip_encoder::CodecPreference`]. Kept
@@ -187,6 +214,40 @@ fn default_qp() -> u32 {
     // and is also a perfectly reasonable AV1 QP — AV1 has a wider 0–255
     // scale but the lower end of it is where high-quality clips live.
     20
+}
+
+/// Quality boost applied for the duration of a manual recording.
+///
+/// Only meaningful when `rate_control` is `ConstantQp` — NVENC can't switch
+/// rate-control *mode* on a live session, so under VBR the recording keeps
+/// the configured average bitrate and this setting is ignored.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum RecordingQualityCfg {
+    /// Recordings use the same quality as replay-buffer clips.
+    MatchClips,
+    /// Boost to this QP (H.264 0–51 scale; AV1 is matched internally) while
+    /// recording. Never *lowers* quality: values above the clip QP are
+    /// clamped to it.
+    ConstantQp {
+        #[serde(default = "default_recording_qp")]
+        qp: u32,
+    },
+}
+
+impl Default for RecordingQualityCfg {
+    fn default() -> Self {
+        Self::ConstantQp {
+            qp: default_recording_qp(),
+        }
+    }
+}
+
+fn default_recording_qp() -> u32 {
+    // +6 QP ≈ half the bitrate, so 14 is roughly twice the data rate of the
+    // QP-20 clip default — comfortably clean enough to master a YouTube
+    // upload from, without ballooning into lossless-tier file sizes.
+    14
 }
 
 // ---- audio --------------------------------------------------------------
@@ -447,6 +508,29 @@ impl Default for MetadataConfig {
             capture_icon: true,
             ignored_processes: default_ignored_processes(),
         }
+    }
+}
+
+// ---- discord ------------------------------------------------------------
+
+/// Capture the Discord voice-call roster at clip time. When enabled (and
+/// the user has authorized via the settings UI / onboarding), each saved
+/// clip records the user IDs + names of everyone in the call into its
+/// `.gameinfo` sidecar. Reads only the call the user is already in, via
+/// Discord's local RPC — no server bot.
+///
+/// Enabled by default. It still does nothing until the user completes the
+/// one-time authorization (onboarding offers it), and writes nothing when
+/// not in a call — so "on" just means "capture it once you've connected".
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordConfig {
+    pub enabled: bool,
+}
+
+impl Default for DiscordConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

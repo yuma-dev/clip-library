@@ -133,6 +133,10 @@ struct AppState {
     /// force-close an overlay whose page failed to load, so a broken webview
     /// can never leave a stuck (potentially fullscreen) error page on screen.
     overlay_booted: Arc<std::sync::atomic::AtomicBool>,
+    /// Background Discord RPC connection. Keeps the current voice-call
+    /// roster warm so the save flow can snapshot it at hotkey time. Always
+    /// present; reports `Disabled` when no client secret is compiled in.
+    discord: Arc<clipdip_discord::DiscordHandle>,
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -839,6 +843,35 @@ fn open_clips_folder(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// ---------- discord commands ----------------------------------------------
+
+/// Current Discord connection state for the settings UI (serialized
+/// [`clipdip_discord::DiscordStatus`]).
+#[tauri::command]
+fn discord_status(state: State<'_, AppState>) -> serde_json::Value {
+    serde_json::to_value(state.discord.status()).unwrap_or(serde_json::Value::Null)
+}
+
+/// Begin the one-time authorization — shows the consent popup in the user's
+/// Discord client. Silent-refresh keeps it connected afterward.
+#[tauri::command]
+fn discord_connect(state: State<'_, AppState>) {
+    state.discord.connect();
+}
+
+/// Forget the stored token; the manager drops back to needs-authorization.
+#[tauri::command]
+fn discord_disconnect(state: State<'_, AppState>) {
+    state.discord.disconnect();
+}
+
+/// The current voice-call roster (for a live preview in settings), or null
+/// if not in a call / not connected.
+#[tauri::command]
+fn discord_current_roster(state: State<'_, AppState>) -> serde_json::Value {
+    serde_json::to_value(state.discord.roster()).unwrap_or(serde_json::Value::Null)
+}
+
 // ---------- capture loop --------------------------------------------------
 
 #[derive(Clone, Copy)]
@@ -850,6 +883,11 @@ enum LoopEvent {
     /// Sent by the `restart_pipeline` command after capture settings
     /// change (encoder options only apply at pipeline start).
     Restart,
+    /// Same teardown/re-start, but initiated by the health monitor after
+    /// the video capture thread died. Rate-limited by a storm guard in
+    /// the capture loop so a persistently-broken capture can't restart
+    /// the pipeline in a tight loop.
+    RestartAfterFailure,
     /// Re-register the global hotkey listener with freshly-loaded config.
     /// Sent by the `reload_hotkeys` command when the user edits a hotkey,
     /// so the change applies without restarting the pipeline (or the app).
@@ -942,6 +980,26 @@ fn notify_native(app: &AppHandle, title: &str, body: &str) {
     }
 }
 
+/// Health alert that the user can actually see while gaming. Windows
+/// suppresses native toasts during fullscreen play (gaming Do-Not-Disturb /
+/// Focus Assist) — on 2026-07-05 five "capture froze" toasts fired and the
+/// user saw none of them. So health alerts go BOTH ways: the toast (for
+/// desktop visibility + the Action Center trail) and the in-game overlay
+/// notice (the same always-on-top window the clip-saved card uses).
+fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
+    notify_native(app, title, body);
+    let notice = NoticePayload {
+        message: format!("{title} — {body}"),
+        corner: corner.to_string(),
+    };
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.pending_notice.lock().unwrap() = Some(notice.clone());
+    }
+    if let Some(overlay) = ensure_overlay_window(app, corner) {
+        let _ = overlay.emit("overlay-notice", notice);
+    }
+}
+
 /// Background watchdog that turns silent capture degradation into an instant,
 /// proactive Windows toast — independent of the clip/save flow. Runs on its
 /// own ~1 Hz timer for the lifetime of one pipeline; dropping it stops and
@@ -960,19 +1018,34 @@ struct HealthMonitor {
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Everything one `health_loop` needs; bundled so the two spawn sites
+/// don't repeat nine positional arguments.
+struct HealthMonitorArgs {
+    ring: Arc<clipdip_ringbuf::PacketRing>,
+    liveness: Arc<std::sync::atomic::AtomicI64>,
+    /// Timestamp of the last frame with *new content* (repeats excluded).
+    real_liveness: Arc<std::sync::atomic::AtomicI64>,
+    /// Error the video thread died with, if it has died.
+    video_error: Arc<Mutex<Option<String>>>,
+    phase: Arc<std::sync::atomic::AtomicU8>,
+    replay_seconds: u32,
+    /// Overlay corner for in-game health notices.
+    corner: String,
+    /// `metadata.ignored_processes` — a fullscreen foreground app NOT on
+    /// this list is assumed to be a game for the blind-capture check.
+    ignored_processes: Vec<String>,
+    /// Channel back into the capture loop, for requesting a pipeline
+    /// restart when the video thread has died.
+    ev_tx: crossbeam_channel::Sender<LoopEvent>,
+}
+
 impl HealthMonitor {
-    fn spawn(
-        app: AppHandle,
-        ring: Arc<clipdip_ringbuf::PacketRing>,
-        liveness: Arc<std::sync::atomic::AtomicI64>,
-        phase: Arc<std::sync::atomic::AtomicU8>,
-        replay_seconds: u32,
-    ) -> Self {
+    fn spawn(app: AppHandle, args: HealthMonitorArgs) -> Self {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name("clipdip-health".into())
-            .spawn(move || health_loop(app, ring, liveness, phase, replay_seconds, stop_thread))
+            .spawn(move || health_loop(app, args, stop_thread))
             .ok();
         Self { stop, handle }
     }
@@ -990,15 +1063,24 @@ impl Drop for HealthMonitor {
 
 fn health_loop(
     app: AppHandle,
-    ring: Arc<clipdip_ringbuf::PacketRing>,
-    liveness: Arc<std::sync::atomic::AtomicI64>,
-    phase: Arc<std::sync::atomic::AtomicU8>,
-    replay_seconds: u32,
+    args: HealthMonitorArgs,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
     use clipdip_core::pipeline::{capture_phase, qpc_now_100ns};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+
+    let HealthMonitorArgs {
+        ring,
+        liveness,
+        real_liveness,
+        video_error,
+        phase,
+        replay_seconds,
+        corner,
+        ignored_processes,
+        ev_tx,
+    } = args;
 
     // No frame for this long ⇒ capture stalled. Well above the ~200ms DXGI
     // acquire stalls that happen under load, and above the video thread's own
@@ -1011,6 +1093,15 @@ fn health_loop(
     // legitimate gap lasts that long, and the media clock already absorbs real
     // stalls shorter than the window.
     const WEDGE_RESTART_100NS: i64 = 150_000_000; // 15s
+    // Frames flowing but none of them carried NEW content for this long,
+    // while a fullscreen (presumably game) window is focused ⇒ the capture
+    // backend can't see what's on screen (exclusive fullscreen /
+    // independent flip / MPO). Clips saved in this state show a frozen
+    // frame or the bare desktop. A real game repaints continuously, so a
+    // minute of zero content-change with a fullscreen app focused is
+    // unambiguous; a static *desktop* is excluded by the fullscreen +
+    // not-ignored-process gate.
+    const BLIND_IDLE_100NS: i64 = 600_000_000; // 60s
     let window_100ns = replay_seconds as i64 * 10_000_000;
     // "Low" = the buffer dropped more than max(10%, 5s) below the window.
     let underfull_floor = window_100ns - (window_100ns / 10).max(50_000_000);
@@ -1036,6 +1127,24 @@ fn health_loop(
         }
         since_poll = Duration::ZERO;
         polls += 1;
+
+        // Video thread died (capture error it couldn't recover from, e.g.
+        // a display-mode change that invalidated the encoder dimensions).
+        // Alert + ask the capture loop for an in-process pipeline restart —
+        // much cheaper than the whole-app restart the wedge path needs, and
+        // it re-inits the encoder at the new display size. One-shot: send
+        // the request, then exit; the restart replaces this monitor.
+        if let Some(err) = video_error.lock().unwrap().clone() {
+            error!("health: video capture thread died — requesting pipeline restart: {err}");
+            notify_health(
+                &app,
+                &corner,
+                "Clipdip — capture stopped",
+                "Screen capture hit an error and is restarting. The replay buffer starts refilling now.",
+            );
+            let _ = ev_tx.send(LoopEvent::RestartAfterFailure);
+            return;
+        }
 
         // Independent capture heartbeat (~every 10s). Logged from this thread,
         // NOT the video loop, so it keeps reporting even if capture freezes —
@@ -1079,8 +1188,9 @@ fn health_loop(
                     stuck_in,
                     "capture wedged (no frames; thread stuck in this stage) — restarting Clipdip to recover"
                 );
-                notify_native(
+                notify_health(
                     &app,
+                    &corner,
                     "Clipdip — capture froze",
                     "Screen capture stopped responding. Restarting Clipdip to recover…",
                 );
@@ -1090,11 +1200,26 @@ fn health_loop(
             }
         }
         let issue: Option<(String, String)> = if live == 0 {
-            // No frame produced yet — still starting up.
-            None
+            // No frame produced yet. Normal for the first seconds after
+            // start — but persisting means capture never came up at all,
+            // which used to be a silent-forever state (no liveness ⇒ no
+            // wedge check, no stall alert, nothing).
+            if polls > 15 {
+                Some((
+                    "Clipdip — capture never started".into(),
+                    format!(
+                        "No frames have been captured since capture started \
+                         ({polls}s ago). Check the monitor / capture settings."
+                    ),
+                ))
+            } else {
+                None
+            }
         } else {
             let idle = qpc_now_100ns() - live;
             let span = ring.stats().video_span_100ns;
+            let real = real_liveness.load(Ordering::Relaxed);
+            let real_idle = if real == 0 { 0 } else { qpc_now_100ns() - real };
             if idle > STALL_IDLE_100NS {
                 Some((
                     "Clipdip — capture stalled".into(),
@@ -1104,6 +1229,27 @@ fn health_loop(
                         idle as f64 / 1e7
                     ),
                 ))
+            } else if real_idle > BLIND_IDLE_100NS {
+                // Frames ARE flowing (idle is small) but they're all
+                // repeats — the capturer can't see new content. Only alert
+                // when a fullscreen, non-system app is focused: a game
+                // repaints every frame, so this state means clips are
+                // frozen/desktop-only. (This is the exact failure that
+                // used to pass every health check: 60 fps of repeats
+                // looked perfectly healthy while Valorant was invisible.)
+                metadata::foreground_fullscreen_app(&ignored_processes).map(|game| {
+                    (
+                        "Clipdip — game not being captured".into(),
+                        format!(
+                            "The captured image hasn't changed for {:.0}s while {} is \
+                             fullscreen. Clips saved now would show a frozen frame or \
+                             the desktop. Try Borderless/Windowed mode, or check \
+                             Clipdip's capture settings.",
+                            real_idle as f64 / 1e7,
+                            game
+                        ),
+                    )
+                })
             } else if polls as i64 > replay_seconds as i64 + 5 && span < underfull_floor {
                 // Only judge "low" once the buffer has had a full window to
                 // fill, so normal startup doesn't trip it.
@@ -1128,7 +1274,7 @@ fn health_loop(
                 if bad >= 2 {
                     degraded = true;
                     warn!("health: degraded — {body}");
-                    notify_native(&app, &title, &body);
+                    notify_health(&app, &corner, &title, &body);
                 }
             }
             (None, true) => {
@@ -1137,8 +1283,9 @@ fn health_loop(
                 if good >= 3 {
                     degraded = false;
                     info!("health: capture recovered");
-                    notify_native(
+                    notify_health(
                         &app,
+                        &corner,
                         "Clipdip — capture recovered",
                         "Replay capture is healthy again and the buffer is refilling.",
                     );
@@ -1189,6 +1336,13 @@ fn run_capture_loop(
     // pipeline.
     let mut replay_seconds = cfg.replay_seconds;
     let mut health_alerts = cfg.notifications.enabled && cfg.notifications.health_alerts;
+    let mut notif_corner = corner_slug(&cfg.notifications.corner);
+    let mut ignored_procs = cfg.metadata.ignored_processes.clone();
+
+    // Timestamps of recent health-initiated pipeline restarts, for the
+    // storm guard: a capture that re-dies immediately after every restart
+    // must not put the pipeline in a restart loop.
+    let mut auto_restarts: Vec<std::time::Instant> = Vec::new();
 
     // Start the pipeline after hotkeys are live. On failure we emit the error
     // and keep the event loop running so hotkeys remain registered.
@@ -1202,10 +1356,17 @@ fn run_capture_loop(
             if health_alerts {
                 monitor = Some(HealthMonitor::spawn(
                     app.clone(),
-                    p.ring(),
-                    p.frame_liveness(),
-                    p.capture_phase(),
-                    replay_seconds,
+                    HealthMonitorArgs {
+                        ring: p.ring(),
+                        liveness: p.frame_liveness(),
+                        real_liveness: p.real_frame_liveness(),
+                        video_error: p.video_error(),
+                        phase: p.capture_phase(),
+                        replay_seconds,
+                        corner: notif_corner.clone(),
+                        ignored_processes: ignored_procs.clone(),
+                        ev_tx: ev_tx.clone(),
+                    },
                 ));
             }
             Some(p)
@@ -1281,6 +1442,14 @@ fn run_capture_loop(
                 // (~1–2 s later). Cheap call — pure GetForegroundWindow +
                 // GetWindowThreadProcessId.
                 let foreground = metadata::ForegroundSnapshot::capture();
+
+                // Snapshot the Discord call roster at the hotkey moment too.
+                // The background manager keeps it warm (polled ~every 2s), so
+                // this is just a lock — it reflects who was in the call when
+                // the user pressed the key, not whoever's there after the mux.
+                let discord_roster = app
+                    .try_state::<AppState>()
+                    .and_then(|s| s.discord.roster());
 
                 // Re-read config so notification settings reflect any changes
                 // since the pipeline started.
@@ -1472,24 +1641,38 @@ fn run_capture_loop(
                                 info!("clip saved: {path_str}");
                             }
 
-                            // `.gameinfo` finalize. The heavy work
-                            // (title + icon) already ran in parallel
-                            // with the mux above — this is just the
-                            // JSON write keyed by the now-known clip
-                            // path. Best-effort; failures only log.
-                            if let Some(handle) = meta_thread {
-                                match handle.join() {
-                                    Ok(resolved) => {
-                                        if let Err(e) = metadata::write_gameinfo(&path, &resolved) {
-                                            warn!("metadata write failed: {e:#}");
-                                        } else if prof {
-                                            info!("metadata.write_gameinfo [t+{}ms]", t0.elapsed().as_millis());
-                                        }
-                                    }
-                                    Err(_) => warn!("metadata resolve thread panicked"),
+                            // `.gameinfo` finalize. The heavy game-info
+                            // work (title + icon) already ran in parallel
+                            // with the mux above; the Discord roster was
+                            // snapshotted at the hotkey moment. This step
+                            // just writes the JSON keyed by the now-known
+                            // clip path. Game info and the call roster are
+                            // independent — either alone still writes a
+                            // sidecar. Best-effort; failures only log.
+                            let resolved = meta_thread.and_then(|h| match h.join() {
+                                Ok(r) => Some(r),
+                                Err(_) => {
+                                    warn!("metadata resolve thread panicked");
+                                    None
                                 }
-                            } else if cur.metadata.enabled {
-                                debug!("metadata enabled but no foreground window at hotkey time");
+                            });
+                            let discord_json = if cur.discord.enabled {
+                                discord_roster
+                                    .as_ref()
+                                    .and_then(|r| serde_json::to_value(r).ok())
+                            } else {
+                                None
+                            };
+                            if resolved.is_some() || discord_json.is_some() {
+                                if let Err(e) = metadata::write_gameinfo(
+                                    &path,
+                                    resolved.as_ref(),
+                                    discord_json.as_ref(),
+                                ) {
+                                    warn!("metadata write failed: {e:#}");
+                                } else if prof {
+                                    info!("metadata.write_gameinfo [t+{}ms]", t0.elapsed().as_millis());
+                                }
                             }
 
                             if notifs_enabled {
@@ -1544,12 +1727,46 @@ fn run_capture_loop(
                     }
                 }
             }
-            LoopEvent::Restart => {
-                if pipeline.as_ref().is_some_and(|p| p.is_recording()) {
-                    warn!("capture settings changed during a manual recording — restart deferred; re-save settings after the recording ends");
-                    continue;
+            LoopEvent::Restart | LoopEvent::RestartAfterFailure => {
+                if matches!(event, LoopEvent::RestartAfterFailure) {
+                    // Storm guard: three failure-restarts inside 10 minutes
+                    // means capture is persistently broken — stop cycling,
+                    // tell the user, and wait for a manual restart (or a
+                    // settings change, which sends a plain Restart).
+                    let now = std::time::Instant::now();
+                    auto_restarts
+                        .retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(600));
+                    if auto_restarts.len() >= 3 {
+                        error!(
+                            "capture failed {} times in 10 minutes — giving up on auto-restart",
+                            auto_restarts.len() + 1
+                        );
+                        notify_health(
+                            &app,
+                            &notif_corner,
+                            "Clipdip — capture keeps failing",
+                            "Screen capture failed repeatedly and is now stopped. \
+                             Check the capture settings (monitor / backend) and restart \
+                             capture from the Clipdip window.",
+                        );
+                        drop(monitor.take());
+                        *ring_handle.lock().unwrap() = None;
+                        *pipeline_running.lock().unwrap() = false;
+                        if let Some(p) = pipeline.take() {
+                            let _ = p.stop();
+                        }
+                        let _ = app.emit("pipeline-status", serde_json::json!({"running": false}));
+                        continue;
+                    }
+                    auto_restarts.push(now);
+                    info!("restarting pipeline after capture failure");
+                } else {
+                    if pipeline.as_ref().is_some_and(|p| p.is_recording()) {
+                        warn!("capture settings changed during a manual recording — restart deferred; re-save settings after the recording ends");
+                        continue;
+                    }
+                    info!("restarting pipeline to apply changed capture settings");
                 }
-                info!("restarting pipeline to apply changed capture settings");
                 // Drop the old monitor first (stops + joins its thread) so it
                 // can't fire on the torn-down pipeline.
                 drop(monitor.take());
@@ -1570,6 +1787,8 @@ fn run_capture_loop(
                 };
                 replay_seconds = cfg.replay_seconds;
                 health_alerts = cfg.notifications.enabled && cfg.notifications.health_alerts;
+                notif_corner = corner_slug(&cfg.notifications.corner);
+                ignored_procs = cfg.metadata.ignored_processes.clone();
                 pipeline = match clipdip_core::Pipeline::start(cfg) {
                     Ok(p) => {
                         info!("pipeline restarted");
@@ -1582,10 +1801,17 @@ fn run_capture_loop(
                         if health_alerts {
                             monitor = Some(HealthMonitor::spawn(
                                 app.clone(),
-                                p.ring(),
-                                p.frame_liveness(),
-                                p.capture_phase(),
-                                replay_seconds,
+                                HealthMonitorArgs {
+                                    ring: p.ring(),
+                                    liveness: p.frame_liveness(),
+                                    real_liveness: p.real_frame_liveness(),
+                                    video_error: p.video_error(),
+                                    phase: p.capture_phase(),
+                                    replay_seconds,
+                                    corner: notif_corner.clone(),
+                                    ignored_processes: ignored_procs.clone(),
+                                    ev_tx: ev_tx.clone(),
+                                },
                             ));
                         }
                         Some(p)
@@ -1768,6 +1994,15 @@ fn main() {
     // commands (restart_pipeline) can send into it via AppState.
     let (loop_tx, loop_rx) = unbounded::<LoopEvent>();
 
+    // Start the background Discord RPC manager. It keeps a warm connection
+    // to the local Discord client and (once the user authorizes) tracks the
+    // current voice-call roster. Tokens live next to the config file.
+    let discord_dir = config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let discord = Arc::new(clipdip_discord::spawn(discord_dir));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
@@ -1781,6 +2016,7 @@ fn main() {
             recording_active: Arc::new(Mutex::new(false)),
             loop_tx: loop_tx.clone(),
             overlay_booted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            discord: discord.clone(),
         })
         .setup(move |app| {
             // Log configured hotkeys so the user can confirm them in the console.
@@ -1866,6 +2102,10 @@ fn main() {
             get_autostart_info,
             set_autostart_status,
             reload_hotkeys,
+            discord_status,
+            discord_connect,
+            discord_disconnect,
+            discord_current_roster,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")

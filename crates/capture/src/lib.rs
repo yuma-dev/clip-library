@@ -24,9 +24,131 @@ use windows::Win32::Graphics::Gdi::DeleteObject;
 use windows::Win32::UI::WindowsAndMessaging::{
     DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, ICONINFO,
 };
-use tracing::warn;
+use tracing::{info, warn};
+
+pub mod wgc;
 
 const POOL_SIZE: usize = 4;
+
+/// Which capture API to use for the monitor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureBackend {
+    /// Try Windows.Graphics.Capture first, fall back to DXGI Desktop
+    /// Duplication if WGC can't initialize. The default: WGC sees
+    /// fullscreen-exclusive / independent-flip / MPO content that
+    /// Desktop Duplication is blind to.
+    Auto,
+    /// Windows.Graphics.Capture only (error if unavailable).
+    Wgc,
+    /// DXGI Desktop Duplication only. Cannot capture content presented on
+    /// independent-flip / MPO / exclusive-fullscreen paths — it will show
+    /// the desktop or a frozen frame instead of the game. Kept as an
+    /// escape hatch.
+    Dxgi,
+}
+
+/// Unified monitor capturer over the two backends. Both produce
+/// [`CapturedFrame`]s with identical semantics (private texture ring,
+/// CFR repeats), so the pipeline is backend-agnostic.
+pub enum Capturer {
+    Wgc(wgc::WgcCapturer),
+    Dxgi(DesktopDuplicator),
+}
+
+impl Capturer {
+    /// Create a capturer on an existing D3D11 device (the one that also
+    /// drives NVENC). Used both at pipeline start and when rebuilding
+    /// capture after an error mid-session — the encoder keeps running on
+    /// the same device, so the rebuilt capturer must share it.
+    pub fn with_device(
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        backend: CaptureBackend,
+        output_index: u32,
+        include_cursor: bool,
+    ) -> Result<Self> {
+        match backend {
+            CaptureBackend::Wgc => {
+                let c = wgc::WgcCapturer::new(device, context, output_index, include_cursor)?;
+                info!("capture backend: Windows.Graphics.Capture");
+                Ok(Capturer::Wgc(c))
+            }
+            CaptureBackend::Dxgi => {
+                let mut d = DesktopDuplicator::new(device, context, output_index)?;
+                d.set_include_cursor(include_cursor);
+                info!("capture backend: DXGI Desktop Duplication");
+                Ok(Capturer::Dxgi(d))
+            }
+            CaptureBackend::Auto => {
+                match wgc::WgcCapturer::new(
+                    device.clone(),
+                    context.clone(),
+                    output_index,
+                    include_cursor,
+                ) {
+                    Ok(c) => {
+                        info!("capture backend: Windows.Graphics.Capture (auto)");
+                        Ok(Capturer::Wgc(c))
+                    }
+                    Err(e) => {
+                        warn!(
+                            "WGC init failed — falling back to DXGI Desktop Duplication \
+                             (fullscreen-exclusive games may not be captured): {e:#}"
+                        );
+                        let mut d = DesktopDuplicator::new(device, context, output_index)?;
+                        d.set_include_cursor(include_cursor);
+                        Ok(Capturer::Dxgi(d))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Create a fresh D3D11 device and a capturer on it.
+    pub fn create(
+        backend: CaptureBackend,
+        output_index: u32,
+        include_cursor: bool,
+    ) -> Result<(Self, ID3D11Device, ID3D11DeviceContext)> {
+        let (device, context) = create_d3d11_device()?;
+        let cap = Self::with_device(
+            device.clone(),
+            context.clone(),
+            backend,
+            output_index,
+            include_cursor,
+        )?;
+        Ok((cap, device, context))
+    }
+
+    pub fn acquire_frame(&mut self, timeout_ms: u32) -> Result<Option<CapturedFrame>> {
+        match self {
+            Capturer::Wgc(c) => c.acquire_frame(timeout_ms),
+            Capturer::Dxgi(d) => d.acquire_frame(timeout_ms),
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        match self {
+            Capturer::Wgc(c) => c.width(),
+            Capturer::Dxgi(d) => d.width(),
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            Capturer::Wgc(c) => c.height(),
+            Capturer::Dxgi(d) => d.height(),
+        }
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Capturer::Wgc(_) => "wgc",
+            Capturer::Dxgi(_) => "dxgi",
+        }
+    }
+}
 
 pub struct CapturedFrame {
     /// Private copy of the captured backbuffer. Owned by the caller.

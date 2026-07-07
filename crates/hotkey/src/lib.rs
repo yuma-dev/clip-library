@@ -90,6 +90,13 @@ impl HotkeyBinding {
     /// - Letters: `a`–`z` (single ASCII char)
     /// - Digits: `0`–`9`
     /// - Function keys: `f1`–`f24`
+    /// - Named keys: `space`, `tab`, `enter`, `backspace`, `escape`,
+    ///   `insert`, `delete`, `home`, `end`, `pageup`, `pagedown`,
+    ///   arrows (`up`/`down`/`left`/`right`), `printscreen`,
+    ///   `scrolllock`, `pause`, `capslock`, `numlock`
+    /// - Numpad: `num0`–`num9`, `numplus`, `numminus`, `nummult`,
+    ///   `numdiv`, `numdot`
+    /// - Punctuation: `` ; = , - . / ` [ \ ] ' ``
     ///
     /// The final non-modifier token is taken as the key. Exactly one key
     /// token is required.
@@ -129,6 +136,24 @@ fn parse_vk(key: &str) -> Result<u32> {
         if c.is_ascii_alphabetic() || c.is_ascii_digit() {
             return Ok(c as u32);
         }
+        // OEM punctuation keys (US layout positions).
+        let vk = match c {
+            ';' => 0xBA, // VK_OEM_1
+            '=' => 0xBB, // VK_OEM_PLUS
+            ',' => 0xBC, // VK_OEM_COMMA
+            '-' => 0xBD, // VK_OEM_MINUS
+            '.' => 0xBE, // VK_OEM_PERIOD
+            '/' => 0xBF, // VK_OEM_2
+            '`' => 0xC0, // VK_OEM_3
+            '[' => 0xDB, // VK_OEM_4
+            '\\' => 0xDC, // VK_OEM_5
+            ']' => 0xDD, // VK_OEM_6
+            '\'' => 0xDE, // VK_OEM_7
+            _ => 0,
+        };
+        if vk != 0 {
+            return Ok(vk);
+        }
     }
     if let Some(n_str) = key.strip_prefix('f') {
         if let Ok(n) = n_str.parse::<u32>() {
@@ -137,7 +162,55 @@ fn parse_vk(key: &str) -> Result<u32> {
             }
         }
     }
-    Err(anyhow!("unsupported key '{key}' — use a letter, digit, or F1–F24"))
+    // Numpad: num0–num9 plus the operator keys.
+    if let Some(n_str) = key.strip_prefix("num") {
+        if let Ok(n) = n_str.parse::<u32>() {
+            if n <= 9 {
+                return Ok(0x60 + n); // VK_NUMPAD0..9
+            }
+        }
+        let vk = match n_str {
+            "plus" => 0x6B,  // VK_ADD
+            "minus" => 0x6D, // VK_SUBTRACT
+            "mult" => 0x6A,  // VK_MULTIPLY
+            "div" => 0x6F,   // VK_DIVIDE
+            "dot" => 0x6E,   // VK_DECIMAL
+            "lock" => 0x90,  // VK_NUMLOCK
+            _ => 0,
+        };
+        if vk != 0 {
+            return Ok(vk);
+        }
+    }
+    // Named keys.
+    let vk = match key {
+        "space" => 0x20,
+        "tab" => 0x09,
+        "enter" | "return" => 0x0D,
+        "backspace" => 0x08,
+        "escape" | "esc" => 0x1B,
+        "insert" | "ins" => 0x2D,
+        "delete" | "del" => 0x2E,
+        "home" => 0x24,
+        "end" => 0x23,
+        "pageup" | "pgup" => 0x21,
+        "pagedown" | "pgdn" => 0x22,
+        "up" | "arrowup" => 0x26,
+        "down" | "arrowdown" => 0x28,
+        "left" | "arrowleft" => 0x25,
+        "right" | "arrowright" => 0x27,
+        "printscreen" | "prtsc" => 0x2C,
+        "scrolllock" => 0x91,
+        "pause" => 0x13,
+        "capslock" => 0x14,
+        _ => 0,
+    };
+    if vk != 0 {
+        return Ok(vk);
+    }
+    Err(anyhow!(
+        "unsupported key '{key}' — use a letter, digit, F1–F24, numpad key, or a named key like Space / PageUp / Up"
+    ))
 }
 
 /// A handle to the message-pump thread. Drop to stop the listener.
@@ -459,5 +532,37 @@ mod tests {
     #[test]
     fn parse_rejects_unknown_token() {
         assert!(HotkeyBinding::parse("Ctrl+Banana").is_err());
+    }
+
+    #[test]
+    fn parse_bare_function_key() {
+        let b = HotkeyBinding::parse("F15").unwrap();
+        assert_eq!(b.modifiers.0, 0);
+        assert_eq!(b.vk, 0x7E); // VK_F15 = 0x70 + 14
+    }
+
+    #[test]
+    fn parse_named_keys() {
+        assert_eq!(HotkeyBinding::parse("Ctrl+Space").unwrap().vk, 0x20);
+        assert_eq!(HotkeyBinding::parse("Alt+PageUp").unwrap().vk, 0x21);
+        assert_eq!(HotkeyBinding::parse("Shift+Up").unwrap().vk, 0x26);
+        assert_eq!(HotkeyBinding::parse("Ctrl+Delete").unwrap().vk, 0x2E);
+        assert_eq!(HotkeyBinding::parse("Pause").unwrap().vk, 0x13);
+    }
+
+    #[test]
+    fn parse_numpad_keys() {
+        assert_eq!(HotkeyBinding::parse("Ctrl+Num5").unwrap().vk, 0x65);
+        assert_eq!(HotkeyBinding::parse("NumPlus").unwrap().vk, 0x6B);
+        assert_eq!(HotkeyBinding::parse("Alt+NumDot").unwrap().vk, 0x6E);
+    }
+
+    #[test]
+    fn parse_punctuation_keys() {
+        assert_eq!(HotkeyBinding::parse("Ctrl+;").unwrap().vk, 0xBA);
+        assert_eq!(HotkeyBinding::parse("Ctrl+/").unwrap().vk, 0xBF);
+        assert_eq!(HotkeyBinding::parse("Ctrl+`").unwrap().vk, 0xC0);
+        assert_eq!(HotkeyBinding::parse("Ctrl+-").unwrap().vk, 0xBD);
+        assert_eq!(HotkeyBinding::parse("Ctrl+[").unwrap().vk, 0xDB);
     }
 }

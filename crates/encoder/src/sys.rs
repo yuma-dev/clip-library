@@ -27,6 +27,7 @@ pub const fn nvencapi_struct_version(ver: u32) -> u32 {
 pub const NV_ENCODE_API_FUNCTION_LIST_VER: u32 = nvencapi_struct_version(2);
 pub const NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: u32 = nvencapi_struct_version(1);
 pub const NV_ENC_INITIALIZE_PARAMS_VER: u32 = nvencapi_struct_version(7) | (1 << 31);
+pub const NV_ENC_RECONFIGURE_PARAMS_VER: u32 = nvencapi_struct_version(1) | (1 << 31);
 pub const NV_ENC_REGISTER_RESOURCE_VER: u32 = nvencapi_struct_version(5);
 pub const NV_ENC_MAP_INPUT_RESOURCE_VER: u32 = nvencapi_struct_version(4);
 pub const NV_ENC_CREATE_BITSTREAM_BUFFER_VER: u32 = nvencapi_struct_version(1);
@@ -528,6 +529,7 @@ impl Default for NV_ENC_PRESET_CONFIG {
 // =====================================================================
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct NV_ENC_INITIALIZE_PARAMS {
     pub version: u32,
     pub encodeGUID: GUID,
@@ -564,6 +566,31 @@ pub struct NV_ENC_INITIALIZE_PARAMS {
 }
 
 impl Default for NV_ENC_INITIALIZE_PARAMS {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+// =====================================================================
+// NV_ENC_RECONFIGURE_PARAMS
+// =====================================================================
+
+/// Bit positions in [`NV_ENC_RECONFIGURE_PARAMS::bitfields`].
+pub const NV_ENC_RECONFIGURE_FLAG_RESET_ENCODER: u32 = 1 << 0;
+pub const NV_ENC_RECONFIGURE_FLAG_FORCE_IDR: u32 = 1 << 1;
+
+#[repr(C)]
+pub struct NV_ENC_RECONFIGURE_PARAMS {
+    pub version: u32,
+    // 4 bytes implicit padding here (reInitEncodeParams holds pointers, so
+    // it's 8-aligned) — repr(C) matches the C header's layout exactly.
+    pub reInitEncodeParams: NV_ENC_INITIALIZE_PARAMS,
+    /// Bitfields region. From the header: resetEncoder (1), forceIDR (1),
+    /// reserved (30). Total 32 bits.
+    pub bitfields: u32,
+}
+
+impl Default for NV_ENC_RECONFIGURE_PARAMS {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
     }
@@ -761,6 +788,11 @@ pub type PFN_InitializeEncoder = unsafe extern "C" fn(
     params: *mut NV_ENC_INITIALIZE_PARAMS,
 ) -> NVENCSTATUS;
 
+pub type PFN_ReconfigureEncoder = unsafe extern "C" fn(
+    encoder: *mut c_void,
+    params: *mut NV_ENC_RECONFIGURE_PARAMS,
+) -> NVENCSTATUS;
+
 pub type PFN_RegisterResource = unsafe extern "C" fn(
     encoder: *mut c_void,
     params: *mut NV_ENC_REGISTER_RESOURCE,
@@ -883,7 +915,7 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
     pub nvEncOpenEncodeSessionEx: Option<PFN_OpenEncodeSessionEx>,
     pub nvEncRegisterResource: Option<PFN_RegisterResource>,
     pub nvEncUnregisterResource: Option<PFN_UnregisterResource>,
-    pub nvEncReconfigureEncoder: *mut c_void,
+    pub nvEncReconfigureEncoder: Option<PFN_ReconfigureEncoder>,
     pub reserved1: *mut c_void,
     pub nvEncCreateMVBuffer: *mut c_void,
     pub nvEncDestroyMVBuffer: *mut c_void,
