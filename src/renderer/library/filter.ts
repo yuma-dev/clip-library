@@ -51,14 +51,19 @@ export function matchesTagFilter(clip: LocalClip, tags: TagFilterState): boolean
   const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
   const isUntagged = clipTags.length === 0;
 
-  if (isUntagged && !selected.has("Untagged")) return false;
-  if (isUnnamedClip(clip) && !selected.has("Unnamed")) return false;
+  // The Untagged/Unnamed system-tag visibility guards are ALWAYS governed by
+  // the persisted selection, even in focus (temporary) mode — focusing a tag
+  // must not hide an unnamed or untagged clip that carries it. Only the actual
+  // tag-membership test below switches to the temporary set. (Legacy
+  // matchesCurrentTagFilter checks state.selectedTags for these guards.)
+  if (isUntagged && !tags.saved.has("Untagged")) return false;
+  if (isUnnamedClip(clip) && !tags.saved.has("Unnamed")) return false;
 
   if (clipTags.length > 0) {
     if (tags.isTemporary) return clipTags.some((t) => tags.temporary.has(t));
     return clipTags.every((t) => selected.has(t));
   }
-  return selected.has("Untagged");
+  return tags.saved.has("Untagged");
 }
 
 // --- Collections (quick top-level filters, ANDed with search + tags) ---
