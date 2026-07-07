@@ -314,6 +314,9 @@ button {
   white-space: nowrap;
   text-overflow: ellipsis;
   transition: opacity 120ms ease;
+  /* Optical centering: flex centers the full glyph box, whose descender space
+     (y/g/p) makes the text read ~1px high next to the icons. */
+  transform: translateY(1px);
 }
 
 .rail-count-pill {
@@ -2165,17 +2168,6 @@ button {
   color: var(--color-text-muted);
 }
 
-.icon-preview {
-  display: flex;
-  gap: 7px;
-}
-.icon-preview-tile {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  transition: filter 220ms ease, opacity 220ms ease;
-}
-
 /* Mock clip cards used by the Appearance previews. */
 .mock-card-row {
   display: flex;
@@ -2240,11 +2232,21 @@ button {
   font-size: 8.5px;
   padding: 0 6px;
 }
-.mock-card-icon {
+/* Real game icon in the greyscale preview — mirrors .clip-game. */
+.mock-card-game {
   flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  display: grid;
+  place-items: center;
+}
+.mock-card-game img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
   transition: filter 220ms ease, opacity 220ms ease;
 }
 
@@ -2286,12 +2288,13 @@ button {
   display: grid;
   place-items: center;
 }
+/* Real player: glow canvas = video + 200px at blur 80px on a ~1700px video.
+   Scaled to this 160px mini player that's ~+19px and ~8–10px of blur. */
 .glow-preview-glow {
   position: absolute;
-  width: 172px;
-  height: 100px;
-  transition: opacity 260ms ease;
-  transform: scale(1.12);
+  width: 180px;
+  height: 101px;
+  transition: opacity 260ms ease, filter 160ms ease;
 }
 .glow-preview-player {
   position: relative;
@@ -2334,8 +2337,8 @@ button {
   color: var(--color-text-muted);
 }
 
-/* Card hover glow preview — mock card + glow behind it (screen blend, like
-   the grid's shared glow canvas). */
+/* Card hover glow preview — replicates .clip-glow-canvas exactly: 16×9 source
+   canvas scaled up behind the card, screen blend, edge-fade masks. */
 .cardglow-preview {
   position: relative;
   width: 240px;
@@ -2347,14 +2350,22 @@ button {
   display: grid;
   place-items: center;
 }
+.cardglow-preview-stage {
+  position: relative;
+  width: 150px;
+  margin-top: -14px;
+}
 .cardglow-preview-glow {
   position: absolute;
-  width: 168px;
-  height: 96px;
-  margin-top: -26px;
+  pointer-events: none;
   mix-blend-mode: screen;
-  transform: scale(1.35);
-  transition: opacity 260ms ease;
+  transition: opacity 260ms ease, filter 160ms ease;
+  -webkit-mask-image: linear-gradient(to right, transparent, black 35%, black 85%, transparent),
+    linear-gradient(to bottom, transparent, black 35%, black 85%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, black 35%, black 85%, transparent),
+    linear-gradient(to bottom, transparent, black 35%, black 85%, transparent);
+  mask-composite: intersect;
 }
 .cardglow-preview-card {
   position: relative;
@@ -2366,6 +2377,7 @@ button {
   height: 84px;
   border-radius: 8px;
   border: 0.5px solid var(--color-border-hover);
+  object-fit: cover;
 }
 .cardglow-preview-foot {
   margin-top: 6px;
