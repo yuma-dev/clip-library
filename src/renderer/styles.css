@@ -1141,16 +1141,44 @@ button {
   color: var(--color-text-primary);
 }
 
+.ctx-tags-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 2px 6px;
+}
 .ctx-tags-search {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
   height: 30px;
-  margin: 4px 2px 6px;
   padding: 0 9px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
   color: var(--color-text-muted);
+}
+.ctx-tags-add {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(147, 51, 234, 0.16);
+  color: #d8a4f0;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+.ctx-tags-add:hover:not(:disabled) {
+  background: rgba(147, 51, 234, 0.3);
+  color: #efd6fb;
+}
+.ctx-tags-add:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 .ctx-tags-search input {
   flex: 1;
@@ -1219,10 +1247,6 @@ button {
 .ctx-tag-row.checked .ctx-tag-check {
   background: linear-gradient(180deg, #9333ea, #c084fc);
   border-color: transparent;
-}
-.ctx-tag-create .ctx-tag-check {
-  border-style: dashed;
-  color: var(--color-text-secondary);
 }
 .ctx-tag-label {
   flex: 1;

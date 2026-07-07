@@ -109,10 +109,13 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     if (!q) return list;
     return [...list].sort((a, b) => a.toLowerCase().indexOf(q) - b.toLowerCase().indexOf(q));
   }, [globalTags, q]);
-  // Offer to create when the query is a novel, non-existent tag.
   const trimmed = query.trim();
+  // The "+" button creates only a genuinely new tag (legacy behavior).
   const canCreate =
     trimmed.length > 0 && !globalTags.some((t) => t.toLowerCase() === trimmed.toLowerCase());
+  // Enter toggles the closest existing match: exact, else prefix (legacy).
+  const closestMatch = () =>
+    q ? globalTags.find((t) => t.toLowerCase() === q || t.toLowerCase().startsWith(q)) : undefined;
 
   const applyTags = (next: Set<string>) => {
     if (clip) setClipTags(clip.originalName, [...next]);
@@ -180,26 +183,43 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
             <ChevronLeft size={14} />
             <span>Manage tags</span>
           </button>
-          <label className="ctx-tags-search">
-            <Search size={13} />
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search or create…"
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  // Escape backs out of the panel instead of closing the menu.
-                  e.stopPropagation();
-                  if (query) setQuery("");
-                  else setView("root");
-                } else if (e.key === "Enter" && canCreate) {
-                  e.preventDefault();
-                  createTag();
-                }
-              }}
-            />
-          </label>
+          <div className="ctx-tags-search-row">
+            <label className="ctx-tags-search">
+              <Search size={13} />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search tags…"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    // Escape backs out of the panel instead of closing the menu.
+                    e.stopPropagation();
+                    if (query) setQuery("");
+                    else setView("root");
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    // Enter toggles the closest existing match; never creates.
+                    const match = closestMatch();
+                    if (match) {
+                      toggleTag(match);
+                      setQuery("");
+                    }
+                  }
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="ctx-tags-add"
+              title={canCreate ? `Create “${trimmed}”` : "Type a new tag name to create it"}
+              aria-label="Create tag"
+              disabled={!canCreate}
+              onClick={createTag}
+            >
+              <Plus size={15} strokeWidth={2.5} />
+            </button>
+          </div>
           <div className="ctx-tags-list">
             {shownTags.map((tag) => {
               const checked = tagSet.has(tag);
@@ -218,18 +238,10 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
                 </button>
               );
             })}
-            {canCreate ? (
-              <button type="button" className="ctx-tag-row ctx-tag-create" onClick={createTag}>
-                <span className="ctx-tag-check" aria-hidden="true">
-                  <Plus size={12} strokeWidth={3} />
-                </span>
-                <span className="ctx-tag-label">
-                  Create “{trimmed}”
-                </span>
-              </button>
-            ) : null}
-            {shownTags.length === 0 && !canCreate ? (
-              <div className="ctx-tags-empty">No tags</div>
+            {shownTags.length === 0 ? (
+              <div className="ctx-tags-empty">
+                {trimmed ? "No matching tags — press + to create" : "No tags"}
+              </div>
             ) : null}
           </div>
         </div>
