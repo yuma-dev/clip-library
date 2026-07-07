@@ -168,7 +168,7 @@ export default function AboutSection() {
 
   return (
     <>
-      <div className="about-card">
+      <div className="about-card span-2">
         <img className="about-logo" src={logoUrl} alt="" draggable={false} />
         <div className="about-text">
           <div className="about-name">

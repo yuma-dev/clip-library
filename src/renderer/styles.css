@@ -1741,11 +1741,21 @@ button {
   overflow-y: auto;
 }
 .settings-page {
-  max-width: 720px;
+  max-width: 1120px;
   padding: 26px 30px 60px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 16px;
+}
+.settings-page-head,
+.span-2 {
+  grid-column: 1 / -1;
+}
+@media (max-width: 1120px) {
+  .settings-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .settings-page-head {
   margin-bottom: 2px;
@@ -1782,6 +1792,36 @@ button {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+.set-group-aside {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.set-group-blurb {
+  margin: 4px 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+/* Header "reset to defaults" icon button. */
+.set-reset {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, transform 200ms ease;
+}
+.set-reset:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-text-primary);
+  transform: rotate(-40deg);
 }
 
 .set-row {
@@ -2079,8 +2119,27 @@ button {
 }
 
 /* ---- Appearance previews ---- */
+.font-flex {
+  display: flex;
+  gap: 22px;
+  align-items: stretch;
+  padding-bottom: 12px;
+}
+.font-pick {
+  flex: none;
+  width: 290px;
+}
+.font-pick .set-row {
+  padding-top: 8px;
+}
+.font-pick .set-row-control {
+  margin-top: 10px;
+  justify-content: flex-start;
+}
 .font-preview {
-  margin: 2px 0 14px;
+  flex: 1;
+  min-width: 0;
+  margin: 2px 0 0;
   padding: 14px 16px;
   border: 0.5px dashed var(--color-border-hover);
   border-radius: 11px;
@@ -2117,14 +2176,21 @@ button {
   transition: filter 220ms ease, opacity 220ms ease;
 }
 
-/* Mini clip card for the new-clip indicator preview. */
-.newclip-preview {
-  width: 108px;
-  border-radius: 8px;
+/* Mock clip cards used by the Appearance previews. */
+.mock-card-row {
+  display: flex;
+  gap: 14px;
+  padding: 2px 2px 14px;
 }
-.newclip-preview-thumb {
+.mock-card {
+  flex: 1;
+  min-width: 0;
+  max-width: 220px;
+  border-radius: 10px;
+}
+.mock-card-thumb {
   aspect-ratio: 16 / 9;
-  border-radius: 7px;
+  border-radius: 9px;
   border: 0.5px solid var(--color-border);
   background:
     radial-gradient(60% 80% at 30% 30%, rgba(147, 51, 234, 0.35), transparent),
@@ -2132,21 +2198,54 @@ button {
     #101013;
   transition: border-color 220ms ease, box-shadow 220ms ease;
 }
-.newclip-preview.on .newclip-preview-thumb {
-  border-color: color-mix(in srgb, var(--color-accent-glyph) 65%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-glyph) 45%, transparent);
+.mock-card:nth-child(2) .mock-card-thumb {
+  background:
+    radial-gradient(70% 90% at 70% 25%, rgba(74, 222, 128, 0.16), transparent),
+    radial-gradient(60% 80% at 25% 75%, rgba(99, 102, 241, 0.2), transparent),
+    #0f0f12;
 }
-.newclip-preview-foot {
+.mock-card.is-new .mock-card-thumb {
+  border-color: color-mix(in srgb, var(--color-accent-glyph) 65%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-glyph) 45%, transparent),
+    0 8px 22px color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+.mock-card-foot {
   display: flex;
   align-items: center;
-  margin-top: 5px;
-  font-size: 10px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
+  gap: 8px;
+  margin-top: 7px;
+  padding: 0 2px;
 }
-.newclip-preview-name {
+.mock-card-text {
+  flex: 1;
+  min-width: 0;
+}
+.mock-card-name {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mock-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 9.5px;
+  color: var(--color-text-muted);
+}
+.mock-card-meta .tag {
+  font-size: 8.5px;
+  padding: 0 6px;
+}
+.mock-card-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  transition: filter 220ms ease, opacity 220ms ease;
 }
 
 /* ---- Ambient glow ---- */
@@ -2235,9 +2334,101 @@ button {
   color: var(--color-text-muted);
 }
 
+/* Card hover glow preview — mock card + glow behind it (screen blend, like
+   the grid's shared glow canvas). */
+.cardglow-preview {
+  position: relative;
+  width: 240px;
+  height: 190px;
+  border-radius: 12px;
+  background: #050506;
+  border: 0.5px solid var(--color-border);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.cardglow-preview-glow {
+  position: absolute;
+  width: 168px;
+  height: 96px;
+  margin-top: -26px;
+  mix-blend-mode: screen;
+  transform: scale(1.35);
+  transition: opacity 260ms ease;
+}
+.cardglow-preview-card {
+  position: relative;
+  width: 150px;
+}
+.cardglow-preview-thumb {
+  display: block;
+  width: 150px;
+  height: 84px;
+  border-radius: 8px;
+  border: 0.5px solid var(--color-border-hover);
+}
+.cardglow-preview-foot {
+  margin-top: 6px;
+}
+.cardglow-preview-name {
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--color-text-primary);
+}
+.cardglow-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 9.5px;
+  color: var(--color-text-muted);
+}
+.cardglow-preview-meta .tag {
+  font-size: 8.5px;
+  padding: 0 6px;
+}
+
+/* ---- Export strategy summary ---- */
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-bottom: 14px;
+}
+.strategy-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 0.5px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--color-accent-glyph);
+}
+.strategy-chip-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.strategy-chip-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.strategy-chip-value {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- Shortcuts ---- */
 .kb-hint {
-  margin: 8px 0 2px;
+  margin: 8px 0 10px;
   font-size: 12px;
   color: var(--color-text-muted);
 }
@@ -2245,18 +2436,26 @@ button {
   height: 28px;
   font-size: 12px;
 }
+/* Two-column card grid — fills the page instead of one long list. */
 .kb-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 8px;
+  padding-bottom: 14px;
 }
 .kb-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 9px 0;
+  padding: 8px 12px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 120ms ease, background 120ms ease;
 }
-.kb-row + .kb-row {
-  border-top: 0.5px solid var(--color-border);
+.kb-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--color-border-hover);
 }
 .kb-ico {
   flex: none;

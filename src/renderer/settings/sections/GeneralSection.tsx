@@ -42,7 +42,7 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
 
   return (
     <>
-      <SetGroup title="Clip library location">
+      <SetGroup title="Clip library location" span2>
         <SetRow
           title="Current location"
           description={<span className="set-mono">{lib.clipLocation || "Not set"}</span>}

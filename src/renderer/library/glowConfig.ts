@@ -13,6 +13,7 @@
 const STORAGE_KEY = "clip-library:glow";
 
 export interface GlowConfig {
+  enabled: boolean;
   opacity: number;
   blur: number;
   saturate: number;
@@ -22,6 +23,7 @@ export interface GlowConfig {
 }
 
 const DEFAULTS: GlowConfig = {
+  enabled: true,
   opacity: 0.6,
   blur: 45,
   saturate: 1.6,
@@ -29,6 +31,33 @@ const DEFAULTS: GlowConfig = {
   overflow: 55,
   yShift: 0,
 };
+
+/** Settings → Card hover glow. Geometry (overflow/yShift) stays dev-only. */
+export interface CardGlowSettings {
+  enabled: boolean;
+  opacity: number;
+  blur: number;
+  saturate: number;
+  brightness: number;
+}
+
+export const CARD_GLOW_DEFAULTS: CardGlowSettings = {
+  enabled: DEFAULTS.enabled,
+  opacity: DEFAULTS.opacity,
+  blur: DEFAULTS.blur,
+  saturate: DEFAULTS.saturate,
+  brightness: DEFAULTS.brightness,
+};
+
+/**
+ * Apply persisted settings to the live glow. Settings are the canonical
+ * source; the window.clipGlow console tuner (below) remains a session-level
+ * dev override on top.
+ */
+export function applyCardGlowSettings(s: Partial<CardGlowSettings>): void {
+  Object.assign(glowConfig, s);
+  applyVars();
+}
 
 // Shared mutable config; ClipGlow reads overflow/yShift from it.
 export const glowConfig: GlowConfig = { ...DEFAULTS };

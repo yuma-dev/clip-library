@@ -1,26 +1,39 @@
 import type { ReactNode } from "react";
+import { RotateCcw } from "lucide-react";
 
 /** Titled card grouping related settings rows. */
 export function SetGroup({
   title,
   children,
   aside,
+  span2,
 }: {
   title?: ReactNode;
   children: ReactNode;
-  /** Right-aligned extra in the group header (e.g. a badge). */
+  /** Right-aligned extras in the group header (badge, toggle, reset). */
   aside?: ReactNode;
+  /** Span both columns of the settings page grid. */
+  span2?: boolean;
 }) {
   return (
-    <section className="set-group">
+    <section className={`set-group${span2 ? " span-2" : ""}`}>
       {title ? (
         <header className="set-group-head">
           <h3 className="set-group-title">{title}</h3>
-          {aside}
+          {aside ? <div className="set-group-aside">{aside}</div> : null}
         </header>
       ) : null}
       {children}
     </section>
+  );
+}
+
+/** Small "reset to defaults" icon button for group headers. */
+export function GroupReset({ onClick, label = "Reset to defaults" }: { onClick: () => void; label?: string }) {
+  return (
+    <button type="button" className="set-reset" title={label} aria-label={label} onClick={onClick}>
+      <RotateCcw size={13} />
+    </button>
   );
 }
 

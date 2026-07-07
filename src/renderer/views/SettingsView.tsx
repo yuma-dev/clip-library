@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Clapperboard,
@@ -15,6 +15,8 @@ import PlayerSection from "../settings/sections/PlayerSection";
 import ExportSection from "../settings/sections/ExportSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
+import { useSettings } from "../settings/SettingsContext";
+import { useToast } from "../ui/Toast";
 import type { UseClips } from "../library/useClips";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 
@@ -37,6 +39,33 @@ interface SettingsViewProps {
 export default function SettingsView({ lib, filter }: SettingsViewProps) {
   const [section, setSection] = useState<SectionId>("general");
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  const { undo, redo } = useSettings();
+  const toast = useToast();
+
+  // Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) step through this session's settings
+  // changes while the settings view is open. Text fields keep their native
+  // undo — we only handle the shortcut outside editable targets.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key !== "z" && key !== "y") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+      const isRedo = key === "y" || (key === "z" && e.shiftKey);
+      const done = isRedo ? redo() : undo();
+      if (done) toast.show(isRedo ? "Redid settings change" : "Undid settings change");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, toast]);
 
   return (
     <div className="settings-view">

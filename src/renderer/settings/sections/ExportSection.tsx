@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { HardDriveDownload } from "lucide-react";
-import { SetGroup, SetRow, StatusLine } from "../rows";
+import { Clapperboard, Gauge, HardDriveDownload, Ruler, Sparkles } from "lucide-react";
+import { GroupReset, SetGroup, SetRow, StatusLine } from "../rows";
 import Select from "../../ui/Select";
 import { useSettings } from "../SettingsContext";
 import { useToast } from "../../ui/Toast";
@@ -49,6 +49,11 @@ const TUNING_ROWS: {
     options: EXPORT_SPEED_BIAS_OPTIONS,
   },
 ];
+
+/** Resolve an option value to its display label. */
+function optLabel(options: { value: string; label: string }[], value: string): string {
+  return options.find((o) => o.value === value)?.label ?? value;
+}
 
 export default function ExportSection() {
   const { settings, patch } = useSettings();
@@ -110,9 +115,20 @@ export default function ExportSection() {
     }
   };
 
+  const strategy = [
+    { icon: Clapperboard, label: "Mode", value: optLabel(EXPORT_QUALITY_OPTIONS, settings.exportQuality || EXPORT_SETTING_DEFAULTS.exportQuality) },
+    { icon: Ruler, label: "Size cap", value: optLabel(EXPORT_SIZE_GOAL_OPTIONS, settings.exportSizeGoal || EXPORT_SETTING_DEFAULTS.exportSizeGoal) },
+    { icon: Sparkles, label: "Quality", value: optLabel(EXPORT_QUALITY_BIAS_OPTIONS, settings.exportQualityBias || EXPORT_SETTING_DEFAULTS.exportQualityBias) },
+    { icon: Gauge, label: "Speed", value: optLabel(EXPORT_SPEED_BIAS_OPTIONS, settings.exportSpeedBias || EXPORT_SETTING_DEFAULTS.exportSpeedBias) },
+  ];
+
   return (
     <>
-      <SetGroup title="Export">
+      <SetGroup
+        title="Export"
+        span2
+        aside={<GroupReset label="Reset to Balanced preset" onClick={() => applyPreset(EXPORT_SETTING_DEFAULTS.exportPreset)} />}
+      >
         <SetRow
           title="Master export preset"
           description={EXPORT_PRESET_META[preset] ?? EXPORT_PRESET_META.custom}
@@ -137,6 +153,23 @@ export default function ExportSection() {
                 aria-label={row.title}
               />
             </SetRow>
+          ))}
+        </div>
+      </SetGroup>
+
+      <SetGroup title="Current strategy">
+        <p className="set-group-blurb">
+          What an export will do right now ({optLabel(EXPORT_PRESET_OPTIONS, preset)}).
+        </p>
+        <div className="strategy-grid">
+          {strategy.map(({ icon: Icon, label, value }) => (
+            <div className="strategy-chip" key={label}>
+              <Icon size={14} />
+              <div className="strategy-chip-text">
+                <span className="strategy-chip-label">{label}</span>
+                <span className="strategy-chip-value">{value}</span>
+              </div>
+            </div>
           ))}
         </div>
       </SetGroup>
