@@ -1,5 +1,40 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocalClip } from "./types";
+
+// Last session's library snapshot — lets the grid paint instantly on launch
+// while the real scan runs, instead of showing a loading screen for ~1s.
+// The fresh get-clips result replaces it wholesale when it arrives.
+const CLIPS_CACHE_KEY = "clip-library:clips-cache-v1";
+
+interface ClipsCache {
+  location: string;
+  clips: LocalClip[];
+  thumbnails: [string, string | null][];
+}
+
+function readClipsCache(): ClipsCache | null {
+  try {
+    const raw = localStorage.getItem(CLIPS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ClipsCache;
+    if (!Array.isArray(parsed?.clips) || !Array.isArray(parsed?.thumbnails)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeClipsCache(produce: () => ClipsCache): void {
+  // Deferred + produced at write time, so thumbnails generated in the first
+  // seconds of the session make it into the snapshot. ~400KB JSON write.
+  setTimeout(() => {
+    try {
+      localStorage.setItem(CLIPS_CACHE_KEY, JSON.stringify(produce()));
+    } catch {
+      /* quota/serialization issues just mean no fast paint next launch */
+    }
+  }, 5000);
+}
 
 export interface UseClips {
   clips: LocalClip[];
@@ -25,10 +60,16 @@ export interface UseClips {
  * - tags load in background batches of 50 (like the legacy renderer) and fill in.
  */
 export function useClips(): UseClips {
-  const [clips, setClips] = useState<LocalClip[]>([]);
-  const [clipLocation, setClipLocation] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [thumbnails, setThumbnails] = useState<Map<string, string | null>>(new Map());
+  const cacheRef = useRef<ClipsCache | null | undefined>(undefined);
+  if (cacheRef.current === undefined) cacheRef.current = readClipsCache();
+  const cached = cacheRef.current;
+
+  const [clips, setClips] = useState<LocalClip[]>(() => cached?.clips ?? []);
+  const [clipLocation, setClipLocation] = useState(() => cached?.location ?? "");
+  const [loading, setLoading] = useState(() => !cached);
+  const [thumbnails, setThumbnails] = useState<Map<string, string | null>>(
+    () => new Map(cached?.thumbnails ?? []),
+  );
   const [generatingCount, setGeneratingCount] = useState(0);
 
   useEffect(() => {
@@ -109,6 +150,7 @@ export function useClips(): UseClips {
       unsubs.push(
         window.clips.onThumbnailGenerated((payload: { clipName?: string; thumbnailPath?: string }) => {
           if (!payload?.clipName) return;
+          tmap.set(payload.clipName, payload.thumbnailPath ?? null); // keep the cache snapshot source fresh
           setThumbnails((prev) => {
             const next = new Map(prev);
             next.set(payload.clipName!, payload.thumbnailPath ?? null);
@@ -133,19 +175,42 @@ export function useClips(): UseClips {
         if (res?.needsGeneration) setGeneratingCount(res.needsGeneration);
       }
 
-      // --- Tags: background batches of 50, fill in progressively. ---
-      const TAG_BATCH = 50;
+      // --- Tags: batched IPC (500 names per call), fill in per batch. ---
+      // One round trip per 500 clips instead of one per clip; clips whose tags
+      // stay empty keep their object identity so memoized cards skip re-render.
+      const allTags: Record<string, string[]> = {};
+      const TAG_BATCH = 500;
       for (let i = 0; i < list.length && !cancelled; i += TAG_BATCH) {
         const slice = list.slice(i, i + TAG_BATCH);
-        const results = await Promise.all(
-          slice.map(async (c) => {
-            const tags = await window.clips.getClipTags(c.originalName).catch(() => []);
-            return [c.originalName, Array.isArray(tags) ? (tags as string[]) : []] as const;
+        const byName = (await window.clips
+          .getClipTagsBatch(slice.map((c) => c.originalName))
+          .catch(() => ({}))) as Record<string, string[]>;
+        if (cancelled) return;
+        Object.assign(allTags, byName);
+        setClips((prev) =>
+          prev.map((c) => {
+            const tags = byName[c.originalName];
+            if (!Array.isArray(tags) || tags.length === 0) return c;
+            return { ...c, tags };
           }),
         );
-        if (cancelled) return;
-        const byName = new Map(results);
-        setClips((prev) => prev.map((c) => (byName.has(c.originalName) ? { ...c, tags: byName.get(c.originalName)! } : c)));
+      }
+
+      // Snapshot for the next launch's instant first paint. "New" flags are
+      // session-relative, so they're stripped. Never cache an empty library —
+      // a transient scan failure must not make later launches paint "no clips".
+      if (list.length > 0) {
+        writeClipsCache(() => ({
+          location: loc,
+          clips: list.map((c) => ({
+            ...c,
+            tags: Array.isArray(allTags[c.originalName]) ? allTags[c.originalName] : [],
+            isNewSinceLastSession: false,
+          })),
+          // tmap is kept up to date by onThumbnailGenerated below, so thumbs
+          // generated before the deferred write land in the snapshot too.
+          thumbnails: [...tmap],
+        }));
       }
     })();
 
@@ -180,5 +245,9 @@ export function useClips(): UseClips {
     return true;
   }, []);
 
-  return { clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip };
+  // Stable object identity so memoized consumers only re-render on real changes.
+  return useMemo(
+    () => ({ clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip }),
+    [clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip],
+  );
 }

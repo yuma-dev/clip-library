@@ -1963,7 +1963,34 @@ async function probeAudioTracksDirect(clipPath) {
   return buildAudioTracksFromStreams(Array.isArray(parsed.streams) ? parsed.streams : []);
 }
 
-async function getClipInfo(clipName, getSettings, thumbnailsModule) {
+// Short-lived memo: opening a clip fires get-clip-info more than once
+// (player + audio-track extraction), so identical calls within a couple of
+// seconds share one promise instead of re-reading/probing.
+const clipInfoMemo = new Map();
+const CLIP_INFO_MEMO_TTL_MS = 2000;
+
+function getClipInfo(clipName, getSettings, thumbnailsModule) {
+  const now = Date.now();
+  const hit = clipInfoMemo.get(clipName);
+  if (hit && now - hit.ts < CLIP_INFO_MEMO_TTL_MS) return hit.promise;
+
+  const promise = getClipInfoUncached(clipName, getSettings, thumbnailsModule);
+  clipInfoMemo.set(clipName, { promise, ts: now });
+  promise.catch(() => {
+    // Only evict if this rejection still owns the slot — a slow failure must
+    // not delete a newer entry that replaced it.
+    if (clipInfoMemo.get(clipName)?.promise === promise) clipInfoMemo.delete(clipName);
+  });
+  // Opportunistic sweep so the map doesn't grow with every opened clip.
+  if (clipInfoMemo.size > 64) {
+    for (const [key, entry] of clipInfoMemo) {
+      if (now - entry.ts >= CLIP_INFO_MEMO_TTL_MS) clipInfoMemo.delete(key);
+    }
+  }
+  return promise;
+}
+
+async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
   logger.info(`[ffmpeg] get-clip-info requested for: ${clipName}`);
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
@@ -2135,6 +2162,9 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
  * Used by the right-click "Reset cache" entry to test first-show timings.
  */
 async function resetClipCache(clipName, getSettings, thumbnailsModule) {
+  // Drop the in-memory memo too — a hit within its TTL would resurrect the
+  // just-deleted .meta contents.
+  clipInfoMemo.delete(clipName);
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
   const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);

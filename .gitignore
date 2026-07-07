@@ -12,6 +12,9 @@ ffmpeg-bin/ffprobe.exe
 __pycache__
 .gitignore
 
+# Dev-only perf profiler trace dumps
+benchmark/traces/
+
 # Ignore files (and directories) starting with tmpclaude
 tmpclaude*
 .antigravitycli/

@@ -32,6 +32,7 @@ const api = {
   getClipLocation: invoke("get-clip-location"),
   setClipLocation: invoke("set-clip-location"),
   getGameIcon: invoke("get-game-icon"),
+  getGameIconsBatch: invoke("get-game-icons-batch"),
 
   // --- Per-clip metadata ---
   saveCustomName: invoke("save-custom-name"),
@@ -46,6 +47,7 @@ const api = {
   getVolumeRange: invoke("get-volume-range"),
   saveVolumeRange: invoke("save-volume-range"),
   getClipTags: invoke("get-clip-tags"),
+  getClipTagsBatch: invoke("get-clip-tags-batch"),
   saveClipTags: invoke("save-clip-tags"),
 
   // --- Audio tracks ---
@@ -142,6 +144,24 @@ const api = {
 
 // contextIsolation is OFF, so a direct assignment is visible to the renderer.
 window.clips = api;
+
+// Bridge for the performance profiler (src/renderer/perf) — ONLY when launched
+// via `npm run dev:trace` (which sets CLIPS_PERF_STARTUP=1, inherited by this
+// renderer process). Not in normal `npm run dev`, not in packaged builds. The
+// renderer checks `window.__perfEnabled` before loading any profiler code; the
+// bundled ESM renderer can't reach ipcRenderer itself, so the preload provides
+// the channel here.
+try {
+  if (process.env.CLIPS_PERF_STARTUP === "1") {
+    window.__perfEnabled = true;
+    window.__perfIpc = {
+      invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+      on: (channel, cb) => ipcRenderer.on(channel, (_event, ...args) => cb(...args)),
+    };
+  }
+} catch (_) {
+  /* env unavailable — skip; profiler stays off */
+}
 
 // Legacy video player (plan D1/Phase 4): run the crown-jewel player + audio
 // engine VERBATIM. Required here (preload has Node + a real __dirname) and

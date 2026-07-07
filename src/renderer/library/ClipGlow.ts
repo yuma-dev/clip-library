@@ -10,9 +10,11 @@ import { glowConfig } from "./glowConfig";
 export class ClipGlow {
   private readonly ctx: CanvasRenderingContext2D | null;
   private currentSource: HTMLImageElement | HTMLVideoElement | null = null;
+  private currentCard: HTMLElement | null = null;
   private rafId: number | null = null;
   private isActive = false;
   private lastDrawTime = 0;
+  private lastPositionTime = 0;
   private readonly frameInterval = 1000 / 30;
   private readonly blendFactor = 0.2;
   private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -32,6 +34,7 @@ export class ClipGlow {
       this.currentSource = img;
       this.draw(true);
     }
+    this.currentCard = cardEl;
     this.position(cardEl);
     this.canvas.classList.add("visible");
     this.isActive = true;
@@ -49,6 +52,7 @@ export class ClipGlow {
   hide(): void {
     this.isActive = false;
     this.currentSource = null;
+    this.currentCard = null;
     this.canvas.classList.remove("visible");
     if (this.rafId != null) {
       cancelAnimationFrame(this.rafId);
@@ -88,6 +92,12 @@ export class ClipGlow {
 
   private loop = (ts: number): void => {
     if (!this.isActive) return;
+    // Track the hovered card: streamed-in cards below can shift it after
+    // show() ran, which would leave the glow floating over the old position.
+    if (this.currentCard && ts - this.lastPositionTime >= 100) {
+      this.position(this.currentCard);
+      this.lastPositionTime = ts;
+    }
     const src = this.currentSource;
     if (src instanceof HTMLVideoElement && !src.paused) {
       const elapsed = ts - this.lastDrawTime;

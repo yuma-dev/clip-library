@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { groupClips } from "./grouping";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { groupClips, type ClipGroupData } from "./grouping";
 import ClipGroup from "./ClipGroup";
 import { ObserveContext, type ObserveFn } from "./visibility";
 import { ClipGlow } from "./ClipGlow";
@@ -30,7 +30,7 @@ function loadCollapsed(): Record<string, boolean> {
   }
 }
 
-export default function ClipGrid({
+function ClipGrid({
   clips,
   thumbnails,
   grayscaleIcons,
@@ -117,18 +117,22 @@ export default function ClipGrid({
         } else if (e.shiftKey) {
           const grid = gridRef.current;
           if (!grid) return;
-          const nodes = Array.from(grid.querySelectorAll<HTMLElement>(".clip-item"));
-          const names = nodes.map((n) => n.dataset.originalName ?? "");
+          // Range comes from DATA (all clips in expanded groups, in display
+          // order), not from the DOM — cards still streaming in aren't mounted
+          // yet, and a DOM-derived range would silently skip them. Mounted
+          // cards get their class toggled here; not-yet-mounted ones pick it
+          // up from selectedRef when they mount (ClipCard mount effect).
+          const names = orderedNamesRef.current;
           const to = names.indexOf(name);
           const from = anchorRef.current ? names.indexOf(anchorRef.current) : to;
           grid.querySelectorAll(".clip-item.selected").forEach((n) => n.classList.remove("selected"));
           selectedRef.current.clear();
           if (to >= 0 && from >= 0) {
             const [s, en] = from <= to ? [from, to] : [to, from];
-            for (let i = s; i <= en; i++) {
-              nodes[i].classList.add("selected");
-              selectedRef.current.add(names[i]);
-            }
+            for (let i = s; i <= en; i++) selectedRef.current.add(names[i]);
+            grid.querySelectorAll<HTMLElement>(".clip-item").forEach((n) => {
+              if (selectedRef.current.has(n.dataset.originalName ?? "")) n.classList.add("selected");
+            });
           } else {
             el.classList.add("selected");
             selectedRef.current.add(name);
@@ -158,19 +162,56 @@ export default function ClipGrid({
     [removeClips],
   );
 
-  const groups = useMemo(() => groupClips(clips, Date.now()), [clips]);
-
-  const toggle = useCallback((name: string) => {
-    setCollapsed((prev) => {
-      const next = { ...prev, [name]: !prev[name] };
-      try {
-        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
-      } catch {
-        /* ignore */
+  // Group, then stabilize: filterClips/groupClips build fresh arrays on every
+  // filter run even when a group's membership didn't change. Reusing the
+  // previous group object when its clips are ref-identical lets memo(ClipGroup)
+  // skip untouched groups entirely, and gives ClipGroup's mount-streaming a
+  // meaningful "did this group actually change?" identity signal.
+  const prevGroupsRef = useRef<Map<string, ClipGroupData>>(new Map());
+  const groups = useMemo(() => {
+    const fresh = groupClips(clips, Date.now());
+    const prev = prevGroupsRef.current;
+    return fresh.map((g) => {
+      const old = prev.get(g.name);
+      if (
+        old &&
+        old.clips.length === g.clips.length &&
+        old.clips.every((c, i) => c === g.clips[i])
+      ) {
+        return old;
       }
-      return next;
+      return g;
     });
+  }, [clips]);
+  // Commit-phase write: a concurrent render that gets discarded must not
+  // poison the identity baseline the next render stabilizes against.
+  useEffect(() => {
+    prevGroupsRef.current = new Map(groups.map((g) => [g.name, g]));
+  }, [groups]);
+
+  // Display-ordered clip names across expanded groups — the source of truth
+  // for shift-click ranges (kept in a ref so selectionApi stays stable and
+  // SelectionContext consumers don't re-render on filter changes).
+  const orderedNamesRef = useRef<string[]>([]);
+  useEffect(() => {
+    orderedNamesRef.current = groups
+      .filter((g) => !collapsed[g.name])
+      .flatMap((g) => g.clips.map((c) => c.originalName));
+  }, [groups, collapsed]);
+
+  // The header (diamond, aria-expanded) updates urgently for instant click
+  // feedback; ClipGroup defers the expensive card mount itself. Persist
+  // outside the updater (and off the click's critical path).
+  const toggle = useCallback((name: string) => {
+    setCollapsed((prev) => ({ ...prev, [name]: !prev[name] }));
   }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
+    } catch {
+      /* ignore */
+    }
+  }, [collapsed]);
 
   return (
     <ObserveContext.Provider value={observe}>
@@ -208,3 +249,5 @@ export default function ClipGrid({
     </ObserveContext.Provider>
   );
 }
+
+export default memo(ClipGrid);

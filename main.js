@@ -18,15 +18,42 @@ if (isBenchmarkMode) {
     logger.error('[Benchmark] Failed to load harness:', e);
   }
 }
-const updaterModule = require('./main/updater');
+// Performance profiler (main side) — ONLY active on `npm run dev:trace`, which
+// sets CLIPS_PERF_STARTUP=1. Not in normal `npm run dev`, not in packaged
+// builds. Must run BEFORE any ipcMain.handle registration so it can wrap every
+// handler for timing. See benchmark/perf-main.js.
+if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
+  try {
+    const perf = require('./benchmark/perf-main');
+    perf.initPerfMain({ isDev: true });
+    logger.info('[perf] dev:trace profiler initialized');
+    // Feed the startup mark sites already placed below (settingsLoad /
+    // fileWatcherSetup / windowCreation / appReady) by standing in as
+    // `benchmarkHarness` when the offline benchmark isn't running.
+    if (!benchmarkHarness) {
+      benchmarkHarness = perf.getStartupRecorder();
+      benchmarkHarness.markStartup('moduleLoad');
+    }
+  } catch (e) {
+    logger.error('[perf] failed to init profiler:', e);
+  }
+}
+
+// Defer heavy, non-startup-critical modules (axios/electron-updater,
+// discord-rpc, archiver) to first use — together they account for a
+// large slice of the ~530ms module-load phase before the window can open.
+// The Proxy loads the real module on first property access; require() caches.
+const lazyModule = (modulePath) =>
+  new Proxy({}, { get: (_t, prop) => require(modulePath)[prop] });
+
+const updaterModule = lazyModule('./main/updater');
 const isDev = !app.isPackaged;
 const path = require("path");
 const fs = require("fs").promises;
 const { loadSettings, saveSettings, updateSettings, getDefaultKeybindings, getClipLocation, setClipLocation } = require("./utils/settings-manager");
 const steelSeriesModule = require('./main/steelseries-processor');
-const readify = require("readify");
 const { logActivity } = require('./utils/activity-tracker');
-const diagnosticsModule = require('./diagnostics/collector');
+const diagnosticsModule = lazyModule('./diagnostics/collector');
 const logUploader = require('./main/log-uploader');
 const shareModule = require('./main/share');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -52,8 +79,8 @@ const metadataModule = require('./main/metadata');
 // File watcher module
 const fileWatcherModule = require('./main/file-watcher');
 
-// Discord RPC module
-const discordModule = require('./main/discord');
+// Discord RPC module (lazy — discord-rpc is heavy and not needed to open the window)
+const discordModule = lazyModule('./main/discord');
 
 // Clips module
 const clipsModule = require('./main/clips');
@@ -405,10 +432,8 @@ async function createWindow() {
   });
   if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
 
-  // Skip Discord RPC in benchmark mode to avoid external dependencies
-  if (settings.enableDiscordRPC && !isBenchmarkMode) {
-    discordModule.initDiscordRPC(getSettings);
-  }
+  // Discord RPC starts after the renderer loads (below) — its require would
+  // otherwise block window creation, defeating the lazy module load.
 
   mainWindow = new BrowserWindow({
     width: 1024,
@@ -461,6 +486,11 @@ async function createWindow() {
     }
   });
   mainWindow.webContents.on('did-finish-load', () => {
+    // Trace marker: splits the window-created -> renderer-running "dark gap"
+    // into page-load (Chromium + module serving) vs renderer boot.
+    if (global.__perf?.now && global.__perf?.fsSpan) {
+      global.__perf.fsSpan('renderer-did-finish-load', global.__perf.now(), 0, {});
+    }
     flushCliplibAuthEvents();
     processQueuedProtocolUrls().catch((error) => {
       logger.error('Failed processing protocol queue after renderer load:', error);
@@ -538,20 +568,25 @@ app.whenReady().then(async () => {
   }
 
   const win = await createWindow();
-  updaterModule.init(win);
 
   if (benchmarkHarness) benchmarkHarness.endStartup('windowCreation');
 
-  // Wait for the renderer to be fully loaded before checking for updates
+  // Heavy optional subsystems (updater -> axios, Discord RPC) start after the
+  // renderer has loaded so their requires never sit on the startup path.
   win.webContents.once('did-finish-load', () => {
     logger.info('Renderer did-finish-load event fired');
-    
+
+    updaterModule.init(win);
+    if (settings.enableDiscordRPC && !isBenchmarkMode) {
+      discordModule.initDiscordRPC(getSettings);
+    }
+
     // Skip update check in benchmark mode
     if (isBenchmarkMode) {
       logger.info('[Benchmark] Skipping update check in benchmark mode');
       return;
     }
-    
+
     // Add a small delay to ensure the renderer's IPC listeners are set up
     setTimeout(() => {
       logger.info('Starting update check after delay');
@@ -689,6 +724,10 @@ ipcMain.handle("get-volume", async (event, clipName) => {
 
 ipcMain.handle("get-clip-tags", async (event, clipName) => {
   return metadataModule.getClipTags(clipName, getSettings);
+});
+
+ipcMain.handle("get-clip-tags-batch", async (event, clipNames) => {
+  return metadataModule.getClipTagsBatch(clipNames, getSettings);
 });
 
 ipcMain.handle("save-clip-tags", async (event, clipName, tags) => {
@@ -959,6 +998,10 @@ ipcMain.handle('log-watch-session', (event, sessionData) => {
 
 ipcMain.handle("get-game-icon", async (event, clipName) => {
   return metadataModule.getGameIcon(clipName, getSettings);
+});
+
+ipcMain.handle("get-game-icons-batch", async (event, clipNames) => {
+  return metadataModule.getGameIconsBatch(clipNames, getSettings);
 });
 
 ipcMain.handle('get-new-clips-info', async () => {

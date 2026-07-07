@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { CircleDashed, Layers, Scissors, Sparkles } from "lucide-react";
 import { routes, type Route } from "../routes";
 import { useToast } from "../ui/Toast";
@@ -31,7 +31,7 @@ const WEEK_MS = 7 * 86_400_000;
 
 // Nav rail — 300px primary surface (design handoff): merged logo+search, nav,
 // scrollable collections + tag filter, stat cards, real profile card.
-export default function Sidebar({
+function Sidebar({
   route,
   onNavigate,
   clips,
@@ -186,3 +186,5 @@ export default function Sidebar({
     </>
   );
 }
+
+export default memo(Sidebar);

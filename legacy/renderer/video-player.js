@@ -1206,11 +1206,12 @@ async function loadVolumeData() {
       });
     } else {
       logger.info('No valid volume data found for:', state.currentClip.originalName);
-      hideVolumeControls();
+      // No stored range -> nothing to remove; don't write a removal to disk.
+      hideVolumeControls(false);
     }
   } catch (error) {
     logger.error('Error loading volume data:', error);
-    hideVolumeControls();
+    hideVolumeControls(false);
   }
 }
 
@@ -1226,7 +1227,7 @@ function hideVolumeDragControl() {
 /**
  * Hide volume controls
  */
-function hideVolumeControls() {
+function hideVolumeControls(persistRemoval = true) {
   state.isVolumeControlsVisible = false;
   state.volumeStartTime = 0;
   state.volumeEndTime = 0;
@@ -1240,9 +1241,11 @@ function hideVolumeControls() {
   if (debouncedSaveVolumeData.cancel) {
     debouncedSaveVolumeData.cancel();
   }
-  
-  // Remove volume data from storage when hiding controls
-  if (state.currentClip) {
+
+  // Remove volume data from storage when the user turns the range off.
+  // Callers hiding the controls just because a clip HAS no range pass
+  // persistRemoval=false so opening a clip never writes to disk.
+  if (persistRemoval && state.currentClip) {
     ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, null)
       .catch(error => logger.error('Error removing volume data:', error));
   }

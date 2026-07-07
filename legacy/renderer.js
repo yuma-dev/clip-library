@@ -2118,7 +2118,9 @@ function clearSaveTitleTimeout() {
 async function saveTitleChange(originalName, oldCustomName, newCustomName, immediate = false) {
   if (!originalName) return;
 
-  const previousName = typeof oldCustomName === "string" ? oldCustomName : "";
+  // Trim BOTH sides — a stored name with stray whitespace must not make the
+  // unchanged-guard in saveOperation fail and re-save on every navigation.
+  const previousName = typeof oldCustomName === "string" ? oldCustomName.trim() : "";
   const nextName = typeof newCustomName === "string" ? newCustomName.trim() : "";
 
   if (saveTitleTimeout) {

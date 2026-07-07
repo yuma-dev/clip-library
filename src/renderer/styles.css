@@ -1332,6 +1332,10 @@ button {
   cursor: pointer;
   transition: transform 180ms ease;
   contain: layout style;
+  /* NOTE: don't add `content-visibility: auto` here — it force-enables paint
+     containment, which clips the hover shadow on .clip-item-media-container
+     and the selection outline at the card edges. Offscreen skipping comes from
+     the IO-driven .cv-offscreen class below instead. */
   contain-intrinsic-size: auto 220px;
 }
 .clip-item:hover {
