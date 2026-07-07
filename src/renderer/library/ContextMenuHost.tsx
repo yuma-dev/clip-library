@@ -1,5 +1,5 @@
-import { forwardRef, useImperativeHandle, useState } from "react";
-import { FolderOpen, RotateCcw, Scissors, Tag, Trash2, Upload } from "lucide-react";
+import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, FolderOpen, Plus, RotateCcw, Scissors, Search, Tag, Trash2, Upload } from "lucide-react";
 import ContextMenu from "../ui/ContextMenu";
 import { MenuDivider, MenuItem, MenuList } from "../ui/Menu";
 import { useToast } from "../ui/Toast";
@@ -12,23 +12,48 @@ export interface ContextMenuHandle {
 
 interface ContextMenuHostProps {
   onDeleted: (originalName: string) => void;
+  /** Persist + propagate a clip's tag list (drives the "Manage tags" panel). */
+  setClipTags: (originalName: string, tags: string[]) => void;
+  /** Assignable global tags, in display order. */
+  globalTags: string[];
+  /** Create a brand-new global tag. */
+  addGlobalTag: (tag: string) => void;
 }
+
+type View = "root" | "tags";
 
 /**
  * Isolated context-menu host: holds its own open/position/clip state so that
- * opening the menu does NOT re-render the (2020-card) grid. Cards trigger it
- * imperatively via the ref handle. Export/Tags are stubs until Phases 6/5;
- * opening a clip in the player lands in Phase 4.
+ * opening the menu does NOT re-render the (2000-card) grid. Cards trigger it
+ * imperatively via the ref handle. "Manage tags" swaps the menu in place for a
+ * searchable tag panel (Phase 5); Export stays stubbed until Phase 6.
  */
 const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(function ContextMenuHost(
-  { onDeleted },
+  { onDeleted, setClipTags, globalTags, addGlobalTag },
   ref,
 ) {
   const [state, setState] = useState<{ x: number; y: number; clip: LocalClip } | null>(null);
+  const [view, setView] = useState<View>("root");
+  // The clip's live tag set, seeded on open — gives instant checkbox feedback
+  // without waiting for the grid's clip list to re-flow down.
+  const [tagSet, setTagSet] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
   const { confirm } = useConfirm();
 
-  useImperativeHandle(ref, () => ({ open: (x, y, clip) => setState({ x, y, clip }) }), []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      open: (x, y, clip) => {
+        setState({ x, y, clip });
+        setView("root");
+        setQuery("");
+        setTagSet(new Set(clip.tags));
+      },
+    }),
+    [],
+  );
 
   const close = () => setState(null);
   const clip = state?.clip;
@@ -77,30 +102,138 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     }
   };
 
+  // --- Tag panel ---
+  const q = query.trim().toLowerCase();
+  const shownTags = useMemo(() => {
+    const list = globalTags.filter((t) => t.toLowerCase().includes(q));
+    if (!q) return list;
+    return [...list].sort((a, b) => a.toLowerCase().indexOf(q) - b.toLowerCase().indexOf(q));
+  }, [globalTags, q]);
+  // Offer to create when the query is a novel, non-existent tag.
+  const trimmed = query.trim();
+  const canCreate =
+    trimmed.length > 0 && !globalTags.some((t) => t.toLowerCase() === trimmed.toLowerCase());
+
+  const applyTags = (next: Set<string>) => {
+    if (clip) setClipTags(clip.originalName, [...next]);
+  };
+  const toggleTag = (tag: string) => {
+    setTagSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      applyTags(next);
+      return next;
+    });
+  };
+  const createTag = () => {
+    if (!canCreate) return;
+    addGlobalTag(trimmed);
+    setTagSet((prev) => {
+      const next = new Set(prev);
+      next.add(trimmed);
+      applyTags(next);
+      return next;
+    });
+    setQuery("");
+    searchRef.current?.focus();
+  };
+
+  const openTags = () => {
+    setView("tags");
+    // Focus the search once the panel has swapped in.
+    requestAnimationFrame(() => searchRef.current?.focus());
+  };
+
   return (
     <ContextMenu open={state !== null} x={state?.x ?? 0} y={state?.y ?? 0} onClose={close}>
-      <MenuList>
-        <MenuItem icon={<Upload size={15} />} disabled>
-          Export (Phase 6)
-        </MenuItem>
-        <MenuItem icon={<Tag size={15} />} disabled>
-          Manage tags (Phase 5)
-        </MenuItem>
-        <MenuDivider />
-        <MenuItem icon={<Scissors size={15} />} onClick={resetTrim}>
-          Reset trim
-        </MenuItem>
-        <MenuItem icon={<RotateCcw size={15} />} onClick={resetCache}>
-          Reset cached metadata
-        </MenuItem>
-        <MenuItem icon={<FolderOpen size={15} />} onClick={revealClip}>
-          Reveal in Explorer
-        </MenuItem>
-        <MenuDivider />
-        <MenuItem icon={<Trash2 size={15} />} danger onClick={deleteClip}>
-          Delete
-        </MenuItem>
-      </MenuList>
+      {view === "root" ? (
+        <MenuList>
+          <MenuItem icon={<Upload size={15} />} disabled>
+            Export (Phase 6)
+          </MenuItem>
+          <button type="button" role="menuitem" className="menu-item ctx-submenu" onClick={openTags}>
+            <span className="menu-icon">
+              <Tag size={15} />
+            </span>
+            <span className="menu-label">Manage tags</span>
+            <ChevronRight size={14} className="ctx-submenu-caret" />
+          </button>
+          <MenuDivider />
+          <MenuItem icon={<Scissors size={15} />} onClick={resetTrim}>
+            Reset trim
+          </MenuItem>
+          <MenuItem icon={<RotateCcw size={15} />} onClick={resetCache}>
+            Reset cached metadata
+          </MenuItem>
+          <MenuItem icon={<FolderOpen size={15} />} onClick={revealClip}>
+            Reveal in Explorer
+          </MenuItem>
+          <MenuDivider />
+          <MenuItem icon={<Trash2 size={15} />} danger onClick={deleteClip}>
+            Delete
+          </MenuItem>
+        </MenuList>
+      ) : (
+        <div className="menu ctx-tags">
+          <button type="button" className="ctx-tags-head" onClick={() => setView("root")}>
+            <ChevronLeft size={14} />
+            <span>Manage tags</span>
+          </button>
+          <label className="ctx-tags-search">
+            <Search size={13} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search or create…"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  // Escape backs out of the panel instead of closing the menu.
+                  e.stopPropagation();
+                  if (query) setQuery("");
+                  else setView("root");
+                } else if (e.key === "Enter" && canCreate) {
+                  e.preventDefault();
+                  createTag();
+                }
+              }}
+            />
+          </label>
+          <div className="ctx-tags-list">
+            {shownTags.map((tag) => {
+              const checked = tagSet.has(tag);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  className={`ctx-tag-row${checked ? " checked" : ""}`}
+                  onClick={() => toggleTag(tag)}
+                  title={tag}
+                >
+                  <span className="ctx-tag-check" aria-hidden="true">
+                    {checked ? <Check size={12} strokeWidth={3} /> : null}
+                  </span>
+                  <span className="ctx-tag-label">{tag}</span>
+                </button>
+              );
+            })}
+            {canCreate ? (
+              <button type="button" className="ctx-tag-row ctx-tag-create" onClick={createTag}>
+                <span className="ctx-tag-check" aria-hidden="true">
+                  <Plus size={12} strokeWidth={3} />
+                </span>
+                <span className="ctx-tag-label">
+                  Create “{trimmed}”
+                </span>
+              </button>
+            ) : null}
+            {shownTags.length === 0 && !canCreate ? (
+              <div className="ctx-tags-empty">No tags</div>
+            ) : null}
+          </div>
+        </div>
+      )}
     </ContextMenu>
   );
 });

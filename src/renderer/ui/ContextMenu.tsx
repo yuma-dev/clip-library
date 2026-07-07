@@ -45,14 +45,20 @@ export default function ContextMenu({ open, x, y, onClose, children }: ContextMe
     const onPointerDown = (e: PointerEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose();
     };
+    // Page scroll dismisses the menu — but a scrollable panel *inside* it (the
+    // "Manage tags" list) must not, so ignore scrolls originating within.
+    const onScroll = (e: Event) => {
+      if (ref.current?.contains(e.target as Node)) return;
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
   }, [open, onClose]);

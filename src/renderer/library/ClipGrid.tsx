@@ -18,6 +18,9 @@ interface ClipGridProps {
   clipLocation: string;
   removeClips: (names: string[]) => void;
   renameClip: RenameFn;
+  setClipTags: (originalName: string, tags: string[]) => void;
+  globalTags: string[];
+  addGlobalTag: (tag: string) => void;
 }
 
 const COLLAPSE_KEY = "clip-library:collapsed-groups";
@@ -37,6 +40,9 @@ function ClipGrid({
   clipLocation,
   removeClips,
   renameClip,
+  setClipTags,
+  globalTags,
+  addGlobalTag,
 }: ClipGridProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -242,7 +248,13 @@ function ClipGrid({
                 ) : null}
               </div>
             </div>
-            <ContextMenuHost ref={menuHostRef} onDeleted={handleDeleted} />
+            <ContextMenuHost
+              ref={menuHostRef}
+              onDeleted={handleDeleted}
+              setClipTags={setClipTags}
+              globalTags={globalTags}
+              addGlobalTag={addGlobalTag}
+            />
           </SelectionContext.Provider>
         </RenameContext.Provider>
       </HoverContext.Provider>
