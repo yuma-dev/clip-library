@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ClipGrid from "../library/ClipGrid";
 import type { UseClips } from "../library/useClips";
 import type { LocalClip } from "../library/types";
@@ -9,7 +10,7 @@ interface LibraryViewProps {
   grayscaleIcons: boolean;
 }
 
-export default function LibraryView({ lib, clips, grayscaleIcons }: LibraryViewProps) {
+function LibraryView({ lib, clips, grayscaleIcons }: LibraryViewProps) {
   return (
     <div className="library-view">
       {lib.loading ? (
@@ -38,3 +39,7 @@ export default function LibraryView({ lib, clips, grayscaleIcons }: LibraryViewP
     </div>
   );
 }
+
+// Memoized so app-shell state changes (rail width, route, …) don't reconcile
+// the 2,000-card grid underneath.
+export default memo(LibraryView);

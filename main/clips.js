@@ -25,30 +25,29 @@ async function walkClips(dir, baseDir) {
     return [];
   }
 
-  let clips = [];
-  for (const entry of entries) {
+  // Stat files and recurse into subdirectories concurrently — a sequential
+  // await-per-file walk costs ~180µs × N clips (366ms at 2,000 clips).
+  const tasks = entries.map(async (entry) => {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name.startsWith('.') || entry.name === 'icons') continue;
-      const subClips = await walkClips(fullPath, baseDir);
-      clips = clips.concat(subClips);
-    } else if (entry.isFile()) {
+      if (entry.name.startsWith('.') || entry.name === 'icons') return [];
+      return walkClips(fullPath, baseDir);
+    }
+    if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
       if (VIDEO_EXTENSIONS.has(ext)) {
         const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
         try {
           const stats = await fs.stat(fullPath);
-          clips.push({
-            name: relativePath,
-            date: stats.mtime
-          });
+          return [{ name: relativePath, date: stats.mtime }];
         } catch (error) {
           logger.error(`Error reading stats for ${fullPath}:`, error);
         }
       }
     }
-  }
-  return clips;
+    return [];
+  });
+  return (await Promise.all(tasks)).flat();
 }
 
 /**
@@ -280,63 +279,59 @@ async function getClips(getSettings) {
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
 
   try {
+    // Dev profiler spans (no-op in production — global.__perf only exists in dev).
+    const tScan = global.__perf?.now();
     const files = await walkClips(clipsFolder, clipsFolder);
+    if (tScan != null) global.__perf.fsSpan('scan-clips-dir', tScan, global.__perf.now() - tScan, { clips: files.length });
     // Sort by date descending (newest first)
     files.sort((a, b) => b.date.getTime() - a.date.getTime());
+
+    const tMeta = global.__perf?.now();
+
+    // One readdir of .clip_metadata instead of ~3 existence probes per clip:
+    // most clips have no .customname/.trim/.date file, so probing costs
+    // thousands of ENOENT round-trips through the fs thread pool for nothing.
+    // Lowercased on both sides: NTFS is case-insensitive, so a clip whose
+    // on-disk casing drifted from its metadata file's casing must still match
+    // (the old fs.access probes were case-insensitive too).
+    let metadataFiles = new Set();
+    try {
+      metadataFiles = new Set((await fs.readdir(metadataFolder)).map((f) => f.toLowerCase()));
+    } catch {
+      // Folder missing -> no metadata exists; the Set stays empty.
+    }
+    const hasMetadata = (name) => metadataFiles.has(name.toLowerCase());
 
     const clipInfoPromises = files
       .map(async (file) => {
         const fullPath = path.join(clipsFolder, file.name);
-        
-        // Check if file exists before processing
-        try {
-          await fs.access(fullPath);
-        } catch (error) {
-          // File doesn't exist, skip it
-          logger.info(`Skipping non-existent file: ${file.name}`);
-          return null;
-        }
+        // walkClips() stat'ed this file moments ago — no existence re-check.
 
         const safeName = metadataSafeName(file.name);
-        const customNamePath = path.join(
-          metadataFolder,
-          `${safeName}.customname`,
-        );
-        const trimPath = path.join(metadataFolder, `${safeName}.trim`);
-        const datePath = path.join(metadataFolder, `${safeName}.date`);
-        let customName;
-        let isTrimmed = false;
+        let customName = path.basename(file.name, path.extname(file.name));
+        const isTrimmed = hasMetadata(`${safeName}.trim`);
         let createdAt = file.date.getTime();
 
-        try {
-          customName = await fs.readFile(customNamePath, "utf8");
-        } catch (error) {
-          if (error.code !== "ENOENT")
+        if (hasMetadata(`${safeName}.customname`)) {
+          try {
+            customName = await fs.readFile(path.join(metadataFolder, `${safeName}.customname`), "utf8");
+          } catch (error) {
             logger.error("Error reading custom name:", error);
-          customName = path.basename(file.name, path.extname(file.name));
-        }
-
-        try {
-          await fs.access(trimPath);
-          isTrimmed = true;
-        } catch (error) {
-          // If trim file doesn't exist, isTrimmed remains false
-        }
-
-        // Try to read recording timestamp from metadata
-        try {
-          const dateStr = await fs.readFile(datePath, "utf8");
-          // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
-          const recordingDate = new Date(dateStr);
-          if (!isNaN(recordingDate.getTime())) {
-            createdAt = recordingDate.getTime();
-            logger.info(`Using recording timestamp for ${file.name}: ${dateStr}`);
           }
-        } catch (error) {
-          if (error.code !== "ENOENT") {
+        }
+
+        // Recording timestamp beats file mtime when present.
+        if (hasMetadata(`${safeName}.date`)) {
+          try {
+            const dateStr = await fs.readFile(path.join(metadataFolder, `${safeName}.date`), "utf8");
+            // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
+            const recordingDate = new Date(dateStr);
+            if (!isNaN(recordingDate.getTime())) {
+              createdAt = recordingDate.getTime();
+            }
+          } catch (error) {
             logger.error("Error reading date metadata:", error);
           }
-          // If date file doesn't exist or is invalid, keep using the file system date
         }
 
         const thumbnailPath = thumbnailsModule.generateThumbnailPath(fullPath);
@@ -351,6 +346,7 @@ async function getClips(getSettings) {
       });
 
     const clipInfos = (await Promise.all(clipInfoPromises)).filter(Boolean); // Remove null entries
+    if (tMeta != null) global.__perf.span('read-clip-metadata', tMeta, global.__perf.now() - tMeta, { clips: clipInfos.length });
     return clipInfos;
   } catch (error) {
     logger.error("Error reading directory:", error);

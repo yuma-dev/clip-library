@@ -37,7 +37,7 @@ async function ensureDirectoryExists(dirPath) {
  * @param {string} data - Data to write
  * @param {number} retries - Number of retry attempts
  */
-async function writeFileWithRetry(filePath, data, retries = 3) {
+async function writeFileWithRetry(filePath, data, retries = 4) {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       await fs.writeFile(filePath, data, { flag: 'w' });
@@ -45,7 +45,10 @@ async function writeFileWithRetry(filePath, data, retries = 3) {
     } catch (error) {
       if (error.code === 'EPERM' || error.code === 'EACCES') {
         if (attempt === retries - 1) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Short exponential backoff (25/50/100ms — tolerates AV holds up to
+        // ~175ms like the old schedule did, without the flat 100ms sleep that
+        // put a visible ~110ms floor under every metadata save).
+        await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
       } else {
         throw error;
       }
@@ -112,9 +115,24 @@ function metadataSafeName(clipName) {
 async function saveCustomName(clipName, customName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
-  await ensureDirectoryExists(metadataFolder);
-
   const customNameFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.customname`);
+
+  // No-op guard: the player flushes the title on every navigation/close, so
+  // most calls carry an unchanged name. Reading is ~100x cheaper than the
+  // atomic write (which eats an AV-scan retry penalty on Windows).
+  try {
+    const existing = await fs.readFile(customNameFilePath, 'utf8');
+    if (existing === customName) return;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      // No custom name stored and the incoming name is just the default
+      // (filename without extension) -> nothing worth persisting.
+      const defaultName = path.basename(clipName, path.extname(clipName));
+      if (customName === defaultName) return;
+    }
+  }
+
+  await ensureDirectoryExists(metadataFolder);
   try {
     await writeFileAtomically(customNameFilePath, customName);
     logger.info(`Custom name saved successfully for ${clipName}`);
@@ -351,23 +369,28 @@ async function saveTrackState(clipName, trackState, getSettings) {
  * track with the same name. Volume stays per-clip.
  * Stored in userData/trackPreferences.json: { [trackName]: { color, hidden } }
  */
+// In-memory mirror of trackPreferences.json — the file is read on every clip
+// open, and only this module ever writes it, so a simple cache is safe.
+let trackPrefsCache = null;
+
 async function getTrackPreferences(getAppPath) {
+  if (trackPrefsCache) return trackPrefsCache;
   try {
     const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
     const raw = await fs.readFile(prefsPath, 'utf8');
     const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed === 'object') ? parsed : {};
+    trackPrefsCache = (parsed && typeof parsed === 'object') ? parsed : {};
   } catch (error) {
-    if (error.code === 'ENOENT') return {};
-    logger.error('Error reading track preferences:', error);
-    return {};
+    if (error.code !== 'ENOENT') logger.error('Error reading track preferences:', error);
+    trackPrefsCache = {};
   }
+  return trackPrefsCache;
 }
 
 async function saveTrackPreferences(trackName, patch, getAppPath) {
   try {
     const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
-    const existing = await getTrackPreferences(getAppPath);
+    const existing = { ...(await getTrackPreferences(getAppPath)) };
     const current = existing[trackName] || {};
     const next = { ...current, ...(patch || {}) };
     // Strip null/undefined entries so the file stays tidy.
@@ -378,6 +401,7 @@ async function saveTrackPreferences(trackName, patch, getAppPath) {
       existing[trackName] = next;
     }
     await writeFileAtomically(prefsPath, JSON.stringify(existing));
+    trackPrefsCache = existing;
     return { success: true };
   } catch (error) {
     logger.error(`Error saving track preferences for ${trackName}:`, error);
@@ -418,6 +442,22 @@ async function saveVolumeRange(clipName, volumeData, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
 
+  // null means "remove the range" — delete the file instead of writing the
+  // literal string "null", and skip entirely when there's nothing to remove
+  // (the player used to trigger this on every clip open).
+  if (volumeData == null) {
+    try {
+      await fs.unlink(volumeRangeFilePath);
+      logger.info(`Volume range data removed for ${clipName}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        logger.error(`Error removing volume range for ${clipName}:`, error);
+        return { success: false, error: error.message };
+      }
+    }
+    return { success: true };
+  }
+
   try {
     await writeFileAtomically(volumeRangeFilePath, JSON.stringify(volumeData));
     logger.info(`Volume range data saved successfully for ${clipName}`);
@@ -439,15 +479,25 @@ async function getVolumeRange(clipName, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
 
+  let volumeData;
   try {
-    const volumeData = await fs.readFile(volumeRangeFilePath, 'utf8');
-    return JSON.parse(volumeData);
+    volumeData = await fs.readFile(volumeRangeFilePath, 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') {
       return null;
     }
     logger.error(`Error reading volume range for ${clipName}:`, error);
     throw error;
+  }
+
+  try {
+    return JSON.parse(volumeData);
+  } catch {
+    // Self-heal a corrupt file (the player used to overwrite it on the next
+    // open; now that opens don't write, clean it up here instead).
+    logger.error(`Corrupt volume range file for ${clipName}; removing it`);
+    await fs.unlink(volumeRangeFilePath).catch(() => {});
+    return null;
   }
 }
 
@@ -476,6 +526,53 @@ async function getClipTags(clipName, getSettings) {
     logger.error('Error reading tags:', error);
     return [];
   }
+}
+
+/**
+ * Run an async mapper over items with bounded concurrency. Keeps thousands of
+ * tiny metadata reads from flooding the libuv thread pool at once (which is
+ * what made per-clip IPC fan-outs average 70ms+ per call).
+ * @param {Array} items
+ * @param {number} limit - Max in-flight operations
+ * @param {Function} mapper - async (item) => result
+ * @returns {Promise<Array>} results in input order
+ */
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await mapper(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * Get tags for many clips in one call.
+ * @param {string[]} clipNames - Clip filenames
+ * @param {Function} getSettings - Function to get settings
+ * @returns {Promise<Object<string, string[]>>} clipName -> tags (missing file -> [])
+ */
+async function getClipTagsBatch(clipNames, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  const names = Array.isArray(clipNames) ? clipNames : [];
+
+  const entries = await mapWithConcurrency(names, 32, async (clipName) => {
+    const tagsFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.tags`);
+    try {
+      const tagsData = await fs.readFile(tagsFilePath, 'utf8');
+      const parsed = JSON.parse(tagsData);
+      return [clipName, Array.isArray(parsed) ? parsed : []];
+    } catch (error) {
+      if (error.code !== 'ENOENT') logger.error('Error reading tags:', error);
+      return [clipName, []];
+    }
+  });
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -731,6 +828,50 @@ async function getGameIcon(clipName, getSettings) {
   return response;
 }
 
+/**
+ * Get game icon info for many clips in one call. One bounded-concurrency pass
+ * over the .gameinfo files; icon-file existence checks are deduped per icon
+ * path (a library typically has few distinct games but thousands of clips).
+ * @param {string[]} clipNames - Clip filenames
+ * @param {Function} getSettings - Function to get settings
+ * @returns {Promise<Object<string, {path: string|null, title: string|null}|null>>}
+ */
+async function getGameIconsBatch(clipNames, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  const names = Array.isArray(clipNames) ? clipNames : [];
+
+  // iconPath -> Promise<boolean> (exists); shared across all clips in the batch.
+  const iconExists = new Map();
+  const checkIcon = (iconPath) => {
+    let pending = iconExists.get(iconPath);
+    if (!pending) {
+      pending = fs.access(iconPath).then(() => true, () => false);
+      iconExists.set(iconPath, pending);
+    }
+    return pending;
+  };
+
+  const entries = await mapWithConcurrency(names, 32, async (clipName) => {
+    const gameInfoPath = path.join(metadataFolder, `${metadataSafeName(clipName)}.gameinfo`);
+
+    let parsed;
+    try {
+      parsed = JSON.parse(await fs.readFile(gameInfoPath, 'utf8'));
+    } catch {
+      return [clipName, null];
+    }
+
+    const response = { path: null, title: parsed.window_title || null };
+    if (parsed.icon_file) {
+      const iconPath = path.join(settings.clipLocation, 'icons', parsed.icon_file);
+      if (await checkIcon(iconPath)) response.path = iconPath;
+    }
+    return [clipName, response];
+  });
+  return Object.fromEntries(entries);
+}
+
 // ============================================================================
 // Tag Preferences
 // ============================================================================
@@ -807,6 +948,7 @@ module.exports = {
 
   // Clip tags
   getClipTags,
+  getClipTagsBatch,
   saveClipTags,
 
   // Global tags
@@ -821,5 +963,6 @@ module.exports = {
   saveTagPreferences,
 
   // Game info
-  getGameIcon
+  getGameIcon,
+  getGameIconsBatch
 };

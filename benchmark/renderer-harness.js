@@ -131,6 +131,9 @@ class RendererHarness {
 
     // Clear collapsed state so ALL groups render expanded (gives realistic full load timing)
     localStorage.removeItem('clipGroupsCollapsed');
+    // Clear the instant-first-paint snapshot so the benchmark measures the
+    // real cold load path, not a cached render.
+    localStorage.removeItem('clip-library:clips-cache-v1');
 
     // Clear current clips if any
     const clipGrid = document.getElementById('clip-grid');

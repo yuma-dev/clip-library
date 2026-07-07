@@ -49,7 +49,9 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons }: ClipCardProps) {
     if (icon) return;
     let alive = true;
     void loadGameIcon(clip.originalName).then((res) => {
-      if (alive) setIcon(res);
+      // Most clips resolve to "no icon" — skip the state update (and the
+      // card re-render) unless there's actually something to show.
+      if (alive && (res.path || res.title)) setIcon(res);
     });
     return () => {
       alive = false;

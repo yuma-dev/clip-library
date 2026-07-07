@@ -23,6 +23,7 @@ export interface ClipsApi {
   getClipLocation(): Promise<string>;
   setClipLocation(location: string): Promise<any>;
   getGameIcon(game: string): Promise<any>;
+  getGameIconsBatch(clipNames: string[]): Promise<Record<string, { path: string | null; title: string | null } | null>>;
 
   // --- Per-clip metadata ---
   saveCustomName(originalName: string, customName: string): Promise<{ success: boolean; customName?: string; error?: string }>;
@@ -37,6 +38,7 @@ export interface ClipsApi {
   getVolumeRange(clipName: string): Promise<any>;
   saveVolumeRange(clipName: string, range: any): Promise<any>;
   getClipTags(clipName: string): Promise<string[]>;
+  getClipTagsBatch(clipNames: string[]): Promise<Record<string, string[]>>;
   saveClipTags(clipName: string, tags: string[]): Promise<any>;
 
   // --- Audio tracks ---

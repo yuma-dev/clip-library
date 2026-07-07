@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   type Collection,
   type TagFilterState,
@@ -137,28 +137,56 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     [saved, temporary, isTemporary],
   );
 
+  // Filtering (and the 2,000-card grid render it feeds) runs against a
+  // deferred copy of the criteria: the search input / tag buttons repaint
+  // immediately, and React re-renders the grid as a low-priority,
+  // interruptible pass instead of blocking every keystroke for ~450ms.
+  const criteria = useMemo(
+    () => ({ query, tags, collection, applyTags: ready }),
+    [query, tags, collection, ready],
+  );
+  const deferredCriteria = useDeferredValue(criteria);
+
   const filteredClips = useMemo(
-    () => filterClips(clips, { query, tags, collection, applyTags: ready }),
-    [clips, query, tags, collection, ready],
+    () => filterClips(clips, deferredCriteria),
+    [clips, deferredCriteria],
   );
 
   const selectedCount = useMemo(() => activeSelection(tags).size, [tags]);
 
-  return {
-    query,
-    setQuery,
-    collection,
-    setCollection,
-    allTags,
-    globalTags,
-    tags,
-    selectedCount,
-    totalCount: allTags.length,
-    toggleTag,
-    focusTag,
-    showAllTags,
-    hideAllTags,
-    clearFocus,
-    filteredClips,
-  };
+  // Stable object identity so memoized consumers (Sidebar) only re-render
+  // when a filter value actually changes.
+  return useMemo(
+    () => ({
+      query,
+      setQuery,
+      collection,
+      setCollection,
+      allTags,
+      globalTags,
+      tags,
+      selectedCount,
+      totalCount: allTags.length,
+      toggleTag,
+      focusTag,
+      showAllTags,
+      hideAllTags,
+      clearFocus,
+      filteredClips,
+    }),
+    [
+      query,
+      collection,
+      allTags,
+      globalTags,
+      tags,
+      selectedCount,
+      toggleTag,
+      focusTag,
+      showAllTags,
+      hideAllTags,
+      clearFocus,
+      filteredClips,
+    ],
+  );
 }

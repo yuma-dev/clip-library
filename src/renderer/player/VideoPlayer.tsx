@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
@@ -34,7 +34,7 @@ interface VideoPlayerProps {
  * fullscreen come from the legacy code once initialized; callbacks + faithful
  * CSS + keybindings are filled in across 4b–4d.
  */
-export default function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlayerProps) {
+function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlayerProps) {
   const initedRef = useRef(false);
   const { confirm } = useConfirm();
   const toast = useToast();
@@ -274,6 +274,9 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
       // (re)bound every time. addEventListener dedupes identical listeners.
       const rawOpenClip = player.openClip.bind(player);
       player.openClip = (originalName: string, customName: string) => {
+        // Dev profiler: label this end-to-end flow so the trace reads "open-clip"
+        // instead of "pointerdown:clip-card". No-op unless the dev HUD is on.
+        (window as unknown as { __perf?: { interaction(l: string): void } }).__perf?.interaction("open-clip");
         document.addEventListener("keydown", player.handleKeyPress);
         document.addEventListener("keyup", player.handleKeyRelease);
         return rawOpenClip(originalName, customName);
@@ -599,3 +602,7 @@ export default function VideoPlayer({ clipLocation, clips, renameClip, removeCli
     </>
   );
 }
+
+// The player DOM is driven imperatively by the legacy code after init; memo
+// keeps app-shell state changes from re-rendering this large static tree.
+export default memo(VideoPlayer);
