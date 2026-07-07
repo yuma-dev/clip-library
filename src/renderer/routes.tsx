@@ -13,6 +13,6 @@ export interface RouteDef {
 
 export const routes: RouteDef[] = [
   { id: "library", label: "Library", icon: Library },
-  { id: "feed", label: "Feed", icon: Rss, disabled: true },
+  { id: "feed", label: "Feed", icon: Rss },
   { id: "settings", label: "Settings", icon: Settings },
 ];

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export interface Profile {
   connected: boolean;
@@ -46,37 +46,62 @@ function extractProfile(result: Record<string, unknown> | null): {
   };
 }
 
+// ---- Module-scope store ----
+//
+// The connection state is app-global (rail profile, feed page, player upload
+// button all consume it), so verify ONCE per session instead of once per
+// component mount — route switches render instantly from the shared state.
+// Re-verifies on every cliplib-auth-event (connect/disconnect).
+
+let state: Profile = { connected: false, verifying: true, username: "", avatarUrl: "" };
+const listeners = new Set<() => void>();
+let started = false;
+let refreshSeq = 0;
+
+function emit(next: Profile): void {
+  state = next;
+  for (const cb of listeners) cb();
+}
+
+async function refresh(): Promise<void> {
+  const seq = ++refreshSeq;
+  emit({ ...state, verifying: true });
+  const result = (await window.clips
+    .testShareConnection()
+    .catch(() => null)) as Record<string, unknown> | null;
+  if (seq !== refreshSeq) return; // superseded by a newer refresh
+  if (result?.success) {
+    const { username, avatarUrl } = extractProfile(result);
+    emit({ connected: true, verifying: false, username, avatarUrl });
+  } else {
+    emit({ connected: false, verifying: false, username: "", avatarUrl: "" });
+  }
+}
+
+function ensureStarted(): void {
+  if (started) return;
+  started = true;
+  void refresh();
+  window.clips.onCliplibAuthEvent(() => void refresh());
+}
+
+function subscribe(cb: () => void): () => void {
+  ensureStarted();
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+function getSnapshot(): Profile {
+  return state;
+}
+
 /**
- * Real ClipLib account state for the rail profile card. Verifies via the
- * existing `test-share-connection` IPC and re-verifies whenever a
+ * Real ClipLib account state (shared module store). Verifies via the existing
+ * `test-share-connection` IPC once per session and re-verifies whenever a
  * `cliplib-auth-event` fires (connect/disconnect from Settings or the flow).
  */
 export function useProfile(): Profile & { connect: () => void; disconnect: () => void } {
-  const [profile, setProfile] = useState<Profile>({
-    connected: false,
-    verifying: true,
-    username: "",
-    avatarUrl: "",
-  });
-
-  const refresh = useCallback(async () => {
-    setProfile((p) => ({ ...p, verifying: true }));
-    const result = (await window.clips
-      .testShareConnection()
-      .catch(() => null)) as Record<string, unknown> | null;
-    if (result?.success) {
-      const { username, avatarUrl } = extractProfile(result);
-      setProfile({ connected: true, verifying: false, username, avatarUrl });
-    } else {
-      setProfile({ connected: false, verifying: false, username: "", avatarUrl: "" });
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-    const unsub = window.clips.onCliplibAuthEvent(() => void refresh());
-    return unsub;
-  }, [refresh]);
+  const profile = useSyncExternalStore(subscribe, getSnapshot);
 
   const connect = useCallback(() => {
     window.clips.startCliplibAuth().catch(() => {});
@@ -87,7 +112,7 @@ export function useProfile(): Profile & { connect: () => void; disconnect: () =>
       .disconnectCliplibAuth()
       .catch(() => {})
       .finally(() => void refresh());
-  }, [refresh]);
+  }, []);
 
   return { ...profile, connect, disconnect };
 }

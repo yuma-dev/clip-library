@@ -304,11 +304,14 @@ function normalizeMentionUser(rawUser = {}) {
   const displayName = displayNameRaw || username || id;
   const avatarUrl = typeof rawUser.avatarUrl === 'string' ? rawUser.avatarUrl.trim() : '';
 
+  const discordId = typeof rawUser.discordId === 'string' ? rawUser.discordId.trim() : '';
+
   return {
     id,
     username,
     displayName,
-    avatarUrl
+    avatarUrl,
+    discordId: discordId || null
   };
 }
 
@@ -685,6 +688,91 @@ async function fetchMentionableUsers(getSettings, overrides = {}) {
   }
 }
 
+/**
+ * Generic authenticated JSON request against the ClipLib share API, used by
+ * the in-app feed (list clips, reactions, comments, profiles). Keeps the
+ * Bearer token main-side; the renderer only ever sees response payloads.
+ * @param {Function} getSettings
+ * @param {{method?: string, path?: string, body?: any}} request - path is
+ *   relative to `/api`, e.g. '/clips?limit=20'
+ * @returns {Promise<{success: boolean, status?: number, data?: any, error?: string}>}
+ */
+async function apiRequest(getSettings, request = {}) {
+  const settings = await getSettings();
+  const { serverUrl, apiToken } = await resolveSharingConfig(settings);
+
+  if (!apiToken) {
+    return { success: false, status: 401, error: 'Not connected to ClipLib.' };
+  }
+
+  const method = typeof request.method === 'string' ? request.method.toUpperCase() : 'GET';
+  const requestPath = typeof request.path === 'string' ? request.path : '';
+  if (!requestPath.startsWith('/') || requestPath.includes('..')) {
+    return { success: false, status: 400, error: 'Invalid API path.' };
+  }
+
+  // Bearer covers most GET routes, but several routes (reaction/comment
+  // writes, thumbnails) only accept cookie auth — the API token is valid as a
+  // `token` cookie, so send both (same as installMediaAuthHeaders).
+  const options = {
+    method,
+    headers: { Authorization: `Bearer ${apiToken}`, Cookie: `token=${apiToken}` }
+  };
+  if (request.body !== undefined && method !== 'GET') {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(request.body);
+  }
+
+  try {
+    const { response, bodyText, bodyJson } = await fetchWithTimeout(
+      `${serverUrl}/api${requestPath}`,
+      options,
+      CONNECTION_TIMEOUT_MS
+    );
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status,
+        data: bodyJson,
+        error: buildErrorMessage(response.status, bodyJson, bodyText, 'ClipLib request failed.')
+      };
+    }
+    return { success: true, status: response.status, data: bodyJson };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { success: false, error: 'ClipLib request timed out.' };
+    }
+    return { success: false, error: `ClipLib request failed: ${error.message}` };
+  }
+}
+
+/**
+ * Attach the ClipLib token to renderer-originated requests for the share
+ * server (video streams, thumbnails, banners loaded via <video>/<img> src).
+ * JSON API calls go through apiRequest() instead; this only exists so media
+ * elements can hit authenticated endpoints directly.
+ *
+ * Sends BOTH auth forms: `Authorization: Bearer` (accepted by /stream) and a
+ * `token` cookie — some server routes (e.g. /clips/:id/thumbnail) only accept
+ * cookie auth, and the API token is valid as a `token` cookie value.
+ * @param {Electron.Session} session
+ */
+function installMediaAuthHeaders(session) {
+  const filter = { urls: [`${DEFAULT_SERVER_URL}/*`] };
+  session.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    authStore
+      .getToken()
+      .then((token) => {
+        if (token) {
+          details.requestHeaders['Authorization'] = `Bearer ${token}`;
+          details.requestHeaders['Cookie'] = `token=${token}`;
+        }
+        callback({ requestHeaders: details.requestHeaders });
+      })
+      .catch(() => callback({ requestHeaders: details.requestHeaders }));
+  });
+}
+
 module.exports = {
   DEFAULT_SERVER_URL,
   DESKTOP_AUTH_CALLBACK_URL,
@@ -696,5 +784,7 @@ module.exports = {
   clearStoredApiToken,
   testConnection,
   shareClip,
-  fetchMentionableUsers
+  fetchMentionableUsers,
+  apiRequest,
+  installMediaAuthHeaders
 };

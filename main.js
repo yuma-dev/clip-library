@@ -571,6 +571,10 @@ app.whenReady().then(async () => {
 
   if (benchmarkHarness) benchmarkHarness.endStartup('windowCreation');
 
+  // Feed media (<video>/<img> pointed at the share server) needs the Bearer
+  // token attached main-side; JSON API calls go through share-api-request.
+  shareModule.installMediaAuthHeaders(win.webContents.session);
+
   // Heavy optional subsystems (updater -> axios, Discord RPC) start after the
   // renderer has loaded so their requires never sit on the startup path.
   win.webContents.once('did-finish-load', () => {
@@ -816,6 +820,10 @@ ipcMain.handle('share-clip', async (event, payload) => {
 
 ipcMain.handle('get-share-users', async (event, overrides) => {
   return shareModule.fetchMentionableUsers(getSettings, overrides || {});
+});
+
+ipcMain.handle('share-api-request', async (event, request) => {
+  return shareModule.apiRequest(getSettings, request || {});
 });
 
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {

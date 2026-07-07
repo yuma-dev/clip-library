@@ -34,19 +34,33 @@ export interface ClipGroupData {
   clips: LocalClip[];
 }
 
-/** Group already-newest-first clips into ordered time sections. */
-export function groupClips(clips: LocalClip[], now: number): ClipGroupData[] {
-  const map = new Map<string, LocalClip[]>();
-  for (const clip of clips) {
-    const name = getTimeGroup(clip.createdAt, now);
+/**
+ * Group already-newest-first items into ordered time sections. Generic over the
+ * item type so both the local library (LocalClip, createdAt in ms) and the feed
+ * (Clip, createdAt as an ISO string) share the exact same time-bucketing +
+ * ordering logic — callers supply a `getTs` that returns milliseconds.
+ */
+export function groupByTime<T>(
+  items: T[],
+  now: number,
+  getTs: (item: T) => number,
+): { name: string; clips: T[] }[] {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const name = getTimeGroup(getTs(item), now);
     let bucket = map.get(name);
     if (!bucket) {
       bucket = [];
       map.set(name, bucket);
     }
-    bucket.push(clip);
+    bucket.push(item);
   }
   return [...map.entries()]
-    .map(([name, groupClips]) => ({ name, clips: groupClips }))
+    .map(([name, clips]) => ({ name, clips }))
     .sort((a, b) => getGroupOrder(a.name) - getGroupOrder(b.name));
+}
+
+/** Group already-newest-first clips into ordered time sections. */
+export function groupClips(clips: LocalClip[], now: number): ClipGroupData[] {
+  return groupByTime(clips, now, (c) => c.createdAt);
 }

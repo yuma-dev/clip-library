@@ -4,6 +4,7 @@ import { routes, type Route } from "../routes";
 import { useToast } from "../ui/Toast";
 import RailTags from "./RailTags";
 import RailProfile from "./RailProfile";
+import FeedRailFilters from "../feed/FeedRailFilters";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 import type { Collection } from "../library/filter";
 import type { LocalClip } from "../library/types";
@@ -134,46 +135,53 @@ function Sidebar({
 
       <div className="rail-divider" />
 
-      {/* Collections stay pinned; only the tag list below scrolls. */}
-      <div className="rail-section rail-section-fixed">
-        <div className="rail-section-head">
-          <span className="rail-section-title">Collections</span>
-        </div>
-        <div className="rail-collections">
-          {COLLECTIONS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              data-rail-tip={label}
-              className={`rail-collection${filter.collection === id ? " active" : ""}`}
-              onClick={() => filter.setCollection(id)}
-            >
-              <span className="r-ico">
-                <Icon size={15} />
-              </span>
-              <span className="rail-label">{label}</span>
-              <span className="rail-collection-count r-label">{collectionCount(id)}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      {route === "feed" ? (
+        /* Feed route: contextual filters replace the library sections. */
+        <FeedRailFilters />
+      ) : (
+        <>
+          {/* Collections stay pinned; only the tag list below scrolls. */}
+          <div className="rail-section rail-section-fixed">
+            <div className="rail-section-head">
+              <span className="rail-section-title">Collections</span>
+            </div>
+            <div className="rail-collections">
+              {COLLECTIONS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  data-rail-tip={label}
+                  className={`rail-collection${filter.collection === id ? " active" : ""}`}
+                  onClick={() => filter.setCollection(id)}
+                >
+                  <span className="r-ico">
+                    <Icon size={15} />
+                  </span>
+                  <span className="rail-label">{label}</span>
+                  <span className="rail-collection-count r-label">{collectionCount(id)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <RailTags filter={filter} />
+          <RailTags filter={filter} />
 
-      <div className="rail-stats r-extra">
-        <div className="rail-stat">
-          <div className="rail-stat-figure">{counts.total}</div>
-          <div className="rail-stat-label">clips</div>
-        </div>
-        <div className="rail-stat">
-          <div className="rail-stat-figure accent">{counts.week}</div>
-          <div className="rail-stat-label">this week</div>
-        </div>
-        <div className="rail-stat">
-          <div className="rail-stat-figure">{counts.tagged}</div>
-          <div className="rail-stat-label">tagged</div>
-        </div>
-      </div>
+          <div className="rail-stats r-extra">
+            <div className="rail-stat">
+              <div className="rail-stat-figure">{counts.total}</div>
+              <div className="rail-stat-label">clips</div>
+            </div>
+            <div className="rail-stat">
+              <div className="rail-stat-figure accent">{counts.week}</div>
+              <div className="rail-stat-label">this week</div>
+            </div>
+            <div className="rail-stat">
+              <div className="rail-stat-figure">{counts.tagged}</div>
+              <div className="rail-stat-label">tagged</div>
+            </div>
+          </div>
+        </>
+      )}
 
       <RailProfile />
     </aside>

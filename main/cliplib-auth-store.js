@@ -51,16 +51,25 @@ function decodeRecord(record) {
   return '';
 }
 
+// In-memory cache: the token is needed on every share API call and every
+// media request (header injection), so skip the file read + decrypt after
+// the first resolution. `null` = not yet read; '' = known-absent.
+let cachedToken = null;
+
 async function getToken() {
+  if (cachedToken !== null) return cachedToken;
   try {
     const raw = await fs.readFile(STORE_PATH, 'utf8');
     const parsed = JSON.parse(raw);
-    return decodeRecord(parsed);
+    cachedToken = decodeRecord(parsed);
   } catch (error) {
-    if (error.code === 'ENOENT') return '';
-    logger.error('Failed reading ClipLib auth token store:', error);
-    return '';
+    if (error.code !== 'ENOENT') {
+      logger.error('Failed reading ClipLib auth token store:', error);
+      return ''; // transient failure — don't cache
+    }
+    cachedToken = '';
   }
+  return cachedToken;
 }
 
 async function setToken(token) {
@@ -70,6 +79,7 @@ async function setToken(token) {
   }
   const record = buildRecord(trimmed);
   await fs.writeFile(STORE_PATH, JSON.stringify(record, null, 2), 'utf8');
+  cachedToken = trimmed;
 }
 
 async function clearToken() {
@@ -79,6 +89,8 @@ async function clearToken() {
     if (error.code !== 'ENOENT') {
       throw error;
     }
+  } finally {
+    cachedToken = '';
   }
 }
 

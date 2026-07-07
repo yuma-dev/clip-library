@@ -813,7 +813,7 @@ async function getGameIcon(clipName, getSettings) {
     return null;
   }
 
-  const response = { path: null, title: parsed.window_title || null };
+  const response = { path: null, title: parsed.window_title || null, discord: normalizeDiscordInfo(parsed.discord) };
 
   if (parsed.icon_file) {
     const iconPath = path.join(settings.clipLocation, 'icons', parsed.icon_file);
@@ -826,6 +826,35 @@ async function getGameIcon(clipName, getSettings) {
   }
 
   return response;
+}
+
+/**
+ * Validate/normalize the optional `discord` block the recorder writes into
+ * .gameinfo (voice-call context: channel + participants at record time).
+ * @param {any} raw - Parsed `discord` value from the .gameinfo JSON
+ * @returns {object|null} { channel_id, channel_name, guild_id, participants[] } or null
+ */
+function normalizeDiscordInfo(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.participants)) return null;
+
+  const participants = raw.participants
+    .filter((p) => p && typeof p === 'object' && typeof p.id === 'string' && p.id)
+    .map((p) => ({
+      id: p.id,
+      username: typeof p.username === 'string' ? p.username : '',
+      global_name: typeof p.global_name === 'string' ? p.global_name : null,
+      nick: typeof p.nick === 'string' ? p.nick : null,
+      bot: p.bot === true,
+      avatar_url: typeof p.avatar_url === 'string' ? p.avatar_url : null
+    }));
+  if (participants.length === 0) return null;
+
+  return {
+    channel_id: typeof raw.channel_id === 'string' ? raw.channel_id : null,
+    channel_name: typeof raw.channel_name === 'string' ? raw.channel_name : null,
+    guild_id: typeof raw.guild_id === 'string' ? raw.guild_id : null,
+    participants
+  };
 }
 
 /**
@@ -862,7 +891,7 @@ async function getGameIconsBatch(clipNames, getSettings) {
       return [clipName, null];
     }
 
-    const response = { path: null, title: parsed.window_title || null };
+    const response = { path: null, title: parsed.window_title || null, discord: normalizeDiscordInfo(parsed.discord) };
     if (parsed.icon_file) {
       const iconPath = path.join(settings.clipLocation, 'icons', parsed.icon_file);
       if (await checkIcon(iconPath)) response.path = iconPath;

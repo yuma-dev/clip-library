@@ -23,7 +23,9 @@ export interface ClipsApi {
   getClipLocation(): Promise<string>;
   setClipLocation(location: string): Promise<any>;
   getGameIcon(game: string): Promise<any>;
-  getGameIconsBatch(clipNames: string[]): Promise<Record<string, { path: string | null; title: string | null } | null>>;
+  getGameIconsBatch(
+    clipNames: string[],
+  ): Promise<Record<string, { path: string | null; title: string | null; discord: unknown } | null>>;
 
   // --- Per-clip metadata ---
   saveCustomName(originalName: string, customName: string): Promise<{ success: boolean; customName?: string; error?: string }>;
@@ -93,6 +95,12 @@ export interface ClipsApi {
   disconnectCliplibAuth(): Promise<any>;
   shareClip(...args: any[]): Promise<any>;
   getShareUsers(...args: any[]): Promise<any>;
+  /** Generic authenticated JSON call against the ClipLib share API (path relative to /api). */
+  shareApiRequest(request: {
+    method?: string;
+    path: string;
+    body?: unknown;
+  }): Promise<{ success: boolean; status?: number; data?: unknown; error?: string }>;
 
   // --- Updates ---
   checkForUpdates(): Promise<any>;
