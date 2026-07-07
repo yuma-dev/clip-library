@@ -21,7 +21,7 @@ const FPS_OPTIONS = [
   { value: "60", label: "60 fps" },
 ];
 
-export default function PlayerSection() {
+export default function PlayerSection({ sampleThumb }: { sampleThumb: string | null }) {
   const { settings, set } = useSettings();
   // Drag-in-progress overrides so the previews react live before commit.
   const [glowDraft, setGlowDraft] = useState<Partial<AmbientGlowSettings>>({});
@@ -137,7 +137,7 @@ export default function PlayerSection() {
             </SetRow>
           </div>
           <div className="glow-preview-col">
-            <GlowPreview glow={glow} />
+            <GlowPreview glow={glow} thumb={sampleThumb} />
             <span className="glow-preview-caption">Live preview</span>
           </div>
         </div>
@@ -209,7 +209,7 @@ export default function PlayerSection() {
             </SetRow>
           </div>
           <div className="glow-preview-col">
-            <CardGlowPreview glow={card} />
+            <CardGlowPreview glow={card} thumb={sampleThumb} />
             <span className="glow-preview-caption">Live preview</span>
           </div>
         </div>

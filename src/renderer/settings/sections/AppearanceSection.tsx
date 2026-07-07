@@ -4,15 +4,22 @@ import Select from "../../ui/Select";
 import { useSettings } from "../SettingsContext";
 import { UI_FONTS, UI_FONT_DEFAULT, fontStack } from "../fonts";
 
-// Mock game-icon tiles for the greyscale preview (real icons live in cards).
-const ICON_TILES = [
-  { bg: "linear-gradient(135deg, #f59e0b, #ef4444)", label: "Valorant" },
-  { bg: "linear-gradient(135deg, #22d3ee, #6366f1)", label: "Overwatch 2" },
-  { bg: "linear-gradient(135deg, #4ade80, #16a34a)", label: "CS2" },
-];
+// Example game icon for the greyscale preview (real icon from the library's
+// icon cache).
+const EXAMPLE_ICON = "file:///C:/Users/Fabia/Videos/Clips/icons/League of Legends.png";
 
 /** Mini clip card used by both library previews. */
-function MockCard({ isNew, showDot, icon, grey }: { isNew?: boolean; showDot?: boolean; icon?: string; grey?: boolean }) {
+function MockCard({
+  isNew,
+  showDot,
+  iconSrc,
+  grey,
+}: {
+  isNew?: boolean;
+  showDot?: boolean;
+  iconSrc?: string;
+  grey?: boolean;
+}) {
   return (
     <div className={`mock-card${isNew ? " is-new" : ""}`} aria-hidden="true">
       <div className="mock-card-thumb" />
@@ -27,11 +34,15 @@ function MockCard({ isNew, showDot, icon, grey }: { isNew?: boolean; showDot?: b
             <span className="tag">{isNew ? "Highlight" : "Practice"}</span>
           </div>
         </div>
-        {icon ? (
-          <span
-            className="mock-card-icon"
-            style={{ background: icon, filter: grey ? "grayscale(1) contrast(1.02)" : "none", opacity: grey ? 0.9 : 1 }}
-          />
+        {iconSrc ? (
+          <span className="mock-card-game">
+            <img
+              src={iconSrc}
+              alt=""
+              draggable={false}
+              style={{ filter: grey ? "grayscale(1) contrast(1.02)" : "none", opacity: grey ? 0.9 : 1 }}
+            />
+          </span>
         ) : null}
       </div>
     </div>
@@ -97,17 +108,7 @@ export default function AppearanceSection() {
       >
         <p className="set-group-blurb">Mute the game icons on clip cards so thumbnails stand out.</p>
         <div className="mock-card-row single">
-          <MockCard icon={ICON_TILES[0].bg} grey={grey} />
-        </div>
-        <div className="icon-preview">
-          {ICON_TILES.map(({ bg, label }) => (
-            <span
-              key={label}
-              className="icon-preview-tile"
-              title={label}
-              style={{ background: bg, filter: grey ? "grayscale(1) contrast(1.02)" : "none", opacity: grey ? 0.9 : 1 }}
-            />
-          ))}
+          <MockCard iconSrc={EXAMPLE_ICON} grey={grey} />
         </div>
       </SetGroup>
     </>

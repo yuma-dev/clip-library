@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Clapperboard,
@@ -41,6 +41,16 @@ export default function SettingsView({ lib, filter }: SettingsViewProps) {
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   const { undo, redo } = useSettings();
   const toast = useToast();
+
+  // A real library thumbnail feeds the glow previews (newest clip that has
+  // one), so they show what the glow actually looks like on your content.
+  const sampleThumb = useMemo(() => {
+    for (const clip of lib.clips) {
+      const t = lib.thumbnails.get(clip.originalName);
+      if (t) return t;
+    }
+    return null;
+  }, [lib.clips, lib.thumbnails]);
 
   // Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) step through this session's settings
   // changes while the settings view is open. Text fields keep their native
@@ -102,7 +112,7 @@ export default function SettingsView({ lib, filter }: SettingsViewProps) {
 
             {section === "general" ? <GeneralSection lib={lib} filter={filter} /> : null}
             {section === "appearance" ? <AppearanceSection /> : null}
-            {section === "player" ? <PlayerSection /> : null}
+            {section === "player" ? <PlayerSection sampleThumb={sampleThumb} /> : null}
             {section === "export" ? <ExportSection /> : null}
             {section === "shortcuts" ? <ShortcutsSection /> : null}
             {section === "about" ? <AboutSection /> : null}
