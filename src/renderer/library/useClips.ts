@@ -56,6 +56,13 @@ export interface UseClips {
    * the change into the open legacy player. Drives the grid "Manage tags" menu.
    */
   setClipTags: (originalName: string, tags: string[]) => void;
+  /**
+   * In-memory reflections of global tag management (settings → Manage tags).
+   * Disk changes are done by the caller via `update-tag-in-all-clips` /
+   * `remove-tag-from-all-clips`; these keep the loaded list in sync.
+   */
+  renameTagInClips: (oldTag: string, newTag: string) => void;
+  removeTagFromClips: (tag: string) => void;
 }
 
 /**
@@ -262,9 +269,55 @@ export function useClips(): UseClips {
     }
   }, []);
 
+  const renameTagInClips = useCallback((oldTag: string, newTag: string) => {
+    setClips((prev) =>
+      prev.map((c) =>
+        c.tags.includes(oldTag)
+          ? { ...c, tags: c.tags.map((t) => (t === oldTag ? newTag : t)) }
+          : c,
+      ),
+    );
+    const state = window.legacyState;
+    if (state?.currentClip?.tags?.includes(oldTag)) {
+      state.currentClip.tags = state.currentClip.tags.map((t: string) => (t === oldTag ? newTag : t));
+    }
+  }, []);
+
+  const removeTagFromClips = useCallback((tag: string) => {
+    setClips((prev) =>
+      prev.map((c) => (c.tags.includes(tag) ? { ...c, tags: c.tags.filter((t) => t !== tag) } : c)),
+    );
+    const state = window.legacyState;
+    if (state?.currentClip?.tags?.includes(tag)) {
+      state.currentClip.tags = state.currentClip.tags.filter((t: string) => t !== tag);
+    }
+  }, []);
+
   // Stable object identity so memoized consumers only re-render on real changes.
   return useMemo(
-    () => ({ clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip, setClipTags }),
-    [clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip, setClipTags],
+    () => ({
+      clips,
+      clipLocation,
+      loading,
+      thumbnails,
+      generatingCount,
+      removeClips,
+      renameClip,
+      setClipTags,
+      renameTagInClips,
+      removeTagFromClips,
+    }),
+    [
+      clips,
+      clipLocation,
+      loading,
+      thumbnails,
+      generatingCount,
+      removeClips,
+      renameClip,
+      setClipTags,
+      renameTagInClips,
+      removeTagFromClips,
+    ],
   );
 }

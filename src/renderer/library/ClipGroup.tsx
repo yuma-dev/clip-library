@@ -7,6 +7,7 @@ interface ClipGroupProps {
   group: ClipGroupData;
   thumbnails: Map<string, string | null>;
   grayscaleIcons: boolean;
+  showNewIndicators: boolean;
   collapsed: boolean;
   onToggle: (name: string) => void;
 }
@@ -18,7 +19,7 @@ interface ClipGroupProps {
 const INITIAL_CARDS = 24;
 const CARDS_PER_FRAME = 80;
 
-function ClipGroup({ group, thumbnails, grayscaleIcons, collapsed, onToggle }: ClipGroupProps) {
+function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, collapsed, onToggle }: ClipGroupProps) {
   // The header reacts to `collapsed` urgently (instant diamond/aria feedback);
   // the card mounting below runs as a deferred, interruptible render.
   const expanded = !useDeferredValue(collapsed);
@@ -90,6 +91,7 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, collapsed, onToggle }: C
               clip={clip}
               thumbnailPath={thumbnails.get(clip.originalName) ?? null}
               grayscaleIcons={grayscaleIcons}
+              showNewIndicators={showNewIndicators}
             />
           ))}
         </div>

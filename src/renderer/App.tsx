@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSettings } from "./settings/SettingsContext";
 import Titlebar from "./shell/Titlebar";
 import Sidebar from "./shell/Sidebar";
 import LibraryView from "./views/LibraryView";
@@ -62,14 +63,12 @@ export default function App() {
     }
   }, [pinned]);
 
-  // Game-icon greyscale (settings; defaults on to match the design).
-  const [grayscaleIcons, setGrayscaleIcons] = useState(true);
-  useEffect(() => {
-    window.clips
-      .getSettings()
-      .then((s) => setGrayscaleIcons(s?.iconGreyscale ?? true))
-      .catch(() => {});
-  }, []);
+  // Live app settings (grid appearance + preview volume come from here so
+  // changes in the Settings view apply immediately).
+  const { settings } = useSettings();
+  const grayscaleIcons = Boolean(settings.iconGreyscale);
+  const showNewIndicators = settings.showNewClipsIndicators !== false;
+  const previewVolume = settings.previewVolume ?? 0.1;
 
   // Escape exits an active tag focus ("only show this tag") — but not while the
   // player is open, where Escape closes the player (handled by its own
@@ -120,11 +119,13 @@ export default function App() {
               lib={lib}
               clips={filter.filteredClips}
               grayscaleIcons={grayscaleIcons}
+              showNewIndicators={showNewIndicators}
+              previewVolume={previewVolume}
               globalTags={filter.globalTags}
               addGlobalTag={filter.addGlobalTag}
             />
           ) : null}
-          {route === "settings" ? <SettingsView /> : null}
+          {route === "settings" ? <SettingsView lib={lib} filter={filter} /> : null}
         </main>
       </div>
       {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened).

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import App from "./App";
 import { ToastProvider } from "./ui/Toast";
 import { ConfirmProvider } from "./ui/ConfirmDialog";
+import { SettingsProvider } from "./settings/SettingsContext";
 import { initGridDensity } from "./library/gridDensity";
 import { initGlowTuner } from "./library/glowConfig";
 import "./styles.css";
@@ -13,7 +14,9 @@ initGlowTuner();
 
 const Providers = ({ children }: { children: ReactNode }) => (
   <ToastProvider>
-    <ConfirmProvider>{children}</ConfirmProvider>
+    <ConfirmProvider>
+      <SettingsProvider>{children}</SettingsProvider>
+    </ConfirmProvider>
   </ToastProvider>
 );
 

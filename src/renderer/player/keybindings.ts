@@ -63,6 +63,16 @@ export function getActionFromEvent(e: KeyboardEvent): string | null {
   return null;
 }
 
+/** Current bindings (copy) — drives the settings Shortcuts tab. */
+export function getAllKeybindings(): Record<string, string> {
+  return { ...keybindings };
+}
+
+/** Replace the live bindings (settings Shortcuts tab persists separately). */
+export function applyKeybindings(map: Record<string, string>): void {
+  keybindings = { ...DEFAULT_KEYBINDINGS, ...map };
+}
+
 /** Load keybindings from settings (merged over defaults). */
 export async function initKeybindings(): Promise<void> {
   try {

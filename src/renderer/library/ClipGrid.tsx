@@ -15,6 +15,8 @@ interface ClipGridProps {
   clips: LocalClip[];
   thumbnails: Map<string, string | null>;
   grayscaleIcons: boolean;
+  showNewIndicators: boolean;
+  previewVolume: number;
   clipLocation: string;
   removeClips: (names: string[]) => void;
   renameClip: RenameFn;
@@ -37,6 +39,8 @@ function ClipGrid({
   clips,
   thumbnails,
   grayscaleIcons,
+  showNewIndicators,
+  previewVolume,
   clipLocation,
   removeClips,
   renameClip,
@@ -83,6 +87,9 @@ function ClipGrid({
   useEffect(() => {
     hover?.setClipLocation(clipLocation);
   }, [hover, clipLocation]);
+  useEffect(() => {
+    hover?.setPreviewVolume(previewVolume);
+  }, [hover, previewVolume]);
   useEffect(() => {
     return () => {
       observerRef.current?.disconnect();
@@ -233,6 +240,7 @@ function ClipGrid({
                     group={group}
                     thumbnails={thumbnails}
                     grayscaleIcons={grayscaleIcons}
+                    showNewIndicators={showNewIndicators}
                     collapsed={Boolean(collapsed[group.name])}
                     onToggle={toggle}
                   />

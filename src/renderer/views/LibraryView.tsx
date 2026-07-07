@@ -8,13 +8,25 @@ interface LibraryViewProps {
   /** Clips after search + tag + collection filtering. */
   clips: LocalClip[];
   grayscaleIcons: boolean;
+  /** Settings → show new-clip indicators (dot + card highlight). */
+  showNewIndicators: boolean;
+  /** Settings → hover preview volume (0–1). */
+  previewVolume: number;
   /** Assignable global tags for the card "Manage tags" menu. */
   globalTags: string[];
   /** Create a new global tag (used by "Manage tags" → create). */
   addGlobalTag: (tag: string) => void;
 }
 
-function LibraryView({ lib, clips, grayscaleIcons, globalTags, addGlobalTag }: LibraryViewProps) {
+function LibraryView({
+  lib,
+  clips,
+  grayscaleIcons,
+  showNewIndicators,
+  previewVolume,
+  globalTags,
+  addGlobalTag,
+}: LibraryViewProps) {
   return (
     <div className="library-view">
       {lib.loading ? (
@@ -31,6 +43,8 @@ function LibraryView({ lib, clips, grayscaleIcons, globalTags, addGlobalTag }: L
           clips={clips}
           thumbnails={lib.thumbnails}
           grayscaleIcons={grayscaleIcons}
+          showNewIndicators={showNewIndicators}
+          previewVolume={previewVolume}
           clipLocation={lib.clipLocation}
           removeClips={lib.removeClips}
           renameClip={lib.renameClip}
