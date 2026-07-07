@@ -51,6 +51,11 @@ export interface UseClips {
    * reflects the change into the open legacy player. Returns true on success.
    */
   renameClip: (originalName: string, newName: string) => Promise<boolean>;
+  /**
+   * Replace a clip's tag list. Updates the list, persists via IPC, and reflects
+   * the change into the open legacy player. Drives the grid "Manage tags" menu.
+   */
+  setClipTags: (originalName: string, tags: string[]) => void;
 }
 
 /**
@@ -245,9 +250,21 @@ export function useClips(): UseClips {
     return true;
   }, []);
 
+  const setClipTags = useCallback((originalName: string, tags: string[]) => {
+    setClips((prev) =>
+      prev.map((c) => (c.originalName === originalName ? { ...c, tags } : c)),
+    );
+    window.clips.saveClipTags(originalName, tags).catch(() => {});
+    // Reflect into the open legacy player, if it's showing this clip.
+    const state = window.legacyState;
+    if (state?.currentClip?.originalName === originalName) {
+      state.currentClip.tags = tags;
+    }
+  }, []);
+
   // Stable object identity so memoized consumers only re-render on real changes.
   return useMemo(
-    () => ({ clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip }),
-    [clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip],
+    () => ({ clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip, setClipTags }),
+    [clips, clipLocation, loading, thumbnails, generatingCount, removeClips, renameClip, setClipTags],
   );
 }

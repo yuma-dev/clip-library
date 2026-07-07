@@ -116,7 +116,13 @@ export default function App() {
         />
         <main className="app-main">
           {route === "library" ? (
-            <LibraryView lib={lib} clips={filter.filteredClips} grayscaleIcons={grayscaleIcons} />
+            <LibraryView
+              lib={lib}
+              clips={filter.filteredClips}
+              grayscaleIcons={grayscaleIcons}
+              globalTags={filter.globalTags}
+              addGlobalTag={filter.addGlobalTag}
+            />
           ) : null}
           {route === "settings" ? <SettingsView /> : null}
         </main>

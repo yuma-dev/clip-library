@@ -28,6 +28,8 @@ export interface UseLibraryFilter {
   showAllTags: () => void;
   hideAllTags: () => void;
   clearFocus: () => void;
+  /** Create a new global tag (persists it and enables it in the filter). */
+  addGlobalTag: (tag: string) => void;
 
   /** clips run through search + tag + collection filters (newest-first). */
   filteredClips: LocalClip[];
@@ -132,6 +134,30 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     persist(next);
   }, [clearFocus, persist]);
 
+  // Create a new global tag: add it to the persisted universe and enable it in
+  // the saved selection so a clip freshly tagged with it stays visible. If it's
+  // already known, this is a no-op beyond ensuring it's selected.
+  const addGlobalTag = useCallback(
+    (raw: string) => {
+      const tag = raw.trim();
+      if (!tag) return;
+      setLoadedTags((prev) => {
+        if (prev.includes(tag)) return prev;
+        const next = [...prev, tag];
+        window.clips.saveGlobalTags(next).catch(() => {});
+        return next;
+      });
+      setSaved((prev) => {
+        if (prev.has(tag)) return prev;
+        const next = new Set(prev);
+        next.add(tag);
+        persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
   const tags: TagFilterState = useMemo(
     () => ({ saved, temporary, isTemporary }),
     [saved, temporary, isTemporary],
@@ -172,6 +198,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       showAllTags,
       hideAllTags,
       clearFocus,
+      addGlobalTag,
       filteredClips,
     }),
     [
@@ -186,6 +213,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       showAllTags,
       hideAllTags,
       clearFocus,
+      addGlobalTag,
       filteredClips,
     ],
   );
