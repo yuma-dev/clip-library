@@ -1,4 +1,5 @@
 import { PanelLeft, Pin } from "lucide-react";
+import GamepadIndicator from "./GamepadIndicator";
 
 interface TitlebarProps {
   /** Pinned = static width; the width button toggles collapsed/expanded. */
@@ -56,6 +57,7 @@ export default function Titlebar({
       >
         <Pin size={14} />
       </button>
+      <GamepadIndicator />
       <div className="titlebar-drag" />
     </header>
   );

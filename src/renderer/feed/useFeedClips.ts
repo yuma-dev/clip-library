@@ -70,6 +70,22 @@ function readCachedState(storageKey: string): CachedClipState | null {
 }
 
 /**
+ * Drop every cached feed list so the next FeedPage mount refetches from the
+ * server. Call after an action that changes what the feed should contain — e.g.
+ * publishing a clip — since the 30s fresh-cache skip would otherwise show a
+ * stale list that's missing the just-uploaded clip.
+ */
+export function invalidateFeedListCache(): void {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith("feed:list:")) sessionStorage.removeItem(key);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * Warm the sessionStorage cache for a filter combination before FeedPage ever
  * mounts (startup prefetch) — the page then paints instantly from cache.
  * No-op if that key is already cached this session.

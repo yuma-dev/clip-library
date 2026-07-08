@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, Upload, X } from "lucide-react";
 import { useToast } from "../ui/Toast";
+import { invalidateFeedListCache } from "../feed/useFeedClips";
 
 interface ShareUser {
   id: string;
@@ -152,6 +153,10 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       } | null;
       if (!aliveRef.current) return;
       if (result?.success) {
+        // The feed caches its list per filter in sessionStorage with a 30s
+        // fresh-skip; drop it so opening the feed after this upload refetches
+        // and shows the new clip instead of the stale cached list.
+        invalidateFeedListCache();
         setStage("done");
         setClipUrl(result.clipUrl ?? null);
       } else {
