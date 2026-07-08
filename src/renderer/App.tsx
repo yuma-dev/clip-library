@@ -169,6 +169,10 @@ export default function App() {
       <div className={`app-body${railDynamic ? " rail-floating" : ""}`}>
         <Sidebar
           route={route}
+          /* Any online overlay (a profile page) lights up the Feed nav item —
+             profiles are reached from the feed, so the rail should reflect that
+             even when the underlying route is still the library. */
+          activeRoute={profileUserId ? "feed" : route}
           onNavigate={navigate}
           clips={lib.clips}
           filter={filter}

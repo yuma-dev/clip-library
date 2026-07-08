@@ -93,6 +93,34 @@ export interface ShareUser {
   clipCount?: number;
 }
 
+// Admin badge catalog entry (GET /admin/badges — website BadgeManagerModal.tsx).
+export interface AdminBadge {
+  id: string;
+  slug: string;
+  name: string;
+  icon: string;
+  description: string | null;
+  category: string;
+  threshold: number | null;
+  userCount: number;
+}
+
+// Invite code (GET /invites — website SettingsPage.tsx).
+export interface InviteCode {
+  id: string;
+  code: string;
+  maxUses: number;
+  uses: number;
+  createdAt: string;
+}
+
+// API token metadata (GET /auth/tokens — website SettingsPage.tsx).
+export interface ApiTokenInfo {
+  id: string;
+  label: string;
+  createdAt: string;
+}
+
 export const SERVER_URL = "https://friends.cliplib.app";
 
 // Emoji lookup (website ClipCard.tsx) + an ordered, labelled list for pickers.

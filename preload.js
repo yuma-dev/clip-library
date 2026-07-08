@@ -34,6 +34,7 @@ const api = {
   setClipLocation: invoke("set-clip-location"),
   getGameIcon: invoke("get-game-icon"),
   getGameIconsBatch: invoke("get-game-icons-batch"),
+  getClipParticipants: invoke("get-clip-participants"),
 
   // --- Per-clip metadata ---
   saveCustomName: invoke("save-custom-name"),
@@ -104,6 +105,7 @@ const api = {
   shareClip: invoke("share-clip"),
   getShareUsers: invoke("get-share-users"),
   shareApiRequest: invoke("share-api-request"),
+  shareUploadBanner: invoke("share-upload-banner"),
 
   // --- Updates ---
   checkForUpdates: invoke("check-for-updates"),

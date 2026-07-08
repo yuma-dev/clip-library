@@ -27,6 +27,18 @@ export interface ClipsApi {
   getGameIconsBatch(
     clipNames: string[],
   ): Promise<Record<string, { path: string | null; title: string | null; discord: unknown } | null>>;
+  getClipParticipants(clipNames: string[]): Promise<{
+    people: Array<{
+      id: string;
+      username: string;
+      global_name: string | null;
+      nick: string | null;
+      bot: boolean;
+      avatar_url: string | null;
+      count: number;
+    }>;
+    byClip: Record<string, string[]>;
+  }>;
 
   // --- Per-clip metadata ---
   saveCustomName(originalName: string, customName: string): Promise<{ success: boolean; customName?: string; error?: string }>;
@@ -102,6 +114,14 @@ export interface ClipsApi {
     path: string;
     body?: unknown;
   }): Promise<{ success: boolean; status?: number; data?: unknown; error?: string }>;
+  /** Pick a banner image via the native dialog and upload it to /users/me/banner. */
+  shareUploadBanner(): Promise<{
+    success: boolean;
+    status?: number;
+    error?: string;
+    canceled?: boolean;
+    data?: unknown;
+  }>;
 
   // --- Updates ---
   checkForUpdates(): Promise<any>;

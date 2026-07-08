@@ -901,6 +901,75 @@ async function getGameIconsBatch(clipNames, getSettings) {
   return Object.fromEntries(entries);
 }
 
+/**
+ * Aggregate every human Discord participant that appears in the given clips'
+ * .gameinfo files — the source for the search bar's `@mention` autocomplete
+ * ("everyone who's ever been in a call when you clipped"). Bots are dropped.
+ *
+ * Returns the deduped people (keyed by Discord id, newest snapshot wins so a
+ * renamed user shows their current name) plus a per-clip id list so the
+ * renderer can filter the grid by `@mention` without a second scan.
+ *
+ * @param {string[]} clipNames - Clip filenames
+ * @param {Function} getSettings - Function to get settings
+ * @returns {Promise<{ people: object[], byClip: Object<string,string[]> }>}
+ */
+async function getClipParticipants(clipNames, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  const names = Array.isArray(clipNames) ? clipNames : [];
+
+  // id -> { at, participant, count }; `at` = newest clip mtime seen for the id.
+  const people = new Map();
+  const byClip = {};
+
+  await mapWithConcurrency(names, 32, async (clipName) => {
+    const gameInfoPath = path.join(metadataFolder, `${metadataSafeName(clipName)}.gameinfo`);
+
+    let raw;
+    let mtime = 0;
+    try {
+      raw = await fs.readFile(gameInfoPath, 'utf8');
+      // File mtime stands in for record time — good enough to pick the freshest
+      // identity snapshot without threading each clip's createdAt through IPC.
+      mtime = (await fs.stat(gameInfoPath).catch(() => null))?.mtimeMs ?? 0;
+    } catch {
+      return;
+    }
+
+    let discord;
+    try {
+      discord = normalizeDiscordInfo(JSON.parse(raw).discord);
+    } catch {
+      return;
+    }
+    if (!discord) return;
+
+    const ids = [];
+    for (const p of discord.participants) {
+      if (p.bot) continue;
+      ids.push(p.id);
+      const existing = people.get(p.id);
+      if (!existing) {
+        people.set(p.id, { at: mtime, participant: p, count: 1 });
+      } else {
+        existing.count += 1;
+        if (mtime >= existing.at) {
+          existing.at = mtime;
+          existing.participant = p;
+        }
+      }
+    }
+    if (ids.length > 0) byClip[clipName] = ids;
+  });
+
+  const list = [...people.values()]
+    .sort((a, b) => b.count - a.count)
+    .map(({ participant, count }) => ({ ...participant, count }));
+
+  return { people: list, byClip };
+}
+
 // ============================================================================
 // Tag Preferences
 // ============================================================================
@@ -993,5 +1062,6 @@ module.exports = {
 
   // Game info
   getGameIcon,
-  getGameIconsBatch
+  getGameIconsBatch,
+  getClipParticipants
 };
