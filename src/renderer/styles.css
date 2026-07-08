@@ -1946,6 +1946,52 @@ button {
   pointer-events: none;
 }
 
+/* Keyboard/gamepad grid-navigation focus ring (library/gridNavigation.ts).
+   Same outline language as .selected, but brighter + glowing so the "cursor"
+   reads distinctly from a mouse multi-selection. */
+.clip-item.grid-focused {
+  z-index: 10;
+}
+.clip-item.grid-focused .clip-item-media-container {
+  outline: 2px solid var(--color-accent-hover);
+  outline-offset: 2px;
+  border-color: transparent;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent-hover) 45%, transparent);
+}
+.clip-item.grid-focused .clip-item-media-container::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  pointer-events: none;
+}
+
+/* Gamepad connection chip in the titlebar (player/gamepad.ts store). */
+.gamepad-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  -webkit-app-region: no-drag;
+  animation: gamepad-indicator-in 0.25s ease;
+}
+@keyframes gamepad-indicator-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ---- Publish-to-ClipLib modal (player/ShareModal.tsx) ---- */
 .share-modal-backdrop {
   position: fixed;

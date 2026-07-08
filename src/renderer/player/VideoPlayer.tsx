@@ -18,6 +18,16 @@ import {
   updateDiscordPresenceBasedOnState,
   updateDiscordPresenceForClip,
 } from "./discordPresence";
+import { initGamepad } from "./gamepad";
+import {
+  disableGridNavigation,
+  enableGridNavigation,
+  getVisibleCards,
+  initGridKeyboardNavigation,
+  moveGridSelection,
+  openCurrentGridSelection,
+  type GridDirection,
+} from "../library/gridNavigation";
 import ShareModal from "./ShareModal";
 import "./player.css";
 
@@ -233,6 +243,17 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     // Discord presence: initial "Browsing clips", idle poll, focus re-assert.
     initDiscordPresence();
 
+    // Grid navigation: arrows/Enter on the library grid (player closed).
+    initGridKeyboardNavigation();
+
+    // Gamepad: 16ms poll, button/stick routing, quit confirm, grid nav.
+    initGamepad({
+      navigateToVideo: (direction) => navigate(direction),
+      exportDefault: () => runExport(exportTrimmedVideo),
+      exportVideo: () => runExport(exportVideoWithFileSelection),
+      confirm: (options) => confirm(options),
+    });
+
     const byId = (id: string) => document.getElementById(id);
     // Hidden scrubbing video for the timeline hover preview (see the preview
     // effect below). Kept in a ref so both effects share the same element.
@@ -300,10 +321,12 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       exportAudioToClipboard: () => runExport((p) => exportAudio(null, p)),
       exportDefault: () => runExport(exportTrimmedVideo),
       confirmAndDeleteClip: () => void handleDelete(),
-      enableGridNavigation: noop,
-      disableGridNavigation: noop,
-      openCurrentGridSelection: noop,
-      moveGridSelection: noop,
+      // Grid navigation (library/gridNavigation.ts) — the player re-enables it
+      // on close while a gamepad is connected (player-legacy:1747).
+      enableGridNavigation: () => enableGridNavigation(),
+      disableGridNavigation: () => disableGridNavigation(),
+      openCurrentGridSelection: () => openCurrentGridSelection(),
+      moveGridSelection: (direction: GridDirection) => moveGridSelection(direction),
       // Persist on close / clip-switch (legacy flushPendingClipEdits path).
       saveTitleChange: (clipName: string, _old: string, newName: string) =>
         renameRef.current(clipName, newName),
@@ -311,7 +334,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       removeClipTitleEditingListeners: noop,
       updateClipDisplay: noop,
       smoothScrollToElement: noop,
-      getVisibleClips: () => [],
+      getVisibleClips: () => getVisibleCards(),
     };
 
     try {
