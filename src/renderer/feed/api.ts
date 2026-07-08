@@ -37,6 +37,8 @@ export interface FetchClipsParams {
 export interface FetchClipsResult {
   clips: Clip[];
   nextCursor: string | null;
+  /** Full result-set size for this filter combination (null on older servers). */
+  total: number | null;
 }
 
 export async function fetchClips(params: FetchClipsParams): Promise<FetchClipsResult> {
@@ -48,10 +50,14 @@ export async function fetchClips(params: FetchClipsParams): Promise<FetchClipsRe
   if (params.game) search.set("game", params.game);
   if (params.sort) search.set("sort", params.sort);
   if (params.favorite) search.set("favorite", params.favorite);
-  const data = await request<{ clips: Clip[]; nextCursor: string | null }>(
+  const data = await request<{ clips: Clip[]; nextCursor: string | null; total?: number }>(
     `/clips?${search.toString()}`,
   );
-  return { clips: data.clips ?? [], nextCursor: data.nextCursor ?? null };
+  return {
+    clips: data.clips ?? [],
+    nextCursor: data.nextCursor ?? null,
+    total: typeof data.total === "number" ? data.total : null,
+  };
 }
 
 export async function toggleReaction(

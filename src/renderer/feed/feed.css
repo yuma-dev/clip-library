@@ -564,6 +564,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Offscreen skeletons skip layout/paint entirely; safe here (no shadows or
+     outlines to clip). Intrinsic size keeps the scrollbar length stable. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
 }
 .feed-skeleton-media {
   aspect-ratio: 16 / 9;

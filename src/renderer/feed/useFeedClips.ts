@@ -25,6 +25,7 @@ interface CachedClipState {
   clips: Clip[];
   nextCursor: string | null;
   hasMore: boolean;
+  total: number | null;
   savedAt: number;
 }
 
@@ -52,6 +53,7 @@ function readCachedState(storageKey: string): CachedClipState | null {
       clips: parsed.clips,
       nextCursor: typeof parsed.nextCursor === "string" ? parsed.nextCursor : null,
       hasMore: Boolean(parsed.hasMore),
+      total: typeof parsed.total === "number" ? parsed.total : null,
       savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : Date.now(),
     };
   } catch {
@@ -71,10 +73,10 @@ export async function prefetchFeedList(
   const storageKey = getCacheKey(persistKey);
   if (!storageKey || readCachedState(storageKey)) return;
   try {
-    const { clips, nextCursor } = await fetchClips({ limit: PAGE_SIZE, ...options });
+    const { clips, nextCursor, total } = await fetchClips({ limit: PAGE_SIZE, ...options });
     sessionStorage.setItem(
       storageKey,
-      JSON.stringify({ clips, nextCursor, hasMore: Boolean(nextCursor), savedAt: Date.now() }),
+      JSON.stringify({ clips, nextCursor, hasMore: Boolean(nextCursor), total, savedAt: Date.now() }),
     );
   } catch {
     /* not connected / offline — the page fetches live and handles the error */
@@ -85,6 +87,8 @@ export interface UseFeedClips {
   clips: Clip[];
   loading: boolean;
   hasMore: boolean;
+  /** Full result-set size for the active filter (null until the server says). */
+  total: number | null;
   restoredFromCache: boolean;
   /** Set on a 401 "not connected" (or other API error) so the page can react. */
   error: FeedApiError | null;
@@ -101,6 +105,8 @@ export function useFeedClips(
   const [clips, setClips] = useState<Clip[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMore, setHasMore] = useState(true);
+  const [total, setTotal] = useState<number | null>(null);
+  const totalRef = useRef<number | null>(null);
   const [restoredFromCache, setRestoredFromCache] = useState(false);
   const [error, setError] = useState<FeedApiError | null>(null);
   const cursorRef = useRef<string | null>(null);
@@ -130,6 +136,7 @@ export function useFeedClips(
             clips: nextClips,
             nextCursor,
             hasMore: nextHasMore,
+            total: totalRef.current,
             savedAt: Date.now(),
           }),
         );
@@ -179,6 +186,10 @@ export function useFeedClips(
         const nextHasMore = !!data.nextCursor;
         hasMoreRef.current = nextHasMore;
         setHasMore(nextHasMore);
+        if (data.total != null) {
+          totalRef.current = data.total;
+          setTotal(data.total);
+        }
         persistCache(nextClips, data.nextCursor, nextHasMore);
       } catch (err) {
         if (requestVersion !== requestVersionRef.current) return;
@@ -225,8 +236,10 @@ export function useFeedClips(
         clipsRef.current = cached.clips;
         cursorRef.current = cached.nextCursor;
         hasMoreRef.current = cached.hasMore;
+        totalRef.current = cached.total;
         setClips(cached.clips);
         setHasMore(cached.hasMore);
+        setTotal(cached.total);
         setLoading(false);
         // Stale-while-revalidate: paint the cached list instantly, then
         // refetch page 1 in the background so clips shared since the last
@@ -242,8 +255,10 @@ export function useFeedClips(
     cursorRef.current = null;
     clipsRef.current = [];
     hasMoreRef.current = true;
+    totalRef.current = null;
     setClips([]);
     setHasMore(true);
+    setTotal(null);
     doFetch(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doFetch, optionsSignature, persistKey]);
@@ -281,6 +296,7 @@ export function useFeedClips(
     clips,
     loading,
     hasMore,
+    total,
     restoredFromCache,
     error,
     loadMore,
