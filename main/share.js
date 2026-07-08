@@ -508,6 +508,7 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
   }
 
   const { clipName, start, end, volume, speed } = payload;
+  const audioMix = Array.isArray(payload.audioMix) ? payload.audioMix : null;
   if (!clipName) {
     emitShareProgress(onProgress, { phase: 'failed', percent: 0, error: 'Missing clip name.' });
     return { success: false, error: 'Missing clip name.' };
@@ -538,7 +539,8 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
       volume,
       speed,
       getSettings,
-      exportProgressHandler
+      exportProgressHandler,
+      { audioMix }
     );
 
     if (!exportResult?.success || !exportResult.path) {

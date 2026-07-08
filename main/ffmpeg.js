@@ -1616,7 +1616,8 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
 /**
  * Export trimmed video for sharing uploads (no clipboard side effects).
  */
-async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, getSettings, onProgress = null) {
+async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, getSettings, onProgress = null, extraOptions = {}) {
+  const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `shared_${Date.now()}_${path.parse(clipName).name}.mp4`);
@@ -1647,8 +1648,11 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       quality,
       exportSettings: settings,
       volumeData,
+      audioMix,
       onProgress,
-      allowAudioCopy: quality !== 'discord',
+      // Audio copy is incompatible with a custom mix — re-encode when
+      // filter_complex builds [aout].
+      allowAudioCopy: quality !== 'discord' && !audioMix,
       emitGlobalProgress: false
     });
     const usingFallback = Boolean(exportResult?.usingFallback);

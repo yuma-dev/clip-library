@@ -130,12 +130,23 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       /* default volume */
     }
 
+    // Per-track mix snapshot (null for single-track clips). Without this the
+    // uploaded clip ignores individually-adjusted track volumes — see the
+    // normal export path in playerExport.ts, which passes the same mix.
+    let audioMix: unknown = null;
+    try {
+      audioMix = player.getActiveAudioTracksManager?.()?.getExportMix?.() ?? null;
+    } catch {
+      /* single-track / not ready */
+    }
+
     const payload = {
       clipName: current.originalName,
       start: state.trimStartTime,
       end: state.trimEndTime,
       volume,
       speed: video?.playbackRate ?? 1,
+      audioMix,
       metadata: {
         title: title.trim() || current.customName,
         tags: Array.isArray((current as { tags?: string[] }).tags)
