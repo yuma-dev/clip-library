@@ -7,10 +7,12 @@
 // signed-in user's own profile a subtle strip explains that only published
 // clips appear here and links back to the local library.
 
-import { useEffect, useMemo, useState } from "react";
-import { Lock } from "lucide-react";
-import { fetchUserProfile } from "./api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Lock, Pencil, Settings } from "lucide-react";
+import { fetchUserProfile, invalidateUserProfile } from "./api";
 import { fetchMe } from "./me";
+import EditProfileModal from "./EditProfileModal";
+import BadgeManagerModal from "./BadgeManagerModal";
 import { useFeedClips } from "./useFeedClips";
 import { openFeedClip } from "./feedPlayerBus";
 import FeedClipCard from "./FeedClipCard";
@@ -57,6 +59,9 @@ export default function ProfilePage({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [isOwnProfile, setIsOwnProfile] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [badgeManagerOpen, setBadgeManagerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ProfileTab>(() => loadTab(userId));
 
   // Load the profile whenever the target user changes.
@@ -81,15 +86,28 @@ export default function ProfilePage({ userId }: { userId: string }) {
     };
   }, [userId]);
 
-  // Determine whether this is the signed-in user's own public profile.
+  // Force-refresh the profile after an edit (banner/bio/badges change).
+  const reloadProfile = useCallback(() => {
+    invalidateUserProfile(userId);
+    fetchUserProfile(userId)
+      .then(setProfile)
+      .catch(() => setError(true));
+  }, [userId]);
+
+  // Determine whether this is the signed-in user's own public profile, and
+  // whether they're an admin (badge manager affordance).
   useEffect(() => {
     let alive = true;
     fetchMe()
       .then((me) => {
-        if (alive) setIsOwnProfile(Boolean(me && me.id === userId));
+        if (!alive) return;
+        setIsOwnProfile(Boolean(me && me.id === userId));
+        setIsAdmin(Boolean(me?.isAdmin));
       })
       .catch(() => {
-        if (alive) setIsOwnProfile(false);
+        if (!alive) return;
+        setIsOwnProfile(false);
+        setIsAdmin(false);
       });
     return () => {
       alive = false;
@@ -112,13 +130,23 @@ export default function ProfilePage({ userId }: { userId: string }) {
   }, [activeTab, userId]);
 
   const listPersistKey = `profile:v1:${userId}:${activeTab}`;
-  const { clips, loading: clipsLoading, hasMore, loadMore, updateClipReaction, updateClipFavorite } =
-    useFeedClips(clipOptions, listPersistKey);
+  const {
+    clips,
+    loading: clipsLoading,
+    hasMore,
+    loadMore,
+    updateClipReaction,
+    updateClipFavorite,
+    removeClip,
+    patchClip,
+  } = useFeedClips(clipOptions, listPersistKey);
 
   const handleOpen = (clip: Clip) =>
     openFeedClip(clip, clips, {
       onReactionUpdate: updateClipReaction,
       onFavoriteUpdate: updateClipFavorite,
+      onClipDeleted: removeClip,
+      onClipUpdated: patchClip,
     });
   const { gridRef, canvasRef } = useCardGlow();
   // Streamed mounting + offscreen culling — same mechanics as the other grids.
@@ -211,6 +239,29 @@ export default function ProfilePage({ userId }: { userId: string }) {
                 <div className="profile-names">
                   <h1 className="profile-display">{profile.displayName}</h1>
                   <p className="profile-handle">@{profile.username}</p>
+                </div>
+                <div className="profile-actions">
+                  {isOwnProfile && (
+                    <button
+                      type="button"
+                      className="profile-action-btn"
+                      onClick={() => setEditOpen(true)}
+                    >
+                      <Pencil size={13} />
+                      <span>Edit Profile</span>
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="profile-action-btn profile-action-icon"
+                      title="Manage badges"
+                      aria-label="Manage badges"
+                      onClick={() => setBadgeManagerOpen(true)}
+                    >
+                      <Settings size={14} />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -318,6 +369,21 @@ export default function ProfilePage({ userId }: { userId: string }) {
           </div>
         </div>
       </div>
+
+      <EditProfileModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        onSaved={() => {
+          setEditOpen(false);
+          reloadProfile();
+        }}
+        onRefresh={reloadProfile}
+        initialBio={profile.bio}
+        initialAccentColor={profile.accentColor}
+        initialBannerGradient={profile.bannerGradient}
+        initialBannerType={profile.bannerType}
+      />
+      <BadgeManagerModal open={badgeManagerOpen} onClose={() => setBadgeManagerOpen(false)} />
     </div>
   );
 }

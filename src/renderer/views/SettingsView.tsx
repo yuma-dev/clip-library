@@ -7,6 +7,7 @@ import {
   MonitorPlay,
   Palette,
   Settings2,
+  Share2,
   type LucideIcon,
 } from "lucide-react";
 import GeneralSection from "../settings/sections/GeneralSection";
@@ -15,12 +16,20 @@ import PlayerSection from "../settings/sections/PlayerSection";
 import ExportSection from "../settings/sections/ExportSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
+import CliplibSection from "../settings/sections/CliplibSection";
 import { useSettings } from "../settings/SettingsContext";
 import { useToast } from "../ui/Toast";
 import type { UseClips } from "../library/useClips";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 
-type SectionId = "general" | "appearance" | "player" | "export" | "shortcuts" | "about";
+type SectionId =
+  | "general"
+  | "appearance"
+  | "player"
+  | "export"
+  | "shortcuts"
+  | "cliplib"
+  | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; blurb: string }[] = [
   { id: "general", label: "General", icon: Settings2, blurb: "Library location, integrations, and tags" },
@@ -28,6 +37,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; blurb: string 
   { id: "player", label: "Player", icon: MonitorPlay, blurb: "Previews and the ambient glow" },
   { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard, blurb: "Player keyboard bindings" },
+  { id: "cliplib", label: "ClipLib", icon: Share2, blurb: "Account, invite codes, and API tokens" },
   { id: "about", label: "About", icon: Info, blurb: "Version, updates, and diagnostics" },
 ];
 
@@ -115,6 +125,7 @@ export default function SettingsView({ lib, filter }: SettingsViewProps) {
             {section === "player" ? <PlayerSection sampleThumb={sampleThumb} /> : null}
             {section === "export" ? <ExportSection /> : null}
             {section === "shortcuts" ? <ShortcutsSection /> : null}
+            {section === "cliplib" ? <CliplibSection /> : null}
             {section === "about" ? <AboutSection /> : null}
           </motion.div>
         </AnimatePresence>

@@ -829,6 +829,21 @@ ipcMain.handle('share-api-request', async (event, request) => {
   return shareModule.apiRequest(getSettings, request || {});
 });
 
+// Profile banner upload: pick an image via the native dialog, then multipart
+// POST it to /users/me/banner. Returns { success, error?, canceled? }.
+ipcMain.handle('share-upload-banner', async (event) => {
+  const owner = event.sender.getOwnerBrowserWindow?.() || mainWindow;
+  const result = await dialog.showOpenDialog(owner, {
+    title: 'Choose a banner image',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'] }]
+  });
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+  return shareModule.uploadProfileBanner(getSettings, result.filePaths[0]);
+});
+
 ipcMain.handle("remove-tag-from-all-clips", async (event, tagToRemove) => {
   return metadataModule.removeTagFromAllClips(tagToRemove, getSettings);
 });
@@ -1013,6 +1028,10 @@ ipcMain.handle("get-game-icon", async (event, clipName) => {
 
 ipcMain.handle("get-game-icons-batch", async (event, clipNames) => {
   return metadataModule.getGameIconsBatch(clipNames, getSettings);
+});
+
+ipcMain.handle("get-clip-participants", async (event, clipNames) => {
+  return metadataModule.getClipParticipants(clipNames, getSettings);
 });
 
 ipcMain.handle('get-new-clips-info', async () => {

@@ -5,7 +5,16 @@
 // `FeedApiError` on failure so callers can distinguish the 401 "not connected"
 // case from other errors.
 
-import type { Clip, ClipDetail, Comment, ShareUser, UserProfile } from "./types";
+import type {
+  Clip,
+  ClipDetail,
+  Comment,
+  ShareUser,
+  UserProfile,
+  AdminBadge,
+  InviteCode,
+  ApiTokenInfo,
+} from "./types";
 
 export class FeedApiError extends Error {
   status?: number;
@@ -122,4 +131,108 @@ export function fetchUserProfile(userId: string): Promise<UserProfile> {
 /** Force-refresh a profile (e.g. after visiting a profile page). */
 export function invalidateUserProfile(userId: string): void {
   profileCache.delete(userId);
+}
+
+// ---- Profile editing (website EditProfileModal.tsx) ----
+
+export interface UpdateProfileBody {
+  bio?: string | null;
+  accentColor?: string | null;
+  bannerGradient?: string | null;
+}
+
+/** PATCH /users/me — bio, accent colour, and banner gradient. */
+export async function updateMyProfile(body: UpdateProfileBody): Promise<void> {
+  await request<unknown>(`/users/me`, "PATCH", body);
+}
+
+/** DELETE /users/me/banner — clears any gradient or uploaded banner image. */
+export async function removeMyBanner(): Promise<void> {
+  await request<unknown>(`/users/me/banner`, "DELETE");
+}
+
+// ---- Clip owner actions (website ClipDetailPage.tsx) ----
+
+/** PATCH /clips/:id — update title + featured mentions. Returns the fresh detail. */
+export async function updateClip(
+  clipId: string,
+  body: { title: string; mentions: string[] },
+): Promise<ClipDetail> {
+  return request<ClipDetail>(`/clips/${clipId}`, "PATCH", body);
+}
+
+/** DELETE /clips/:id — permanently removes the clip. */
+export async function deleteClip(clipId: string): Promise<void> {
+  await request<unknown>(`/clips/${clipId}`, "DELETE");
+}
+
+/** POST /clips/:id/share — mint a public share token/URL. */
+export async function createClipShareLink(
+  clipId: string,
+): Promise<{ publicToken: string; publicUrl: string }> {
+  return request<{ publicToken: string; publicUrl: string }>(`/clips/${clipId}/share`, "POST");
+}
+
+/** DELETE /clips/:id/share — revoke the public share link. */
+export async function removeClipShareLink(clipId: string): Promise<void> {
+  await request<unknown>(`/clips/${clipId}/share`, "DELETE");
+}
+
+// ---- Badges (admin — website BadgeManagerModal.tsx) ----
+
+export async function fetchAdminBadges(): Promise<AdminBadge[]> {
+  const data = await request<{ badges: AdminBadge[] }>(`/admin/badges`);
+  return data.badges ?? [];
+}
+
+export async function createBadge(icon: string, name: string): Promise<void> {
+  await request<unknown>(`/admin/badges`, "POST", { icon, name });
+}
+
+export async function updateBadge(slug: string, icon: string, name: string): Promise<void> {
+  await request<unknown>(`/admin/badges/${slug}`, "PATCH", { icon, name });
+}
+
+export async function deleteBadge(slug: string): Promise<void> {
+  await request<unknown>(`/admin/badges/${slug}`, "DELETE");
+}
+
+export async function awardBadge(userId: string, badgeSlug: string): Promise<void> {
+  await request<unknown>(`/admin/badges/award`, "POST", { userId, badgeSlug });
+}
+
+export async function revokeBadge(userId: string, badgeSlug: string): Promise<void> {
+  // The revoke route takes its payload on a DELETE body (website parity).
+  await request<unknown>(`/admin/badges/revoke`, "DELETE", { userId, badgeSlug });
+}
+
+// ---- Invite codes (website SettingsPage.tsx) ----
+
+export async function fetchInvites(): Promise<InviteCode[]> {
+  const data = await request<{ invites: InviteCode[] }>(`/invites`);
+  return data.invites ?? [];
+}
+
+export async function createInvite(maxUses = 1): Promise<void> {
+  await request<unknown>(`/invites`, "POST", { maxUses });
+}
+
+export async function deleteInvite(id: string): Promise<void> {
+  await request<unknown>(`/invites/${id}`, "DELETE");
+}
+
+// ---- API tokens (website SettingsPage.tsx) ----
+
+export async function fetchApiTokens(): Promise<ApiTokenInfo[]> {
+  const data = await request<{ tokens: ApiTokenInfo[] }>(`/auth/tokens`);
+  return data.tokens ?? [];
+}
+
+export async function createApiToken(label: string): Promise<string> {
+  const data = await request<{ token: string }>(`/auth/token`, "POST", { label });
+  return data.token;
+}
+
+export async function deleteApiToken(id: string): Promise<void> {
+  await request<unknown>(`/auth/tokens/${id}`, "DELETE");
 }

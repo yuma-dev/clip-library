@@ -36,8 +36,17 @@ export default function FeedPage() {
   );
   const listPersistKey = feedPersistKey(filters);
 
-  const { clips, loading, hasMore, error, loadMore, updateClipReaction, updateClipFavorite } =
-    useFeedClips(options, listPersistKey);
+  const {
+    clips,
+    loading,
+    hasMore,
+    error,
+    loadMore,
+    updateClipReaction,
+    updateClipFavorite,
+    removeClip,
+    patchClip,
+  } = useFeedClips(options, listPersistKey);
 
   const { groups, collapsed, toggle } = useFeedGroups(clips, FEED_COLLAPSE_KEY);
 
@@ -54,6 +63,8 @@ export default function FeedPage() {
     openFeedClip(clip, clips, {
       onReactionUpdate: updateClipReaction,
       onFavoriteUpdate: updateClipFavorite,
+      onClipDeleted: removeClip,
+      onClipUpdated: patchClip,
     });
 
   // Connect prompt: shown whenever we know we're logged out (verified) or the

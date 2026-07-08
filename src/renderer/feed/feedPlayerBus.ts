@@ -9,6 +9,10 @@ import type { Clip } from "./types";
 export interface FeedListSync {
   onReactionUpdate?: (clipId: string, emoji: string, action: "added" | "removed") => void;
   onFavoriteUpdate?: (clipId: string, action: "added" | "removed") => void;
+  /** Owner deleted the clip in the player — drop it from the launching list. */
+  onClipDeleted?: (clipId: string) => void;
+  /** Owner edited title/mentions — patch the launching list's copy. */
+  onClipUpdated?: (clipId: string, patch: Partial<Clip>) => void;
 }
 
 export type FeedOpenHandler = (clip: Clip, list: Clip[], sync?: FeedListSync) => void;

@@ -23,10 +23,14 @@ export function isUnnamedClip(clip: LocalClip): boolean {
   return clip.customName === base;
 }
 
-// --- Search parsing (mirrors legacy search-manager parseSearchTerms) ---
+// --- Search parsing ---
+// Two typed prefixes drive the search: `#tag` filters by clip tag, `@user`
+// filters by Discord call participant. Everything else is plain-text search.
 export interface SearchTerms {
-  /** `@mention` terms, kept WITH the leading `@` (matched by substring below). */
+  /** `#tag` terms, WITHOUT the leading `#` (lowercased). */
   tags: string[];
+  /** `@user` terms, WITHOUT the leading `@` (lowercased). */
+  mentions: string[];
   /** Plain text words. */
   text: string[];
 }
@@ -34,8 +38,9 @@ export interface SearchTerms {
 export function parseSearchTerms(raw: string): SearchTerms {
   const terms = raw.trim().toLowerCase().split(/\s+/).filter((t) => t.length > 0);
   return {
-    tags: terms.filter((t) => t.startsWith("@") && t.length > 1),
-    text: terms.filter((t) => !t.startsWith("@")),
+    tags: terms.filter((t) => t.startsWith("#") && t.length > 1).map((t) => t.slice(1)),
+    mentions: terms.filter((t) => t.startsWith("@") && t.length > 1).map((t) => t.slice(1)),
+    text: terms.filter((t) => !t.startsWith("#") && !t.startsWith("@")),
   };
 }
 
@@ -93,24 +98,31 @@ export interface FilterInput {
   collection: Collection;
   /** Skip the tag-dropdown filter until the persisted selection has loaded. */
   applyTags?: boolean;
+  /**
+   * clipName → lowercased participant tokens, for `@mention` filtering. When
+   * omitted the roster hasn't loaded yet, so `@mention` filtering is skipped
+   * (the grid stays full) until the scan resolves.
+   */
+  mentionIndex?: Map<string, Set<string>>;
 }
 
 /**
- * Full library filter (ported from legacy search-manager.performSearch):
- * search terms first, then — only when the user hasn't typed `@mentions` —
- * the dropdown tag filter, then the active collection. Input order is
- * preserved (clips arrive newest-first).
+ * Full library filter: typed search terms first (`#tag`, `@user`, plain text),
+ * then — only when the user hasn't typed a `#tag`/`@user` term — the dropdown
+ * tag filter, then the active collection. Input order is preserved (clips
+ * arrive newest-first).
  */
 export function filterClips(clips: LocalClip[], input: FilterInput): LocalClip[] {
-  const { tags, text } = parseSearchTerms(input.query);
-  const hasSearch = tags.length > 0 || text.length > 0;
+  const { tags, mentions, text } = parseSearchTerms(input.query);
+  const hasSearch = tags.length > 0 || mentions.length > 0 || text.length > 0;
   const applyTags = input.applyTags !== false;
+  const mentionIndex = input.mentionIndex;
 
   return clips.filter((clip) => {
     if (hasSearch) {
       const hasTags =
         tags.length === 0 ||
-        tags.every((t) => clip.tags.some((ct) => ct.toLowerCase().includes(t.slice(1))));
+        tags.every((t) => clip.tags.some((ct) => ct.toLowerCase().includes(t)));
       const hasText =
         text.length === 0 ||
         text.every(
@@ -118,11 +130,28 @@ export function filterClips(clips: LocalClip[], input: FilterInput): LocalClip[]
             clip.customName.toLowerCase().includes(w) ||
             clip.originalName.toLowerCase().includes(w),
         );
-      if (!hasTags || !hasText) return false;
+      // `@user` matches when the clip's participants include the term. Until the
+      // roster loads (mentionIndex undefined) the mention filter is a no-op, so
+      // the grid stays full instead of flashing empty mid-scan.
+      const hasMentions =
+        mentions.length === 0 ||
+        !mentionIndex ||
+        (() => {
+          const toks = mentionIndex.get(clip.originalName);
+          if (!toks) return false;
+          return mentions.every((m) => [...toks].some((t) => t.includes(m)));
+        })();
+      if (!hasTags || !hasText || !hasMentions) return false;
     }
 
-    // Typing `@mentions` bypasses the dropdown exclusions for those results.
-    if (applyTags && tags.length === 0 && !matchesTagFilter(clip, input.tags)) return false;
+    // A typed `#tag`/`@user` search bypasses the persisted dropdown exclusions.
+    if (
+      applyTags &&
+      tags.length === 0 &&
+      mentions.length === 0 &&
+      !matchesTagFilter(clip, input.tags)
+    )
+      return false;
 
     return matchesCollection(clip, input.collection);
   });

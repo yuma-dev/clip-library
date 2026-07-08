@@ -27,23 +27,32 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bookmark,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Link2,
   Maximize,
   MessageSquare,
+  Pencil,
   Trash2,
   X,
 } from "lucide-react";
 import { useAppNav } from "../shell/appNav";
 import { useSettings } from "../settings/SettingsContext";
+import { useToast } from "../ui/Toast";
 import {
   deleteComment as apiDeleteComment,
+  createClipShareLink,
+  deleteClip as apiDeleteClip,
   fetchClipDetail,
   fetchComments,
   postComment,
+  removeClipShareLink,
   toggleFavorite,
   toggleReaction,
+  updateClip,
 } from "./api";
 import { fetchMe, type Me } from "./me";
 import { setFeedOpenHandler, type FeedListSync } from "./feedPlayerBus";
@@ -113,6 +122,15 @@ export default function FeedPlayer() {
       syncRef.current.onFavoriteUpdate?.(clipId, action),
     [],
   );
+  const onClipDeletedSync = useCallback(
+    (clipId: string) => syncRef.current.onClipDeleted?.(clipId),
+    [],
+  );
+  const onClipUpdatedSync = useCallback(
+    (clipId: string, patch: Partial<Clip>) => syncRef.current.onClipUpdated?.(clipId, patch),
+    [],
+  );
+  const toast = useToast();
 
   // --- Open / clip state ---
   const [clip, setClip] = useState<Clip | null>(null);
@@ -147,6 +165,23 @@ export default function FeedPlayer() {
   // --- Comment composer ---
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
+
+  // --- Owner actions: edit (title + mentions), share link, delete ---
+  interface MentionUser {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string;
+  }
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editMentions, setEditMentions] = useState<string[]>([]);
+  const [editUsers, setEditUsers] = useState<MentionUser[]>([]);
+  const [userSearch, setUserSearch] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const glowCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -201,6 +236,8 @@ export default function FeedPlayer() {
     setDetail(null);
     setComments([]);
     setDraft("");
+    setEditing(false);
+    setCopied(false);
 
     // Reset playback UI (video element resets via keyed remount below).
     setPlaying(false);
@@ -601,6 +638,122 @@ export default function FeedPlayer() {
     }
   }, []);
 
+  // ---- Owner actions: edit title/mentions ----
+  const enterEdit = useCallback(async () => {
+    if (!clip) return;
+    setEditTitle(detail?.title ?? clip.title);
+    setEditMentions((detail?.mentions ?? clip.mentions ?? []).map((m) => m.id));
+    setUserSearch("");
+    setEditing(true);
+    try {
+      const res = (await window.clips.getShareUsers()) as {
+        success?: boolean;
+        users?: MentionUser[];
+      } | null;
+      if (res?.success && Array.isArray(res.users)) setEditUsers(res.users);
+    } catch {
+      /* selector still works with just the current mentions */
+    }
+  }, [clip, detail]);
+
+  const toggleEditMention = useCallback((userId: string) => {
+    setEditMentions((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId],
+    );
+  }, []);
+
+  const saveEdit = useCallback(async () => {
+    if (!clip || savingEdit) return;
+    const title = editTitle.trim();
+    if (!title) return;
+    setSavingEdit(true);
+    try {
+      const updated = await updateClip(clip.id, { title, mentions: editMentions });
+      setDetail(updated);
+      setClip((cur) => (cur ? { ...cur, title: updated.title, mentions: updated.mentions } : cur));
+      setList((prev) =>
+        prev.map((c) =>
+          c.id === clip.id ? { ...c, title: updated.title, mentions: updated.mentions } : c,
+        ),
+      );
+      onClipUpdatedSync(clip.id, { title: updated.title, mentions: updated.mentions });
+      setEditing(false);
+      toast.show("Clip updated");
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "Failed to update clip");
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [clip, savingEdit, editTitle, editMentions, onClipUpdatedSync, toast]);
+
+  // ---- Owner actions: share link ----
+  const onCreateShareLink = useCallback(async () => {
+    if (!clip || shareBusy) return;
+    setShareBusy(true);
+    try {
+      const res = await createClipShareLink(clip.id);
+      setDetail((prev) =>
+        prev ? { ...prev, publicToken: res.publicToken, publicUrl: res.publicUrl } : prev,
+      );
+      await navigator.clipboard.writeText(res.publicUrl).catch(() => {});
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+      toast.show("Share link copied");
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "Failed to create share link");
+    } finally {
+      setShareBusy(false);
+    }
+  }, [clip, shareBusy, toast]);
+
+  const onCopyShareLink = useCallback(async () => {
+    if (!detail?.publicUrl) return;
+    await navigator.clipboard.writeText(detail.publicUrl).catch(() => {});
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  }, [detail]);
+
+  const onUnshareLink = useCallback(async () => {
+    if (!clip || shareBusy) return;
+    setShareBusy(true);
+    try {
+      await removeClipShareLink(clip.id);
+      setDetail((prev) => (prev ? { ...prev, publicToken: null, publicUrl: null } : prev));
+      toast.show("Share link revoked");
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "Failed to revoke share link");
+    } finally {
+      setShareBusy(false);
+    }
+  }, [clip, shareBusy, toast]);
+
+  // ---- Owner actions: delete ----
+  const onDeleteClip = useCallback(async () => {
+    if (!clip || deleting) return;
+    if (!window.confirm("Delete this clip? This cannot be undone.")) return;
+    setDeleting(true);
+    const deletedId = clip.id;
+    try {
+      await apiDeleteClip(deletedId);
+      onClipDeletedSync(deletedId);
+      // Advance to the next clip if there is one, else close.
+      const i = list.findIndex((c) => c.id === deletedId);
+      const nextList = list.filter((c) => c.id !== deletedId);
+      const nextClip = nextList[i] ?? nextList[i - 1] ?? null;
+      if (nextClip) {
+        setList(nextList);
+        setClip(nextClip);
+      } else {
+        close();
+      }
+      toast.show("Clip deleted");
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "Failed to delete clip");
+    } finally {
+      setDeleting(false);
+    }
+  }, [clip, deleting, list, close, onClipDeletedSync, toast]);
+
   // ---- Profile navigation (closes the player) ----
   const openProfile = useCallback(
     (userId: string) => {
@@ -617,6 +770,18 @@ export default function FeedPlayer() {
   const progressPct = duration > 0 ? Math.min(100, (current / duration) * 100) : 0;
   const mentions = detail?.mentions ?? clip.mentions ?? [];
   const description = detail?.description ?? clip.description;
+  const title = detail?.title ?? clip.title;
+
+  // Owner / admin affordances (edit, share link, delete).
+  const isOwner = Boolean(me && clip.userId === me.id);
+  const canModify = isOwner || Boolean(me?.isAdmin);
+  const publicUrl = detail?.publicUrl ?? null;
+  const hasShareLink = Boolean(detail?.publicToken);
+  const filteredEditUsers = editUsers.filter(
+    (u) =>
+      u.displayName.toLowerCase().includes(userSearch.toLowerCase()) ||
+      u.username.toLowerCase().includes(userSearch.toLowerCase()),
+  );
   const resolution =
     (detail?.width ?? clip.width) && (detail?.height ?? clip.height)
       ? `${detail?.width ?? clip.width}×${detail?.height ?? clip.height}`
@@ -925,7 +1090,18 @@ export default function FeedPlayer() {
         <div className="fp-sheet-body">
           {/* Left column — clip info + reactions */}
           <div className="fp-info-col">
-            <h2 className="fp-info-title">{clip.title}</h2>
+            {editing ? (
+              <input
+                className="fp-edit-title"
+                value={editTitle}
+                maxLength={100}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="Clip title"
+                aria-label="Clip title"
+              />
+            ) : (
+              <h2 className="fp-info-title">{title}</h2>
+            )}
             <div className="fp-uploader">
               <img
                 className="fp-uploader-avatar"
@@ -965,25 +1141,69 @@ export default function FeedPlayer() {
               </div>
             </div>
 
-            {description && <p className="fp-description">{description}</p>}
+            {description && !editing && <p className="fp-description">{description}</p>}
 
-            {mentions.length > 0 && (
-              <div className="fp-featuring">
-                <div className="fp-featuring-label">Featuring</div>
-                <div className="fp-featuring-chips">
-                  {mentions.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className="fp-mention-chip"
-                      onClick={() => openProfile(m.id)}
-                    >
-                      <img src={getAvatarUrl(m.discordId, m.avatarHash, 32)} alt={m.displayName} />
-                      <span>{m.displayName}</span>
-                    </button>
-                  ))}
+            {editing ? (
+              <div className="fp-featuring fp-edit-featuring">
+                <div className="fp-featuring-label">
+                  Featuring
+                  {editMentions.length > 0 && (
+                    <span className="fp-edit-count"> · {editMentions.length} selected</span>
+                  )}
+                </div>
+                <input
+                  className="fp-edit-search"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  placeholder="Search users…"
+                  aria-label="Search users"
+                />
+                <div className="fp-edit-userlist">
+                  {filteredEditUsers.length === 0 ? (
+                    <p className="fp-edit-empty">No users found</p>
+                  ) : (
+                    filteredEditUsers.map((u) => {
+                      const selected = editMentions.includes(u.id);
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          className={`fp-edit-user${selected ? " selected" : ""}`}
+                          onClick={() => toggleEditMention(u.id)}
+                        >
+                          {u.avatarUrl ? (
+                            <img src={u.avatarUrl} alt={u.displayName} />
+                          ) : (
+                            <span className="fp-edit-user-fallback" />
+                          )}
+                          <span className="fp-edit-user-name">{u.displayName}</span>
+                          <span className="fp-edit-user-handle">@{u.username}</span>
+                          {selected && <Check size={14} className="fp-edit-user-check" />}
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </div>
+            ) : (
+              mentions.length > 0 && (
+                <div className="fp-featuring">
+                  <div className="fp-featuring-label">Featuring</div>
+                  <div className="fp-featuring-chips">
+                    {mentions.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className="fp-mention-chip"
+                        onClick={() => openProfile(m.id)}
+                      >
+                        <img src={getAvatarUrl(m.discordId, m.avatarHash, 32)} alt={m.displayName} />
+                        <span>{m.displayName}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
             )}
 
             <div className="fp-reactions">
@@ -1005,6 +1225,78 @@ export default function FeedPlayer() {
                 );
               })}
             </div>
+
+            {/* Owner / admin actions */}
+            {editing ? (
+              <div className="fp-owner-actions">
+                <button
+                  type="button"
+                  className="fp-owner-btn primary"
+                  disabled={savingEdit || !editTitle.trim()}
+                  onClick={() => void saveEdit()}
+                >
+                  {savingEdit ? "Saving…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  className="fp-owner-btn"
+                  onClick={() => setEditing(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              canModify && (
+                <div className="fp-owner-actions">
+                  {isOwner && (
+                    <button type="button" className="fp-owner-btn" onClick={() => void enterEdit()}>
+                      <Pencil size={13} />
+                      <span>Edit</span>
+                    </button>
+                  )}
+                  {!hasShareLink ? (
+                    <button
+                      type="button"
+                      className="fp-owner-btn"
+                      disabled={shareBusy}
+                      onClick={() => void onCreateShareLink()}
+                    >
+                      <Link2 size={13} />
+                      <span>{shareBusy ? "Sharing…" : "Share link"}</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="fp-owner-btn"
+                        disabled={!publicUrl}
+                        onClick={() => void onCopyShareLink()}
+                      >
+                        {copied ? <Check size={13} /> : <Copy size={13} />}
+                        <span>{copied ? "Copied!" : "Copy link"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="fp-owner-btn"
+                        disabled={shareBusy}
+                        onClick={() => void onUnshareLink()}
+                      >
+                        <span>Unshare</span>
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="fp-owner-btn danger"
+                    disabled={deleting}
+                    onClick={() => void onDeleteClip()}
+                  >
+                    <Trash2 size={13} />
+                    <span>{deleting ? "Deleting…" : "Delete"}</span>
+                  </button>
+                </div>
+              )
+            )}
           </div>
 
           {/* Right column — comments */}

@@ -4,7 +4,14 @@ import {
   type TagFilterState,
   activeSelection,
   filterClips,
+  parseSearchTerms,
 } from "./filter";
+import {
+  ensureParticipants,
+  getMentionIndex,
+  participantsLoaded,
+  useParticipantsVersion,
+} from "./participants";
 import type { LocalClip } from "./types";
 
 export interface UseLibraryFilter {
@@ -219,13 +226,36 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     [saved, temporary, isTemporary],
   );
 
+  // `@mention` filtering needs the participant roster + per-clip index. It's a
+  // full-library metadata scan, so only trigger it once the user actually types
+  // an `@user` term (the roster is otherwise loaded lazily when the search field
+  // is focused). Re-render when the scan resolves so the grid picks it up.
+  const participantsVersion = useParticipantsVersion();
+  const hasMentionQuery = useMemo(
+    () => parseSearchTerms(query).mentions.length > 0,
+    [query],
+  );
+  useEffect(() => {
+    if (hasMentionQuery) ensureParticipants(clips.map((c) => c.originalName));
+  }, [hasMentionQuery, clips]);
+
   // Filtering (and the 2,000-card grid render it feeds) runs against a
   // deferred copy of the criteria: the search input / tag buttons repaint
   // immediately, and React re-renders the grid as a low-priority,
   // interruptible pass instead of blocking every keystroke for ~450ms.
   const criteria = useMemo(
-    () => ({ query, tags, collection, applyTags: ready }),
-    [query, tags, collection, ready],
+    () => ({
+      query,
+      tags,
+      collection,
+      applyTags: ready,
+      // `participantsVersion` bumps identity when the scan resolves, forcing the
+      // filter to re-run against the freshly built index.
+      mentionIndex:
+        hasMentionQuery && participantsLoaded() ? getMentionIndex() : undefined,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [query, tags, collection, ready, hasMentionQuery, participantsVersion],
   );
   const deferredCriteria = useDeferredValue(criteria);
 

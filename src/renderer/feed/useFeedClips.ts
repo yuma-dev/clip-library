@@ -104,6 +104,10 @@ export interface UseFeedClips {
   refresh: () => void;
   updateClipReaction: (clipId: string, emoji: string, action: "added" | "removed") => void;
   updateClipFavorite: (clipId: string, action: "added" | "removed") => void;
+  /** Drop a clip from the list (owner deleted it in the player). */
+  removeClip: (clipId: string) => void;
+  /** Merge a partial update into a clip (owner edited title/mentions). */
+  patchClip: (clipId: string, patch: Partial<Clip>) => void;
 }
 
 export function useFeedClips(
@@ -328,6 +332,26 @@ export function useFeedClips(
     [setClipsAndPersist],
   );
 
+  const removeClip = useCallback(
+    (clipId: string) => {
+      setClipsAndPersist((prev) => prev.filter((clip) => clip.id !== clipId));
+      if (totalRef.current != null) {
+        totalRef.current = Math.max(0, totalRef.current - 1);
+        setTotal(totalRef.current);
+      }
+    },
+    [setClipsAndPersist],
+  );
+
+  const patchClip = useCallback(
+    (clipId: string, patch: Partial<Clip>) => {
+      setClipsAndPersist((prev) =>
+        prev.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
+      );
+    },
+    [setClipsAndPersist],
+  );
+
   return {
     clips,
     loading,
@@ -339,5 +363,7 @@ export function useFeedClips(
     refresh,
     updateClipReaction,
     updateClipFavorite,
+    removeClip,
+    patchClip,
   };
 }

@@ -5,14 +5,17 @@ import { useToast } from "../ui/Toast";
 import { useProfile } from "./useProfile";
 import RailTags from "./RailTags";
 import RailProfile from "./RailProfile";
+import RailSearch from "./RailSearch";
 import FeedRailFilters from "../feed/FeedRailFilters";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 import type { Collection } from "../library/filter";
 import type { LocalClip } from "../library/types";
-import logoUrl from "../../../assets/logo.png";
 
 interface SidebarProps {
   route: Route;
+  /** Nav highlight target — differs from `route` when an online overlay (a
+   *  profile page) is open, so the Feed item stays active over any route. */
+  activeRoute: Route;
   onNavigate: (route: Route) => void;
   clips: LocalClip[];
   filter: UseLibraryFilter;
@@ -35,6 +38,7 @@ const WEEK_MS = 7 * 86_400_000;
 // scrollable collections + tag filter, stat cards, real profile card.
 function Sidebar({
   route,
+  activeRoute,
   onNavigate,
   clips,
   filter,
@@ -103,34 +107,27 @@ function Sidebar({
       onMouseOver={onRailOver}
       onMouseLeave={() => setTip(null)}
     >
-      {/* Merged logo → search field. */}
-      <label className="r-search" data-rail-tip="Search clips">
-        <img className="r-search-logo" src={logoUrl} alt="Clips" draggable={false} />
-        <input
-          className="r-label"
-          value={filter.query}
-          onChange={(e) => filter.setQuery(e.target.value)}
-          placeholder="Search clips…"
-        />
-      </label>
+      {/* Merged logo → search field (syntax highlighting + #tag/@user autocomplete). */}
+      <RailSearch filter={filter} clips={clips} />
 
       <nav className="rail-nav">
         {routes.map(({ id, label, icon: Icon, disabled }) => {
           const locked = disabled || (id === "feed" && feedLocked);
           const tip = disabled ? `${label} (soon)` : locked ? `${label} (sign in)` : label;
+          const active = activeRoute === id;
           return (
             <button
               key={id}
               type="button"
               data-rail-tip={tip}
-              className={`rail-item${route === id ? " active" : ""}${locked ? " soon" : ""}`}
+              className={`rail-item${active ? " active" : ""}${locked ? " soon" : ""}`}
               onClick={() => {
                 if (disabled) toast.show(`${label} is coming soon`);
                 else if (locked) toast.show("Connect to ClipLib to browse the feed");
                 else onNavigate(id);
               }}
             >
-              {route === id ? <span className="rail-item-mark" aria-hidden="true" /> : null}
+              {active ? <span className="rail-item-mark" aria-hidden="true" /> : null}
               <span className="r-ico">
                 <Icon size={17} />
               </span>

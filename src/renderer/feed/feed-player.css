@@ -510,3 +510,156 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* ---- Owner / admin actions (edit, share link, delete) ---- */
+.fp-owner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.fp-owner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.fp-owner-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+}
+.fp-owner-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fp-owner-btn.primary {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: #fff;
+}
+.fp-owner-btn.primary:hover:not(:disabled) {
+  background: var(--color-accent-hover, var(--color-accent));
+  color: #fff;
+}
+.fp-owner-btn.danger {
+  border-color: rgba(240, 138, 122, 0.3);
+  color: #f08a7a;
+}
+.fp-owner-btn.danger:hover:not(:disabled) {
+  background: rgba(240, 138, 122, 0.1);
+  color: #f08a7a;
+}
+
+/* ---- Inline clip edit (title + mentions) ---- */
+.fp-edit-title {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: 700;
+  font-family: inherit;
+  outline: none;
+}
+.fp-edit-title:focus {
+  border-color: var(--color-border-hover);
+}
+.fp-edit-count {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+.fp-edit-featuring {
+  display: block;
+}
+.fp-edit-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+.fp-edit-search:focus {
+  border-color: var(--color-border-hover);
+}
+.fp-edit-userlist {
+  margin-top: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fp-edit-empty {
+  margin: 0;
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.fp-edit-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.fp-edit-user:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.fp-edit-user.selected {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.fp-edit-user img,
+.fp-edit-user-fallback {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  flex: none;
+  object-fit: cover;
+}
+.fp-edit-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-edit-user-handle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.fp-edit-user-check {
+  flex: none;
+  color: var(--color-accent);
+}

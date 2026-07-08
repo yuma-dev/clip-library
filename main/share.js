@@ -639,6 +639,112 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
   }
 }
 
+function getBannerMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.png':
+      return 'image/png';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+/**
+ * Upload a profile banner image to POST /users/me/banner (multipart, field
+ * "file"). Mirrors the website EditProfileModal banner upload. Sends BOTH auth
+ * forms (Bearer + `token` cookie) like apiRequest, since banner is a write
+ * route and some server routes only accept the cookie form.
+ */
+async function uploadProfileBanner(getSettings, filePath) {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    return { success: false, error: 'No banner file selected.' };
+  }
+
+  const settings = await getSettings();
+  const { serverUrl, apiToken } = await resolveSharingConfig(settings);
+  if (!apiToken) {
+    return { success: false, status: 401, error: 'Not connected to ClipLib.' };
+  }
+
+  let fileStats;
+  try {
+    fileStats = await fsp.stat(filePath);
+  } catch (error) {
+    return { success: false, error: `Could not read banner file: ${error.message}` };
+  }
+  if (fileStats.size > 10 * 1024 * 1024) {
+    return { success: false, error: `Banner too large (${formatBytes(fileStats.size)}). Max 10 MB.` };
+  }
+
+  const endpoint = new URL('/api/users/me/banner', serverUrl);
+  const useHttps = endpoint.protocol === 'https:';
+  const requestFn = useHttps ? https.request : http.request;
+
+  const boundary = `----ClipLibBanner${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const filename = path.basename(filePath).replace(/"/g, '_');
+  const header =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+    `Content-Type: ${getBannerMimeType(filePath)}\r\n\r\n`;
+  const closing = `\r\n--${boundary}--\r\n`;
+  const contentLength =
+    Buffer.byteLength(header, 'utf8') + fileStats.size + Buffer.byteLength(closing, 'utf8');
+
+  const options = {
+    method: 'POST',
+    hostname: endpoint.hostname,
+    port: endpoint.port || (useHttps ? 443 : 80),
+    path: `${endpoint.pathname}${endpoint.search}`,
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      Cookie: `token=${apiToken}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': contentLength
+    }
+  };
+
+  return new Promise((resolve) => {
+    const req = requestFn(options, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', async () => {
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        const bodyJson = await parseJsonSafe(bodyText);
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ success: true, data: bodyJson });
+        } else {
+          resolve({
+            success: false,
+            status: res.statusCode || 0,
+            error: buildErrorMessage(res.statusCode, bodyJson, bodyText, 'Banner upload failed.')
+          });
+        }
+      });
+    });
+
+    req.setTimeout(UPLOAD_TIMEOUT_MS, () => {
+      req.destroy(new Error('Banner upload timed out.'));
+    });
+    req.on('error', (error) => resolve({ success: false, error: `Banner upload failed: ${error.message}` }));
+
+    req.write(header);
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.on('error', (streamError) => req.destroy(streamError));
+    fileStream.on('end', () => {
+      req.write(closing);
+      req.end();
+    });
+    fileStream.pipe(req, { end: false });
+  });
+}
+
 async function fetchMentionableUsers(getSettings, overrides = {}) {
   const settings = await getSettings();
   const { serverUrl, apiToken } = await resolveSharingConfig(settings, overrides);
@@ -786,5 +892,6 @@ module.exports = {
   shareClip,
   fetchMentionableUsers,
   apiRequest,
+  uploadProfileBanner,
   installMediaAuthHeaders
 };
