@@ -217,6 +217,11 @@ export function useFeedClips(
         setClips(cached.clips);
         setHasMore(cached.hasMore);
         setLoading(false);
+        // Stale-while-revalidate: paint the cached list instantly, then
+        // refetch page 1 in the background so clips shared since the last
+        // visit appear on re-entry (the fetch replaces the list on success
+        // and leaves the cached one up on failure).
+        doFetch(true);
         return;
       }
     }

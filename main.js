@@ -445,7 +445,10 @@ async function createWindow() {
     titleBarOverlay: {
       color: '#050608',
       symbolColor: '#c8c8c8',
-      height: 34
+      // 1px shorter than the 34px titlebar strip: the overlay is opaque and
+      // drawn over the page, so this lets the titlebar's bottom border run
+      // uninterrupted beneath the min/max/close buttons.
+      height: 33
     },
     show: false,
     webPreferences: {
@@ -1014,6 +1017,10 @@ ipcMain.handle("get-game-icons-batch", async (event, clipNames) => {
 
 ipcMain.handle('get-new-clips-info', async () => {
   return await clipsModule.getNewClipsInfo(getSettings);
+});
+
+ipcMain.handle('mark-clips-watched', async (event, clipNames) => {
+  return await clipsModule.markClipsWatched(clipNames);
 });
 
 ipcMain.handle('save-clip-list-immediately', async () => {

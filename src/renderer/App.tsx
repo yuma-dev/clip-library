@@ -8,6 +8,7 @@ import FeedPage from "./feed/FeedPage";
 import FeedPlayer from "./feed/FeedPlayer";
 import ProfilePage from "./feed/ProfilePage";
 import { AppNavContext, type AppNav } from "./shell/appNav";
+import { useProfile } from "./shell/useProfile";
 import VideoPlayer from "./player/VideoPlayer";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
@@ -102,6 +103,16 @@ export default function App() {
     }
   }, [pinned]);
 
+  // Logging out closes online-only surfaces: the feed route falls back to the
+  // library and any open profile page closes (both need authentication).
+  const profile = useProfile();
+  const loggedOut = !profile.connected && !profile.verifying;
+  useEffect(() => {
+    if (!loggedOut) return;
+    setProfileUserId(null);
+    setRoute((prev) => (prev === "feed" ? "library" : prev));
+  }, [loggedOut]);
+
   // Live app settings (grid appearance + preview volume come from here so
   // changes in the Settings view apply immediately).
   const { settings } = useSettings();
@@ -184,6 +195,7 @@ export default function App() {
         clips={filter.filteredClips}
         renameClip={lib.renameClip}
         removeClips={lib.removeClips}
+        markClipsWatched={lib.markClipsWatched}
       />
       {/* Feed player mounts once app-wide so any grid (feed route, profile
           overlay) can open remote clips through the feedPlayerBus. */}

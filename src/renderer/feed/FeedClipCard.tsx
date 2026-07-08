@@ -67,7 +67,12 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
   const extraMentions = clip.mentions.length - mentions.length;
 
   return (
-    <article className="clip-item feed-card" onClick={() => onOpen(clip)}>
+    <article
+      className="clip-item feed-card"
+      data-clip-id={clip.id}
+      data-duration={clip.duration ?? 0}
+      onClick={() => onOpen(clip)}
+    >
       <div className="clip-item-media-container feed-card-media">
         {thumb ? (
           <img src={thumb} alt={clip.title} loading="lazy" />
@@ -151,40 +156,43 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
         )}
       </div>
 
-      <h3 className="feed-card-title">{clip.title}</h3>
-
-      {/* Footer below the title. */}
+      {/* Footer: text column (title over byline, library-card metrics) + bookmark. */}
       <div className="feed-card-foot">
-        <UserPopover
-          cliplibUserId={clip.user.id}
-          displayName={clip.user.displayName}
-          username={clip.user.username}
-          avatarUrl={getAvatarUrl(clip.user.discordId, clip.user.avatarHash, 24)}
-        >
-          <span
-            className="feed-card-uploader-link"
-            onClick={(e) => {
-              e.stopPropagation();
-              openProfile(clip.user.id);
-            }}
-          >
-            <img
-              className="feed-card-avatar"
-              src={getAvatarUrl(clip.user.discordId, clip.user.avatarHash, 24)}
-              alt={clip.user.displayName}
-            />
-            <span className="feed-card-uploader">{clip.user.displayName}</span>
-          </span>
-        </UserPopover>
-        <div className="feed-card-foot-text">
-          <span className="feed-card-dot">·</span>
-          <span className="feed-card-time">{formatRelativeTime(clip.createdAt)}</span>
-          {clip.game && (
-            <>
-              <span className="feed-card-dot">·</span>
-              <span className="feed-card-game">{clip.game}</span>
-            </>
-          )}
+        <div className="feed-card-info">
+          <h3 className="feed-card-title" title={clip.title}>
+            {clip.title}
+          </h3>
+          <div className="feed-card-byline">
+            <UserPopover
+              cliplibUserId={clip.user.id}
+              displayName={clip.user.displayName}
+              username={clip.user.username}
+              avatarUrl={getAvatarUrl(clip.user.discordId, clip.user.avatarHash, 24)}
+            >
+              <span
+                className="feed-card-uploader-link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openProfile(clip.user.id);
+                }}
+              >
+                <img
+                  className="feed-card-avatar"
+                  src={getAvatarUrl(clip.user.discordId, clip.user.avatarHash, 24)}
+                  alt={clip.user.displayName}
+                />
+                <span className="feed-card-uploader">{clip.user.displayName}</span>
+              </span>
+            </UserPopover>
+            <span className="feed-card-dot">·</span>
+            <span className="feed-card-time">{formatRelativeTime(clip.createdAt)}</span>
+            {clip.game && (
+              <>
+                <span className="feed-card-dot">·</span>
+                <span className="feed-card-game">{clip.game}</span>
+              </>
+            )}
+          </div>
         </div>
         <button
           type="button"

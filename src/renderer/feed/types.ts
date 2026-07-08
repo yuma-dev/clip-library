@@ -141,6 +141,16 @@ export function mediaUrl(path: string | null | undefined): string {
   return `${SERVER_URL}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
+/** Authenticated full-clip stream URL (main injects auth headers for this host). */
+export function streamUrl(clipId: string): string {
+  return `${SERVER_URL}/api/clips/${clipId}/stream`;
+}
+
+/** Low-resolution preview stream — used by the card hover previews. */
+export function previewStreamUrl(clipId: string): string {
+  return `${SERVER_URL}/api/clips/${clipId}/stream/preview`;
+}
+
 export function formatDuration(seconds: number | null): string {
   if (!seconds) return "";
   const m = Math.floor(seconds / 60);

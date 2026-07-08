@@ -8,7 +8,7 @@ interface LibraryViewProps {
   /** Clips after search + tag + collection filtering. */
   clips: LocalClip[];
   grayscaleIcons: boolean;
-  /** Settings → show new-clip indicators (dot + card highlight). */
+  /** Settings → show new-clip indicators (card glow + border). */
   showNewIndicators: boolean;
   /** Settings → hover preview volume (0–1). */
   previewVolume: number;

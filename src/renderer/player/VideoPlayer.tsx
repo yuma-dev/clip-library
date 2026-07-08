@@ -23,6 +23,8 @@ interface VideoPlayerProps {
   renameClip: (originalName: string, newName: string) => Promise<boolean>;
   /** Remove clips from the library list after a successful delete. */
   removeClips: (names: string[]) => void;
+  /** Clear the "new" highlight + persist watched state when a clip is opened. */
+  markClipsWatched: (names: string[]) => void;
 }
 
 /**
@@ -36,7 +38,7 @@ interface VideoPlayerProps {
  * fullscreen come from the legacy code once initialized; callbacks + faithful
  * CSS + keybindings are filled in across 4b–4d.
  */
-function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlayerProps) {
+function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWatched }: VideoPlayerProps) {
   const initedRef = useRef(false);
   const { confirm } = useConfirm();
   const toast = useToast();
@@ -46,6 +48,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlay
   // Latest renameClip, read from the once-only init callbacks without stale closures.
   const renameRef = useRef(renameClip);
   renameRef.current = renameClip;
+  // Latest markClipsWatched, read from the once-only openClip wrapper.
+  const markWatchedRef = useRef(markClipsWatched);
+  markWatchedRef.current = markClipsWatched;
   // Pending debounced title save (also cleared by the legacy flush-on-close path).
   const titleTimerRef = useRef<number | undefined>(undefined);
   // Hidden video used to render timeline hover-preview frames.
@@ -281,6 +286,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips }: VideoPlay
         // Dev profiler: label this end-to-end flow so the trace reads "open-clip"
         // instead of "pointerdown:clip-card". No-op unless the dev HUD is on.
         (window as unknown as { __perf?: { interaction(l: string): void } }).__perf?.interaction("open-clip");
+        // Opening the player is what makes a clip "watched" (grid click and
+        // prev/next both land here); hover previews never do.
+        markWatchedRef.current([originalName]);
         document.addEventListener("keydown", player.handleKeyPress);
         document.addEventListener("keyup", player.handleKeyRelease);
         return rawOpenClip(originalName, customName);

@@ -74,6 +74,15 @@ async function refresh(): Promise<void> {
     const { username, avatarUrl } = extractProfile(result);
     emit({ connected: true, verifying: false, username, avatarUrl });
   } else {
+    // Logged out: drop the cached feed lists so nothing keeps the feed
+    // browsable (or leaks it to a different account connected later).
+    try {
+      for (const key of Object.keys(sessionStorage)) {
+        if (key.startsWith("feed:list:")) sessionStorage.removeItem(key);
+      }
+    } catch {
+      /* ignore */
+    }
     emit({ connected: false, verifying: false, username: "", avatarUrl: "" });
   }
 }

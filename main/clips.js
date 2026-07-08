@@ -116,47 +116,119 @@ async function saveCurrentClipList(getSettings) {
   }
 }
 
-async function getNewClipsInfo(getSettings) {
-  const LAST_CLIPS_FILE = getLastClipsFilePath();
+/**
+ * Path to the watched-clips file: the set of clips the user has ever opened
+ * in the player. A clip is "new" until it appears in this set.
+ */
+function getWatchedClipsFilePath() {
+  return path.join(app.getPath('userData'), 'watched-clips.json');
+}
 
+// In-memory watched set, loaded once per process. null = not loaded yet.
+let watchedClips = null;
+
+/**
+ * Load the watched set from disk into `watchedClips`.
+ * Returns false when the file doesn't exist yet (pre-migration installs).
+ */
+async function loadWatchedClips() {
+  if (watchedClips) return true;
+  try {
+    const data = await fs.readFile(getWatchedClipsFilePath(), 'utf8');
+    const parsed = JSON.parse(data);
+    watchedClips = new Set(Array.isArray(parsed.watched) ? parsed.watched : []);
+    return true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.error('Error reading watched clips file:', error);
+      // Unreadable/corrupt: start over rather than flagging the whole library.
+      watchedClips = new Set();
+      return true;
+    }
+    return false;
+  }
+}
+
+async function saveWatchedClips() {
+  if (!watchedClips) return;
+  const file = getWatchedClipsFilePath();
+  const tempFile = file + '.tmp';
+  try {
+    await fs.writeFile(tempFile, JSON.stringify({ watched: [...watchedClips] }), 'utf8');
+    await fs.rename(tempFile, file);
+  } catch (error) {
+    logger.error('Error saving watched clips file:', error);
+    try {
+      await fs.unlink(tempFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+/**
+ * Record that clips were opened in the player, so they stop counting as new.
+ */
+async function markClipsWatched(clipNames) {
+  const names = (Array.isArray(clipNames) ? clipNames : [clipNames]).filter(Boolean);
+  if (names.length === 0) return;
+  if (!(await loadWatchedClips())) watchedClips = new Set();
+  let changed = false;
+  for (const name of names) {
+    if (!watchedClips.has(name)) {
+      watchedClips.add(name);
+      changed = true;
+    }
+  }
+  if (changed) await saveWatchedClips();
+}
+
+/**
+ * "New" clips = clips on disk the user has never opened in the player.
+ *
+ * Migration: installs that predate watched tracking only have the old
+ * last-clips.json session snapshot. Its contents seed the watched set —
+ * anything that wasn't "new since last session" under the old scheme is
+ * treated as already watched, so highlights carry over unchanged. With
+ * neither file (true first run) the whole library is seeded as watched.
+ */
+async function getNewClipsInfo(getSettings) {
   try {
     const settings = await getSettings();
-
-    let previousClips = [];
-    try {
-      const data = await fs.readFile(LAST_CLIPS_FILE, 'utf8');
-
-      if (data.trim().length === 0) {
-        logger.warn('Empty clip list file, treating as first run');
-        return { newClips: [], totalNewCount: 0 };
-      }
-
-      const parsed = JSON.parse(data);
-      previousClips = parsed.clips || [];
-      logger.info(`Loaded ${previousClips.length} clips from previous session`);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        logger.error('Error reading previous clip list:', error);
-
-        try {
-          const backupPath = LAST_CLIPS_FILE + '.backup.' + Date.now();
-          await fs.copyFile(LAST_CLIPS_FILE, backupPath);
-          logger.info(`Backed up corrupted file to: ${backupPath}`);
-        } catch (backupError) {
-          logger.error('Failed to backup corrupted file:', backupError);
-        }
-      }
-
-      return { newClips: [], totalNewCount: 0 };
-    }
-
     const clipsFolder = settings?.clipLocation;
+    if (!clipsFolder) return { newClips: [], totalNewCount: 0 };
+
     const files = await walkClips(clipsFolder, clipsFolder);
     const currentClips = files.map((file) => file.name);
 
-    const newClips = currentClips.filter((clipName) => !previousClips.includes(clipName));
+    if (!(await loadWatchedClips())) {
+      let previousClips = null;
+      try {
+        const data = await fs.readFile(getLastClipsFilePath(), 'utf8');
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed.clips)) previousClips = parsed.clips;
+      } catch {
+        // Missing/corrupt snapshot -> treat as first run below.
+      }
+      watchedClips = new Set(previousClips ?? currentClips);
+      logger.info(
+        previousClips
+          ? `Seeded watched clips from last-session snapshot (${watchedClips.size} clips)`
+          : `First run: seeded all ${watchedClips.size} clips as watched`
+      );
+      await saveWatchedClips();
+    }
 
-    logger.info(`Found ${newClips.length} new clips since last session`);
+    // Prune deleted clips so the file doesn't grow forever.
+    const current = new Set(currentClips);
+    const before = watchedClips.size;
+    for (const name of watchedClips) {
+      if (!current.has(name)) watchedClips.delete(name);
+    }
+    if (watchedClips.size !== before) await saveWatchedClips();
+
+    const newClips = currentClips.filter((clipName) => !watchedClips.has(clipName));
+    logger.info(`Found ${newClips.length} unwatched clips`);
 
     return {
       newClips,
@@ -467,6 +539,7 @@ async function revealClip(clipName, getSettings) {
 module.exports = {
   saveCurrentClipList,
   getNewClipsInfo,
+  markClipsWatched,
   getNewClipInfo,
   startPeriodicSave,
   stopPeriodicSave,

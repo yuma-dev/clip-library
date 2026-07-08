@@ -53,7 +53,7 @@ import {
   getAvatarUrl,
   REACTION_EMOJI,
   REACTIONS,
-  SERVER_URL,
+  streamUrl,
   type Clip,
   type ClipDetail,
   type Comment,
@@ -70,7 +70,7 @@ function fmtTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-const STREAM_URL = (clipId: string) => `${SERVER_URL}/api/clips/${clipId}/stream`;
+const STREAM_URL = streamUrl;
 
 /** Idle time before the hover controls fade out while playing. */
 const CONTROLS_HIDE_MS = 2400;

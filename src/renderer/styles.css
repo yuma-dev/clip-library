@@ -1158,6 +1158,14 @@ button {
   width: 244px;
   gap: 0;
 }
+/* Bulk-menu header — "N clips selected" above the multi-selection actions. */
+.ctx-multi-head {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--color-text-muted);
+  cursor: default;
+}
 .ctx-tags-head {
   display: flex;
   align-items: center;
@@ -1805,6 +1813,7 @@ button {
 }
 .clip-participant {
   display: inline-flex;
+  cursor: pointer;
 }
 .clip-participant img {
   width: 32px;
@@ -1948,14 +1957,14 @@ button {
 /* Card footer: text column + game icon (design). */
 .clip-foot {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 9px;
   padding: 0 2px;
 }
 .clip-info {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   min-width: 0;
   flex: 1;
 }
@@ -1967,17 +1976,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* Inline new-clip dot preceding the name. */
-.clip-new-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 3px;
-  border-radius: 50%;
-  background: #be29e8;
-  box-shadow: 0 0 6px #be29e8;
-  vertical-align: middle;
 }
 .clip-meta-row {
   display: flex;
@@ -2007,20 +2005,18 @@ button {
   color: var(--color-text-muted);
 }
 
-/* Game / application icon (get-game-icon). */
+/* Game / application icon (get-game-icon). No backdrop — the icon spans the
+   text column's full height (title top to timestamp bottom, via foot stretch). */
 .clip-game {
   flex: none;
   width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.05);
   display: grid;
   place-items: center;
 }
 .clip-game img {
-  width: 22px;
-  height: 22px;
+  width: 100%;
+  height: 100%;
+  max-height: 32px;
   object-fit: contain;
 }
 .clip-game img.grayscale {
@@ -2609,7 +2605,7 @@ button {
 }
 .mock-card-foot {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   margin-top: 7px;
   padding: 0 2px;
@@ -2638,20 +2634,17 @@ button {
   font-size: 8.5px;
   padding: 0 6px;
 }
-/* Real game icon in the greyscale preview — mirrors .clip-game. */
+/* Real game icon in the greyscale preview — mirrors .clip-game (no backdrop). */
 .mock-card-game {
   flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.05);
+  width: 24px;
   display: grid;
   place-items: center;
 }
 .mock-card-game img {
-  width: 20px;
-  height: 20px;
+  width: 100%;
+  height: 100%;
+  max-height: 26px;
   object-fit: contain;
   transition: filter 220ms ease, opacity 220ms ease;
 }

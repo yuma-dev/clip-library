@@ -11,12 +11,10 @@ const EXAMPLE_ICON = "file:///C:/Users/Fabia/Videos/Clips/icons/League of Legend
 /** Mini clip card used by both library previews. */
 function MockCard({
   isNew,
-  showDot,
   iconSrc,
   grey,
 }: {
   isNew?: boolean;
-  showDot?: boolean;
   iconSrc?: string;
   grey?: boolean;
 }) {
@@ -26,7 +24,6 @@ function MockCard({
       <div className="mock-card-foot">
         <div className="mock-card-text">
           <div className="mock-card-name">
-            {showDot ? <span className="clip-new-dot" /> : null}
             {isNew ? "Clutch ace" : "Ranked warmup"}
           </div>
           <div className="mock-card-meta">
@@ -95,9 +92,9 @@ export default function AppearanceSection() {
         title="New clip indicators"
         aside={<Toggle checked={indicators} onChange={(v) => void set("showNewClipsIndicators", v)} aria-label="New clip indicators" />}
       >
-        <p className="set-group-blurb">Highlight clips recorded since your last session.</p>
+        <p className="set-group-blurb">Highlight clips you haven't opened in the player yet.</p>
         <div className="mock-card-row">
-          <MockCard isNew={indicators} showDot={indicators} />
+          <MockCard isNew={indicators} />
           <MockCard />
         </div>
       </SetGroup>
