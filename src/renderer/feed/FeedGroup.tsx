@@ -3,8 +3,9 @@
 // .clip-group-content grid) so feed sections read as the SAME app surface as
 // the library. Renders FeedClipCards inside the shared grid.
 
-import { memo } from "react";
+import { memo, useDeferredValue } from "react";
 import FeedClipCard from "./FeedClipCard";
+import { useStreamedSlice } from "../ui/useStreamedSlice";
 import type { Clip } from "./types";
 
 interface FeedGroupProps {
@@ -26,6 +27,12 @@ function FeedGroup({
   onFavoriteUpdate,
   onOpen,
 }: FeedGroupProps) {
+  // Same streamed mounting as the library's ClipGroup: a page of clips (or a
+  // cache-restored list) mounts a screenful in one small commit and streams
+  // the rest, instead of one giant commit per infinite-scroll page.
+  const expanded = !useDeferredValue(collapsed);
+  const shown = useStreamedSlice(clips, expanded);
+
   return (
     <section className="clip-group">
       <button
@@ -41,9 +48,9 @@ function FeedGroup({
         <span className="clip-group-divider" />
       </button>
 
-      {!collapsed ? (
+      {shown ? (
         <div className="clip-group-content">
-          {clips.map((clip) => (
+          {shown.map((clip) => (
             <FeedClipCard
               key={clip.id}
               clip={clip}

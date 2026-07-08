@@ -9,12 +9,19 @@ import { glowConfig } from "./glowConfig";
 
 export class ClipGlow {
   private readonly ctx: CanvasRenderingContext2D | null;
+  // Positioned wrapper (.clip-glow-wrap): moved with `transform` so hovering a
+  // card never dirties layout or resizes the blur(45px) layer — left/top/width/
+  // height writes on the filtered canvas forced a re-layout AND a re-rasterize
+  // of the heavily filtered surface on every card enter (16-40ms frames).
+  private readonly wrap: HTMLElement;
   private currentSource: HTMLImageElement | HTMLVideoElement | null = null;
   private currentCard: HTMLElement | null = null;
   private rafId: number | null = null;
   private isActive = false;
   private lastDrawTime = 0;
   private lastPositionTime = 0;
+  private lastW = -1;
+  private lastH = -1;
   private readonly frameInterval = 1000 / 30;
   private readonly blendFactor = 0.2;
   private readonly reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -23,6 +30,9 @@ export class ClipGlow {
     private readonly canvas: HTMLCanvasElement,
     private readonly gridEl: HTMLElement,
   ) {
+    this.wrap = canvas.parentElement?.classList.contains("clip-glow-wrap")
+      ? canvas.parentElement
+      : canvas; // fallback: unwrapped call site keeps the old (slower) behavior
     this.ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: false });
     if (this.ctx) this.ctx.filter = "blur(1px)";
   }
@@ -66,10 +76,17 @@ export class ClipGlow {
     const g = this.gridEl.getBoundingClientRect();
     const m = media.getBoundingClientRect();
     const o = glowConfig.overflow;
-    this.canvas.style.left = `${m.left - g.left - o}px`;
-    this.canvas.style.top = `${m.top - g.top - o + glowConfig.yShift}px`;
-    this.canvas.style.width = `${m.width + o * 2}px`;
-    this.canvas.style.height = `${m.height + o * 2}px`;
+    // Compositor-only reposition; width/height (layout) only when the card
+    // size actually changed — cards in a grid are uniform, so ~never.
+    this.wrap.style.transform = `translate3d(${m.left - g.left - o}px, ${m.top - g.top - o + glowConfig.yShift}px, 0)`;
+    const w = m.width + o * 2;
+    const h = m.height + o * 2;
+    if (w !== this.lastW || h !== this.lastH) {
+      this.wrap.style.width = `${w}px`;
+      this.wrap.style.height = `${h}px`;
+      this.lastW = w;
+      this.lastH = h;
+    }
   }
 
   private draw(force = false): void {

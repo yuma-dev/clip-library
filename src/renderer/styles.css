@@ -1414,12 +1414,35 @@ button {
   padding: 14px 22px 48px;
 }
 
+/* Routed-view host — layout-transparent wrapper that lets the routed view stay
+   mounted (hidden) while the profile overlay is up, so closing the profile
+   doesn't remount the feed/library from scratch. */
+.route-host {
+  display: contents;
+}
+.route-host.hidden {
+  display: none;
+}
+
 /* Shared card glow — one 16x9 canvas behind the cards, unclipped, repositioned
-   over the hovered card with a 55px overflow (see ClipGlow.ts). */
-.clip-glow-canvas {
+   over the hovered card with a 55px overflow (see ClipGlow.ts). The wrapper is
+   what moves (transform-only, compositor-friendly); the canvas inside carries
+   the expensive blur/mask stack and never changes geometry, so repositioning
+   never re-rasterizes the filtered layer. */
+.clip-glow-wrap {
   position: absolute;
+  left: 0;
+  top: 0;
   pointer-events: none;
   z-index: 0;
+  will-change: transform;
+}
+.clip-glow-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
   opacity: 0;
   filter: blur(var(--glow-blur, 45px)) saturate(var(--glow-sat, 1.6)) brightness(var(--glow-bright, 1));
   mix-blend-mode: screen;
@@ -1541,8 +1564,28 @@ button {
      the IO-driven .cv-offscreen class below instead. */
   contain-intrinsic-size: auto 220px;
 }
+/* Hover shadow, pre-rendered: animating box-shadow repaints the blur every
+   frame of the 180ms transition on every card the pointer crosses; a baked
+   shadow cross-faded via opacity is compositor-only and looks identical. It
+   tracks the media container (first child, full width, 16:9). */
+.clip-item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 180ms ease;
+  pointer-events: none;
+}
 .clip-item:hover {
   transform: translateY(-3px);
+}
+.clip-item:hover::before {
+  opacity: 1;
 }
 .clip-item.cv-offscreen {
   content-visibility: hidden;
@@ -1555,11 +1598,11 @@ button {
   border-radius: 12px;
   background: #000;
   border: 0.5px solid var(--color-border);
-  transition: border-color 180ms ease, box-shadow 180ms ease;
+  transition: border-color 180ms ease;
 }
 .clip-item:hover .clip-item-media-container {
   border-color: var(--color-border-hover);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  /* hover shadow lives on .clip-item::before (opacity-only animation) */
 }
 .clip-item-media-container img {
   width: 100%;
@@ -2041,7 +2084,12 @@ button {
   outline: none;
 }
 
-/* New-since-last-session / live-added highlight (plan §5 new-clips indicator). */
+/* New-since-last-session / live-added highlight (plan §5 new-clips indicator).
+   The is-new glow wins over the hover shadow (as it did when both lived on the
+   media container and this later rule took precedence). */
+.clip-item.is-new::before {
+  display: none;
+}
 .clip-item.is-new .clip-item-media-container {
   border-color: color-mix(in srgb, var(--color-accent-glyph) 65%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-glyph) 45%, transparent),

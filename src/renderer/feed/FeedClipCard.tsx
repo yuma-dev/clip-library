@@ -2,7 +2,7 @@
 // visual language (custom classes + design tokens, not Tailwind). Shares the
 // library card's hover feel (translateY(-3px), border + shadow) via feed.css.
 
-import { memo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { Bookmark, Film, MessageSquare } from "lucide-react";
 import {
   formatDuration,
@@ -15,6 +15,7 @@ import {
 import { toggleReaction, toggleFavorite } from "./api";
 import UserPopover from "../ui/UserPopover";
 import { useAppNav } from "../shell/appNav";
+import { useObserve } from "../library/visibility";
 
 interface FeedClipCardProps {
   clip: Clip;
@@ -25,11 +26,25 @@ interface FeedClipCardProps {
 
 function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: FeedClipCardProps) {
   const { openProfile } = useAppNav();
+  const ref = useRef<HTMLElement>(null);
+  const observe = useObserve();
 
-  const topReactions = Object.entries(clip.reactionCounts)
-    .filter(([, count]) => count > 0)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 3);
+  // Register with the shared visibility observer (toggles .cv-offscreen so
+  // far-offscreen cards stop costing layout/paint — same as library ClipCard).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !observe) return;
+    return observe(el);
+  }, [observe]);
+
+  const topReactions = useMemo(
+    () =>
+      Object.entries(clip.reactionCounts)
+        .filter(([, count]) => count > 0)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 3),
+    [clip.reactionCounts],
+  );
 
   const handleReaction = async (e: React.MouseEvent, emoji: string) => {
     e.stopPropagation();
@@ -68,6 +83,7 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
 
   return (
     <article
+      ref={ref}
       className="clip-item feed-card"
       data-clip-id={clip.id}
       data-duration={clip.duration ?? 0}
