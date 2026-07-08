@@ -113,7 +113,7 @@ export default function ProfilePage({ userId }: { userId: string }) {
   }, [activeTab, userId]);
 
   const listPersistKey = `profile:v1:${userId}:${activeTab}`;
-  const { clips, loading: clipsLoading, hasMore, loadMore, updateClipReaction, updateClipFavorite } =
+  const { clips, loading: clipsLoading, hasMore, total, loadMore, updateClipReaction, updateClipFavorite } =
     useFeedClips(clipOptions, listPersistKey);
 
   const handleOpen = (clip: Clip) =>
@@ -316,7 +316,9 @@ export default function ProfilePage({ userId }: { userId: string }) {
               </div>
             )}
             <InfiniteScroll onLoadMore={loadMore} hasMore={hasMore} loading={clipsLoading} />
-            {hasMore && clips.length > 0 ? <SkeletonCards /> : null}
+            {hasMore && clips.length > 0 ? (
+              <SkeletonCards count={total != null ? total - clips.length : null} />
+            ) : null}
           </div>
         </div>
       </div>
