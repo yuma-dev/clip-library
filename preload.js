@@ -27,6 +27,7 @@ const api = {
   getClips: invoke("get-clips"),
   getNewClipInfo: invoke("get-new-clip-info"),
   getNewClipsInfo: invoke("get-new-clips-info"),
+  markClipsWatched: invoke("mark-clips-watched"),
   deleteClip: invoke("delete-clip"),
   saveClipListImmediately: invoke("save-clip-list-immediately"),
   getClipLocation: invoke("get-clip-location"),

@@ -53,11 +53,10 @@ export default function FeedPage() {
       onFavoriteUpdate: updateClipFavorite,
     });
 
-  // Connect prompt: shown when we know we're logged out (verified) or the
-  // fetch itself came back 401 — never blocks the first fetch.
-  const notConnected =
-    (!profile.connected && !profile.verifying && clips.length === 0) ||
-    (error?.status === 401 && clips.length === 0);
+  // Connect prompt: shown whenever we know we're logged out (verified) or the
+  // fetch itself came back 401 — cached clips must NOT keep an unauthenticated
+  // feed browsable. `verifying` keeps the first fetch unblocked on startup.
+  const notConnected = (!profile.connected && !profile.verifying) || error?.status === 401;
 
   if (notConnected) {
     return (

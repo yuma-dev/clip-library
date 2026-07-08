@@ -7,7 +7,12 @@ import { useConfirm } from "../ui/ConfirmDialog";
 import type { LocalClip } from "./types";
 
 export interface ContextMenuHandle {
-  open(x: number, y: number, clip: LocalClip): void;
+  /**
+   * Open the menu for a clip. When `selection` holds more than one clip (the
+   * right-clicked card is part of a multi-selection), the menu switches to
+   * bulk mode and every action applies to all of them.
+   */
+  open(x: number, y: number, clip: LocalClip, selection?: LocalClip[]): void;
 }
 
 interface ContextMenuHostProps {
@@ -27,16 +32,20 @@ type View = "root" | "tags";
  * opening the menu does NOT re-render the (2000-card) grid. Cards trigger it
  * imperatively via the ref handle. "Manage tags" swaps the menu in place for a
  * searchable tag panel (Phase 5); Export stays stubbed until Phase 6.
+ *
+ * Single vs. multi: the host always works on a `clips` array. With one clip it
+ * renders the classic per-clip menu; with several, actions loop over all of
+ * them and the tag panel's checkmark means "every selected clip has this tag".
  */
 const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(function ContextMenuHost(
   { onDeleted, setClipTags, globalTags, addGlobalTag },
   ref,
 ) {
-  const [state, setState] = useState<{ x: number; y: number; clip: LocalClip } | null>(null);
+  const [state, setState] = useState<{ x: number; y: number; clips: LocalClip[] } | null>(null);
   const [view, setView] = useState<View>("root");
-  // The clip's live tag set, seeded on open — gives instant checkbox feedback
+  // Live per-clip tag sets, seeded on open — gives instant checkbox feedback
   // without waiting for the grid's clip list to re-flow down.
-  const [tagSet, setTagSet] = useState<Set<string>>(new Set());
+  const [tagMap, setTagMap] = useState<Map<string, Set<string>>>(new Map());
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
@@ -45,61 +54,81 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
   useImperativeHandle(
     ref,
     () => ({
-      open: (x, y, clip) => {
-        setState({ x, y, clip });
+      open: (x, y, clip, selection) => {
+        const clips = selection && selection.length > 1 ? selection : [clip];
+        setState({ x, y, clips });
         setView("root");
         setQuery("");
-        setTagSet(new Set(clip.tags));
+        setTagMap(new Map(clips.map((c) => [c.originalName, new Set(c.tags)])));
       },
     }),
     [],
   );
 
   const close = () => setState(null);
-  const clip = state?.clip;
+  const clips = state?.clips ?? [];
+  const clip = clips[0];
+  const multi = clips.length > 1;
 
   const revealClip = () => {
     if (clip) window.clips.revealClip(clip.originalName);
     close();
   };
   const resetTrim = async () => {
-    if (!clip) return;
+    if (clips.length === 0) return;
+    const targets = clips;
     close();
-    try {
-      await window.clips.deleteTrim(clip.originalName);
-      toast.show("Trim reset", "success");
-    } catch {
-      toast.show("Failed to reset trim", "error");
+    let failed = 0;
+    for (const t of targets) {
+      try {
+        await window.clips.deleteTrim(t.originalName);
+      } catch {
+        failed++;
+      }
     }
+    if (failed === 0) toast.show(multi ? `Trim reset on ${targets.length} clips` : "Trim reset", "success");
+    else toast.show(`Failed to reset trim on ${failed} of ${targets.length} clips`, "error");
   };
   const resetCache = async () => {
-    if (!clip) return;
+    if (clips.length === 0) return;
+    const targets = clips;
     close();
-    try {
-      await window.clips.resetClipCache(clip.originalName);
-      toast.show("Cached metadata reset", "success");
-    } catch {
-      toast.show("Failed to reset cache", "error");
+    let failed = 0;
+    for (const t of targets) {
+      try {
+        await window.clips.resetClipCache(t.originalName);
+      } catch {
+        failed++;
+      }
     }
+    if (failed === 0)
+      toast.show(multi ? `Cached metadata reset on ${targets.length} clips` : "Cached metadata reset", "success");
+    else toast.show(`Failed to reset cache on ${failed} of ${targets.length} clips`, "error");
   };
-  const deleteClip = async () => {
-    if (!clip) return;
-    const target = clip;
+  const deleteClips = async () => {
+    if (clips.length === 0) return;
+    const targets = clips;
     close();
     const ok = await confirm({
-      title: "Delete clip",
-      message: `Delete “${target.customName}”? This permanently removes the file.`,
+      title: multi ? `Delete ${targets.length} clips` : "Delete clip",
+      message: multi
+        ? `Delete ${targets.length} selected clips? This permanently removes the files.`
+        : `Delete “${targets[0].customName}”? This permanently removes the file.`,
       confirmLabel: "Delete",
       danger: true,
     });
     if (!ok) return;
-    try {
-      await window.clips.deleteClip(target.originalName);
-      onDeleted(target.originalName);
-      toast.show("Clip deleted", "success");
-    } catch {
-      toast.show("Failed to delete clip", "error");
+    let failed = 0;
+    for (const t of targets) {
+      try {
+        await window.clips.deleteClip(t.originalName);
+        onDeleted(t.originalName);
+      } catch {
+        failed++;
+      }
     }
+    if (failed === 0) toast.show(multi ? `${targets.length} clips deleted` : "Clip deleted", "success");
+    else toast.show(`Failed to delete ${failed} of ${targets.length} clips`, "error");
   };
 
   // --- Tag panel ---
@@ -117,27 +146,32 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
   const closestMatch = () =>
     q ? globalTags.find((t) => t.toLowerCase() === q || t.toLowerCase().startsWith(q)) : undefined;
 
-  const applyTags = (next: Set<string>) => {
-    if (clip) setClipTags(clip.originalName, [...next]);
-  };
+  /** Checked = every clip in scope carries the tag. */
+  const tagChecked = (tag: string) =>
+    clips.length > 0 && clips.every((c) => tagMap.get(c.originalName)?.has(tag));
+
+  /** Add the tag everywhere it's missing, or (if all have it) remove it everywhere. */
   const toggleTag = (tag: string) => {
-    setTagSet((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      applyTags(next);
-      return next;
-    });
+    const allHave = tagChecked(tag);
+    const next = new Map(tagMap);
+    for (const c of clips) {
+      const cur = new Set(tagMap.get(c.originalName) ?? []);
+      if (allHave) {
+        if (!cur.delete(tag)) continue;
+      } else {
+        if (cur.has(tag)) continue;
+        cur.add(tag);
+      }
+      next.set(c.originalName, cur);
+      setClipTags(c.originalName, [...cur]);
+    }
+    setTagMap(next);
   };
   const createTag = () => {
     if (!canCreate) return;
     addGlobalTag(trimmed);
-    setTagSet((prev) => {
-      const next = new Set(prev);
-      next.add(trimmed);
-      applyTags(next);
-      return next;
-    });
+    // New tag: nobody has it yet, so toggle = add to every selected clip.
+    toggleTag(trimmed);
     setQuery("");
     searchRef.current?.focus();
   };
@@ -152,6 +186,12 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     <ContextMenu open={state !== null} x={state?.x ?? 0} y={state?.y ?? 0} onClose={close}>
       {view === "root" ? (
         <MenuList>
+          {multi ? (
+            <>
+              <div className="ctx-multi-head">{clips.length} clips selected</div>
+              <MenuDivider />
+            </>
+          ) : null}
           <MenuItem icon={<Upload size={15} />} disabled>
             Export (Phase 6)
           </MenuItem>
@@ -169,19 +209,21 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
           <MenuItem icon={<RotateCcw size={15} />} onClick={resetCache}>
             Reset cached metadata
           </MenuItem>
-          <MenuItem icon={<FolderOpen size={15} />} onClick={revealClip}>
-            Reveal in Explorer
-          </MenuItem>
+          {!multi ? (
+            <MenuItem icon={<FolderOpen size={15} />} onClick={revealClip}>
+              Reveal in Explorer
+            </MenuItem>
+          ) : null}
           <MenuDivider />
-          <MenuItem icon={<Trash2 size={15} />} danger onClick={deleteClip}>
-            Delete
+          <MenuItem icon={<Trash2 size={15} />} danger onClick={deleteClips}>
+            {multi ? `Delete ${clips.length} clips` : "Delete"}
           </MenuItem>
         </MenuList>
       ) : (
         <div className="menu ctx-tags">
           <button type="button" className="ctx-tags-head" onClick={() => setView("root")}>
             <ChevronLeft size={14} />
-            <span>Manage tags</span>
+            <span>{multi ? `Manage tags · ${clips.length} clips` : "Manage tags"}</span>
           </button>
           <div className="ctx-tags-search-row">
             <label className="ctx-tags-search">
@@ -230,7 +272,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
           </div>
           <div className="ctx-tags-list">
             {shownTags.map((tag) => {
-              const checked = tagSet.has(tag);
+              const checked = tagChecked(tag);
               return (
                 <button
                   key={tag}

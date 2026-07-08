@@ -54,6 +54,9 @@ function ClipGrid({
   const observerRef = useRef<IntersectionObserver | null>(null);
   const selectedRef = useRef<Set<string>>(new Set());
   const anchorRef = useRef<string | null>(null);
+  // Live clip list for the context menu (selectionApi is memoized without it).
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
   const menuHostRef = useRef<ContextMenuHandle>(null);
   const [hover, setHover] = useState<LibraryHover | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
@@ -161,7 +164,14 @@ function ClipGrid({
       },
       onCardContextMenu: (e, clip) => {
         e.preventDefault();
-        menuHostRef.current?.open(e.clientX, e.clientY, clip);
+        // Right-clicking inside a multi-selection targets the whole selection
+        // (bulk menu); right-clicking any other card targets just that card.
+        const sel = selectedRef.current;
+        const selection =
+          sel.size > 1 && sel.has(clip.originalName)
+            ? clipsRef.current.filter((c) => sel.has(c.originalName))
+            : undefined;
+        menuHostRef.current?.open(e.clientX, e.clientY, clip, selection);
       },
     }),
     [clearSelection, toast],

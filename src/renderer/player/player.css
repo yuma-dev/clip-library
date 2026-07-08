@@ -731,12 +731,14 @@
 }
 
 #export-button:disabled {
-  background-color: #2d6a30;
+  background: none;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 #share-button:disabled {
-  background: #6b21a8;
+  background: none;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -1398,24 +1400,22 @@ body.player-open .cet-titlebar {
   cursor: pointer;
   transition: background-color 120ms ease;
 }
-/* Original button colors. */
-#export-button {
-  background-color: #3fa14a;
-}
-#share-button {
-  background-color: #9333ea;
-}
+/* Ghost buttons — no fill at rest; a translucent color tint on hover only
+   (same 0.25 alpha as the feed player's close-button hover). */
+#export-button,
+#share-button,
 #delete-button {
-  background-color: #d64533;
+  background: none;
+  color: #e0e0e0;
 }
 #export-button:hover {
-  background-color: #48b155;
+  background-color: rgba(76, 175, 80, 0.25);
 }
 #share-button:hover {
-  background-color: #a352ee;
+  background-color: rgba(147, 51, 234, 0.25);
 }
 #delete-button:hover {
-  background-color: #e2503e;
+  background-color: rgba(240, 80, 80, 0.25);
 }
 #export-button svg,
 #share-button svg,

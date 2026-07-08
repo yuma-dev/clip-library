@@ -18,6 +18,7 @@ export interface ClipsApi {
   getClips(): Promise<any[]>;
   getNewClipInfo(fileName: string): Promise<any>;
   getNewClipsInfo(): Promise<{ newClips: string[]; totalNewCount?: number }>;
+  markClipsWatched(clipNames: string[]): Promise<void>;
   deleteClip(clip: any): Promise<any>;
   saveClipListImmediately(): Promise<any>;
   getClipLocation(): Promise<string>;

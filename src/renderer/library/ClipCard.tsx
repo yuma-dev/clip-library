@@ -135,9 +135,6 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
                 if (rename) setEditing(true);
               }}
             >
-              {showNewIndicators && clip.isNewSinceLastSession ? (
-                <span className="clip-new-dot" aria-hidden="true" />
-              ) : null}
               {clip.customName}
             </p>
           )}

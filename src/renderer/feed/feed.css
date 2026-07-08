@@ -242,42 +242,58 @@
   }
 }
 
-/* ---- Card footer ---- */
+/* ---- Card footer ----
+   Mirrors the library card: a tight text column (title over byline, 2px gap)
+   with the bookmark on the right, aligned to the top of the title. */
 .feed-card-foot {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 9px;
   padding: 0 2px;
 }
+.feed-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.feed-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Byline: avatar + name · time · game — sized like the library meta row. */
+.feed-card-byline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+}
 .feed-card-avatar {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   object-fit: cover;
   flex: none;
 }
-/* Uploader link — same text scale as the meta row so "Name · 2mo ago" reads
-   as one aligned line (the name previously inherited the body font size). */
 .feed-card-uploader-link {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 550;
   line-height: 1;
 }
 .feed-card-uploader-link:hover .feed-card-uploader {
   color: var(--color-text-primary);
-}
-.feed-card-foot-text {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  font-size: 12px;
 }
 .feed-card-uploader {
   color: var(--color-text-secondary);
@@ -297,7 +313,6 @@
 }
 .feed-card-game {
   color: var(--color-text-muted);
-  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -309,6 +324,9 @@
   width: 26px;
   height: 26px;
   flex: none;
+  /* Optically align the 15px glyph inside the 26px hit-area with the title's
+     text top (the button has ~5px internal padding). */
+  margin-top: -4px;
   border: none;
   border-radius: 7px;
   background: transparent;
@@ -324,17 +342,6 @@
   color: var(--color-accent-glyph);
 }
 
-.feed-card-title {
-  margin: 0;
-  padding: 0 2px;
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ---- Infinite-scroll sentinel + spinner ---- */
 .feed-sentinel {
   display: flex;
@@ -348,6 +355,26 @@
   border: 2px solid var(--color-text-muted);
   border-top-color: transparent;
   animation: feed-spin 0.7s linear infinite;
+}
+/* Hover-preview loading overlay — bottom-right of the thumbnail while the
+   remote stream buffers (removed when playback starts). */
+.feed-preview-loading {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.feed-preview-loading .feed-spinner {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
 }
 @keyframes feed-spin {
   to {

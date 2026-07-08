@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { CircleDashed, Layers, Scissors, Sparkles } from "lucide-react";
 import { routes, type Route } from "../routes";
 import { useToast } from "../ui/Toast";
+import { useProfile } from "./useProfile";
 import RailTags from "./RailTags";
 import RailProfile from "./RailProfile";
 import FeedRailFilters from "../feed/FeedRailFilters";
@@ -41,6 +42,9 @@ function Sidebar({
   collapsed,
 }: SidebarProps) {
   const toast = useToast();
+  // Feed requires a ClipLib login — the nav item locks while logged out.
+  const { connected, verifying } = useProfile();
+  const feedLocked = !connected && !verifying;
 
   const counts = useMemo(() => {
     const now = Date.now();
@@ -111,26 +115,31 @@ function Sidebar({
       </label>
 
       <nav className="rail-nav">
-        {routes.map(({ id, label, icon: Icon, disabled }) => (
-          <button
-            key={id}
-            type="button"
-            data-rail-tip={disabled ? `${label} (soon)` : label}
-            className={`rail-item${route === id ? " active" : ""}${disabled ? " soon" : ""}`}
-            onClick={() => {
-              if (disabled) toast.show(`${label} is coming soon`);
-              else onNavigate(id);
-            }}
-          >
-            {route === id ? <span className="rail-item-mark" aria-hidden="true" /> : null}
-            <span className="r-ico">
-              <Icon size={17} />
-            </span>
-            <span className="rail-label">{label}</span>
-            {id === "library" ? <span className="rail-count-pill r-label">{counts.total}</span> : null}
-            {disabled ? <span className="rail-soon r-label">soon</span> : null}
-          </button>
-        ))}
+        {routes.map(({ id, label, icon: Icon, disabled }) => {
+          const locked = disabled || (id === "feed" && feedLocked);
+          const tip = disabled ? `${label} (soon)` : locked ? `${label} (sign in)` : label;
+          return (
+            <button
+              key={id}
+              type="button"
+              data-rail-tip={tip}
+              className={`rail-item${route === id ? " active" : ""}${locked ? " soon" : ""}`}
+              onClick={() => {
+                if (disabled) toast.show(`${label} is coming soon`);
+                else if (locked) toast.show("Connect to ClipLib to browse the feed");
+                else onNavigate(id);
+              }}
+            >
+              {route === id ? <span className="rail-item-mark" aria-hidden="true" /> : null}
+              <span className="r-ico">
+                <Icon size={17} />
+              </span>
+              <span className="rail-label">{label}</span>
+              {id === "library" ? <span className="rail-count-pill r-label">{counts.total}</span> : null}
+              {disabled ? <span className="rail-soon r-label">soon</span> : null}
+            </button>
+          );
+        })}
       </nav>
 
       <div className="rail-divider" />

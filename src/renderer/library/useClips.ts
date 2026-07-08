@@ -47,6 +47,11 @@ export interface UseClips {
   /** Remove clips from the list (e.g. after a successful delete). */
   removeClips: (names: string[]) => void;
   /**
+   * Mark clips as watched (player opened): clears their "new" highlight
+   * immediately and persists via IPC so it survives restarts.
+   */
+  markClipsWatched: (names: string[]) => void;
+  /**
    * Rename a clip's custom title. Persists via IPC, updates the list, and
    * reflects the change into the open legacy player. Returns true on success.
    */
@@ -237,6 +242,20 @@ export function useClips(): UseClips {
     setClips((prev) => prev.filter((c) => !set.has(c.originalName)));
   }, []);
 
+  const markClipsWatched = useCallback((names: string[]) => {
+    const set = new Set(names);
+    setClips((prev) =>
+      prev.some((c) => set.has(c.originalName) && c.isNewSinceLastSession)
+        ? prev.map((c) =>
+            set.has(c.originalName) && c.isNewSinceLastSession
+              ? { ...c, isNewSinceLastSession: false }
+              : c,
+          )
+        : prev,
+    );
+    window.clips.markClipsWatched(names).catch(() => {});
+  }, []);
+
   const renameClip = useCallback(async (originalName: string, rawName: string) => {
     const newName = rawName.trim();
     const res = await window.clips.saveCustomName(originalName, newName).catch(() => null);
@@ -302,6 +321,7 @@ export function useClips(): UseClips {
       thumbnails,
       generatingCount,
       removeClips,
+      markClipsWatched,
       renameClip,
       setClipTags,
       renameTagInClips,
@@ -314,6 +334,7 @@ export function useClips(): UseClips {
       thumbnails,
       generatingCount,
       removeClips,
+      markClipsWatched,
       renameClip,
       setClipTags,
       renameTagInClips,
