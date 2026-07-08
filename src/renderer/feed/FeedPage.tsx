@@ -18,7 +18,6 @@ import { useFeedGroups } from "./useFeedGroups";
 import { useCardGlow } from "./useCardGlow";
 import { ObserveContext, useVisibilityObserver } from "../library/visibility";
 import InfiniteScroll from "./InfiniteScroll";
-import SkeletonCards from "./SkeletonCards";
 import type { Clip } from "./types";
 import "./feed.css";
 
@@ -37,7 +36,7 @@ export default function FeedPage() {
   );
   const listPersistKey = feedPersistKey(filters);
 
-  const { clips, loading, hasMore, total, error, loadMore, updateClipReaction, updateClipFavorite } =
+  const { clips, loading, hasMore, error, loadMore, updateClipReaction, updateClipFavorite } =
     useFeedClips(options, listPersistKey);
 
   const { groups, collapsed, toggle } = useFeedGroups(clips, FEED_COLLAPSE_KEY);
@@ -113,11 +112,6 @@ export default function FeedPage() {
               />
             ))}
             <InfiniteScroll onLoadMore={loadMore} hasMore={hasMore} loading={loading} />
-            {/* Below the sentinel: sized to the server-reported remainder so
-                the scroll area has its final length up front; scrolling into
-                the skeletons triggers the next page load and they're filled
-                in place. */}
-            {hasMore ? <SkeletonCards count={total != null ? total - clips.length : null} /> : null}
           </div>
         )}
       </div>

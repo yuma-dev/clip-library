@@ -16,7 +16,6 @@ import { openFeedClip } from "./feedPlayerBus";
 import FeedClipCard from "./FeedClipCard";
 import { useCardGlow } from "./useCardGlow";
 import InfiniteScroll from "./InfiniteScroll";
-import SkeletonCards from "./SkeletonCards";
 import { useStreamedSlice } from "../ui/useStreamedSlice";
 import { ObserveContext, useVisibilityObserver } from "../library/visibility";
 import { getAvatarUrl, mediaUrl, type Clip, type UserProfile } from "./types";
@@ -113,7 +112,7 @@ export default function ProfilePage({ userId }: { userId: string }) {
   }, [activeTab, userId]);
 
   const listPersistKey = `profile:v1:${userId}:${activeTab}`;
-  const { clips, loading: clipsLoading, hasMore, total, loadMore, updateClipReaction, updateClipFavorite } =
+  const { clips, loading: clipsLoading, hasMore, loadMore, updateClipReaction, updateClipFavorite } =
     useFeedClips(clipOptions, listPersistKey);
 
   const handleOpen = (clip: Clip) =>
@@ -316,9 +315,6 @@ export default function ProfilePage({ userId }: { userId: string }) {
               </div>
             )}
             <InfiniteScroll onLoadMore={loadMore} hasMore={hasMore} loading={clipsLoading} />
-            {hasMore && clips.length > 0 ? (
-              <SkeletonCards count={total != null ? total - clips.length : null} />
-            ) : null}
           </div>
         </div>
       </div>
