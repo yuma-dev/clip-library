@@ -92,6 +92,22 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
         setSaved(new Set(["Untagged", "Unnamed", ...list]));
       }
       setReady(true);
+
+      // Disaster recovery (legacy clip-grid behavior): rebuild the persisted
+      // global tag list from per-clip tags on disk (e.g. after settings loss).
+      // Display already self-heals via deriveGlobalTags; this repairs storage.
+      try {
+        const restore = (await window.clips.restoreMissingGlobalTags()) as {
+          success?: boolean;
+          restoredCount?: number;
+        } | null;
+        if (!cancelled && restore?.success && (restore.restoredCount ?? 0) > 0) {
+          const reloaded = await window.clips.loadGlobalTags().catch(() => []);
+          if (!cancelled && Array.isArray(reloaded)) setLoadedTags(reloaded.map(String));
+        }
+      } catch {
+        /* recovery is best-effort */
+      }
     })();
     return () => {
       cancelled = true;

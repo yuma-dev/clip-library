@@ -57,6 +57,9 @@ function ctx(): ExportCtx | null {
 export async function exportTrimmedVideo(onProgress?: ProgressFn): Promise<void> {
   const c = ctx();
   if (!c) return;
+  // Legacy parity: surfaces the FFmpeg version in main's log right before an
+  // export, so failed-export diagnostics always carry it. Result unused.
+  window.clips.getFfmpegVersion().catch(() => {});
   onProgress?.(0, 100, true);
   const res = await window.clips.exportTrimmedVideo(
     c.name,

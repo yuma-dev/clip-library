@@ -75,7 +75,6 @@ export interface ClipsApi {
   // --- Thumbnails ---
   getThumbnailPath(...args: any[]): Promise<any>;
   getThumbnailPathsBatch(...args: any[]): Promise<any>;
-  generateThumbnail(...args: any[]): Promise<any>;
   generateThumbnailsProgressively(...args: any[]): Promise<any>;
   regenerateThumbnailForTrim(...args: any[]): Promise<any>;
 
@@ -125,6 +124,8 @@ export interface ClipsApi {
 
   // --- Updates ---
   checkForUpdates(): Promise<any>;
+  /** Download the latest installer, launch it, and quit (main auto-installs). */
+  startUpdate(): Promise<{ success: boolean }>;
   openUpdatePage(url?: string | null): Promise<{ success: boolean; url?: string; error?: string }>;
   getAppVersion(): Promise<string>;
 

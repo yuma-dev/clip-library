@@ -183,6 +183,18 @@ export function useClips(): UseClips {
         }),
       );
       unsubs.push(window.clips.onThumbnailGenerationComplete(() => setGeneratingCount(0)));
+      // Main revalidates thumbnails on startup/location change; seed the
+      // pending count so the indicator appears before the first progress tick.
+      unsubs.push(
+        window.clips.onThumbnailValidationStart((payload: { total?: number }) => {
+          setGeneratingCount(Math.max(0, Number(payload?.total) || 0));
+        }),
+      );
+      unsubs.push(
+        window.clips.onThumbnailGenerationFailed((payload: { clipName?: string; error?: string }) => {
+          console.error(`Failed to generate thumbnail for ${payload?.clipName}: ${payload?.error}`);
+        }),
+      );
 
       const missing = names.filter((n) => !tmap.get(n));
       if (missing.length > 0) {

@@ -12,6 +12,12 @@ import "./styles.css";
 initGridDensity();
 initGlowTuner();
 
+// Mirror main-process log lines into the renderer console (legacy `log` IPC).
+window.clips?.onLog?.(({ type, message }: { type: string; message: string }) => {
+  const fn = (console as unknown as Record<string, (...a: unknown[]) => void>)[type];
+  (typeof fn === "function" ? fn : console.log)(`[Main Process] ${message}`);
+});
+
 const Providers = ({ children }: { children: ReactNode }) => (
   <ToastProvider>
     <ConfirmProvider>

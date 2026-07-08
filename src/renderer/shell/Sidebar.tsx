@@ -6,6 +6,7 @@ import { useProfile } from "./useProfile";
 import RailTags from "./RailTags";
 import RailProfile from "./RailProfile";
 import RailSearch from "./RailSearch";
+import UpdatePill from "./UpdatePill";
 import FeedRailFilters from "../feed/FeedRailFilters";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 import type { Collection } from "../library/filter";
@@ -188,6 +189,9 @@ function Sidebar({
           </div>
         </>
       )}
+
+      {/* App update pill (only rendered while an update is available/in flight). */}
+      <UpdatePill />
 
       <RailProfile />
     </aside>

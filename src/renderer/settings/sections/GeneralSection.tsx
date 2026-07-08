@@ -5,6 +5,7 @@ import Toggle from "../../ui/Toggle";
 import TagManagerModal from "../TagManagerModal";
 import { useSettings } from "../SettingsContext";
 import { useToast } from "../../ui/Toast";
+import { setDiscordPresenceEnabled } from "../../player/discordPresence";
 import type { UseClips } from "../../library/useClips";
 import type { UseLibraryFilter } from "../../library/useLibraryFilter";
 
@@ -37,6 +38,8 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
     } catch {
       /* RPC connection issues are non-fatal; the saved setting still applies next launch */
     }
+    // Flip the renderer-side gate + re-assert presence when re-enabled.
+    setDiscordPresenceEnabled(enabled);
     if (!ok) toast.show("Failed to save setting", "error");
   };
 
