@@ -38,6 +38,14 @@ function getCacheKey(persistKey?: string | null): string | null {
  * streamed, so fetch big pages and grow the scroll area in big steps. */
 const PAGE_SIZE = 60;
 
+/** After page 1 paints, the entire remainder (server-reported total) is
+ * fetched in ONE background request — clip rows are ~0.5KB of metadata, so
+ * even a full library is ~1MB and the per-request auth/query overhead (~1s)
+ * dominates anyway. The cap is a guard against pathological totals; anything
+ * beyond it falls back to cursor pagination via InfiniteScroll, which also
+ * covers servers that clamp `limit`. */
+const MAX_EAGER_FETCH = 2000;
+
 /** Cache younger than this skips the mount-time revalidate fetch entirely —
  * bouncing between views within half a minute shouldn't re-hit the share
  * server (each round trip is ~300ms and lands mid-navigation). */
@@ -160,8 +168,11 @@ export function useFeedClips(
     [persistCache],
   );
 
+  // One-shot guard for the eager remainder fetch (reset per filter change).
+  const eagerLoadedRef = useRef(false);
+
   const doFetch = useCallback(
-    async (reset = false) => {
+    async (reset = false, limitOverride?: number) => {
       if (!reset && fetchingRef.current) return;
       const requestVersion = requestVersionRef.current + 1;
       requestVersionRef.current = requestVersion;
@@ -169,7 +180,7 @@ export function useFeedClips(
       setLoading(true);
       try {
         const data = await fetchClips({
-          limit: PAGE_SIZE,
+          limit: limitOverride ?? PAGE_SIZE,
           cursor: !reset ? cursorRef.current : null,
           user: optionsRef.current.user,
           mention: optionsRef.current.mention,
@@ -191,6 +202,17 @@ export function useFeedClips(
           setTotal(data.total);
         }
         persistCache(nextClips, data.nextCursor, nextHasMore);
+        // Complete the list in one background request once page 1 is up:
+        // deferred a tick so this fetch's `finally` clears the in-flight
+        // guard first. Failure (or a server that clamps `limit`) degrades
+        // to normal cursor pagination.
+        if (nextHasMore && data.total != null && !eagerLoadedRef.current) {
+          const remaining = data.total - nextClips.length;
+          if (remaining > 0 && remaining <= MAX_EAGER_FETCH) {
+            eagerLoadedRef.current = true;
+            window.setTimeout(() => void doFetchRef.current(false, remaining), 0);
+          }
+        }
       } catch (err) {
         if (requestVersion !== requestVersionRef.current) return;
         console.error("Failed to fetch clips:", err);
@@ -204,6 +226,10 @@ export function useFeedClips(
     },
     [persistCache],
   );
+  // Self-reference for the deferred eager fetch (can't close over `doFetch`
+  // inside its own useCallback definition).
+  const doFetchRef = useRef(doFetch);
+  doFetchRef.current = doFetch;
 
   const refresh = useCallback(() => {
     setRestoredFromCache(false);
@@ -227,6 +253,7 @@ export function useFeedClips(
   useEffect(() => {
     requestVersionRef.current += 1;
     fetchingRef.current = false;
+    eagerLoadedRef.current = false;
     const storageKey = getCacheKey(persistKey);
     if (storageKey) {
       const cached = readCachedState(storageKey);
@@ -246,7 +273,16 @@ export function useFeedClips(
         // visit appear on re-entry (the fetch replaces the list on success
         // and leaves the cached one up on failure). Fresh caches skip the
         // refetch — quick view bounces shouldn't re-hit the server.
-        if (Date.now() - cached.savedAt > REVALIDATE_AFTER_MS) doFetch(true);
+        if (Date.now() - cached.savedAt > REVALIDATE_AFTER_MS) {
+          doFetch(true); // its success schedules the eager remainder fetch
+        } else if (cached.hasMore && cached.total != null) {
+          // Fresh but partial cache: still complete the list in one request.
+          const remaining = cached.total - cached.clips.length;
+          if (remaining > 0 && remaining <= MAX_EAGER_FETCH) {
+            eagerLoadedRef.current = true;
+            doFetch(false, remaining);
+          }
+        }
         return;
       }
     }
