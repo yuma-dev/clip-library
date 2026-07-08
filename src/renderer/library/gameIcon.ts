@@ -78,8 +78,11 @@ export function loadGameIcon(name: string): Promise<GameIcon> {
     queue.set(name, resolve);
     if (!flushScheduled) {
       flushScheduled = true;
-      // One macrotask gap collects the whole mount wave into a single flush.
-      setTimeout(() => void flushQueue(), 0);
+      // Collect a few frames' worth of mount waves into one flush: cards (and
+      // now groups) stream in across frames, so a 0ms flush produced one IPC
+      // batch per frame. 50ms is imperceptible for icon pop-in and cuts the
+      // batch count several-fold.
+      setTimeout(() => void flushQueue(), 50);
     }
   });
 

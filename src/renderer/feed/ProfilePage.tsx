@@ -16,6 +16,9 @@ import { openFeedClip } from "./feedPlayerBus";
 import FeedClipCard from "./FeedClipCard";
 import { useCardGlow } from "./useCardGlow";
 import InfiniteScroll from "./InfiniteScroll";
+import SkeletonCards from "./SkeletonCards";
+import { useStreamedSlice } from "../ui/useStreamedSlice";
+import { ObserveContext, useVisibilityObserver } from "../library/visibility";
 import { getAvatarUrl, mediaUrl, type Clip, type UserProfile } from "./types";
 import { useAppNav } from "../shell/appNav";
 import "./feed.css";
@@ -119,6 +122,9 @@ export default function ProfilePage({ userId }: { userId: string }) {
       onFavoriteUpdate: updateClipFavorite,
     });
   const { gridRef, canvasRef } = useCardGlow();
+  // Streamed mounting + offscreen culling — same mechanics as the other grids.
+  const shownClips = useStreamedSlice(clips, true) ?? [];
+  const observe = useVisibilityObserver();
 
   if (loading) {
     return (
@@ -291,21 +297,26 @@ export default function ProfilePage({ userId }: { userId: string }) {
               <p className="profile-empty">{emptyMessage}</p>
             ) : (
               <div className="clip-grid profile-clip-grid" ref={gridRef}>
-                <canvas className="clip-glow-canvas" ref={canvasRef} width={16} height={9} aria-hidden="true" />
+                <div className="clip-glow-wrap" aria-hidden="true">
+                  <canvas className="clip-glow-canvas" ref={canvasRef} width={16} height={9} />
+                </div>
                 <div className="clip-group-content">
-                  {clips.map((clip) => (
-                    <FeedClipCard
-                      key={clip.id}
-                      clip={clip}
-                      onReactionUpdate={updateClipReaction}
-                      onFavoriteUpdate={updateClipFavorite}
-                      onOpen={handleOpen}
-                    />
-                  ))}
+                  <ObserveContext.Provider value={observe}>
+                    {shownClips.map((clip) => (
+                      <FeedClipCard
+                        key={clip.id}
+                        clip={clip}
+                        onReactionUpdate={updateClipReaction}
+                        onFavoriteUpdate={updateClipFavorite}
+                        onOpen={handleOpen}
+                      />
+                    ))}
+                  </ObserveContext.Provider>
                 </div>
               </div>
             )}
             <InfiniteScroll onLoadMore={loadMore} hasMore={hasMore} loading={clipsLoading} />
+            {hasMore && clips.length > 0 ? <SkeletonCards /> : null}
           </div>
         </div>
       </div>

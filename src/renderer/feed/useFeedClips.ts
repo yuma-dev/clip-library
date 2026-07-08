@@ -1,7 +1,9 @@
 // Cursor-paginated clip list for the feed. Ported from the reference website's
 // `useClips` hook (cliplib share/src/hooks/useClips.ts), adapted to the app's
-// typed `api.ts` client. Behavior preserved verbatim:
-//   - limit 20, cursor pagination
+// typed `api.ts` client. Behavior preserved verbatim (except the page size —
+// the server takes ~1s per authed query regardless of limit, and streamed
+// card mounting makes big pages cheap, so bigger pages = fewer stalls):
+//   - limit PAGE_SIZE, cursor pagination
 //   - loadMore guarded by in-flight + hasMore refs
 //   - request-version race guard (stale responses dropped)
 //   - sessionStorage cache per persistKey (restore on mount → restoredFromCache)
@@ -30,6 +32,15 @@ function getCacheKey(persistKey?: string | null): string | null {
   if (!persistKey) return null;
   return `feed:list:v1:${persistKey}`;
 }
+
+/** One server round trip is ~1s warm regardless of page size; mounting is
+ * streamed, so fetch big pages and grow the scroll area in big steps. */
+const PAGE_SIZE = 60;
+
+/** Cache younger than this skips the mount-time revalidate fetch entirely —
+ * bouncing between views within half a minute shouldn't re-hit the share
+ * server (each round trip is ~300ms and lands mid-navigation). */
+const REVALIDATE_AFTER_MS = 30_000;
 
 function readCachedState(storageKey: string): CachedClipState | null {
   try {
@@ -60,7 +71,7 @@ export async function prefetchFeedList(
   const storageKey = getCacheKey(persistKey);
   if (!storageKey || readCachedState(storageKey)) return;
   try {
-    const { clips, nextCursor } = await fetchClips({ limit: 20, ...options });
+    const { clips, nextCursor } = await fetchClips({ limit: PAGE_SIZE, ...options });
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({ clips, nextCursor, hasMore: Boolean(nextCursor), savedAt: Date.now() }),
@@ -151,7 +162,7 @@ export function useFeedClips(
       setLoading(true);
       try {
         const data = await fetchClips({
-          limit: 20,
+          limit: PAGE_SIZE,
           cursor: !reset ? cursorRef.current : null,
           user: optionsRef.current.user,
           mention: optionsRef.current.mention,
@@ -220,8 +231,9 @@ export function useFeedClips(
         // Stale-while-revalidate: paint the cached list instantly, then
         // refetch page 1 in the background so clips shared since the last
         // visit appear on re-entry (the fetch replaces the list on success
-        // and leaves the cached one up on failure).
-        doFetch(true);
+        // and leaves the cached one up on failure). Fresh caches skip the
+        // refetch — quick view bounces shouldn't re-hit the server.
+        if (Date.now() - cached.savedAt > REVALIDATE_AFTER_MS) doFetch(true);
         return;
       }
     }

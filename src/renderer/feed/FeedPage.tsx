@@ -16,7 +16,9 @@ import { feedPersistKey, setFeedGames, useFeedFilters } from "./feedFilters";
 import FeedGroup from "./FeedGroup";
 import { useFeedGroups } from "./useFeedGroups";
 import { useCardGlow } from "./useCardGlow";
+import { ObserveContext, useVisibilityObserver } from "../library/visibility";
 import InfiniteScroll from "./InfiniteScroll";
+import SkeletonCards from "./SkeletonCards";
 import type { Clip } from "./types";
 import "./feed.css";
 
@@ -26,6 +28,8 @@ export default function FeedPage() {
   const profile = useProfile();
   const filters = useFeedFilters();
   const { gridRef, canvasRef } = useCardGlow();
+  // Offscreen culling — same .cv-offscreen mechanism as the library grid.
+  const observe = useVisibilityObserver();
 
   const options = useMemo(
     () => ({ user: filters.user, mention: filters.mention, game: filters.game, sort: filters.sort }),
@@ -76,6 +80,7 @@ export default function FeedPage() {
   }
 
   return (
+    <ObserveContext.Provider value={observe}>
     <div className="feed-view">
       <div className="feed-scroll clip-scroll">
         {clips.length === 0 && !loading ? (
@@ -92,7 +97,9 @@ export default function FeedPage() {
           </div>
         ) : (
           <div className="clip-grid feed-clip-grid" ref={gridRef}>
-            <canvas className="clip-glow-canvas" ref={canvasRef} width={16} height={9} aria-hidden="true" />
+            <div className="clip-glow-wrap" aria-hidden="true">
+              <canvas className="clip-glow-canvas" ref={canvasRef} width={16} height={9} />
+            </div>
             {groups.map((group) => (
               <FeedGroup
                 key={group.name}
@@ -105,11 +112,15 @@ export default function FeedPage() {
                 onOpen={handleOpen}
               />
             ))}
+            <InfiniteScroll onLoadMore={loadMore} hasMore={hasMore} loading={loading} />
+            {/* Below the sentinel: scrolling into the skeletons is what
+                triggers the next page load, so they're replaced as they
+                come into view. */}
+            {hasMore ? <SkeletonCards /> : null}
           </div>
         )}
-
-        <InfiniteScroll onLoadMore={loadMore} hasMore={hasMore} loading={loading} />
       </div>
     </div>
+    </ObserveContext.Provider>
   );
 }

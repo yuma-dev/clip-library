@@ -9,6 +9,7 @@ import { SelectionContext, type SelectionApi } from "./selectionContext";
 import { RenameContext, type RenameFn } from "./renameContext";
 import ContextMenuHost, { type ContextMenuHandle } from "./ContextMenuHost";
 import { useToast } from "../ui/Toast";
+import { useStreamedSlice } from "../ui/useStreamedSlice";
 import type { LocalClip } from "./types";
 
 interface ClipGridProps {
@@ -212,6 +213,12 @@ function ClipGrid({
     prevGroupsRef.current = new Map(groups.map((g) => [g.name, g]));
   }, [groups]);
 
+  // Stream the GROUPS too: every expanded group mounts 24 cards in the commit
+  // it appears in, so mounting all ~25 groups at once is still a ~600-card
+  // commit (the 700ms first frame in the 2026-07-08 startup trace). A few
+  // groups fill the viewport; the rest stream in below the fold.
+  const shownGroups = useStreamedSlice(groups, true, { initial: 4, perFrame: 3 }) ?? groups;
+
   // Display-ordered clip names across expanded groups — the source of truth
   // for shift-click ranges (kept in a ref so selectionApi stays stable and
   // SelectionContext consumers don't re-render on filter changes).
@@ -243,8 +250,10 @@ function ClipGrid({
           <SelectionContext.Provider value={selectionApi}>
             <div className="clip-scroll" ref={scrollRef}>
               <div className="clip-grid" ref={gridRef}>
-                <canvas className="clip-glow-canvas" ref={glowCanvasRef} width={16} height={9} aria-hidden="true" />
-                {groups.map((group) => (
+                <div className="clip-glow-wrap" aria-hidden="true">
+                  <canvas className="clip-glow-canvas" ref={glowCanvasRef} width={16} height={9} />
+                </div>
+                {shownGroups.map((group) => (
                   <ClipGroup
                     key={group.name}
                     group={group}

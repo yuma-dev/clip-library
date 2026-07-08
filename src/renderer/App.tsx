@@ -51,6 +51,14 @@ export default function App() {
   const filter = useLibraryFilter(lib.clips);
   const readySent = useRef(false);
 
+  // Keep-alive for the heavy routed views: once visited, library/feed stay
+  // mounted (hidden via .route-host) so switching back is a style flip instead
+  // of a full remount — rail-item switches cost 585-930ms in the 2026-07-08
+  // trace, almost all of it re-mounting the target view's grid.
+  const visitedRoutes = useRef({ library: false, feed: false });
+  if (route === "library") visitedRoutes.current.library = true;
+  if (route === "feed") visitedRoutes.current.feed = true;
+
   // Warm the online data shortly after launch, off the startup path: the
   // registered-user map (grid popovers), own account, and the default feed
   // page — so Feed/popovers open instantly instead of waiting ~1s each.
@@ -110,6 +118,9 @@ export default function App() {
   useEffect(() => {
     if (!loggedOut) return;
     setProfileUserId(null);
+    // Also drop the kept-alive feed — a cached feed must not stay browsable
+    // (or even mounted) once the user is logged out.
+    visitedRoutes.current.feed = false;
     setRoute((prev) => (prev === "feed" ? "library" : prev));
   }, [loggedOut]);
 
@@ -165,26 +176,31 @@ export default function App() {
           collapsed={railCollapsed}
         />
         <main className="app-main">
-          {/* Profile overlay takes precedence over the routed view. */}
-          {profileUserId ? (
-            <ProfilePage userId={profileUserId} />
-          ) : (
-            <>
-              {route === "library" ? (
-                <LibraryView
-                  lib={lib}
-                  clips={filter.filteredClips}
-                  grayscaleIcons={grayscaleIcons}
-                  showNewIndicators={showNewIndicators}
-                  previewVolume={previewVolume}
-                  globalTags={filter.globalTags}
-                  addGlobalTag={filter.addGlobalTag}
-                />
-              ) : null}
-              {route === "feed" ? <FeedPage /> : null}
-              {route === "settings" ? <SettingsView lib={lib} filter={filter} /> : null}
-            </>
-          )}
+          {/* Profile overlay takes precedence over the routed view. The routed
+              view stays MOUNTED (display:none via .route-host) so closing the
+              profile doesn't remount the feed/library — remounting re-ran the
+              feed's fetch + mounted every card in one commit (855ms freeze on
+              profile-back in the 2026-07-08 trace). */}
+          {profileUserId ? <ProfilePage userId={profileUserId} /> : null}
+          <div className={`route-host${profileUserId || route !== "library" ? " hidden" : ""}`}>
+            {visitedRoutes.current.library ? (
+              <LibraryView
+                lib={lib}
+                clips={filter.filteredClips}
+                grayscaleIcons={grayscaleIcons}
+                showNewIndicators={showNewIndicators}
+                previewVolume={previewVolume}
+                globalTags={filter.globalTags}
+                addGlobalTag={filter.addGlobalTag}
+              />
+            ) : null}
+          </div>
+          <div className={`route-host${profileUserId || route !== "feed" ? " hidden" : ""}`}>
+            {visitedRoutes.current.feed ? <FeedPage /> : null}
+          </div>
+          <div className={`route-host${profileUserId || route !== "settings" ? " hidden" : ""}`}>
+            {route === "settings" ? <SettingsView lib={lib} filter={filter} /> : null}
+          </div>
         </main>
       </div>
       {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened).
