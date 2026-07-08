@@ -71,8 +71,11 @@ const api = {
   // --- Thumbnails ---
   getThumbnailPath: invoke("get-thumbnail-path"),
   getThumbnailPathsBatch: invoke("get-thumbnail-paths-batch"),
-  generateThumbnail: invoke("generate-thumbnail"),
+  // NOTE: no wrapper for "generate-thumbnail" (singular) — that main handler
+  // predates generate-thumbnails-progressively and no renderer ever called it.
   generateThumbnailsProgressively: invoke("generate-thumbnails-progressively"),
+  // Called by the wrapped legacy player directly via ipcRenderer today; the
+  // wrapper exists so future React code can trigger trim-thumbnail regen.
   regenerateThumbnailForTrim: invoke("regenerate-thumbnail-for-trim"),
 
   // --- Export / files ---
@@ -109,6 +112,7 @@ const api = {
 
   // --- Updates ---
   checkForUpdates: invoke("check-for-updates"),
+  startUpdate: invoke("start-update"),
   openUpdatePage: invoke("open-update-page"),
   getAppVersion: invoke("get-app-version"),
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Archive, ExternalLink, RefreshCw, UploadCloud } from "lucide-react";
 import { SetGroup, SetRow, StatusLine } from "../rows";
 import { useToast } from "../../ui/Toast";
+import { reportUpdateAvailable } from "../../shell/useUpdater";
 import logoUrl from "../../../../assets/logo.png";
 
 type Tone = "info" | "progress" | "success" | "error";
@@ -85,6 +86,8 @@ export default function AboutSection() {
       if (result?.manualUpdateUrl) manualUrlRef.current = result.manualUpdateUrl;
       if (result?.updateAvailable) {
         setUpdateStatus({ tone: "success", text: `Update available: v${result.latestVersion}` });
+        // Surface the rail pill too (legacy re-emitted show-update-notification).
+        reportUpdateAvailable(result.latestVersion ?? null, result.changelog ?? null);
       } else if (result?.error === "network_unavailable") {
         setUpdateStatus({ tone: "error", text: 'Could not connect. You can still use "Open download page".' });
       } else if (result?.error === "rate_limited") {

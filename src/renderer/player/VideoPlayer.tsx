@@ -12,6 +12,12 @@ import {
 import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
 import { useProfile } from "../shell/useProfile";
+import {
+  initDiscordPresence,
+  updateDiscordPresence,
+  updateDiscordPresenceBasedOnState,
+  updateDiscordPresenceForClip,
+} from "./discordPresence";
 import ShareModal from "./ShareModal";
 import "./player.css";
 
@@ -55,6 +61,31 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   const titleTimerRef = useRef<number | undefined>(undefined);
   // Hidden video used to render timeline hover-preview frames.
   const tempVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Watch-session accumulator: only *active playing* time counts. `lastPlay`
+  // is set on `play` and folded into `activeMs` on `pause`/log. Feeds the
+  // activity log (year-end recap data) via log-watch-session.
+  const watchRef = useRef<{ activeMs: number; lastPlay: number | null }>({ activeMs: 0, lastPlay: null });
+
+  // Flush the accumulated session for the current clip (legacy called this on
+  // player close and right before switching clips, while `state.currentClip`
+  // still points at the outgoing clip). Sessions ≤1s are noise and dropped.
+  const logCurrentWatchSession = useCallback(() => {
+    const w = watchRef.current;
+    if (w.lastPlay != null) {
+      w.activeMs += Date.now() - w.lastPlay;
+      w.lastPlay = null;
+    }
+    const durationSeconds = Math.round(w.activeMs / 1000);
+    w.activeMs = 0;
+    const clip = window.legacyState?.currentClip;
+    if (!clip || durationSeconds <= 1) return;
+    const titleInput = document.getElementById("clip-title") as HTMLInputElement | null;
+    void window.clips.logWatchSession({
+      originalName: clip.originalName,
+      customName: titleInput?.value || clip.customName,
+      durationSeconds,
+    });
+  }, []);
 
   // Move to the prev (-1) / next (+1) clip in the current display order.
   // Reads live from the shared legacy state so it never captures a stale list.
@@ -90,6 +121,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   useEffect(() => {
     if (window.legacyState) window.legacyState.currentClipList = clips;
     updateNavButtons();
+    // Grid view: refresh the "Browsing clips · Total: N" presence as the
+    // visible list changes (legacy did this on load + filter changes).
+    if (!window.legacyState?.currentClip) updateDiscordPresenceBasedOnState();
   }, [clips, updateNavButtons]);
 
   // Export progress toast — drives the legacy #export-toast markup imperatively
@@ -196,6 +230,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     // Load player keybindings (Space/f/,/./[/] etc.) from settings.
     void initKeybindings();
 
+    // Discord presence: initial "Browsing clips", idle poll, focus re-assert.
+    initDiscordPresence();
+
     const byId = (id: string) => document.getElementById(id);
     // Hidden scrubbing video for the timeline hover preview (see the preview
     // effect below). Kept in a ref so both effects share the same element.
@@ -240,15 +277,19 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
 
     const noop = () => {};
     const callbacks = {
-      logCurrentWatchSession: noop,
+      logCurrentWatchSession,
       initializeVolumeControls: null,
       getCachedClipData: () => null,
       getThumbnailPath: (name: string) => window.clips.getThumbnailPath(name),
-      updateDiscordPresenceForClip: noop,
+      // Legacy calls these on clip open + seek (skipping Private clips) and on
+      // close/edit; the module gates on the enableDiscordRPC setting itself.
+      updateDiscordPresenceForClip: (clip: { originalName: string; customName: string; tags?: string[] }, isPlaying: boolean) =>
+        updateDiscordPresenceForClip(clip, isPlaying),
       showCustomAlert: (msg: unknown) => window.alert(String(msg)),
       showCustomConfirm: (msg: unknown) => window.confirm(String(msg)),
       isBenchmarkMode: false,
-      updateDiscordPresence: noop,
+      updateDiscordPresence: (details: string, state?: string | null) =>
+        updateDiscordPresence(details, state ?? null),
       getActionFromEvent: (e: KeyboardEvent) => getActionFromEvent(e),
       navigateToVideo: (direction: number) => navigate(direction),
       updateNavigationButtons: () => updateNavButtons(),
@@ -322,6 +363,35 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (window.legacyState) window.legacyState.clipLocation = clipLocation;
   }, [clipLocation]);
 
+  // Play/pause on the (static) legacy video element drives two things:
+  // watch-session active-time accumulation and a Discord presence refresh
+  // (ticker runs while playing, frozen elapsed while paused). `pause` also
+  // fires before `ended` and on clip switch/close, so it covers all stops.
+  useEffect(() => {
+    const video = document.getElementById("video-player") as HTMLVideoElement | null;
+    if (!video) return;
+    const onPlay = () => {
+      watchRef.current.lastPlay = Date.now();
+      const clip = window.legacyState?.currentClip;
+      if (clip) updateDiscordPresenceForClip(clip, true);
+    };
+    const onPause = () => {
+      const w = watchRef.current;
+      if (w.lastPlay != null) {
+        w.activeMs += Date.now() - w.lastPlay;
+        w.lastPlay = null;
+      }
+      const clip = window.legacyState?.currentClip;
+      if (clip) updateDiscordPresenceForClip(clip, false);
+    };
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    return () => {
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+    };
+  }, []);
+
   // Live export progress streamed from the main process (fills the toast bar
   // between the 0% start and 100% completion set by the export helpers).
   useEffect(() => {
@@ -331,6 +401,34 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     });
     return unsub;
   }, [showExportProgress]);
+
+  // Hardware encode/decode fallback notices from main during export (legacy
+  // rendered dismissible .fallback-notice divs; toasts cover the same info).
+  useEffect(() => {
+    const offEncode = window.clips.onShowFallbackNotice(() => {
+      toast.show(
+        "Exporting with software encoding (slower). For faster exports, install the NVIDIA CUDA runtime and update your graphics drivers.",
+        "info",
+        8000,
+      );
+    });
+    const offDecode = window.clips.onShowDecodeFallbackNotice(
+      (payload: { sourceCodec?: string; decodeAttempts?: string[] } | undefined) => {
+        const codec = payload?.sourceCodec ? payload.sourceCodec.toUpperCase() : "unknown";
+        const attempts = (payload?.decodeAttempts ?? []).filter((a) => a && a !== "none");
+        const tried = attempts.length > 0 ? attempts.join(", ") : "hardware decode";
+        toast.show(
+          `Hardware decode fallback: using software decode for the ${codec} source (tried ${tried}). Export still works, but may be slower.`,
+          "info",
+          8000,
+        );
+      },
+    );
+    return () => {
+      offEncode();
+      offDecode();
+    };
+  }, [toast]);
 
   // (Escape-to-close is now handled by the player's own keybindings, bound on
   // open; backdrop click remains as a fallback.)

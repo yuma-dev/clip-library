@@ -86,7 +86,14 @@ export default function ExportSection() {
       const pct = total > 0 ? Math.round((current / total) * 100) : 0;
       setImportStatus({ tone: "progress", text: `Importing clips… ${pct}%` });
     });
-    return off;
+    // Import log lines go to the console (legacy behavior) for diagnostics.
+    const offLog = window.clips.onSteelseriesLog(({ message }: { message?: string }) => {
+      if (importingRef.current && message) console.info(`[SteelSeries] ${message}`);
+    });
+    return () => {
+      off();
+      offLog();
+    };
   }, []);
 
   const runImport = async () => {
