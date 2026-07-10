@@ -50,3 +50,8 @@ build-installer.log
 /.tauri
 # Generated release notes draft
 /RELEASE_DRAFT.md
+
+# Local tooling and notes, never committed
+/docs
+/.claude
+/.antigravitycli
