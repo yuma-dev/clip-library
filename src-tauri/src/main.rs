@@ -2410,6 +2410,21 @@ fn main() {
         info!("profiling enabled (CLIPDIP_PROFILE)");
     }
 
+    // Pin the process-wide MTA for the whole process lifetime. The windows
+    // crate caches WinRT activation factories (Windows.Graphics.Capture)
+    // process-globally, but the implicit MTA they're created in is owned by
+    // whichever thread called RoInitialize first — the video capture thread.
+    // When that thread exits on a pipeline restart, the MTA is torn down and
+    // the cached factory pointers dangle: the next WGC call (IsSupported, in
+    // the restarted thread) is a deterministic access violation. Holding an
+    // MTA usage cookie keeps the apartment alive independent of any thread.
+    unsafe {
+        use windows::Win32::System::Com::CoIncrementMTAUsage;
+        if let Err(e) = CoIncrementMTAUsage() {
+            warn!("CoIncrementMTAUsage failed: {e:?} — pipeline restart may crash");
+        }
+    }
+
     let config_path = clipdip_core::config::Config::path()
         .unwrap_or_else(|_| PathBuf::from("config.toml"));
 
@@ -2474,6 +2489,11 @@ fn main() {
                     info!("control: --reload received, restarting pipeline + hotkeys");
                     let _ = loop_tx.send(LoopEvent::Restart);
                     let _ = loop_tx.send(LoopEvent::ReloadHotkeys);
+                } else if argv.iter().any(|a| a == "--reload-hotkeys") {
+                    // Cheap path: re-register hotkeys without tearing down the
+                    // pipeline (a full restart clears the replay buffer).
+                    info!("control: --reload-hotkeys received");
+                    let _ = loop_tx.send(LoopEvent::ReloadHotkeys);
                 }
             }
         }))
@@ -2504,7 +2524,7 @@ fn main() {
             // control — exit before the tray or capture loop start, so a
             // stale "reload" from the library can never boot a second-class
             // capturing instance.
-            if std::env::args().any(|a| a == "--quit" || a == "--reload") {
+            if std::env::args().any(|a| a == "--quit" || a == "--reload" || a == "--reload-hotkeys") {
                 info!("control flag on primary instance argv — nothing running to control, exiting");
                 app.handle().exit(0);
                 return Ok(());
@@ -2637,10 +2657,15 @@ fn main() {
             // main settings window) would otherwise drop the last webview
             // and Tauri would exit — keep the process alive for the next
             // save hotkey.
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
-                if code.is_none() {
-                    api.prevent_exit();
+            match &event {
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    info!("run event: ExitRequested (code={code:?})");
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
                 }
+                tauri::RunEvent::Exit => info!("run event: Exit"),
+                _ => {}
             }
         });
 }
