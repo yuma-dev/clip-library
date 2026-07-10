@@ -413,25 +413,28 @@ fn get_autostart_info() -> Result<AutostartInfo, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let mut cmd = Command::new("reg");
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.args(&[
-        "query",
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-        "/v",
-        "ClipDip",
-    ]);
-
-    let output = cmd.output().map_err(|e| format!("Failed to query registry: {}", e))?;
-    if !output.status.success() {
-        return Ok(AutostartInfo {
-            enabled: false,
-            is_dev: false,
-        });
+    // Check the current value name and the pre-rebrand "ClipDip" one, so an
+    // install that autostarted before the ClipLib rename still reports
+    // enabled until the value is migrated by the next toggle.
+    let mut enabled = false;
+    for value_name in ["ClipLib", "ClipDip"] {
+        let mut cmd = Command::new("reg");
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.args(&[
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            value_name,
+        ]);
+        if let Ok(output) = cmd.output() {
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains(&exe_path_str)
+            {
+                enabled = true;
+                break;
+            }
+        }
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let enabled = stdout.contains(&exe_path_str);
 
     Ok(AutostartInfo {
         enabled,
@@ -452,6 +455,19 @@ fn set_autostart_status(enabled: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+    // Best-effort: drop the pre-rebrand "ClipDip" value so toggling never
+    // leaves two autostart entries behind.
+    let mut legacy = Command::new("reg");
+    legacy.creation_flags(CREATE_NO_WINDOW);
+    legacy.args(&[
+        "delete",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "/v",
+        "ClipDip",
+        "/f",
+    ]);
+    let _ = legacy.output();
+
     let mut cmd = Command::new("reg");
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -460,7 +476,7 @@ fn set_autostart_status(enabled: bool) -> Result<(), String> {
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "/v",
-            "ClipDip",
+            "ClipLib",
             "/t",
             "REG_SZ",
             "/d",
@@ -472,7 +488,7 @@ fn set_autostart_status(enabled: bool) -> Result<(), String> {
             "delete",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "/v",
-            "ClipDip",
+            "ClipLib",
             "/f",
         ]);
     }
@@ -2261,7 +2277,7 @@ fn open_main_window(app: &AppHandle) {
         return;
     }
     if let Ok(w) = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Clipdip")
+        .title("ClipLib")
         .inner_size(980.0, 700.0)
         .min_inner_size(820.0, 580.0)
         .center()
@@ -2273,6 +2289,32 @@ fn open_main_window(app: &AppHandle) {
     {
         disable_webview_autofill(&w);
         let _ = w.set_focus();
+    }
+}
+
+/// Open the ClipLib library app directly on its Clipper settings page via
+/// the `cliplib://` protocol. Windows starts (or focuses) the library.
+/// If the protocol isn't registered — library not installed / never run —
+/// fall back to our own settings window so the tray icon is never dead.
+fn open_library(app: &AppHandle) {
+    use windows::core::w;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            w!("cliplib://settings/clipper"),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecuteW returns a value > 32 on success.
+    if result.0 as usize <= 32 {
+        info!("cliplib:// protocol not available (ShellExecuteW={}), opening own settings window", result.0 as usize);
+        open_main_window(app);
     }
 }
 
@@ -2415,6 +2457,26 @@ fn main() {
     }
 
     tauri::Builder::default()
+        // Registered first so a second invocation exits before doing any
+        // work. The guard doubles as the external control surface: the clip
+        // library runs `clipdip.exe --reload` / `--quit`, and that second
+        // instance's argv is forwarded here — into the running process,
+        // where the capture loop's channel is reachable.
+        .plugin(tauri_plugin_single_instance::init({
+            let loop_tx = loop_tx.clone();
+            move |app, argv, _cwd| {
+                if argv.iter().any(|a| a == "--quit") {
+                    info!("control: --quit received, exiting");
+                    app.exit(0);
+                    return;
+                }
+                if argv.iter().any(|a| a == "--reload") {
+                    info!("control: --reload received, restarting pipeline + hotkeys");
+                    let _ = loop_tx.send(LoopEvent::Restart);
+                    let _ = loop_tx.send(LoopEvent::ReloadHotkeys);
+                }
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -2437,6 +2499,17 @@ fn main() {
             diagnostics: diagnostics.clone(),
         })
         .setup(move |app| {
+            // A control invocation (--quit/--reload) that finds no running
+            // instance becomes the primary itself. There is nothing to
+            // control — exit before the tray or capture loop start, so a
+            // stale "reload" from the library can never boot a second-class
+            // capturing instance.
+            if std::env::args().any(|a| a == "--quit" || a == "--reload") {
+                info!("control flag on primary instance argv — nothing running to control, exiting");
+                app.handle().exit(0);
+                return Ok(());
+            }
+
             // Log configured hotkeys so the user can confirm them in the console.
             let cfg_peek = clipdip_core::config::Config::load_or_default(&config_path)
                 .unwrap_or_default();
@@ -2449,13 +2522,13 @@ fn main() {
 
             // Build system tray.
             let menu = Menu::with_items(app, &[
-                &MenuItem::with_id(app, "show", "Open ClipDip", true, None::<&str>)?,
+                &MenuItem::with_id(app, "show", "Open ClipLib", true, None::<&str>)?,
                 &PredefinedMenuItem::separator(app)?,
-                &MenuItem::with_id(app, "quit", "Quit ClipDip", true, None::<&str>)?,
+                &MenuItem::with_id(app, "quit", "Quit ClipLib", true, None::<&str>)?,
             ])?;
 
             let tooltip = format!(
-                "ClipDip\nSave clip: {}\nRecord: {}",
+                "ClipLib\nSave clip: {}\nRecord: {}",
                 cfg_peek.hotkey.save_clip, cfg_peek.hotkey.toggle_recording
             );
 
@@ -2465,7 +2538,7 @@ fn main() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => open_main_window(app),
+                    "show" => open_library(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -2476,7 +2549,7 @@ fn main() {
                         ..
                     } = event
                     {
-                        open_main_window(tray.app_handle());
+                        open_library(tray.app_handle());
                     }
                 })
                 .build(app)?;
