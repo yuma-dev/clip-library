@@ -116,7 +116,29 @@ export function useClips(): UseClips {
       }));
 
       setClipLocation(loc);
-      setClips(list);
+      // Reconcile against the cached snapshot instead of replacing wholesale:
+      // swapping 2000+ object identities re-rendered every memoized card in
+      // one commit (a ~600ms dropped frame at startup) and blanked the tags
+      // until the tag batches refilled them. Unchanged clips keep their old
+      // object (and cached tags — the batches below remain authoritative).
+      setClips((prev) => {
+        if (prev.length === 0) return list;
+        const byName = new Map(prev.map((c) => [c.originalName, c]));
+        return list.map((fresh) => {
+          const old = byName.get(fresh.originalName);
+          if (!old) return fresh;
+          if (
+            old.customName === fresh.customName &&
+            old.createdAt === fresh.createdAt &&
+            old.thumbnailPath === fresh.thumbnailPath &&
+            old.isTrimmed === fresh.isTrimmed &&
+            (old.isNewSinceLastSession ?? false) === (fresh.isNewSinceLastSession ?? false)
+          ) {
+            return old;
+          }
+          return { ...fresh, tags: old.tags };
+        });
+      });
       setLoading(false);
 
       // Live: a clip file lands while the app is running. Fetch its info, mark
@@ -209,18 +231,27 @@ export function useClips(): UseClips {
       // stay empty keep their object identity so memoized cards skip re-render.
       const allTags: Record<string, string[]> = {};
       const TAG_BATCH = 500;
+      const sameTags = (a: string[], b: string[]) =>
+        a.length === b.length && a.every((t, i) => t === b[i]);
       for (let i = 0; i < list.length && !cancelled; i += TAG_BATCH) {
         const slice = list.slice(i, i + TAG_BATCH);
+        const sliceNames = new Set(slice.map((c) => c.originalName));
         const byName = (await window.clips
           .getClipTagsBatch(slice.map((c) => c.originalName))
           .catch(() => ({}))) as Record<string, string[]>;
         if (cancelled) return;
+        // The batch returns an entry for every requested name ([] when
+        // tagless); an empty object means the IPC failed — keep current tags.
+        if (Object.keys(byName).length === 0) continue;
         Object.assign(allTags, byName);
+        // Authoritative for the clips in this batch (an absent entry means "no
+        // tags" — cached tags carried over by the startup reconcile must be
+        // cleared, not kept). Identity only changes when the tags differ.
         setClips((prev) =>
           prev.map((c) => {
-            const tags = byName[c.originalName];
-            if (!Array.isArray(tags) || tags.length === 0) return c;
-            return { ...c, tags };
+            if (!sliceNames.has(c.originalName)) return c;
+            const tags = Array.isArray(byName[c.originalName]) ? byName[c.originalName] : [];
+            return sameTags(c.tags, tags) ? c : { ...c, tags };
           }),
         );
       }

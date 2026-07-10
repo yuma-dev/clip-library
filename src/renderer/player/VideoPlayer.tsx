@@ -328,8 +328,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       openCurrentGridSelection: () => openCurrentGridSelection(),
       moveGridSelection: (direction: GridDirection) => moveGridSelection(direction),
       // Persist on close / clip-switch (legacy flushPendingClipEdits path).
-      saveTitleChange: (clipName: string, _old: string, newName: string) =>
-        renameRef.current(clipName, newName),
+      // Unchanged titles skip the write — the flush runs on EVERY close, and
+      // the redundant save-custom-name IPC showed up in perf traces.
+      saveTitleChange: (clipName: string, old: string, newName: string) =>
+        old === newName ? Promise.resolve(true) : renameRef.current(clipName, newName),
       clearSaveTitleTimeout: () => window.clearTimeout(titleTimerRef.current),
       removeClipTitleEditingListeners: noop,
       updateClipDisplay: noop,

@@ -39,6 +39,11 @@ const api = {
   // --- Per-clip metadata ---
   saveCustomName: invoke("save-custom-name"),
   getClipInfo: invoke("get-clip-info"),
+  // Hover-preview start time (trim.start or cached-duration midpoint) in one
+  // cheap round trip — never triggers ffprobe.
+  getPreviewStartTime: invoke("get-preview-start-time"),
+  // One-round-trip bundle of everything the player reads on clip open.
+  getClipOpenState: invoke("get-clip-open-state"),
   getTrim: invoke("get-trim"),
   saveTrim: invoke("save-trim"),
   deleteTrim: invoke("delete-trim"),
@@ -87,7 +92,20 @@ const api = {
   resetClipCache: invoke("reset-clip-cache"),
 
   // --- Settings ---
-  getSettings: invoke("get-settings"),
+  // Concurrent-call dedupe: several modules request settings at startup in
+  // the same tick; share the in-flight promise instead of 4+ parallel IPCs.
+  // No caching — once resolved, the next call hits the channel again.
+  getSettings: (() => {
+    let inflight = null;
+    return () => {
+      if (!inflight) {
+        inflight = ipcRenderer.invoke("get-settings").finally(() => {
+          inflight = null;
+        });
+      }
+      return inflight;
+    };
+  })(),
   saveSettings: invoke("save-settings"),
   getDefaultKeybindings: invoke("get-default-keybindings"),
 

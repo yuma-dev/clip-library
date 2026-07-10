@@ -24,6 +24,43 @@ const EMPTY: GameIcon = { path: null, title: null, discord: null };
 const cache = new Map<string, GameIcon>();
 const inflight = new Map<string, Promise<GameIcon>>();
 
+// Icon results are effectively immutable per clip (resolved from the game +
+// Discord context recorded with it), so the whole cache — including "no icon"
+// results, which are the majority — persists across sessions. Without this,
+// every launch re-resolved ~2000 icons through 10+ IPC batches and re-rendered
+// every visible card as answers streamed in (a chunk of the startup jank).
+const ICON_CACHE_KEY = "clip-library:game-icons-v1";
+
+try {
+  const raw = localStorage.getItem(ICON_CACHE_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw) as Record<string, Partial<GameIcon> | null>;
+    for (const [name, icon] of Object.entries(parsed)) {
+      if (icon && typeof icon === "object") {
+        cache.set(name, {
+          path: icon.path ?? null,
+          title: icon.title ?? null,
+          discord: icon.discord ?? null,
+        });
+      }
+    }
+  }
+} catch {
+  /* corrupt/absent snapshot just means a cold resolve this launch */
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | undefined;
+function schedulePersist(): void {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(ICON_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+    } catch {
+      /* quota — next launch refetches */
+    }
+  }, 5_000);
+}
+
 // Names queued for the next batch flush, with their pending resolvers.
 const queue = new Map<string, (icon: GameIcon) => void>();
 let flushScheduled = false;
@@ -66,6 +103,7 @@ async function flushQueue(): Promise<void> {
       pending.get(name)?.(icon);
     }
   }
+  schedulePersist();
 }
 
 export function loadGameIcon(name: string): Promise<GameIcon> {

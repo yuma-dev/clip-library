@@ -55,6 +55,10 @@ export interface ClipsApi {
   getClipTags(clipName: string): Promise<string[]>;
   getClipTagsBatch(clipNames: string[]): Promise<Record<string, string[]>>;
   saveClipTags(clipName: string, tags: string[]): Promise<any>;
+  /** Hover-preview start seconds (trim.start or cached-duration midpoint); never probes. */
+  getPreviewStartTime(clipName: string): Promise<number>;
+  /** One-round-trip bundle of everything the player reads on clip open. */
+  getClipOpenState(clipName: string): Promise<any>;
 
   // --- Audio tracks ---
   extractAudioTracks(...args: any[]): Promise<any>;

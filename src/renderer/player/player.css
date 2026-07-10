@@ -44,6 +44,17 @@
   z-index: 10;
 }
 
+/* Pre-play placeholder state: while the low-res thumbnail is showing, the
+   loading overlay just darkens it — no spinner. The class is removed when
+   playback starts, so mid-playback buffering still gets the spinner. */
+#loading-overlay.thumbnail-backdrop {
+  background-color: rgba(0, 0, 0, 0.45);
+}
+
+#loading-overlay.thumbnail-backdrop .loading-spinner {
+  display: none;
+}
+
 .loading-spinner {
   width: 20px;
   height: 20px;

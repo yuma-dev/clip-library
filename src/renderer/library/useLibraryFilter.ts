@@ -70,6 +70,15 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
   // Load the global tag list + persisted selection once on mount.
   useEffect(() => {
     let cancelled = false;
+    let restoreTimer: number | undefined;
+    let lastInputAt = Date.now();
+    const bumpInput = () => {
+      lastInputAt = Date.now();
+    };
+    const removeIdleListeners = () => {
+      window.removeEventListener("pointerdown", bumpInput, { capture: true });
+      window.removeEventListener("keydown", bumpInput, { capture: true });
+    };
     (async () => {
       const [gt, prefs] = await Promise.all([
         window.clips.loadGlobalTags().catch(() => []),
@@ -96,21 +105,41 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       // Disaster recovery (legacy clip-grid behavior): rebuild the persisted
       // global tag list from per-clip tags on disk (e.g. after settings loss).
       // Display already self-heals via deriveGlobalTags; this repairs storage.
-      try {
-        const restore = (await window.clips.restoreMissingGlobalTags()) as {
-          success?: boolean;
-          restoredCount?: number;
-        } | null;
-        if (!cancelled && restore?.success && (restore.restoredCount ?? 0) > 0) {
-          const reloaded = await window.clips.loadGlobalTags().catch(() => []);
-          if (!cancelled && Array.isArray(reloaded)) setLoadedTags(reloaded.map(String));
+      // Deferred past startup AND gated on user idle: the scan reads every
+      // clip's metadata on the main process (~400-600ms), so running it while
+      // the user is opening clips stalls their IPC behind it.
+      const runRestore = async () => {
+        removeIdleListeners();
+        try {
+          const restore = (await window.clips.restoreMissingGlobalTags()) as {
+            success?: boolean;
+            restoredCount?: number;
+          } | null;
+          if (!cancelled && restore?.success && (restore.restoredCount ?? 0) > 0) {
+            const reloaded = await window.clips.loadGlobalTags().catch(() => []);
+            if (!cancelled && Array.isArray(reloaded)) setLoadedTags(reloaded.map(String));
+          }
+        } catch {
+          /* recovery is best-effort */
         }
-      } catch {
-        /* recovery is best-effort */
-      }
+      };
+      const tryRestore = () => {
+        if (cancelled) return;
+        if (Date.now() - lastInputAt < 5_000) {
+          // User is active — check back shortly.
+          restoreTimer = window.setTimeout(tryRestore, 5_000);
+          return;
+        }
+        void runRestore();
+      };
+      window.addEventListener("pointerdown", bumpInput, { capture: true });
+      window.addEventListener("keydown", bumpInput, { capture: true });
+      restoreTimer = window.setTimeout(tryRestore, 15_000);
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(restoreTimer);
+      removeIdleListeners();
     };
   }, []);
 

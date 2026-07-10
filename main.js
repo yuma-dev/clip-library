@@ -713,6 +713,48 @@ ipcMain.handle("get-trim", async (event, clipName) => {
   return metadataModule.getTrimData(clipName, getSettings);
 });
 
+// Hover-preview start time in one round trip: trim.start when set, else
+// mid-clip from the cached thumbnail-metadata duration. Never probes — a
+// cache miss returns 0 and the preview simply starts at the beginning
+// (the full probe happens when the clip is actually opened).
+ipcMain.handle("get-preview-start-time", async (event, clipName) => {
+  try {
+    const trim = await metadataModule.getTrimData(clipName, getSettings);
+    if (trim && typeof trim.start === "number") return trim.start;
+    const settings = await getSettings();
+    const clipPath = path.join(settings.clipLocation, clipName);
+    const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
+    const metadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath);
+    const duration = Number(metadata && metadata.duration);
+    if (Number.isFinite(duration) && duration > 0) {
+      return duration > 40 ? duration / 2 : 0;
+    }
+  } catch (error) {
+    logger.warn(`Error resolving preview start time for ${clipName}: ${error.message}`);
+  }
+  return 0;
+});
+
+// Everything the player needs to open a clip, gathered in one round trip
+// (the player used to fire ~9 read-only IPCs per open across several waves,
+// each paying queueing latency on a busy main process).
+ipcMain.handle("get-clip-open-state", async (event, clipName) => {
+  const swallow = (promise, fallback) => promise.catch(() => fallback);
+  const [clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences] =
+    await Promise.all([
+      swallow(ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule), null),
+      swallow(metadataModule.getTrimData(clipName, getSettings), null),
+      swallow(metadataModule.getClipTags(clipName, getSettings), []),
+      swallow(thumbnailsModule.getThumbnailPath(clipName, getSettings), null),
+      swallow(metadataModule.getVolume(clipName, getSettings), 1),
+      swallow(metadataModule.getSpeed(clipName, getSettings), 1),
+      swallow(metadataModule.getVolumeRange(clipName, getSettings), null),
+      swallow(metadataModule.getTrackState(clipName, getSettings), null),
+      swallow(metadataModule.getTrackPreferences(app.getPath.bind(app)), null),
+    ]);
+  return { clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences };
+});
+
 ipcMain.handle("save-speed", async (event, clipName, speed) => {
   return metadataModule.saveSpeed(clipName, speed, getSettings);
 });
