@@ -472,17 +472,6 @@
       letter-spacing: 0.01em;
       text-shadow: 0 0 0.6vh rgba(244, 63, 94, 0.6);
     }
-    .update-esc {
-      display: none;
-      margin-top: 0.45vh;
-      font: 500 1.1vh/1 inherit;
-      color: rgba(255, 255, 255, 0.32);
-      align-items: center;
-      gap: 0.35vh;
-      white-space: nowrap;
-      pointer-events: none;
-    }
-    .update-esc .kbd { height: 1.5vh; min-width: 1.7vh; font-size: 1.05vh; opacity: 0.85; }
 
     /* Visibility per phase. Each phase reveals exactly one of:
        title alone (saving), hint OR input (saved, depending on
@@ -505,10 +494,7 @@
     .card.update   .rename-display,
     .card.update   .hint-row       { display: none; }
     .card.update   .update-sub     { display: flex; }
-    .card.update   .update-esc     { display: flex; }
-    /* Installing / installed states hide what no longer applies. */
-    .card.update.installing .update-esc,
-    .card.update.installed  .update-esc,
+    /* Installed confirmation is title-only. */
     .card.update.installed  .update-sub { display: none; }
     .card.focused  .hint           { display: none; }
     .card.focused  .rename-input   { opacity: 1; }
@@ -557,7 +543,6 @@
           <div class="underline"></div>
         </div>
         <div class="update-sub" id="update-sub"></div>
-        <div class="update-esc" id="update-esc"></div>
       </div>
       <span class="ember e1"></span>
       <span class="ember e2"></span>
@@ -607,16 +592,13 @@
             demo === "updated" ? "Updated to v1.0.1" :
             demo === "updating" ? "Updating ClipDip…" : "New version ready";
           const sub = document.getElementById("update-sub");
-          const esc = document.getElementById("update-esc");
           if (demo === "update") {
             mk(sub, "Press");
             mk(sub, "Ctrl", "kbd"); mk(sub, "+", "", "opacity:.5"); mk(sub, "F10", "kbd");
             mk(sub, "to update to", "", "margin-left:0.1vh");
             mk(sub, "v1.0.1", "ver");
-            mk(esc, "Esc", "kbd");
-            mk(esc, "to dismiss", "", "margin-left:0.1vh");
           } else if (demo === "updating") {
-            mk(sub, "Downloading v1.0.1 — ClipDip restarts itself");
+            mk(sub, "Downloading v1.0.1, ClipDip restarts itself");
           }
           requestAnimationFrame(() =>
             requestAnimationFrame(() => card.classList.add("entered")));
@@ -879,7 +861,6 @@
       };
       // --- Update toast --------------------------------------------------
       const updateSub = document.getElementById("update-sub");
-      const updateEsc = document.getElementById("update-esc");
       const mkspan = (parent, text, cls, style) => {
         const el = document.createElement("span");
         if (cls) el.className = cls;
@@ -901,15 +882,14 @@
         state.updateMode = mode;
         setPhase("update");
         if (mode === "installing") card.classList.add("installing");
-        if (mode === "installed" || mode === "failed") card.classList.add("installed");
+        if (mode === "installed") card.classList.add("installed");
         titleEl.textContent =
           mode === "installing" ? "Updating ClipDip…" :
           mode === "installed"  ? "Updated to v" + state.updateVersion :
-          mode === "failed"     ? "Update failed — open ClipDip" :
+          mode === "failed"     ? "Update failed" :
                                   "New version ready";
         swapTitle();
         updateSub.textContent = "";
-        updateEsc.textContent = "";
         if (mode === "available") {
           mkspan(updateSub, "Press");
           if (!hotkeyChips(updateSub, state.updateHotkey)) {
@@ -917,10 +897,10 @@
           }
           mkspan(updateSub, "to update to", "", "margin-left:0.1vh");
           mkspan(updateSub, "v" + state.updateVersion, "ver");
-          mkspan(updateEsc, "Esc", "kbd");
-          mkspan(updateEsc, "to dismiss", "", "margin-left:0.1vh");
         } else if (mode === "installing") {
-          mkspan(updateSub, "Downloading v" + state.updateVersion + " — ClipDip restarts itself");
+          mkspan(updateSub, "Downloading v" + state.updateVersion + ", ClipDip restarts itself");
+        } else if (mode === "failed") {
+          mkspan(updateSub, "Try again from the app");
         }
         scheduleDismiss();
       };
