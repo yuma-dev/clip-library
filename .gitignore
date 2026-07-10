@@ -27,3 +27,4 @@ package-lock.json
 package-lock.json
 .modularization-snapshot.json
 GEMINI.md
+vendor/

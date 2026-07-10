@@ -36,6 +36,17 @@ async function resolveBinaryPath() {
     // The picker hands us a folder; a direct exe path also works.
     return p.toLowerCase().endsWith('.exe') ? p : path.join(p, EXE_NAME);
   }
+  if (!app.isPackaged) {
+    // Dev convenience: use the sibling clipdip repo's release build (or the
+    // vendored copy) so the clipper works without configuring a path.
+    const candidates = [
+      path.resolve(__dirname, '..', 'vendor', 'clipper', EXE_NAME),
+      path.resolve(__dirname, '..', '..', 'clipdip', 'target', 'release', EXE_NAME)
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
   return path.join(process.resourcesPath, 'clipper', EXE_NAME);
 }
 
