@@ -150,6 +150,14 @@
         rgba(244,63,94,0.55) 90%, #ffe4e6 98%, transparent 100%);
       animation: spinang 2.4s linear infinite;
     }
+    /* Update toast: teal comet — clearly not a save, clearly good news. */
+    .card.update::before {
+      opacity: 1;
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, rgba(20,184,166,0.12) 75%,
+        rgba(45,212,191,0.55) 90%, #ccfbf1 98%, transparent 100%);
+      animation: spinang 2.4s linear infinite;
+    }
 
     /* --- Comet glow ---------------------------------------------------
        Blurred twin of the comet orbiting behind the card. Two layers:
@@ -192,6 +200,13 @@
         rgba(244,63,94,0.6) 90%, rgba(255,228,230,0.9) 98%, transparent 100%);
       animation: spinang 2.4s linear infinite;
     }
+    .card.update .glowwrap { opacity: 0.7; }
+    .card.update .glowwrap i {
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, rgba(20,184,166,0.25) 78%,
+        rgba(45,212,191,0.6) 90%, rgba(204,251,241,0.9) 98%, transparent 100%);
+      animation: spinang 2.4s linear infinite;
+    }
 
     /* Ambient under-glow while working / recording notice. */
     .card.saving {
@@ -206,6 +221,23 @@
         0 18px 40px -16px rgba(0, 0, 0, 0.7),
         0 0 0 1px rgba(255, 255, 255, 0.05),
         0 0 2.8vh -0.6vh rgba(244, 63, 94, 0.3);
+    }
+    .card.update {
+      box-shadow:
+        0 18px 40px -16px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(255, 255, 255, 0.05),
+        0 0 2.8vh -0.6vh rgba(45, 212, 191, 0.35);
+    }
+    /* The update logo breathes in teal instead of the saving purple. */
+    .card.update .logo {
+      animation: updatepulse 2.2s ease-in-out infinite;
+    }
+    @keyframes updatepulse {
+      0%, 100% { transform: scale(0.97); filter: drop-shadow(0 0 0.2vh rgba(94,234,212,0)); }
+      50%      { transform: scale(1.04); filter: drop-shadow(0 0 0.85vh rgba(94,234,212,0.55)); }
+    }
+    .card.update .drain i {
+      background: linear-gradient(90deg, #2dd4bf, #5eead4);
     }
     .card.glow { animation: savedglow 1.2s ease-out 0.05s; }
     @keyframes savedglow {
@@ -368,6 +400,30 @@
       display: none;
     }
 
+    /* Update toast subtitle — "Open ClipDip to install" + version chip. */
+    .update-sub {
+      display: none;
+      font: 500 1.25vh/1 inherit;
+      color: rgba(255, 255, 255, 0.48);
+      align-items: center;
+      gap: 0.5vh;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .update-sub .ver {
+      display: inline-flex;
+      align-items: center;
+      height: 1.65vh;
+      padding: 0 0.5vh;
+      border-radius: 0.35vh;
+      background: rgba(45, 212, 191, 0.12);
+      border: 1px solid rgba(45, 212, 191, 0.28);
+      color: #99f6e4;
+      font: 600 1.15vh/1 "Cascadia Mono", "Consolas", "Segoe UI Mono", ui-monospace, monospace;
+      letter-spacing: 0.01em;
+      text-shadow: 0 0 0.6vh rgba(45, 212, 191, 0.45);
+    }
+
     /* Visibility per phase. Each phase reveals exactly one of:
        title alone (saving), hint OR input (saved, depending on
        focus), or rename-display (renamed). */
@@ -383,6 +439,12 @@
     .card.notice   .rename-input,
     .card.notice   .rename-display,
     .card.notice   .hint-row       { display: none; }
+    /* Update phase: title + teal subtitle, no rename machinery. */
+    .card.update   .hint,
+    .card.update   .rename-input,
+    .card.update   .rename-display,
+    .card.update   .hint-row       { display: none; }
+    .card.update   .update-sub     { display: flex; }
     .card.focused  .hint           { display: none; }
     .card.focused  .rename-input   { opacity: 1; }
   </style>
@@ -426,6 +488,10 @@
           <span class="rename-display" id="rename-display"></span>
           <div class="underline"></div>
         </div>
+        <div class="update-sub" id="update-sub">
+          <span>Open ClipDip to install</span>
+          <span class="ver" id="update-ver">v0.0.0</span>
+        </div>
       </div>
       <div class="drain" id="drain"><i></i></div>
     </div>
@@ -451,6 +517,17 @@
       const T = window.__TAURI_INTERNALS__;
       if (!T) {
         console.warn("[overlay] not running in Tauri — passive mode");
+        // Design-preview shortcut: overlay.html?demo=update shows the
+        // update toast in a plain browser (no Tauri, no backend).
+        if (new URLSearchParams(location.search).get("demo") === "update") {
+          const card = document.getElementById("card");
+          card.classList.remove("saving");
+          card.classList.add("update");
+          document.getElementById("title").textContent = "Update available";
+          document.getElementById("update-ver").textContent = "v1.0.0";
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => card.classList.add("entered")));
+        }
         return;
       }
       const invoke = (cmd, args) => T.invoke(cmd, args || {});
@@ -622,16 +699,18 @@
         if (p === "saving") savingShownAt = performance.now();
         // Effect classes from a previous phase must not leak into the
         // next one (e.g. a new clip-saving while the flash is mid-burn).
-        card.classList.remove("saving", "saved", "renamed", "notice", "flash", "glow", "saved-pop");
+        card.classList.remove("saving", "saved", "renamed", "notice", "update", "flash", "glow", "saved-pop");
         sheen.classList.remove("on");
         clearDrain();
         card.classList.add(p);
         const rec = state.kind === "recording";
         titleEl.textContent =
           p === "notice"  ? state.noticeMessage :
+          p === "update"  ? "Update available" :
           p === "saving"  ? (rec ? "Saving recording…" : "Saving clip…") :
           p === "renamed" ? "Renamed!" :
                             (rec ? "Recording saved" : "Clip saved");
+        if (p === "update") swapTitle();
         if (p === "saved") {
           // The payoff: comet does two fast laps and burns out, glow
           // flash, sheen sweep, squash-pop, sparkles off the logo.
@@ -711,6 +790,11 @@
           armDrain(state.autoDismissSecs * 1000);
         } else if (state.phase === "notice") {
           dismissTimer = setTimeout(dismiss, 2500);
+        } else if (state.phase === "update") {
+          // Long enough to read mid-game, short enough not to squat on
+          // the screen — the settings-window banner is the real CTA.
+          dismissTimer = setTimeout(dismiss, 8000);
+          armDrain(8000);
         }
       };
       // Slide the card out, then let the backend decide whether the
@@ -773,6 +857,14 @@
             setPhase("notice");
             scheduleDismiss();
           }
+          if (p.update && !saving && !saved && !p.notice) {
+            // The update toast fired before we mounted (the common case —
+            // the checker creates this very window, then emits).
+            setCorner(p.update.corner);
+            document.getElementById("update-ver").textContent = "v" + (p.update.version || "?");
+            setPhase("update");
+            scheduleDismiss();
+          }
           setRecording(p.recording);
         })
         .catch((e) => console.error("overlay_get_pending:", e));
@@ -817,6 +909,21 @@
         setCorner(p.corner);
         state.noticeMessage = p.message || "";
         setPhase("notice");
+        showCard();
+        scheduleDismiss();
+      });
+
+      listen("update-available", (ev) => {
+        const p = ev.payload || {};
+        // Never interrupt an in-flight save toast — the backend already
+        // avoids this, belt and suspenders here.
+        if (state.phase === "saving") return;
+        clearSavingTimeout();
+        cancelDeferredSaved();
+        setFocused(false);
+        setCorner(p.corner);
+        document.getElementById("update-ver").textContent = "v" + (p.version || "?");
+        setPhase("update");
         showCard();
         scheduleDismiss();
       });

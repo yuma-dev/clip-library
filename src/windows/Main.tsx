@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { invoke, listen } from "@/lib/tauri";
+import UpdateBanner from "@/components/UpdateBanner";
 import {
   Plus, Trash2, ExternalLink,
   Film, Video, Mic, FolderOpen, Keyboard, Bell,
@@ -2709,6 +2710,8 @@ export default function MainWindow() {
         {activeTab === "notifications" && <NotificationsPanel config={config} patchNotif={patchNotif} />}
         <div style={{ height: 60 }} />
       </main>
+
+      <UpdateBanner />
 
       {showOnboarding && (
         <OnboardingModal

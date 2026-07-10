@@ -45,3 +45,8 @@ vendor/
 /ffmpeg-cache/
 
 build-installer.log
+
+# Updater signing key — NEVER commit the private key. Back it up; losing it breaks updates.
+/.tauri
+# Generated release notes draft
+/RELEASE_DRAFT.md

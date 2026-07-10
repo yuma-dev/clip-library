@@ -115,6 +115,13 @@ struct AppState {
     /// "Clip saved" state on mount instead of being stuck on the
     /// spinner forever.
     pending_saved: Arc<Mutex<Option<ClipSavedPayload>>>,
+    /// Latest update found by the background checker, stashed for the
+    /// overlay to hydrate from (same race as the other pendings) and for
+    /// the settings window to query on mount.
+    pending_update: Arc<Mutex<Option<UpdatePayload>>>,
+    /// Version the update overlay toast was already shown for — the
+    /// 30-second checker must not re-toast the same release forever.
+    update_toast_shown: Arc<Mutex<Option<String>>>,
     /// Stash for transient notice toasts ("Recording started"), same
     /// late-mount race as the two fields above.
     pending_notice: Arc<Mutex<Option<NoticePayload>>>,
@@ -171,6 +178,16 @@ struct ClipSavingPayload {
 #[derive(Clone, Serialize)]
 struct NoticePayload {
     message: String,
+    corner: String,
+}
+
+/// "A new version is out" toast. Shown on the in-game overlay when the
+/// background update check finds a release while the settings window is
+/// closed — it tells the user to open the app, where the in-app banner
+/// does the actual 2-click update.
+#[derive(Clone, Serialize)]
+struct UpdatePayload {
+    version: String,
     corner: String,
 }
 
@@ -312,6 +329,7 @@ fn ensure_overlay_window(app: &AppHandle, corner: &str) -> Option<tauri::Webview
                     *state.pending_saving.lock().unwrap() = None;
                     *state.pending_saved.lock().unwrap() = None;
                     *state.pending_notice.lock().unwrap() = None;
+                    *state.pending_update.lock().unwrap() = None;
                 }
             }
         });
@@ -346,6 +364,7 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
         *state.pending_saving.lock().unwrap() = None;
         *state.pending_saved.lock().unwrap() = None;
         *state.pending_notice.lock().unwrap() = None;
+        *state.pending_update.lock().unwrap() = None;
         *state.active_clip.lock().unwrap() = None;
     }
     if let Some(overlay) = app.get_webview_window("overlay") {
@@ -547,6 +566,7 @@ fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<()
     *state.pending_saving.lock().unwrap() = None;
     *state.pending_saved.lock().unwrap() = None;
     *state.pending_notice.lock().unwrap() = None;
+    *state.pending_update.lock().unwrap() = None;
     // While a manual recording runs, the overlay window stays alive to
     // keep the red recording dot on screen — the card has already slid
     // out on the JS side.
@@ -571,6 +591,7 @@ struct PendingState {
     saving: Option<ClipSavingPayload>,
     saved: Option<ClipSavedPayload>,
     notice: Option<NoticePayload>,
+    update: Option<UpdatePayload>,
     recording: bool,
 }
 
@@ -590,6 +611,7 @@ fn overlay_get_pending(state: State<'_, AppState>) -> PendingState {
         saving: state.pending_saving.lock().unwrap().clone(),
         saved: state.pending_saved.lock().unwrap().clone(),
         notice: state.pending_notice.lock().unwrap().clone(),
+        update: state.pending_update.lock().unwrap().clone(),
         recording: *state.recording_active.lock().unwrap(),
     }
 }
@@ -670,6 +692,19 @@ async fn test_overlay(
                 let _ = overlay.emit("overlay-notice", notice);
             }
         }
+        "update" => {
+            let payload = UpdatePayload {
+                version: "9.9.9".into(),
+                corner: corner.clone(),
+            };
+            *state.pending_update.lock().unwrap() = Some(payload.clone());
+            *state.pending_saving.lock().unwrap() = None;
+            *state.pending_saved.lock().unwrap() = None;
+            *state.pending_notice.lock().unwrap() = None;
+            if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                let _ = overlay.emit("update-available", payload);
+            }
+        }
         "rec_on" | "rec_off" => {
             let on = stage == "rec_on";
             // Mirror the real recording flow's UI state so the dot
@@ -686,7 +721,8 @@ async fn test_overlay(
                 // window like the real flow does after a recording ends.
                 let no_toast = state.pending_saving.lock().unwrap().is_none()
                     && state.pending_saved.lock().unwrap().is_none()
-                    && state.pending_notice.lock().unwrap().is_none();
+                    && state.pending_notice.lock().unwrap().is_none()
+                    && state.pending_update.lock().unwrap().is_none();
                 if no_toast {
                     let _ = overlay.destroy();
                 }
@@ -702,6 +738,99 @@ async fn test_overlay(
 #[tauri::command]
 async fn test_notification(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     test_overlay(app, state, "flow".into()).await
+}
+
+// ---------- auto-update ----------------------------------------------------
+
+/// Update found by the background checker but not yet installed — the
+/// settings window queries this on mount so the banner shows without
+/// waiting for the next 30-second tick.
+#[tauri::command]
+fn get_pending_update(state: State<'_, AppState>) -> Option<UpdatePayload> {
+    state.pending_update.lock().unwrap().clone()
+}
+
+/// Surface a freshly-discovered update to the user:
+/// - the settings window (if open) gets an `update-available` event and
+///   shows the in-app banner with the 2-click install;
+/// - otherwise the in-game overlay shows a toast telling the user to
+///   open the app (once per version — the checker re-fires every 30 s).
+fn notify_update_available(app: &AppHandle, version: &str) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+
+    let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
+        .unwrap_or_default();
+    let payload = UpdatePayload {
+        version: version.to_string(),
+        corner: corner_slug(&cfg.notifications.corner),
+    };
+    *state.pending_update.lock().unwrap() = Some(payload.clone());
+
+    // Settings window open → the banner handles it, no overlay toast.
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("update-available", payload.clone());
+        if main.is_visible().unwrap_or(false) {
+            return;
+        }
+    }
+
+    // Only toast the overlay once per version.
+    {
+        let mut shown = state.update_toast_shown.lock().unwrap();
+        if shown.as_deref() == Some(version) {
+            return;
+        }
+        *shown = Some(version.to_string());
+    }
+
+    // Don't steal the overlay from an in-flight save toast — the stash is
+    // set, so the user still gets the banner next time they open the app.
+    let busy = state.pending_saving.lock().unwrap().is_some()
+        || state.pending_saved.lock().unwrap().is_some();
+    if busy {
+        return;
+    }
+
+    info!("update v{version} available — showing overlay toast");
+    if let Some(overlay) = ensure_overlay_window(app, &payload.corner) {
+        let _ = overlay.emit("update-available", payload);
+    }
+}
+
+/// Background auto-update checker: polls the GitHub Releases `latest.json`
+/// every 30 seconds. Runs only in release builds (a dev build at 0.x would
+/// nag about every published release) unless CLIPDIP_FORCE_UPDATE_CHECK=1.
+fn spawn_update_checker(app: AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let forced = matches!(
+        std::env::var("CLIPDIP_FORCE_UPDATE_CHECK").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    if cfg!(debug_assertions) && !forced {
+        info!("auto-update checker disabled in dev build");
+        return;
+    }
+
+    const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    std::thread::spawn(move || loop {
+        let updater = match app.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("updater unavailable, auto-update checks disabled: {e}");
+                return;
+            }
+        };
+        match tauri::async_runtime::block_on(updater.check()) {
+            Ok(Some(update)) => notify_update_available(&app, &update.version),
+            Ok(None) => {}
+            // Transient network failures are expected — keep polling.
+            Err(e) => debug!("update check failed: {e}"),
+        }
+        std::thread::sleep(CHECK_INTERVAL);
+    });
 }
 
 #[tauri::command]
@@ -2126,6 +2255,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             config_path: config_path.clone(),
             active_clip: active_clip.clone(),
@@ -2133,6 +2264,8 @@ fn main() {
             pending_saving: Arc::new(Mutex::new(None)),
             pending_saved: Arc::new(Mutex::new(None)),
             pending_notice: Arc::new(Mutex::new(None)),
+            pending_update: Arc::new(Mutex::new(None)),
+            update_toast_shown: Arc::new(Mutex::new(None)),
             ring: ring_handle.clone(),
             recording_active: Arc::new(Mutex::new(false)),
             loop_tx: loop_tx.clone(),
@@ -2190,6 +2323,9 @@ fn main() {
             // ensure_overlay_window(). That way WebView2 isn't running
             // while the user is idle.
 
+            // Poll GitHub Releases for updates every 30 seconds.
+            spawn_update_checker(app.handle().clone());
+
             // Start the capture pipeline and hotkey loop in a background thread.
             let handle = app.handle().clone();
             let active = active_clip.clone();
@@ -2231,6 +2367,7 @@ fn main() {
             get_telemetry_status,
             set_telemetry_enabled,
             upload_diagnostics_bundle,
+            get_pending_update,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")
