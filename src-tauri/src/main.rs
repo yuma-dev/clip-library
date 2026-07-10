@@ -122,6 +122,12 @@ struct AppState {
     /// Version the update overlay toast was already shown for — the
     /// 30-second checker must not re-toast the same release forever.
     update_toast_shown: Arc<Mutex<Option<String>>>,
+    /// True while the update toast is on screen. Gates the global Escape
+    /// (dismiss) and rename-hotkey (install now) behaviors.
+    update_toast_active: Arc<std::sync::atomic::AtomicBool>,
+    /// True while a silent hotkey-triggered install is running — blocks
+    /// double-triggers and Escape-dismiss mid-install.
+    update_installing: Arc<std::sync::atomic::AtomicBool>,
     /// Stash for transient notice toasts ("Recording started"), same
     /// late-mount race as the two fields above.
     pending_notice: Arc<Mutex<Option<NoticePayload>>>,
@@ -189,6 +195,12 @@ struct NoticePayload {
 struct UpdatePayload {
     version: String,
     corner: String,
+    /// The rename hotkey doubles as the "update now" hotkey while the
+    /// toast is up — the toast renders it as kbd chips.
+    hotkey: String,
+    /// `"available"` (update found, prompt to act) or `"installed"`
+    /// (post-restart confirmation after a silent hotkey update).
+    kind: String,
 }
 
 /// Phase-2 update, emitted once the mux finishes. The overlay merges
@@ -365,6 +377,9 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
         *state.pending_saved.lock().unwrap() = None;
         *state.pending_notice.lock().unwrap() = None;
         *state.pending_update.lock().unwrap() = None;
+        state
+            .update_toast_active
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         *state.active_clip.lock().unwrap() = None;
     }
     if let Some(overlay) = app.get_webview_window("overlay") {
@@ -567,6 +582,9 @@ fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<()
     *state.pending_saved.lock().unwrap() = None;
     *state.pending_notice.lock().unwrap() = None;
     *state.pending_update.lock().unwrap() = None;
+    state
+        .update_toast_active
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     // While a manual recording runs, the overlay window stays alive to
     // keep the red recording dot on screen — the card has already slid
     // out on the JS side.
@@ -692,16 +710,23 @@ async fn test_overlay(
                 let _ = overlay.emit("overlay-notice", notice);
             }
         }
-        "update" => {
+        "update" | "updated" => {
             let payload = UpdatePayload {
                 version: "9.9.9".into(),
                 corner: corner.clone(),
+                hotkey: cfg.hotkey.rename_clip.clone(),
+                kind: if stage == "updated" { "installed" } else { "available" }.into(),
             };
             *state.pending_update.lock().unwrap() = Some(payload.clone());
             *state.pending_saving.lock().unwrap() = None;
             *state.pending_saved.lock().unwrap() = None;
             *state.pending_notice.lock().unwrap() = None;
             if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                if stage == "update" {
+                    state
+                        .update_toast_active
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 let _ = overlay.emit("update-available", payload);
             }
         }
@@ -765,6 +790,8 @@ fn notify_update_available(app: &AppHandle, version: &str) {
     let payload = UpdatePayload {
         version: version.to_string(),
         corner: corner_slug(&cfg.notifications.corner),
+        hotkey: cfg.hotkey.rename_clip.clone(),
+        kind: "available".into(),
     };
     *state.pending_update.lock().unwrap() = Some(payload.clone());
 
@@ -795,8 +822,107 @@ fn notify_update_available(app: &AppHandle, version: &str) {
 
     info!("update v{version} available — showing overlay toast");
     if let Some(overlay) = ensure_overlay_window(app, &payload.corner) {
+        state
+            .update_toast_active
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = overlay.emit("update-available", payload);
     }
+}
+
+/// Post-restart confirmation after a silent hotkey update — short "Updated
+/// to vX" toast in the same ember style. Triggered by the marker file the
+/// installing process leaves behind (see `start_silent_update`).
+fn notify_updated(app: &AppHandle, version: &str) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
+        .unwrap_or_default();
+    let payload = UpdatePayload {
+        version: version.to_string(),
+        corner: corner_slug(&cfg.notifications.corner),
+        hotkey: String::new(),
+        kind: "installed".into(),
+    };
+    // Never bump an in-flight save toast for a pure confirmation.
+    let busy = state.pending_saving.lock().unwrap().is_some()
+        || state.pending_saved.lock().unwrap().is_some();
+    if busy {
+        return;
+    }
+    *state.pending_update.lock().unwrap() = Some(payload.clone());
+    info!("showing post-update toast for v{version}");
+    if let Some(overlay) = ensure_overlay_window(app, &payload.corner) {
+        let _ = overlay.emit("update-available", payload);
+    }
+}
+
+/// Marker file the silent updater writes (target version) right before
+/// installing. The next launch reads it: if the running version matches,
+/// the update landed — show the "Updated to vX" toast.
+fn updated_marker_path(config_path: &std::path::Path) -> Option<PathBuf> {
+    config_path.parent().map(|p| p.join("updated-toast.marker"))
+}
+
+/// Download + install the pending update with zero further interaction —
+/// the user pressed the update hotkey on the toast. The overlay shows an
+/// "Updating…" state until the installer (quiet NSIS) restarts the app.
+fn start_silent_update(app: AppHandle) {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_updater::UpdaterExt;
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if state
+        .update_installing
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    info!("silent update triggered from overlay hotkey");
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.emit("update-installing", ());
+    }
+
+    std::thread::spawn(move || {
+        let fail = |e: String| {
+            warn!("silent update failed: {e}");
+            if let Some(state) = app.try_state::<AppState>() {
+                state.update_installing.store(false, Ordering::SeqCst);
+            }
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                let _ = overlay.emit("update-error", e);
+            }
+        };
+        let updater = match app.updater() {
+            Ok(u) => u,
+            Err(e) => return fail(e.to_string()),
+        };
+        let update = match tauri::async_runtime::block_on(updater.check()) {
+            Ok(Some(u)) => u,
+            Ok(None) => return fail("update no longer available".into()),
+            Err(e) => return fail(e.to_string()),
+        };
+        // Marker before install: next launch shows the "updated" toast
+        // only if the running version equals the marker (i.e. it landed).
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Some(marker) = updated_marker_path(&state.config_path) {
+                let _ = std::fs::write(marker, &update.version);
+            }
+        }
+        info!("downloading update v{} for silent install", update.version);
+        match tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {})) {
+            Ok(()) => {
+                // Quiet NSIS usually kills + relaunches us itself; restart
+                // is the fallback if we're still alive.
+                info!("silent update installed — restarting");
+                app.restart();
+            }
+            Err(e) => fail(e.to_string()),
+        }
+    });
 }
 
 /// Background auto-update checker: polls the GitHub Releases `latest.json`
@@ -1069,6 +1195,9 @@ enum LoopEvent {
     /// Sent by the `reload_hotkeys` command when the user edits a hotkey,
     /// so the change applies without restarting the pipeline (or the app).
     ReloadHotkeys,
+    /// Escape pressed anywhere (global). Only acted on while the update
+    /// toast is on screen — dismisses it instantly.
+    UpdateEscape,
 }
 
 /// What the shared save flow below is saving — a replay-buffer clip or a
@@ -1120,6 +1249,15 @@ fn spawn_hotkey_listener(
             }
             Err(e) => warn!("{name} hotkey parse failed: {e:#}"),
         }
+    }
+    // Global Escape — only acted on while the update toast is on screen
+    // (the loop handler gates it), so it never eats anything.
+    match clipdip_hotkey::HotkeyBinding::parse("Esc") {
+        Ok(b) => {
+            binding_events.push(LoopEvent::UpdateEscape);
+            binding_defs.push(b);
+        }
+        Err(e) => warn!("esc binding parse failed: {e:#}"),
     }
     if binding_defs.is_empty() {
         return None;
@@ -1922,6 +2060,29 @@ fn run_capture_loop(
                         let _ = overlay.set_ignore_cursor_events(false);
                         let _ = overlay.set_focus();
                     }
+                } else if let Some(state) = app.try_state::<AppState>() {
+                    // No clip on screen — the rename hotkey doubles as
+                    // "update now" while the update toast is showing.
+                    use std::sync::atomic::Ordering;
+                    let no_save_toast = state.pending_saving.lock().unwrap().is_none()
+                        && state.pending_saved.lock().unwrap().is_none();
+                    if no_save_toast && state.update_toast_active.load(Ordering::SeqCst) {
+                        start_silent_update(app.clone());
+                    }
+                }
+            }
+            LoopEvent::UpdateEscape => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    use std::sync::atomic::Ordering;
+                    // Never dismissible mid-install — the toast is the only
+                    // sign the app is about to restart itself.
+                    if !state.update_installing.load(Ordering::SeqCst)
+                        && state.update_toast_active.swap(false, Ordering::SeqCst)
+                    {
+                        if let Some(overlay) = app.get_webview_window("overlay") {
+                            let _ = overlay.emit("update-dismiss", ());
+                        }
+                    }
                 }
             }
             LoopEvent::Restart | LoopEvent::RestartAfterFailure => {
@@ -2266,6 +2427,8 @@ fn main() {
             pending_notice: Arc::new(Mutex::new(None)),
             pending_update: Arc::new(Mutex::new(None)),
             update_toast_shown: Arc::new(Mutex::new(None)),
+            update_toast_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            update_installing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ring: ring_handle.clone(),
             recording_active: Arc::new(Mutex::new(false)),
             loop_tx: loop_tx.clone(),
@@ -2325,6 +2488,30 @@ fn main() {
 
             // Poll GitHub Releases for updates every 30 seconds.
             spawn_update_checker(app.handle().clone());
+
+            // A silent hotkey update leaves a marker with the target
+            // version — if we're now running that version, the update
+            // landed: confirm it with a short "Updated to vX" toast.
+            if let Some(marker) = updated_marker_path(&config_path) {
+                if let Ok(v) = std::fs::read_to_string(&marker) {
+                    let _ = std::fs::remove_file(&marker);
+                    let v = v.trim().to_string();
+                    if v == env!("CARGO_PKG_VERSION") {
+                        let app2 = app.handle().clone();
+                        std::thread::spawn(move || {
+                            // Give WebView2 + the pipeline a beat to settle
+                            // so the toast entrance isn't eaten by startup.
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            notify_updated(&app2, &v);
+                        });
+                    } else {
+                        info!(
+                            "stale update marker (v{v}, running v{}) — ignored",
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                }
+            }
 
             // Start the capture pipeline and hotkey loop in a background thread.
             let handle = app.handle().clone();

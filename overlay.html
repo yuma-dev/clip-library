@@ -150,14 +150,23 @@
         rgba(244,63,94,0.55) 90%, #ffe4e6 98%, transparent 100%);
       animation: spinang 2.4s linear infinite;
     }
-    /* Update toast: teal comet — clearly not a save, clearly good news. */
+    /* Update toast: ember comet — violet tail, red-hot head. Clearly
+       not a save, clearly good news. */
     .card.update::before {
       opacity: 1;
       background: conic-gradient(from var(--ang, 0deg),
-        transparent 0% 62%, rgba(20,184,166,0.12) 75%,
-        rgba(45,212,191,0.55) 90%, #ccfbf1 98%, transparent 100%);
-      animation: spinang 2.4s linear infinite;
+        transparent 0% 55%,
+        rgba(109,68,201,0.15) 68%,
+        rgba(139,92,246,0.5)  80%,
+        rgba(217,70,120,0.75) 90%,
+        rgba(244,63,94,0.95)  95%,
+        #ffe4e6 98%, transparent 100%);
+      animation: spinang 1.9s linear infinite;
     }
+    /* While installing, the comet whips faster — the only feedback the
+       user needs that something is happening. */
+    .card.update.installing::before { animation-duration: 0.8s; }
+    .card.update.installing .glowwrap i { animation-duration: 0.8s !important; }
 
     /* --- Comet glow ---------------------------------------------------
        Blurred twin of the comet orbiting behind the card. Two layers:
@@ -203,9 +212,46 @@
     .card.update .glowwrap { opacity: 0.7; }
     .card.update .glowwrap i {
       background: conic-gradient(from var(--ang, 0deg),
-        transparent 0% 62%, rgba(20,184,166,0.25) 78%,
-        rgba(45,212,191,0.6) 90%, rgba(204,251,241,0.9) 98%, transparent 100%);
-      animation: spinang 2.4s linear infinite;
+        transparent 0% 55%, rgba(139,92,246,0.3) 78%,
+        rgba(244,63,94,0.65) 92%, rgba(255,228,230,0.95) 98%, transparent 100%);
+      animation: spinang 1.9s linear infinite;
+    }
+    /* Embers shed off the red-hot head, drifting away from the card. */
+    .ember {
+      display: none;
+      position: absolute;
+      width: 0.28vh; height: 0.28vh;
+      border-radius: 999px;
+      background: #fda4af;
+      box-shadow: 0 0 0.55vh #f43f5e;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .card.update .ember { display: block; animation: emberdrift 2.4s ease-out infinite; }
+    .ember.e1 { right: -0.55vh; top: 30%; animation-delay: 0.2s; }
+    .ember.e2 { right: 20%; top: -0.65vh; animation-delay: 1.0s; }
+    .ember.e3 { left: 30%; bottom: -0.65vh; animation-delay: 1.7s; --dx: -1.3vh; }
+    @keyframes emberdrift {
+      0%   { opacity: 0; transform: translate(0,0) scale(0.6); }
+      12%  { opacity: 1; }
+      100% { opacity: 0; transform: translate(var(--dx, 1.5vh), -1.85vh) scale(0.2); }
+    }
+    /* Star sparkles twinkling off the logo (update toast only). */
+    .uspark {
+      display: none;
+      position: absolute;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .uspark svg { display: block; width: 100%; height: 100%; }
+    .card.update .uspark { display: block; animation: usparkle 2.6s ease-in-out infinite; }
+    .uspark.s1 { width: 0.95vh; height: 0.95vh; top: -0.55vh; right: -0.4vh; animation-delay: 0.3s !important; }
+    .uspark.s2 { width: 0.65vh; height: 0.65vh; bottom: -0.2vh; left: -0.65vh; animation-delay: 1.2s !important; }
+    .uspark.s3 { width: 0.75vh; height: 0.75vh; top: 0.95vh; right: -1.1vh; animation-delay: 2.0s !important; }
+    @keyframes usparkle {
+      0%, 100% { opacity: 0; transform: scale(0) rotate(-10deg); }
+      18%      { opacity: 1; transform: scale(1.05) rotate(8deg); }
+      36%      { opacity: 0; transform: scale(0) rotate(25deg); }
     }
 
     /* Ambient under-glow while working / recording notice. */
@@ -226,18 +272,19 @@
       box-shadow:
         0 18px 40px -16px rgba(0, 0, 0, 0.7),
         0 0 0 1px rgba(255, 255, 255, 0.05),
-        0 0 2.8vh -0.6vh rgba(45, 212, 191, 0.35);
+        0 0 2.8vh -0.55vh rgba(139, 92, 246, 0.35),
+        0 0.55vh 3.3vh -0.9vh rgba(244, 63, 94, 0.3);
     }
-    /* The update logo breathes in teal instead of the saving purple. */
+    /* The update logo breathes violet with a red halo. */
     .card.update .logo {
-      animation: updatepulse 2.2s ease-in-out infinite;
+      animation: updatepulse 1.9s ease-in-out infinite;
     }
     @keyframes updatepulse {
-      0%, 100% { transform: scale(0.97); filter: drop-shadow(0 0 0.2vh rgba(94,234,212,0)); }
-      50%      { transform: scale(1.04); filter: drop-shadow(0 0 0.85vh rgba(94,234,212,0.55)); }
+      0%, 100% { transform: scale(0.96); filter: drop-shadow(0 0 0.2vh rgba(192,132,252,0)); }
+      50%      { transform: scale(1.05); filter: drop-shadow(0 0 0.55vh rgba(192,132,252,0.55)) drop-shadow(0 0 1.1vh rgba(244,63,94,0.4)); }
     }
     .card.update .drain i {
-      background: linear-gradient(90deg, #2dd4bf, #5eead4);
+      background: linear-gradient(90deg, #8b5cf6, #f43f5e);
     }
     .card.glow { animation: savedglow 1.2s ease-out 0.05s; }
     @keyframes savedglow {
@@ -400,13 +447,14 @@
       display: none;
     }
 
-    /* Update toast subtitle — "Open ClipDip to install" + version chip. */
+    /* Update toast subtitle — hotkey prompt + version chip, and a dimmer
+       Esc-to-dismiss line below it. */
     .update-sub {
       display: none;
       font: 500 1.25vh/1 inherit;
-      color: rgba(255, 255, 255, 0.48);
+      color: rgba(255, 255, 255, 0.5);
       align-items: center;
-      gap: 0.5vh;
+      gap: 0.4vh;
       white-space: nowrap;
       pointer-events: none;
     }
@@ -415,14 +463,26 @@
       align-items: center;
       height: 1.65vh;
       padding: 0 0.5vh;
+      margin-left: 0.15vh;
       border-radius: 0.35vh;
-      background: rgba(45, 212, 191, 0.12);
-      border: 1px solid rgba(45, 212, 191, 0.28);
-      color: #99f6e4;
+      background: linear-gradient(120deg, rgba(139,92,246,0.18), rgba(244,63,94,0.18));
+      border: 1px solid rgba(244, 63, 94, 0.35);
+      color: #fecdd3;
       font: 600 1.15vh/1 "Cascadia Mono", "Consolas", "Segoe UI Mono", ui-monospace, monospace;
       letter-spacing: 0.01em;
-      text-shadow: 0 0 0.6vh rgba(45, 212, 191, 0.45);
+      text-shadow: 0 0 0.6vh rgba(244, 63, 94, 0.6);
     }
+    .update-esc {
+      display: none;
+      margin-top: 0.45vh;
+      font: 500 1.1vh/1 inherit;
+      color: rgba(255, 255, 255, 0.32);
+      align-items: center;
+      gap: 0.35vh;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .update-esc .kbd { height: 1.5vh; min-width: 1.7vh; font-size: 1.05vh; opacity: 0.85; }
 
     /* Visibility per phase. Each phase reveals exactly one of:
        title alone (saving), hint OR input (saved, depending on
@@ -439,12 +499,17 @@
     .card.notice   .rename-input,
     .card.notice   .rename-display,
     .card.notice   .hint-row       { display: none; }
-    /* Update phase: title + teal subtitle, no rename machinery. */
+    /* Update phase: title + hotkey prompt, no rename machinery. */
     .card.update   .hint,
     .card.update   .rename-input,
     .card.update   .rename-display,
     .card.update   .hint-row       { display: none; }
     .card.update   .update-sub     { display: flex; }
+    .card.update   .update-esc     { display: flex; }
+    /* Installing / installed states hide what no longer applies. */
+    .card.update.installing .update-esc,
+    .card.update.installed  .update-esc,
+    .card.update.installed  .update-sub { display: none; }
     .card.focused  .hint           { display: none; }
     .card.focused  .rename-input   { opacity: 1; }
   </style>
@@ -456,6 +521,9 @@
       <div class="fxclip"><div class="sheen" id="sheen"></div></div>
       <div class="logo-wrap" id="logo-wrap">
         <img class="logo" src="/logo250x250.png" alt="" draggable="false" />
+        <span class="uspark s1"><svg viewBox="0 0 24 24"><path fill="#ffe4e6" d="M12 0C13.2 7.4 16.6 10.8 24 12 16.6 13.2 13.2 16.6 12 24 10.8 16.6 7.4 13.2 0 12 7.4 10.8 10.8 7.4 12 0Z"/></svg></span>
+        <span class="uspark s2"><svg viewBox="0 0 24 24"><path fill="#e9d5ff" d="M12 0C13.2 7.4 16.6 10.8 24 12 16.6 13.2 13.2 16.6 12 24 10.8 16.6 7.4 13.2 0 12 7.4 10.8 10.8 7.4 12 0Z"/></svg></span>
+        <span class="uspark s3"><svg viewBox="0 0 24 24"><path fill="#fda4af" d="M12 0C13.2 7.4 16.6 10.8 24 12 16.6 13.2 13.2 16.6 12 24 10.8 16.6 7.4 13.2 0 12 7.4 10.8 10.8 7.4 12 0Z"/></svg></span>
       </div>
       <div class="body">
         <div class="title-row">
@@ -488,11 +556,12 @@
           <span class="rename-display" id="rename-display"></span>
           <div class="underline"></div>
         </div>
-        <div class="update-sub" id="update-sub">
-          <span>Open ClipDip to install</span>
-          <span class="ver" id="update-ver">v0.0.0</span>
-        </div>
+        <div class="update-sub" id="update-sub"></div>
+        <div class="update-esc" id="update-esc"></div>
       </div>
+      <span class="ember e1"></span>
+      <span class="ember e2"></span>
+      <span class="ember e3"></span>
       <div class="drain" id="drain"><i></i></div>
     </div>
     <div class="rec-dot" title="Recording"><span class="orb"></span><span class="core"></span></div>
@@ -517,14 +586,38 @@
       const T = window.__TAURI_INTERNALS__;
       if (!T) {
         console.warn("[overlay] not running in Tauri — passive mode");
-        // Design-preview shortcut: overlay.html?demo=update shows the
-        // update toast in a plain browser (no Tauri, no backend).
-        if (new URLSearchParams(location.search).get("demo") === "update") {
+        // Design-preview shortcut: overlay.html?demo=update (or
+        // demo=updated / demo=updating) shows the update toast in a
+        // plain browser (no Tauri, no backend).
+        const demo = new URLSearchParams(location.search).get("demo");
+        if (demo === "update" || demo === "updated" || demo === "updating") {
           const card = document.getElementById("card");
+          const mk = (parent, text, cls, style) => {
+            const el = document.createElement("span");
+            if (cls) el.className = cls;
+            if (style) el.style.cssText = style;
+            el.textContent = text;
+            parent.appendChild(el);
+          };
           card.classList.remove("saving");
           card.classList.add("update");
-          document.getElementById("title").textContent = "Update available";
-          document.getElementById("update-ver").textContent = "v1.0.0";
+          if (demo === "updated") card.classList.add("installed");
+          if (demo === "updating") card.classList.add("installing");
+          document.getElementById("title").textContent =
+            demo === "updated" ? "Updated to v1.0.1" :
+            demo === "updating" ? "Updating ClipDip…" : "New version ready";
+          const sub = document.getElementById("update-sub");
+          const esc = document.getElementById("update-esc");
+          if (demo === "update") {
+            mk(sub, "Press");
+            mk(sub, "Ctrl", "kbd"); mk(sub, "+", "", "opacity:.5"); mk(sub, "F10", "kbd");
+            mk(sub, "to update to", "", "margin-left:0.1vh");
+            mk(sub, "v1.0.1", "ver");
+            mk(esc, "Esc", "kbd");
+            mk(esc, "to dismiss", "", "margin-left:0.1vh");
+          } else if (demo === "updating") {
+            mk(sub, "Downloading v1.0.1 — ClipDip restarts itself");
+          }
           requestAnimationFrame(() =>
             requestAnimationFrame(() => card.classList.add("entered")));
         }
@@ -611,7 +704,7 @@
 
       // --- State ------------------------------------------------------
       const state = {
-        phase: "saving",          // "saving" | "saved" | "renamed" | "notice"
+        phase: "saving",          // "saving" | "saved" | "renamed" | "notice" | "update"
         kind: "clip",             // "clip" | "recording" — words the titles
         noticeMessage: "",
         path: null,
@@ -620,6 +713,9 @@
         focused: false,
         recording: false,
         sound: false,             // chirp on save? (from the saving payload)
+        updateMode: "available",  // "available" | "installing" | "installed" | "failed"
+        updateVersion: "?",
+        updateHotkey: "",
       };
       let dismissTimer = null;
       let savingTimeoutTimer = null;
@@ -699,14 +795,15 @@
         if (p === "saving") savingShownAt = performance.now();
         // Effect classes from a previous phase must not leak into the
         // next one (e.g. a new clip-saving while the flash is mid-burn).
-        card.classList.remove("saving", "saved", "renamed", "notice", "update", "flash", "glow", "saved-pop");
+        card.classList.remove("saving", "saved", "renamed", "notice", "update",
+          "installing", "installed", "flash", "glow", "saved-pop");
         sheen.classList.remove("on");
         clearDrain();
         card.classList.add(p);
         const rec = state.kind === "recording";
         titleEl.textContent =
           p === "notice"  ? state.noticeMessage :
-          p === "update"  ? "Update available" :
+          p === "update"  ? "New version ready" :
           p === "saving"  ? (rec ? "Saving recording…" : "Saving clip…") :
           p === "renamed" ? "Renamed!" :
                             (rec ? "Recording saved" : "Clip saved");
@@ -780,6 +877,67 @@
         // that the hint content changed.
         lockBodyWidth();
       };
+      // --- Update toast --------------------------------------------------
+      const updateSub = document.getElementById("update-sub");
+      const updateEsc = document.getElementById("update-esc");
+      const mkspan = (parent, text, cls, style) => {
+        const el = document.createElement("span");
+        if (cls) el.className = cls;
+        if (style) el.style.cssText = style;
+        el.textContent = text;
+        parent.appendChild(el);
+      };
+      // "Ctrl+F10" → [Ctrl] + [F10] chips. Returns false when the string
+      // was empty (caller falls back to plain words).
+      const hotkeyChips = (parent, s) => {
+        const parts = String(s || "").split("+").map(x => x.trim()).filter(Boolean);
+        parts.forEach((p, i) => {
+          if (i > 0) mkspan(parent, "+", "", "opacity:.5");
+          mkspan(parent, p, "kbd");
+        });
+        return parts.length > 0;
+      };
+      const applyUpdateMode = (mode) => {
+        state.updateMode = mode;
+        setPhase("update");
+        if (mode === "installing") card.classList.add("installing");
+        if (mode === "installed" || mode === "failed") card.classList.add("installed");
+        titleEl.textContent =
+          mode === "installing" ? "Updating ClipDip…" :
+          mode === "installed"  ? "Updated to v" + state.updateVersion :
+          mode === "failed"     ? "Update failed — open ClipDip" :
+                                  "New version ready";
+        swapTitle();
+        updateSub.textContent = "";
+        updateEsc.textContent = "";
+        if (mode === "available") {
+          mkspan(updateSub, "Press");
+          if (!hotkeyChips(updateSub, state.updateHotkey)) {
+            mkspan(updateSub, "the rename hotkey");
+          }
+          mkspan(updateSub, "to update to", "", "margin-left:0.1vh");
+          mkspan(updateSub, "v" + state.updateVersion, "ver");
+          mkspan(updateEsc, "Esc", "kbd");
+          mkspan(updateEsc, "to dismiss", "", "margin-left:0.1vh");
+        } else if (mode === "installing") {
+          mkspan(updateSub, "Downloading v" + state.updateVersion + " — ClipDip restarts itself");
+        }
+        scheduleDismiss();
+      };
+      const showUpdate = (p) => {
+        if (!p) return;
+        if (dismissTimer) clearTimeout(dismissTimer);
+        clearSavingTimeout();
+        cancelDeferredSaved();
+        setFocused(false);
+        input.value = "";
+        setCorner(p.corner);
+        state.updateVersion = p.version || "?";
+        state.updateHotkey = p.hotkey || "";
+        applyUpdateMode(p.kind === "installed" ? "installed" : "available");
+        showCard();
+      };
+
       const scheduleDismiss = () => {
         if (dismissTimer) clearTimeout(dismissTimer);
         if (state.focused) return;
@@ -791,10 +949,19 @@
         } else if (state.phase === "notice") {
           dismissTimer = setTimeout(dismiss, 2500);
         } else if (state.phase === "update") {
-          // Long enough to read mid-game, short enough not to squat on
-          // the screen — the settings-window banner is the real CTA.
-          dismissTimer = setTimeout(dismiss, 8000);
-          armDrain(8000);
+          if (state.updateMode === "available") {
+            // Long enough to read and reach the hotkey mid-game; Escape
+            // kills it instantly, the update hotkey installs.
+            dismissTimer = setTimeout(dismiss, 15000);
+            armDrain(15000);
+          } else if (state.updateMode === "installed") {
+            dismissTimer = setTimeout(dismiss, 5000);
+            armDrain(5000);
+          } else if (state.updateMode === "failed") {
+            dismissTimer = setTimeout(dismiss, 5000);
+          }
+          // "installing": no dismiss — the card stays until the app
+          // restarts itself (or update-error fires).
         }
       };
       // Slide the card out, then let the backend decide whether the
@@ -860,10 +1027,7 @@
           if (p.update && !saving && !saved && !p.notice) {
             // The update toast fired before we mounted (the common case —
             // the checker creates this very window, then emits).
-            setCorner(p.update.corner);
-            document.getElementById("update-ver").textContent = "v" + (p.update.version || "?");
-            setPhase("update");
-            scheduleDismiss();
+            showUpdate(p.update);
           }
           setRecording(p.recording);
         })
@@ -914,18 +1078,30 @@
       });
 
       listen("update-available", (ev) => {
-        const p = ev.payload || {};
         // Never interrupt an in-flight save toast — the backend already
         // avoids this, belt and suspenders here.
         if (state.phase === "saving") return;
-        clearSavingTimeout();
-        cancelDeferredSaved();
-        setFocused(false);
-        setCorner(p.corner);
-        document.getElementById("update-ver").textContent = "v" + (p.version || "?");
-        setPhase("update");
-        showCard();
-        scheduleDismiss();
+        showUpdate(ev.payload || {});
+      });
+
+      // Silent install started (update hotkey pressed) — comet whips
+      // faster, copy flips to "Updating…", no dismiss until restart.
+      listen("update-installing", () => {
+        if (state.phase !== "update") return;
+        if (dismissTimer) clearTimeout(dismissTimer);
+        applyUpdateMode("installing");
+      });
+
+      listen("update-error", () => {
+        if (state.phase !== "update") return;
+        applyUpdateMode("failed");
+      });
+
+      // Global Escape pressed while the toast is up — instant out.
+      listen("update-dismiss", () => {
+        if (state.phase !== "update") return;
+        if (dismissTimer) clearTimeout(dismissTimer);
+        dismiss();
       });
 
       listen("clip-error", () => {

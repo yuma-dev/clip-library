@@ -36,8 +36,9 @@ export default function UpdateBanner() {
   // was closed), the live event (found while it's open), and our own
   // check on mount (fresh open, checker between ticks).
   useEffect(() => {
-    invoke<{ version: string } | null>("get_pending_update")
-      .then(p => { if (p) surface(p.version); })
+    invoke<{ version: string; kind?: string } | null>("get_pending_update")
+      // "installed" is the post-restart confirmation stash — not actionable.
+      .then(p => { if (p && p.kind !== "installed") surface(p.version); })
       .catch(() => {});
     const un = listen<{ version: string }>("update-available", e => surface(e.payload.version));
     check({ timeout: 30_000 })
