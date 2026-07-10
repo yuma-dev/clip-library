@@ -54,14 +54,10 @@ export class LibraryHover {
 
       let startTime = 0;
       try {
-        const trim = await window.clips.getTrim(clip.originalName);
-        if (trim && typeof trim.start === "number") {
-          startTime = trim.start;
-        } else {
-          const info = await window.clips.getClipInfo(clip.originalName);
-          const duration = Number(info?.format?.duration ?? 0);
-          startTime = duration > 40 ? duration / 2 : 0;
-        }
+        // One cheap IPC (trim.start or cached-duration midpoint). Never call
+        // getClipInfo here — on a cold cache it runs a ~300ms ffprobe on the
+        // main process, which serially stalled every hover + queued IPC.
+        startTime = Number(await window.clips.getPreviewStartTime(clip.originalName)) || 0;
       } catch {
         /* default to 0 */
       }

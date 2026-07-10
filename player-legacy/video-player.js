@@ -1182,14 +1182,18 @@ function endVolumeDrag() {
 /**
  * Load volume data for current clip
  */
-async function loadVolumeData() {
+async function loadVolumeData(preloadedVolumeData) {
   if (!state.currentClip) {
     logger.warn('Attempted to load volume data without current clip');
     return;
   }
-  
+
   try {
-    const volumeData = await ipcRenderer.invoke('get-volume-range', state.currentClip.originalName);
+    // openClip passes the value from its batched open-state fetch; other
+    // callers (module export) still hit the IPC.
+    const volumeData = preloadedVolumeData !== undefined
+      ? preloadedVolumeData
+      : await ipcRenderer.invoke('get-volume-range', state.currentClip.originalName);
     logger.info('Volume data loaded:', volumeData);
 
     if (volumeData && volumeData.start !== undefined && volumeData.end !== undefined) {
@@ -1655,6 +1659,10 @@ async function closePlayer() {
   if (window.justFinishedDragging) {
     return;
   }
+
+  // Dev profiler: label the whole close flow (backdrop click, Escape, delete
+  // all land here) so traces don't show it as "pointerdown:unknown".
+  if (window.__perf && window.__perf.interaction) window.__perf.interaction('close-clip');
 
   if (callbacks.logCurrentWatchSession) {
     callbacks.logCurrentWatchSession();
@@ -2137,6 +2145,8 @@ async function openClip(originalName, customName) {
     callbacks.initializeVolumeControls();
   }
   elements.loadingOverlay.style.display = "none";
+  // Clear a lingering darkener state from a clip closed before it played.
+  elements.loadingOverlay.classList.remove('thumbnail-backdrop');
 
   // Create or get thumbnail overlay
   let thumbnailOverlay = document.getElementById('thumbnail-overlay');
@@ -2171,8 +2181,11 @@ async function openClip(originalName, customName) {
   
   // OPTIMIZATION: Check if data was preloaded on hover
   let clipInfo, trimData, clipTags, thumbnailPath;
+  // Everything the later stages read (volume/speed/volume-range/track state)
+  // arrives in the same round trip, so those stages never touch IPC again.
+  let openState = null;
   const cachedData = callbacks.getCachedClipData ? await callbacks.getCachedClipData(originalName) : null;
-  
+
   if (cachedData) {
     // Use cached data - much faster!
     clipInfo = cachedData.clipInfo;
@@ -2182,15 +2195,37 @@ async function openClip(originalName, customName) {
     mark('usedCachedData');
     logger.info(`[${originalName}] Using preloaded cached data`);
   } else {
-    // No cache - load fresh (parallel fetch for speed)
+    // No cache - load fresh (single batched IPC: one round trip instead of
+    // ~9 handles spread over several await waves)
     logger.info(`[${originalName}] Loading clip data (not cached)...`);
     try {
-      [clipInfo, trimData, clipTags, thumbnailPath] = await Promise.all([
-        ipcRenderer.invoke("get-clip-info", originalName),
-        ipcRenderer.invoke("get-trim", originalName),
-        ipcRenderer.invoke("get-clip-tags", originalName),
-        callbacks.getThumbnailPath ? callbacks.getThumbnailPath(originalName) : ipcRenderer.invoke("get-thumbnail-path", originalName)
-      ]);
+      const openStatePromise = ipcRenderer.invoke("get-clip-open-state", originalName);
+      // The batch can include a first-time ffprobe (~250ms). The thumbnail
+      // lookup is just an fs.access, so run it separately and put the low-res
+      // placeholder on screen right away instead of gating it on the probe —
+      // otherwise the video (pre-warmed by the hover preview) starts before
+      // the placeholder ever paints.
+      try {
+        const earlyThumb = await (callbacks.getThumbnailPath
+          ? callbacks.getThumbnailPath(originalName)
+          : ipcRenderer.invoke("get-thumbnail-path", originalName));
+        if (earlyThumb && openGen === clipOpenGeneration) {
+          thumbnailOverlay.src = `file://${earlyThumb}`;
+          thumbnailOverlay.style.display = 'block';
+          // While the placeholder is up, the loading overlay is a plain
+          // darkener (no spinner) — see #loading-overlay.thumbnail-backdrop.
+          // Shown explicitly: the updatePlayhead loop that normally raises it
+          // isn't running before the first clip of the session loads.
+          elements.loadingOverlay.classList.add('thumbnail-backdrop');
+          elements.loadingOverlay.style.display = 'flex';
+        }
+      } catch (_) { /* placeholder is cosmetic */ }
+      openState = await openStatePromise;
+      clipInfo = openState.clipInfo;
+      trimData = openState.trimData;
+      clipTags = openState.clipTags;
+      thumbnailPath = openState.thumbnailPath;
+      if (!clipInfo) throw new Error('get-clip-open-state returned no clip info');
       mark('fetchedClipData');
     } catch (error) {
       logger.error(`[${originalName}] Error loading clip data:`, error);
@@ -2198,11 +2233,25 @@ async function openClip(originalName, customName) {
     }
   }
   mark('getClipData');
-  
+
+  // Multi-track clips: kick off track extraction NOW so the one-time ffmpeg
+  // stream-copy (~200-350ms on first open of a clip) overlaps the video
+  // load/seek below instead of running after it. The multi-track init block
+  // awaits this same promise later. Harmless if the open is superseded —
+  // it just warms the extraction cache.
+  let earlyExtractPromise = null;
+  if (Array.isArray(clipInfo?.audioTracks) && clipInfo.audioTracks.length > 1
+      && !audioWarmCache.has(originalName)) {
+    earlyExtractPromise = ipcRenderer.invoke('extract-audio-tracks', originalName);
+    earlyExtractPromise.catch(() => {}); // observed where awaited
+  }
+
   // Set up thumbnail
   if (thumbnailPath) {
     thumbnailOverlay.src = `file://${thumbnailPath}`;
     thumbnailOverlay.style.display = 'block';
+    elements.loadingOverlay.classList.add('thumbnail-backdrop');
+    elements.loadingOverlay.style.display = 'flex';
     logger.info(`[${originalName}] Thumbnail loaded: ${thumbnailPath}`);
   } else {
     logger.warn(`[${originalName}] No thumbnail path found`);
@@ -2358,11 +2407,14 @@ async function openClip(originalName, customName) {
     await videoLoadPromise;
     mark('afterLoadPromise');
     
-    // Load volume and speed
-    const [loadedVolume, loadedSpeed] = await Promise.all([
-      loadVolume(originalName),
-      loadSpeed(originalName)
-    ]);
+    // Load volume and speed (already fetched in the open-state batch when
+    // this open wasn't served from the hover cache)
+    const [loadedVolume, loadedSpeed] = openState
+      ? [openState.volume, openState.speed]
+      : await Promise.all([
+          loadVolume(originalName),
+          loadSpeed(originalName)
+        ]);
     
     // Always apply clip-specific volume/speed so prior clip state does not leak.
     const volumeMin = elements.volumeSlider ? Number(elements.volumeSlider.min) : 0;
@@ -2388,7 +2440,7 @@ async function openClip(originalName, customName) {
     mark('afterVolumeSpeed');
     
     // Check for volume range data to show volume controls
-    await loadVolumeData();
+    await loadVolumeData(openState ? openState.volumeRange : undefined);
     mark('afterVolumeData');
 
     // Multi-track audio support: if this clip has >1 audio stream, extract each
@@ -2412,11 +2464,11 @@ async function openClip(originalName, customName) {
               streamIndex: m.streamIndex,
               path: m.path
             })))
-          : ipcRenderer.invoke('extract-audio-tracks', originalName);
+          : (earlyExtractPromise || ipcRenderer.invoke('extract-audio-tracks', originalName));
         const [extracted, persisted, globalPrefs] = await Promise.all([
           extractedPromise,
-          ipcRenderer.invoke('get-track-state', originalName),
-          ipcRenderer.invoke('get-track-preferences')
+          openState ? Promise.resolve(openState.trackState) : ipcRenderer.invoke('get-track-state', originalName),
+          openState ? Promise.resolve(openState.trackPreferences) : ipcRenderer.invoke('get-track-preferences')
         ]);
         if (openGen !== clipOpenGeneration) {
           logger.info(`[${originalName}] Multi-track init aborted (stale gen ${openGen} vs ${clipOpenGeneration})`);
@@ -2533,6 +2585,9 @@ async function openClip(originalName, customName) {
             if (thumbnailOverlay) {
                 thumbnailOverlay.style.display = 'none';
             }
+            // Placeholder gone — restore the normal spinner behavior for
+            // any later mid-playback buffering.
+            elements.loadingOverlay.classList.remove('thumbnail-backdrop');
 
             elements.videoPlayer.removeEventListener('playing', playHandler);
             elements.videoPlayer.removeEventListener('error', errorHandlerPlay);

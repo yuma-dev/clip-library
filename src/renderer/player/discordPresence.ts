@@ -37,8 +37,21 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+// Last payload pushed to main — identical consecutive updates are dropped.
+// Interactions fire presence from several places at once (player open + the
+// video 'play' event, pause + close), which doubled every IPC in perf traces.
+let lastSent: { details: string; state: string | null } | null = null;
+
+/** Forget the last payload so the next update always goes through (used after
+ * presence may have been cleared outside this module). */
+function resetPresenceDedupe(): void {
+  lastSent = null;
+}
+
 export function updateDiscordPresence(details: string, presenceState: string | null = null): void {
   if (!enabled) return;
+  if (lastSent && lastSent.details === details && lastSent.state === presenceState) return;
+  lastSent = { details, state: presenceState };
   void window.clips.updateDiscordPresence(details, presenceState);
 }
 
@@ -64,17 +77,28 @@ export function updateDiscordPresenceForClip(clip: PresenceClip, isPlaying = tru
   if (isPlaying) state.discordPresenceInterval = setInterval(tick, 1000);
 }
 
+// The grid-browsing line updates whenever the clip list changes; during
+// startup the tag batches change it several times in ~1s, and each distinct
+// "Total: N" payload defeated the dedupe. Trailing debounce coalesces them.
+let browseDebounce: ReturnType<typeof setTimeout> | undefined;
+
 /** Presence for the current view: open clip if any, else grid browsing. */
 export function updateDiscordPresenceBasedOnState(): void {
   const state = legacyState();
   if (!state || !enabled) return;
   const video = videoEl();
   if (state.currentClip && video) {
+    clearTimeout(browseDebounce);
     updateDiscordPresenceForClip(state.currentClip, !video.paused);
   } else {
-    const list = (state.currentClipList ?? []) as LocalClip[];
-    const publicCount = list.filter((c) => !(c.tags ?? []).includes("Private")).length;
-    updateDiscordPresence("Browsing clips", `Total: ${publicCount}`);
+    clearTimeout(browseDebounce);
+    browseDebounce = setTimeout(() => {
+      const s = legacyState();
+      if (!s || !enabled || s.currentClip) return;
+      const list = (s.currentClipList ?? []) as LocalClip[];
+      const publicCount = list.filter((c) => !(c.tags ?? []).includes("Private")).length;
+      updateDiscordPresence("Browsing clips", `Total: ${publicCount}`);
+    }, 1_000);
   }
 }
 
@@ -83,6 +107,7 @@ export function setDiscordPresenceEnabled(value: boolean): void {
   enabled = value;
   const state = legacyState();
   if (state?.settings) state.settings.enableDiscordRPC = value;
+  resetPresenceDedupe();
   if (value) updateDiscordPresenceBasedOnState();
 }
 
@@ -119,6 +144,7 @@ export function initDiscordPresence(): void {
     const video = videoEl();
     const playing = video ? !video.paused : false;
     if (Date.now() - lastActivityTime > IDLE_TIMEOUT_MS && !playing) {
+      resetPresenceDedupe();
       void window.clips.clearDiscordPresence();
     }
   }, 60_000);
@@ -128,6 +154,9 @@ export function initDiscordPresence(): void {
     const video = videoEl();
     const playing = video ? !video.paused : false;
     if (Date.now() - lastActivityTime <= IDLE_TIMEOUT_MS || playing) {
+      // Main may have cleared presence while we were blurred/locked — force
+      // the re-assert through even if the payload matches the last send.
+      resetPresenceDedupe();
       updateDiscordPresenceBasedOnState();
     }
   });

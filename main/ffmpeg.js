@@ -1955,18 +1955,6 @@ function buildAudioTracksFromStreams(streams) {
 // v3 added per-track startTime + needsReencode (elst detection).
 const AUDIO_TRACKS_CACHE_VERSION = 3;
 
-async function probeAudioTracksDirect(clipPath) {
-  // Use ffprobe directly to get raw stream tags (fluent-ffmpeg sometimes filters them).
-  const { stdout } = await execFileAsync(ffprobePath, [
-    '-v', 'error',
-    '-print_format', 'json',
-    '-show_streams',
-    clipPath
-  ]);
-  const parsed = JSON.parse(stdout || '{}');
-  return buildAudioTracksFromStreams(Array.isArray(parsed.streams) ? parsed.streams : []);
-}
-
 // Short-lived memo: opening a clip fires get-clip-info more than once
 // (player + audio-track extraction), so identical calls within a couple of
 // seconds share one promise instead of re-reading/probing.
@@ -2029,34 +2017,48 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
     }
 
     logger.info(`[ffmpeg] No (complete) cached metadata, running ffprobe for: ${clipName}`);
-    return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(clipPath, async (err, info) => {
-        if (err) {
-          logger.error(`[ffmpeg] ffprobe failed for ${clipName}:`, err);
-          reject(err);
-          return;
-        }
-        let audioTracks = [];
-        try {
-          // Always re-probe directly to capture stream tags reliably.
-          audioTracks = await probeAudioTracksDirect(clipPath);
-        } catch (directErr) {
-          logger.warn(`[ffmpeg] direct ffprobe failed for ${clipName}, falling back to fluent output: ${directErr?.error?.message || directErr.message || directErr}`);
-          audioTracks = buildAudioTracksFromStreams(info.streams);
-        }
-        logger.info(`[ffmpeg] ffprobe successful for ${clipName} - duration: ${info.format.duration}, audioTracks: ${audioTracks.length} (${audioTracks.map((t) => t.name).join(' | ')})`);
-        const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
-        await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
-          ...existingMetadata,
-          duration: info.format.duration,
-          audioTracks,
-          audioTracksVersion: AUDIO_TRACKS_CACHE_VERSION,
-          timestamp: Date.now()
-        });
-        info.audioTracks = audioTracks;
-        resolve(info);
+    // One direct ffprobe returns format + streams together with raw stream
+    // tags. (This used to be two spawns per cold clip: fluent-ffmpeg's probe
+    // for the format, then a second direct probe for reliable tags — ~2x the
+    // ~120ms process cost on the open path.)
+    let info;
+    try {
+      const { stdout } = await execFileAsync(ffprobePath, [
+        '-v', 'error',
+        '-print_format', 'json',
+        '-show_format',
+        '-show_streams',
+        clipPath
+      ]);
+      const parsed = JSON.parse(stdout || '{}');
+      const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+      info = {
+        format: {
+          filename: clipPath,
+          duration: Number(parsed.format && parsed.format.duration) || 0
+        },
+        streams,
+        audioTracks: buildAudioTracksFromStreams(streams)
+      };
+    } catch (directErr) {
+      // Fall back to fluent-ffmpeg's probe (its stream tags are sometimes
+      // filtered, but a generic track name beats failing the open).
+      logger.warn(`[ffmpeg] direct ffprobe failed for ${clipName}, falling back to fluent probe: ${directErr?.error?.message || directErr.message || directErr}`);
+      info = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(clipPath, (err, res) => (err ? reject(err) : resolve(res)));
       });
+      info.audioTracks = buildAudioTracksFromStreams(info.streams);
+    }
+    logger.info(`[ffmpeg] ffprobe successful for ${clipName} - duration: ${info.format.duration}, audioTracks: ${info.audioTracks.length} (${info.audioTracks.map((t) => t.name).join(' | ')})`);
+    const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
+    await thumbnailsModule.saveThumbnailMetadata(thumbnailPath, {
+      ...existingMetadata,
+      duration: info.format.duration,
+      audioTracks: info.audioTracks,
+      audioTracksVersion: AUDIO_TRACKS_CACHE_VERSION,
+      timestamp: Date.now()
     });
+    return info;
   } catch (error) {
     logger.error(`[ffmpeg] Error getting clip info for ${clipName}:`, error);
     throw error;
