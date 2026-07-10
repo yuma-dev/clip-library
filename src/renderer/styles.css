@@ -800,6 +800,7 @@ button {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 .rail-stat-figure.accent {
   color: #d9a6ef;

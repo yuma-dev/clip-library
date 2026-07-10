@@ -3,6 +3,7 @@ import { CircleDashed, Layers, Scissors, Sparkles } from "lucide-react";
 import { routes, type Route } from "../routes";
 import { useToast } from "../ui/Toast";
 import { useProfile } from "./useProfile";
+import { useClipsFolderSize, formatBytes } from "./useClipsFolderSize";
 import RailTags from "./RailTags";
 import RailProfile from "./RailProfile";
 import RailSearch from "./RailSearch";
@@ -57,16 +58,17 @@ function Sidebar({
     let untagged = 0;
     let trimmed = 0;
     let isNew = 0;
-    let tagged = 0;
     for (const c of clips) {
       if (now - c.createdAt <= WEEK_MS) week++;
       if (c.tags.length === 0) untagged++;
-      else tagged++;
       if (c.isTrimmed) trimmed++;
       if (c.isNewSinceLastSession) isNew++;
     }
-    return { total: clips.length, week, untagged, trimmed, isNew, tagged };
+    return { total: clips.length, week, untagged, trimmed, isNew };
   }, [clips]);
+
+  // Clip-folder disk usage — lazily fetched, refreshed slowly, nothing depends on it.
+  const folderBytes = useClipsFolderSize();
 
   // Collapsed-rail hover title — flies out to the right, over the grid. The
   // rail clips its own overflow, so the tip is rendered as a fixed sibling and
@@ -183,8 +185,8 @@ function Sidebar({
               <div className="rail-stat-label">this week</div>
             </div>
             <div className="rail-stat">
-              <div className="rail-stat-figure">{counts.tagged}</div>
-              <div className="rail-stat-label">tagged</div>
+              <div className="rail-stat-figure">{folderBytes == null ? "—" : formatBytes(folderBytes)}</div>
+              <div className="rail-stat-label">on disk</div>
             </div>
           </div>
         </>

@@ -18,6 +18,8 @@ export interface ClipsApi {
   getClips(): Promise<any[]>;
   getNewClipInfo(fileName: string): Promise<any>;
   getNewClipsInfo(): Promise<{ newClips: string[]; totalNewCount?: number }>;
+  /** Total disk usage (bytes) of the configured clip folder. Cached ~4 min in main. */
+  getClipsFolderSize(): Promise<{ bytes: number }>;
   markClipsWatched(clipNames: string[]): Promise<void>;
   deleteClip(clip: any): Promise<any>;
   saveClipListImmediately(): Promise<any>;
