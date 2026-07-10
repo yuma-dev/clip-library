@@ -1,0 +1,614 @@
+//! User-facing pipeline configuration.
+//!
+//! This is the single source of truth that the smoke binary, the future
+//! walking-skeleton, and the Tauri UI all read from. Persisted as TOML
+//! at `%APPDATA%\clipdip\config.toml` (Windows) — see [`Config::path`].
+//!
+//! Design notes:
+//! - Sub-configs (`VideoConfig`, `AudioConfig`, `OutputConfig`) keep the
+//!   top-level struct shallow so the TOML file stays human-editable.
+//! - `AudioConfig::sources` is `Vec<AudioSource>` so users can add as
+//!   many tracks as they want (system loopback + mic + N per-process
+//!   captures). Default is `[SystemLoopback, Microphone]`, count = 2.
+//! - `serde` `#[serde(default)]` on every field so missing keys in an
+//!   old config file fall back to defaults instead of erroring.
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// Top-level user-editable configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub video: VideoConfig,
+    pub audio: AudioConfig,
+    pub output: OutputConfig,
+    pub hotkey: HotkeyConfig,
+    pub notifications: NotificationsConfig,
+    pub profile: ProfileConfig,
+    pub metadata: MetadataConfig,
+    pub discord: DiscordConfig,
+    pub telemetry: TelemetryConfig,
+    /// Replay window in seconds. Ring buffer is sized for this duration at
+    /// `video.bitrate_bps` (plus ~20% headroom for audio + muxer overhead).
+    pub replay_seconds: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            video: VideoConfig::default(),
+            audio: AudioConfig::default(),
+            output: OutputConfig::default(),
+            hotkey: HotkeyConfig::default(),
+            notifications: NotificationsConfig::default(),
+            profile: ProfileConfig::default(),
+            metadata: MetadataConfig::default(),
+            discord: DiscordConfig::default(),
+            telemetry: TelemetryConfig::default(),
+            replay_seconds: 60,
+        }
+    }
+}
+
+impl Config {
+    /// Path the config is loaded from / saved to:
+    /// `%APPDATA%\clipdip\config\config.toml` on Windows.
+    ///
+    /// Note: the `organization` segment is intentionally empty — passing
+    /// `"clipdip"` for both org and app makes `directories` join them
+    /// (`{org}\{app}\config`) and you get `clipdip\clipdip\config\…`.
+    /// With empty org you get the cleaner `clipdip\config\…`.
+    pub fn path() -> Result<PathBuf> {
+        let dirs = directories::ProjectDirs::from("", "", "clipdip")
+            .context("could not resolve user config directory")?;
+        Ok(dirs.config_dir().join("config.toml"))
+    }
+
+    /// Load from `path`. If the file does not exist, write a fresh default
+    /// config there and return it.
+    pub fn load_or_default(path: &Path) -> Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(s) => toml::from_str(&s).with_context(|| format!("parse {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let cfg = Self::default();
+                cfg.save(path)?;
+                Ok(cfg)
+            }
+            Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
+        }
+    }
+
+    /// Serialize and write atomically (tmp file + rename).
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+        let body = toml::to_string_pretty(self).context("serialize config to TOML")?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, body).with_context(|| format!("write {}", tmp.display()))?;
+        std::fs::rename(&tmp, path).with_context(|| format!("rename into {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Byte budget for the packet ring. This is a *safety cap*, not the
+    /// sizing mechanism — the ring evicts by time (`replay_seconds`), so
+    /// resident memory tracks the encoder's actual bitrate. Under CQP the
+    /// real bitrate floats with scene complexity and can far exceed the
+    /// `bitrate_bps` hint on busy scenes; cap at 2× the nominal size so
+    /// byte eviction never truncates the replay window in practice.
+    pub fn ring_byte_budget(&self) -> usize {
+        let video = (self.replay_seconds as u64 * self.video.bitrate_bps as u64) / 8;
+        ((video * 2) as usize).max(1024 * 1024)
+    }
+
+    /// Replay window in 100-ns ticks for the ring's time-based eviction.
+    /// Two seconds of slack on top of `replay_seconds` so the save path
+    /// always finds an IDR at/before the window start — guaranteeing the
+    /// saved clip covers the full configured duration.
+    pub fn ring_time_window_100ns(&self) -> i64 {
+        (self.replay_seconds as i64 + 2) * 10_000_000
+    }
+}
+
+// ---- video --------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoConfig {
+    /// DXGI output index — which monitor to capture. 0 = primary.
+    pub output_index: u32,
+    /// Which capture API to use. `auto` (default) tries
+    /// Windows.Graphics.Capture — which sees fullscreen-exclusive /
+    /// independent-flip / MPO-presented games that DXGI Desktop Duplication
+    /// is blind to (those clips showed the desktop or a frozen frame) —
+    /// and falls back to DXGI Desktop Duplication when WGC can't start.
+    /// `wgc` / `dxgi` force a specific backend.
+    pub capture_backend: CaptureBackendCfg,
+    pub fps: u32,
+    /// Used to size the packet ring buffer ([`Config::ring_byte_budget`]).
+    /// Under the default CQP rate-control this is a *hint*, not the actual
+    /// encoder bitrate — pick generously so the ring isn't undersized on
+    /// busy scenes. When `rate_control = Vbr { .. }` it doubles as the
+    /// encoder's average-bitrate target.
+    pub bitrate_bps: u32,
+    /// Composite the OS mouse cursor onto each frame. DXGI Desktop
+    /// Duplication never includes it natively.
+    pub include_cursor: bool,
+    /// IDR (keyframe) interval in seconds.
+    pub gop_seconds: f32,
+    /// Codec preference. `PreferAv1` (default) uses AV1 on RTX 40-series
+    /// and newer, transparently falls back to H.264 elsewhere.
+    pub codec: CodecPreferenceCfg,
+    /// Rate-control mode. Default is CQP (constant quality, bitrate floats
+    /// with scene complexity) — same model as NVIDIA ShadowPlay.
+    pub rate_control: RateControlCfg,
+    /// Encode quality while a *manual recording* is in progress. Manual
+    /// recordings are meant to be kept and uploaded, so they default to a
+    /// noticeably higher quality (QP 14 ≈ 2× the bitrate of the QP-20
+    /// clip default) than the always-on replay buffer. Applied via NVENC
+    /// reconfigure when the recording starts, reverted when it stops.
+    pub recording_quality: RecordingQualityCfg,
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            output_index: 0,
+            capture_backend: CaptureBackendCfg::default(),
+            fps: 60,
+            bitrate_bps: 30_000_000,
+            include_cursor: true,
+            gop_seconds: 1.0,
+            codec: CodecPreferenceCfg::default(),
+            rate_control: RateControlCfg::default(),
+            recording_quality: RecordingQualityCfg::default(),
+        }
+    }
+}
+
+/// Serde-friendly mirror of `clipdip_capture::CaptureBackend`.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureBackendCfg {
+    #[default]
+    Auto,
+    Wgc,
+    Dxgi,
+}
+
+/// Serde-friendly mirror of [`clipdip_encoder::CodecPreference`]. Kept
+/// separate from the encoder enum so the config crate doesn't have to
+/// depend on encoder internals.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecPreferenceCfg {
+    #[default]
+    PreferAv1,
+    ForceH264,
+    ForceAv1,
+}
+
+/// Serde-friendly mirror of [`clipdip_encoder::RateControl`].
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum RateControlCfg {
+    /// Constant quantization. `qp` scale is codec-specific; if unset the
+    /// encoder picks a sensible default (H.264 ~20, AV1 ~28).
+    ConstantQp {
+        #[serde(default = "default_qp")]
+        qp: u32,
+    },
+    /// Variable bitrate with `avg_bps` average target.
+    Vbr { avg_bps: u32 },
+}
+
+impl Default for RateControlCfg {
+    fn default() -> Self {
+        Self::ConstantQp { qp: default_qp() }
+    }
+}
+
+fn default_qp() -> u32 {
+    // 20 sits comfortably inside H.264's 0–51 range (visually-lossless-ish)
+    // and is also a perfectly reasonable AV1 QP — AV1 has a wider 0–255
+    // scale but the lower end of it is where high-quality clips live.
+    20
+}
+
+/// Quality boost applied for the duration of a manual recording.
+///
+/// Only meaningful when `rate_control` is `ConstantQp` — NVENC can't switch
+/// rate-control *mode* on a live session, so under VBR the recording keeps
+/// the configured average bitrate and this setting is ignored.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum RecordingQualityCfg {
+    /// Recordings use the same quality as replay-buffer clips.
+    MatchClips,
+    /// Boost to this QP (H.264 0–51 scale; AV1 is matched internally) while
+    /// recording. Never *lowers* quality: values above the clip QP are
+    /// clamped to it.
+    ConstantQp {
+        #[serde(default = "default_recording_qp")]
+        qp: u32,
+    },
+}
+
+impl Default for RecordingQualityCfg {
+    fn default() -> Self {
+        Self::ConstantQp {
+            qp: default_recording_qp(),
+        }
+    }
+}
+
+fn default_recording_qp() -> u32 {
+    // +6 QP ≈ half the bitrate, so 14 is roughly twice the data rate of the
+    // QP-20 clip default — comfortably clean enough to master a YouTube
+    // upload from, without ballooning into lossless-tier file sizes.
+    14
+}
+
+// ---- audio --------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    /// Each entry is captured on its own thread and muxed as a separate
+    /// audio track. Empty list = no audio at all.
+    pub sources: Vec<AudioSource>,
+    /// When `true` and at least two sources are captured, the muxer
+    /// prepends a combined "Mix" track (sum of all sources via `amix`)
+    /// as the first audio stream of the output MP4. With one source the
+    /// flag is ignored (a mix of one input would be a redundant copy).
+    #[serde(default = "default_include_mix")]
+    pub include_mix: bool,
+}
+
+fn default_include_mix() -> bool {
+    true
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            sources: vec![
+                AudioSource::SystemLoopback { device_id: None },
+                AudioSource::Microphone { device_id: None },
+            ],
+            include_mix: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AudioSource {
+    /// WASAPI loopback on a render endpoint. `device_id = None` (or
+    /// missing) uses the system default render device; `Some(id)` pins a
+    /// specific one (use `clipdip --list-audio-devices` to find IDs).
+    SystemLoopback {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
+    },
+    /// WASAPI capture from a microphone / line-in endpoint. Same
+    /// `device_id = None` convention as above.
+    Microphone {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
+    },
+    /// Per-process loopback (Windows 10 build 20348+). Not yet wired in;
+    /// reserving the variant for forward-compatibility of the config file.
+    ProcessLoopback { process_name: String },
+}
+
+impl AudioSource {
+    /// Short human-readable label for logs and sidecar filenames. When a
+    /// specific device is pinned we append a short suffix so multiple
+    /// sources of the same kind don't collide in the WAV filename.
+    pub fn label(&self) -> String {
+        match self {
+            AudioSource::SystemLoopback { device_id: None } => "loopback".into(),
+            AudioSource::SystemLoopback { device_id: Some(id) } => {
+                format!("loopback-{}", short_id(id))
+            }
+            AudioSource::Microphone { device_id: None } => "mic".into(),
+            AudioSource::Microphone { device_id: Some(id) } => {
+                format!("mic-{}", short_id(id))
+            }
+            AudioSource::ProcessLoopback { process_name } => {
+                format!("proc-{}", sanitize(process_name))
+            }
+        }
+    }
+
+    /// Convenience accessor for the pinned device ID, if any.
+    pub fn device_id(&self) -> Option<&str> {
+        match self {
+            AudioSource::SystemLoopback { device_id }
+            | AudioSource::Microphone { device_id } => device_id.as_deref(),
+            AudioSource::ProcessLoopback { .. } => None,
+        }
+    }
+}
+
+/// Take the last 8 hex chars of a WASAPI ID to make a stable short label.
+fn short_id(id: &str) -> String {
+    let cleaned: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    let len = cleaned.len();
+    cleaned[len.saturating_sub(8)..].to_string()
+}
+
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+// ---- output -------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputConfig {
+    /// Directory clips are written to.
+    pub directory: PathBuf,
+    /// Filename template (no extension). Supports `[token]` variables —
+    /// see [`crate::filename`] for the full list. Sidecars and the final
+    /// container all derive from the expanded stem — e.g. `{stem}.h264`,
+    /// `{stem}.loopback.wav`, `{stem}.mp4`. On a name collision a ` (2)`
+    /// style suffix is appended.
+    pub filename_stem: String,
+    /// Override path to the `ffmpeg` binary. `None` = use whatever's on
+    /// `PATH`. Set this if you have multiple ffmpeg builds installed.
+    pub ffmpeg_path: Option<PathBuf>,
+    /// Keep the intermediate `.h264` and per-source `.wav` files after the
+    /// `.mp4` mux completes. Useful for debugging; turn off in production.
+    pub keep_sidecars: bool,
+    /// AAC bitrate per audio track in the output MP4.
+    pub audio_bitrate_bps: u32,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        let dir = directories::UserDirs::new()
+            .and_then(|d| d.video_dir().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Clipdip");
+        Self {
+            directory: dir,
+            filename_stem: "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]".into(),
+            ffmpeg_path: None,
+            keep_sidecars: true,
+            audio_bitrate_bps: 192_000,
+        }
+    }
+}
+
+// ---- hotkey -------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HotkeyConfig {
+    /// Shortcut that triggers `save_clip`.
+    pub save_clip: String,
+    /// Shortcut that activates the rename input in the clip notification overlay.
+    pub rename_clip: String,
+    /// Shortcut that toggles a manual recording: first press marks the
+    /// start point, second press saves everything since then as a clip.
+    pub toggle_recording: String,
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            save_clip: "Ctrl+Alt+F10".into(),
+            rename_clip: "Ctrl+F10".into(),
+            toggle_recording: "Ctrl+Alt+F9".into(),
+        }
+    }
+}
+
+// ---- notifications -------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Default for NotificationCorner {
+    fn default() -> Self {
+        Self::BottomRight
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    pub enabled: bool,
+    pub sound: bool,
+    pub corner: NotificationCorner,
+    /// Seconds before the notification auto-dismisses (0 = stay until renamed or dismissed).
+    pub auto_dismiss_secs: u32,
+    /// Whether the background health monitor raises a native Windows toast
+    /// when capture degrades at runtime (capture stall, replay buffer
+    /// dropping below the configured window). Independent of the per-save
+    /// overlay notification above — this is the "something is going wrong
+    /// right now" alert, not a save confirmation.
+    pub health_alerts: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sound: true,
+            corner: NotificationCorner::TopRight,
+            auto_dismiss_secs: 10,
+            health_alerts: true,
+        }
+    }
+}
+
+// ---- profile ------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfileConfig {
+    /// How often the profile reporter thread logs a per-stage summary.
+    /// Only consulted when profiling is enabled (via `--profile` or
+    /// `CLIPDIP_PROFILE=1`). 5 s is a reasonable trade-off — short
+    /// enough to track interactive changes, long enough for stable
+    /// percentiles.
+    pub report_interval_ms: u64,
+}
+
+impl Default for ProfileConfig {
+    fn default() -> Self {
+        Self {
+            report_interval_ms: 5_000,
+        }
+    }
+}
+
+// ---- metadata -----------------------------------------------------------
+
+/// Per-clip game-info capture. When enabled, each saved clip gets a sidecar
+/// JSON file under `{directory}/.clip_metadata/{clip}.gameinfo` containing
+/// the foreground window title at hotkey time, and (optionally) the
+/// foreground exe's icon is extracted to `{directory}/icons/{exe}.png`.
+///
+/// Disabled by default — the capture touches the foreground HWND and reads
+/// the target process's image, which some users may not want.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MetadataConfig {
+    pub enabled: bool,
+    /// When `true` (and `enabled`), extract the foreground exe's icon as
+    /// a PNG into `icons/{exe-basename}.png`. Skipped if the file already
+    /// exists, so it's a one-time cost per game.
+    pub capture_icon: bool,
+    /// Lower-cased exe basenames to skip (e.g. `explorer.exe`). If the
+    /// foreground process at hotkey time matches one of these, no
+    /// metadata is written for the clip.
+    pub ignored_processes: Vec<String>,
+}
+
+impl Default for MetadataConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            capture_icon: true,
+            ignored_processes: default_ignored_processes(),
+        }
+    }
+}
+
+// ---- discord ------------------------------------------------------------
+
+/// Capture the Discord voice-call roster at clip time. When enabled (and
+/// the user has authorized via the settings UI / onboarding), each saved
+/// clip records the user IDs + names of everyone in the call into its
+/// `.gameinfo` sidecar. Reads only the call the user is already in, via
+/// Discord's local RPC — no server bot.
+///
+/// Enabled by default. It still does nothing until the user completes the
+/// one-time authorization (onboarding offers it), and writes nothing when
+/// not in a call — so "on" just means "capture it once you've connected".
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordConfig {
+    pub enabled: bool,
+}
+
+impl Default for DiscordConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+// ---- telemetry ----------------------------------------------------------
+
+/// Anonymous, opt-out diagnostics. When enabled (the default), the app reports
+/// capture failures / crashes and a periodic heartbeat to the diagnostics
+/// server so problems on machines we don't own become visible. Identity is a
+/// random per-install id — no accounts, no PII. See `clipdip-diagnostics`.
+///
+/// Opt-out: `enabled = false` stops all network calls. The app also does
+/// nothing here unless an ingest key was compiled into the build.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryConfig {
+    pub enabled: bool,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+fn default_ignored_processes() -> Vec<String> {
+    [
+        "explorer.exe", "systemsettings.exe", "searchui.exe", "searchapp.exe",
+        "shellexperiencehost.exe", "startmenuexperiencehost.exe", "taskmgr.exe",
+        "snippingtool.exe", "snipandsketch.exe", "lockapp.exe", "ctfmon.exe",
+        "sihost.exe", "applicationframehost.exe", "runtimebroker.exe",
+        "smartscreen.exe", "werfault.exe", "cmd.exe", "powershell.exe",
+        "windowsterminal.exe", "wt.exe", "conhost.exe", "rundll32.exe",
+        "msiexec.exe", "setup.exe",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_round_trips_through_toml() {
+        let cfg = Config::default();
+        let s = toml::to_string_pretty(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        // Spot-check a few fields rather than implementing PartialEq.
+        assert_eq!(cfg.video.fps, back.video.fps);
+        assert_eq!(cfg.audio.sources.len(), back.audio.sources.len());
+        assert_eq!(cfg.replay_seconds, back.replay_seconds);
+    }
+
+    #[test]
+    fn defaults_to_two_audio_sources() {
+        let cfg = Config::default();
+        assert_eq!(cfg.audio.sources.len(), 2);
+    }
+
+    #[test]
+    fn missing_keys_fall_back_to_defaults() {
+        // A nearly empty file should still parse — every section uses
+        // #[serde(default)].
+        let cfg: Config = toml::from_str("replay_seconds = 30").unwrap();
+        assert_eq!(cfg.replay_seconds, 30);
+        assert_eq!(cfg.video.fps, 60); // default
+        assert_eq!(cfg.audio.sources.len(), 2); // default
+    }
+
+    #[test]
+    fn ring_budget_has_floor() {
+        let mut cfg = Config::default();
+        cfg.replay_seconds = 0;
+        cfg.video.bitrate_bps = 0;
+        // Floor at 1 MiB so a degenerate config doesn't yield a zero ring.
+        assert!(cfg.ring_byte_budget() >= 1024 * 1024);
+    }
+}

@@ -1,0 +1,105 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  font-family: "Inter", system-ui, sans-serif;
+  background: transparent;
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a4a; }
+
+/* Range input track */
+input[type="range"] { -webkit-appearance: none; appearance: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+@keyframes notif-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Notification card enter animation. Used to slide in from the side,
+   but the overlay window is now sized to fit the card so a translate
+   would immediately clip at the window edge. Fade + tiny scale-up
+   instead — also cheaper for the compositor. */
+@keyframes notif-pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Settings panel entrance — fade + small rise, mirrors the overlay's
+   slide-and-settle feel without being distracting on every tab switch. */
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* The overlay's comet, miniaturized: a conic highlight orbiting a tile.
+   Used on the panel header icon. Falls back to a static gradient where
+   @property isn't supported. */
+@property --ang {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes spinang {
+  to { --ang: 360deg; }
+}
+.comet-tile {
+  position: relative;
+}
+.comet-tile::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--ang, 0deg),
+    rgba(139, 92, 246, 0.25) 0% 62%, rgba(139, 92, 246, 0.45) 75%,
+    rgba(216, 68, 221, 0.8) 90%, #f3e8ff 98%, rgba(139, 92, 246, 0.25) 100%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: spinang 3.2s linear infinite;
+  pointer-events: none;
+}
+
+/* Text selection in the lavender family */
+::selection { background: rgba(139, 92, 246, 0.35); color: #f3e8ff; }
+
+/* Remove default focus ring for mouse users; keep for keyboard */
+:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }

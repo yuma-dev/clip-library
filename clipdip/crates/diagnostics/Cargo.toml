@@ -1,0 +1,27 @@
+[package]
+name = "clipdip-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+chrono.workspace = true
+directories.workspace = true
+# Blocking HTTPS client — same choice as the Discord crate. The diagnostics
+# manager runs on a single dedicated thread, so a small synchronous client
+# fits better than pulling an async runtime into the workspace. schannel/rustls
+# handles TLS to the ingest server.
+ureq = { version = "2", features = ["json"] }
+# Stable install id + per-event idempotency keys.
+uuid = { version = "1", features = ["v4"] }
+# gzip the log tail attached to events, and deflate the diagnostic bundle.
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
