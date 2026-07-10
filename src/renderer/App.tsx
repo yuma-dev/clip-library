@@ -51,6 +51,20 @@ export default function App() {
   const filter = useLibraryFilter(lib.clips);
   const readySent = useRef(false);
 
+  // Navigation deep links from main (cliplib://settings/<section> — e.g. the
+  // clipper tray icon opening Settings → Clipper). The nonce makes repeated
+  // tray clicks re-apply the section even when it hasn't changed.
+  const [settingsIntent, setSettingsIntent] = useState<{ section?: string; nonce: number } | null>(null);
+  useEffect(() => {
+    const unsubscribe = window.clips?.onCliplibNavigate?.((payload: { view?: string; section?: string }) => {
+      if (payload?.view !== "settings") return;
+      setProfileUserId(null);
+      setRoute("settings");
+      setSettingsIntent({ section: payload.section, nonce: Date.now() });
+    });
+    return unsubscribe;
+  }, []);
+
   // Keep-alive for the heavy routed views: once visited, library/feed stay
   // mounted (hidden via .route-host) so switching back is a style flip instead
   // of a full remount — rail-item switches cost 585-930ms in the 2026-07-08
@@ -203,7 +217,9 @@ export default function App() {
             {visitedRoutes.current.feed ? <FeedPage /> : null}
           </div>
           <div className={`route-host${profileUserId || route !== "settings" ? " hidden" : ""}`}>
-            {route === "settings" ? <SettingsView lib={lib} filter={filter} /> : null}
+            {route === "settings" ? (
+              <SettingsView lib={lib} filter={filter} intent={settingsIntent} />
+            ) : null}
           </div>
         </main>
       </div>

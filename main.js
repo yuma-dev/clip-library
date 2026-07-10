@@ -88,6 +88,9 @@ const clipsModule = require('./main/clips');
 // Dialogs Module - handles all Electron dialog interactions
 const dialogsModule = require('./main/dialogs');
 
+// Integrated clipper (clipdip binary): process lifecycle + TOML config bridge
+const clipperModule = require('./main/clipper');
+
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
   logger.error('FFmpeg initialization failed:', err);
@@ -243,6 +246,38 @@ function queueCliplibAuthEvent(eventPayload) {
   mainWindow.webContents.send('cliplib-auth-event', eventPayload);
 }
 
+// Generic main->renderer event queue for events that may fire before the
+// renderer is loaded (same lifecycle as the auth queue above, but not tied
+// to one channel). Used by cliplib://settings/... navigation deep links.
+const queuedRendererEvents = [];
+
+function queueRendererEvent(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    queuedRendererEvents.push({ channel, payload });
+    return;
+  }
+  const isLoading = typeof mainWindow.webContents.isLoadingMainFrame === 'function'
+    ? mainWindow.webContents.isLoadingMainFrame()
+    : mainWindow.webContents.isLoading();
+  if (isLoading) {
+    queuedRendererEvents.push({ channel, payload });
+    return;
+  }
+  mainWindow.webContents.send(channel, payload);
+}
+
+function flushQueuedRendererEvents() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const isLoading = typeof mainWindow.webContents.isLoadingMainFrame === 'function'
+    ? mainWindow.webContents.isLoadingMainFrame()
+    : mainWindow.webContents.isLoading();
+  if (isLoading) return;
+  while (queuedRendererEvents.length > 0) {
+    const { channel, payload } = queuedRendererEvents.shift();
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
 function flushCliplibAuthEvents() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -290,6 +325,21 @@ function hasValidPendingCliplibSession() {
 }
 
 async function handleCliplibProtocolUrl(protocolUrl) {
+  // Navigation deep links (e.g. cliplib://settings/clipper from the
+  // clipper's tray icon) — everything else falls through to the original
+  // auth-callback handling.
+  try {
+    const url = new URL(protocolUrl);
+    if (url.host === 'settings') {
+      const section = url.pathname.replace(/^\/+|\/+$/g, '') || undefined;
+      queueRendererEvent('cliplib-navigate', { view: 'settings', section });
+      focusMainWindow();
+      return;
+    }
+  } catch (_) {
+    // not a parseable URL — let the auth parser produce the error
+  }
+
   const parsed = shareModule.parseDesktopAuthCallbackUrl(protocolUrl);
   if (!parsed.ok) {
     queueCliplibAuthEvent({
@@ -495,6 +545,7 @@ async function createWindow() {
       global.__perf.fsSpan('renderer-did-finish-load', global.__perf.now(), 0, {});
     }
     flushCliplibAuthEvents();
+    flushQueuedRendererEvents();
     processQueuedProtocolUrls().catch((error) => {
       logger.error('Failed processing protocol queue after renderer load:', error);
     });
@@ -604,6 +655,11 @@ app.whenReady().then(async () => {
   // Start periodic saves to prevent data loss
   clipsModule.startPeriodicSave(getSettings);
 
+  // Bring the integrated clipper up if it's enabled but not running (it may
+  // already be running via its own login autostart — that's a no-op here).
+  clipperModule.init(getSettings);
+  clipperModule.ensureStartedIfEnabled();
+
   processQueuedProtocolUrls().catch((error) => {
     logger.error('Failed processing startup protocol queue:', error);
   });
@@ -639,6 +695,33 @@ ipcMain.handle('clear-discord-presence', () => {
 
 ipcMain.handle('get-settings', () => {
   return settings;
+});
+
+// --- Integrated clipper -----------------------------------------------------
+
+ipcMain.handle('clipper-get-config', () => clipperModule.getConfig());
+
+ipcMain.handle('clipper-set-config', (event, patch) => clipperModule.setConfig(patch));
+
+ipcMain.handle('clipper-status', () => clipperModule.getStatus());
+
+ipcMain.handle('clipper-start', () => clipperModule.start());
+
+ipcMain.handle('clipper-stop', () => clipperModule.quit());
+
+ipcMain.handle('clipper-restart', () => clipperModule.restart());
+
+ipcMain.handle('clipper-set-autostart', async (event, enabled) => {
+  await clipperModule.setAutostart(enabled);
+  settings.clipper = { ...settings.clipper, autostart: enabled };
+  await saveSettings(settings);
+  return { success: true };
+});
+
+ipcMain.handle('clipper-set-enabled', async (event, enabled) => {
+  settings.clipper = { ...settings.clipper, enabled };
+  await saveSettings(settings);
+  return clipperModule.setEnabled(enabled);
 });
 
 ipcMain.handle("get-clips", async () => {
