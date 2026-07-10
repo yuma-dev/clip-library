@@ -8,6 +8,54 @@
 // Verify each against the corresponding `main/` handler and tighten the types
 // as each phase starts consuming the channel.
 
+// Mirror of the clipper's TOML config (clipdip crates/core/src/config.rs).
+// Every field is serde-defaulted on the Rust side, so partial objects are fine.
+export interface ClipperConfig {
+  replay_seconds?: number;
+  video?: {
+    output_index?: number;
+    capture_backend?: string;
+    fps?: number;
+    bitrate_bps?: number;
+    include_cursor?: boolean;
+    gop_seconds?: number;
+    codec?: string;
+    rate_control?: Record<string, unknown>;
+    recording_quality?: boolean | Record<string, unknown>;
+  };
+  audio?: {
+    sources?: Array<Record<string, unknown>>;
+    include_mix?: boolean;
+  };
+  output?: {
+    directory?: string;
+    filename_stem?: string;
+    ffmpeg_path?: string;
+    keep_sidecars?: boolean;
+    audio_bitrate_bps?: number;
+  };
+  hotkey?: {
+    save_clip?: string;
+    rename_clip?: string;
+    toggle_recording?: string;
+  };
+  notifications?: {
+    enabled?: boolean;
+    sound?: boolean;
+    corner?: string;
+    auto_dismiss_secs?: number;
+    health_alerts?: boolean;
+  };
+  metadata?: {
+    enabled?: boolean;
+    capture_icon?: boolean;
+    ignored_processes?: string[];
+  };
+  discord?: { enabled?: boolean };
+  telemetry?: { enabled?: boolean };
+  [key: string]: unknown;
+}
+
 type ClipsUnsubscribe = () => void;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ClipsEventCallback = (...args: any[]) => void;
@@ -144,6 +192,24 @@ export interface ClipsApi {
   importSteelseriesClips(...args: any[]): Promise<any>;
   quitApp(): Promise<any>;
 
+  // --- Integrated clipper (clipdip binary; config lives in its TOML) ---
+  clipper: {
+    getConfig(): Promise<{ exists: boolean; config: ClipperConfig }>;
+    /** Deep-merge patch into the TOML; a debounced --reload follows if running. */
+    setConfig(patch: Partial<ClipperConfig>): Promise<{ success: boolean }>;
+    getStatus(): Promise<{
+      running: boolean;
+      binaryFound: boolean;
+      configExists: boolean;
+      autostart: boolean;
+    }>;
+    start(): Promise<{ success: boolean; error?: string; alreadyRunning?: boolean }>;
+    stop(): Promise<{ success: boolean; forced?: boolean; alreadyStopped?: boolean }>;
+    restart(): Promise<{ success: boolean; error?: string }>;
+    setAutostart(enabled: boolean): Promise<{ success: boolean }>;
+    setEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
+  };
+
   // --- Signal to main (fire-and-forget) ---
   rendererReady(): void;
 
@@ -152,6 +218,8 @@ export interface ClipsApi {
   onNewClipAdded(cb: ClipsEventCallback): ClipsUnsubscribe;
   onCheckActivityState(cb: ClipsEventCallback): ClipsUnsubscribe;
   onCliplibAuthEvent(cb: ClipsEventCallback): ClipsUnsubscribe;
+  /** Navigation deep links (cliplib://settings/<section>) forwarded by main. */
+  onCliplibNavigate(cb: ClipsEventCallback): ClipsUnsubscribe;
   onExportProgress(cb: ClipsEventCallback): ClipsUnsubscribe;
   onShowFallbackNotice(cb: ClipsEventCallback): ClipsUnsubscribe;
   onShowDecodeFallbackNotice(cb: ClipsEventCallback): ClipsUnsubscribe;

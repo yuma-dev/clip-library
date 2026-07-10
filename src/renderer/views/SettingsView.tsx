@@ -8,6 +8,7 @@ import {
   Palette,
   Settings2,
   Share2,
+  Videotape,
   type LucideIcon,
 } from "lucide-react";
 import GeneralSection from "../settings/sections/GeneralSection";
@@ -17,6 +18,7 @@ import ExportSection from "../settings/sections/ExportSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
 import CliplibSection from "../settings/sections/CliplibSection";
+import ClipperSection from "../settings/sections/ClipperSection";
 import { useSettings } from "../settings/SettingsContext";
 import { useToast } from "../ui/Toast";
 import type { UseClips } from "../library/useClips";
@@ -24,6 +26,7 @@ import type { UseLibraryFilter } from "../library/useLibraryFilter";
 
 type SectionId =
   | "general"
+  | "clipper"
   | "appearance"
   | "player"
   | "export"
@@ -33,6 +36,7 @@ type SectionId =
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; blurb: string }[] = [
   { id: "general", label: "General", icon: Settings2, blurb: "Library location, integrations, and tags" },
+  { id: "clipper", label: "Clipper", icon: Videotape, blurb: "Replay buffer, hotkeys, and recording" },
   { id: "appearance", label: "Appearance", icon: Palette, blurb: "Font and library visuals" },
   { id: "player", label: "Player", icon: MonitorPlay, blurb: "Previews and the ambient glow" },
   { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
@@ -44,10 +48,20 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; blurb: string 
 interface SettingsViewProps {
   lib: UseClips;
   filter: UseLibraryFilter;
+  /** Deep-link intent from main (cliplib://settings/<section>). The nonce
+   *  re-applies the section on repeated tray clicks. */
+  intent?: { section?: string; nonce: number } | null;
 }
 
-export default function SettingsView({ lib, filter }: SettingsViewProps) {
+export default function SettingsView({ lib, filter, intent }: SettingsViewProps) {
   const [section, setSection] = useState<SectionId>("general");
+
+  useEffect(() => {
+    if (!intent?.section) return;
+    if (SECTIONS.some((s) => s.id === intent.section)) {
+      setSection(intent.section as SectionId);
+    }
+  }, [intent]);
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   const { undo, redo } = useSettings();
   const toast = useToast();
@@ -121,6 +135,7 @@ export default function SettingsView({ lib, filter }: SettingsViewProps) {
             </header>
 
             {section === "general" ? <GeneralSection lib={lib} filter={filter} /> : null}
+            {section === "clipper" ? <ClipperSection /> : null}
             {section === "appearance" ? <AppearanceSection /> : null}
             {section === "player" ? <PlayerSection sampleThumb={sampleThumb} /> : null}
             {section === "export" ? <ExportSection /> : null}
