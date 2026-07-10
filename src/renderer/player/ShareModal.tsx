@@ -15,6 +15,8 @@ interface ShareUser {
   username: string;
   displayName: string;
   avatarUrl: string;
+  /** Linked Discord user id, if the ClipLib account is connected to one. */
+  discordId?: string | null;
 }
 
 interface ShareProgress {
@@ -42,8 +44,13 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
   const [progress, setProgress] = useState<ShareProgress | null>(null);
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Discord ids of the people recorded in this clip's .gameinfo — used to
+  // preselect the matching ClipLib accounts in the "Featuring" list.
+  const [clipDiscordIds, setClipDiscordIds] = useState<Set<string> | null>(null);
   // The upload keeps running main-side if the modal unmounts; guard state sets.
   const aliveRef = useRef(true);
+  // Guards the one-time auto-preselect so it can't clobber manual edits.
+  const preselectedRef = useRef(false);
 
   // Reset per open, seeding the title from the player's live title input.
   useEffect(() => {
@@ -60,6 +67,27 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
     setProgress(null);
     setClipUrl(null);
     setCopied(false);
+    setClipDiscordIds(null);
+    preselectedRef.current = false;
+
+    // Load the Discord participants recorded in this clip so we can preselect
+    // the ClipLib accounts linked to them.
+    const clipName = current?.originalName;
+    if (clipName) {
+      void window.clips
+        .getClipParticipants([clipName])
+        .then((res) => {
+          if (!aliveRef.current) return;
+          const ids = res?.byClip?.[clipName] ?? [];
+          setClipDiscordIds(new Set(ids));
+        })
+        .catch(() => {
+          if (aliveRef.current) setClipDiscordIds(new Set());
+        });
+    } else {
+      setClipDiscordIds(new Set());
+    }
+
     return () => {
       aliveRef.current = false;
     };
@@ -79,6 +107,19 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
         if (aliveRef.current) setUsersError(true);
       });
   }, [open, users]);
+
+  // Once both the user list and the clip's participants have loaded, preselect
+  // every ClipLib account whose linked Discord id appears in the clip. Runs
+  // once per open (preselectedRef) so it never overrides manual toggles.
+  useEffect(() => {
+    if (!open || preselectedRef.current || !users || !clipDiscordIds) return;
+    preselectedRef.current = true;
+    if (clipDiscordIds.size === 0) return;
+    const matched = users
+      .filter((u) => u.discordId && clipDiscordIds.has(u.discordId))
+      .map((u) => u.id);
+    if (matched.length > 0) setSelected(new Set(matched));
+  }, [open, users, clipDiscordIds]);
 
   useEffect(() => {
     if (!open) return;
