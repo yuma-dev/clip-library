@@ -1,0 +1,44 @@
+[package]
+name = "clipdip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "clipdip"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender = "0.2"
+crossbeam-channel.workspace = true
+base64 = "0.22"
+png = "0.17"
+windows.workspace = true
+directories.workspace = true
+# WebView2 settings access (disable Edge autofill on the rename input).
+# webview2-com is the same version Tauri 2 links; it binds against
+# windows-core 0.61 while the workspace pins 0.58 for our COM code, so
+# pull the matching windows-core in under an aliased name.
+webview2-com = "0.38"
+windows-core-061 = { package = "windows-core", version = "0.61" }
+
+clipdip-core.workspace = true
+clipdip-ringbuf.workspace = true
+clipdip-hotkey.workspace = true
+clipdip-profile.workspace = true
+clipdip-audio.workspace = true
+clipdip-discord.workspace = true
+clipdip-diagnostics.workspace = true

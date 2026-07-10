@@ -1,0 +1,57 @@
+# Rust
+/target
+src-tauri/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local build env — holds the Discord client secret (never commit)
+.cargo/config.toml
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Tauri (legacy paths)
+src-tauri/ui/node_modules
+src-tauri/ui/dist
+src-tauri/ui/.svelte-kit
+
+# Tauri generated
+src-tauri/gen/
+
+# IDE
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local test artifacts
+clipdip-test.mp4
+*.h264
+*.aac
+
+# FFmpeg / NVENC SDK if vendored locally (not committed)
+/vendor
+
+# package-lock (generated, not committed)
+package-lock.json
+vendor/
+/ffmpeg-cache/
+
+build-installer.log
+
+# Updater signing key — NEVER commit the private key. Back it up; losing it breaks updates.
+/.tauri
+# Generated release notes draft
+/RELEASE_DRAFT.md
+
+# Local tooling and notes, never committed
+/docs
+/.claude
+/.antigravitycli

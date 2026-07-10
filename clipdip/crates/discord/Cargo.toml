@@ -1,0 +1,23 @@
+[package]
+name = "clipdip-discord"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+# PeekNamedPipe, so the reader thread never parks in a blocking ReadFile
+# (which would serialize against — and deadlock — concurrent writes on the
+# same synchronous pipe file object).
+windows = { workspace = true, features = ["Win32_System_Pipes"] }
+# Blocking HTTPS client used only for the OAuth2 token endpoint
+# (code -> token exchange + silent refresh). Local RPC itself is over a
+# named pipe and needs no HTTP. `ureq` is small and blocking, which suits
+# the single manager thread; schannel/rustls handles the TLS to discord.com.
+ureq = { version = "2", features = ["json"] }

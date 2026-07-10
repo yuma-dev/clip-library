@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Clipdip",
+  "version": "1.0.2",
+  "identifier": "com.clipdip.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run fetch-ffmpeg && npm run dev",
+    "beforeBuildCommand": "npm run build && npm run fetch-ffmpeg"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "../dist/ffmpeg-cache/ffmpeg.exe": "ffmpeg.exe",
+      "../dist/ATTRIBUTION.txt": "ATTRIBUTION.txt"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": [
+          "English"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGRURCNUVFRjBCREY0NUYKUldSZjlMM3c3clh0ejZwRjVsNjdpa3VxdE9ONFlXeVllRTZRWjJzcGtJOUI1SmVoNzlFT1FzQysK",
+      "endpoints": [
+        "https://github.com/yuma-dev/clipdip/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
+      }
+    }
+  }
+}

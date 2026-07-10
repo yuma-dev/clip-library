@@ -1,0 +1,19 @@
+Clipdip Attribution and Licensing
+
+This application distributes a pre-compiled binary of FFmpeg (ffmpeg.exe) which is used for media recording, processing, and encoding.
+
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
+FFmpeg is licensed under the GNU Lesser General Public License (LGPL) version 2.1.
+You can find a copy of the LGPL v2.1 license here: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+FFmpeg is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.
+
+This software is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+
+The FFmpeg source code used in this project is unmodified and was obtained from the BtbN LGPL-essentials builds:
+https://github.com/BtbN/FFmpeg-Builds
+
+In accordance with the LGPL v2.1:
+1. FFmpeg is used as a separate, pre-compiled executable (ffmpeg.exe) and is invoked via standard system processes.
+2. The unmodified pre-compiled binaries are provided.
+3. You may replace the ffmpeg.exe binary with any other compatible version of your choice.
