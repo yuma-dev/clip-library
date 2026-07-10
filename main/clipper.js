@@ -107,6 +107,20 @@ async function snapshotOnce(file) {
 }
 
 let reloadTimer = null;
+// Highest reload level needed by the patches since the last flush.
+// 0 = none (clipper re-reads these sections per operation), 1 = hotkeys only,
+// 2 = full pipeline restart (clears the replay buffer — only when capture
+// settings actually changed).
+let pendingReload = 0;
+
+function reloadLevelFor(patch) {
+  let level = 0;
+  for (const key of Object.keys(patch)) {
+    if (key === 'video' || key === 'audio' || key === 'replay_seconds') return 2;
+    if (key === 'hotkey') level = Math.max(level, 1);
+  }
+  return level;
+}
 
 async function setConfig(patch) {
   const file = configPath();
@@ -119,13 +133,19 @@ async function setConfig(patch) {
   await fsp.writeFile(tmp, serialized, 'utf8');
   await fsp.rename(tmp, file);
 
-  // Debounce the reload: every reload clears the clipper's replay buffer, so
-  // a burst of settings edits should cost one restart, not one per keystroke.
+  // Debounce the reload: a full restart clears the clipper's replay buffer,
+  // so a burst of settings edits should cost one restart, not one each.
+  pendingReload = Math.max(pendingReload, reloadLevelFor(patch));
   if (reloadTimer) clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => {
     reloadTimer = null;
+    const level = pendingReload;
+    pendingReload = 0;
+    if (level === 0) return;
     isRunning()
-      .then((running) => (running ? sendControlFlag('--reload') : null))
+      .then((running) =>
+        running ? sendControlFlag(level === 2 ? '--reload' : '--reload-hotkeys') : null
+      )
       .catch((error) => logger.warn(`Clipper reload failed: ${error.message}`));
   }, 1500);
 
