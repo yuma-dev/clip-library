@@ -32,7 +32,9 @@ async function resolveBinaryPath() {
   const settings = await getSettings();
   const override = settings?.clipper?.binaryPath;
   if (override && typeof override === 'string' && override.trim()) {
-    return override.trim();
+    const p = override.trim();
+    // The picker hands us a folder; a direct exe path also works.
+    return p.toLowerCase().endsWith('.exe') ? p : path.join(p, EXE_NAME);
   }
   return path.join(process.resourcesPath, 'clipper', EXE_NAME);
 }

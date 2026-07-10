@@ -175,7 +175,7 @@ export default function AboutSection() {
         <img className="about-logo" src={logoUrl} alt="" draggable={false} />
         <div className="about-text">
           <div className="about-name">
-            Clip Library <span className="about-version">v{version}</span>
+            ClipLib <span className="about-version">v{version}</span>
           </div>
           <div className="about-tag">A modern, fast, and efficient way to manage your clip collection.</div>
         </div>

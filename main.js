@@ -1,6 +1,20 @@
 if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
+
+// ClipLib rebrand keeps the pre-rename data: packaged Electron derives
+// userData from productName ("Clips" -> "ClipLib"), which would silently
+// abandon settings/thumbnails in %APPDATA%\Clips. Pin the old folder while it
+// exists. Must run before ANY userData consumer (incl. the logger below).
+{
+  const path = require('path');
+  const fs = require('fs');
+  const legacyUserData = path.join(app.getPath('appData'), 'Clips');
+  if (fs.existsSync(legacyUserData)) {
+    app.setPath('userData', legacyUserData);
+  }
+}
+
 const logger = require('./utils/logger');
 const consoleBuffer = require('./utils/console-log-buffer');
 consoleBuffer.patchConsole();
@@ -711,18 +725,15 @@ ipcMain.handle('clipper-stop', () => clipperModule.quit());
 
 ipcMain.handle('clipper-restart', () => clipperModule.restart());
 
+// Side effects only — the renderer persists clipper.enabled/autostart through
+// its normal settings path (SettingsContext -> save-settings), which replaces
+// the whole settings object; writing settings here too would race that copy.
 ipcMain.handle('clipper-set-autostart', async (event, enabled) => {
   await clipperModule.setAutostart(enabled);
-  settings.clipper = { ...settings.clipper, autostart: enabled };
-  await saveSettings(settings);
   return { success: true };
 });
 
-ipcMain.handle('clipper-set-enabled', async (event, enabled) => {
-  settings.clipper = { ...settings.clipper, enabled };
-  await saveSettings(settings);
-  return clipperModule.setEnabled(enabled);
-});
+ipcMain.handle('clipper-set-enabled', (event, enabled) => clipperModule.setEnabled(enabled));
 
 ipcMain.handle("get-clips", async () => {
   return await clipsModule.getClips(getSettings);

@@ -1,6 +1,6 @@
 {
   "name": "clips",
-  "displayName": "Clips",
+  "displayName": "ClipLib",
   "version": "2.1.0",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
@@ -22,7 +22,7 @@
   },
   "build": {
     "appId": "com.yuma-dev.clips",
-    "productName": "Clips",
+    "productName": "ClipLib",
     "protocols": [
       {
         "name": "ClipLib",
@@ -59,9 +59,9 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Clips",
-      "uninstallDisplayName": "Clips",
-      "artifactName": "Clips Setup ${version}.${ext}",
+      "shortcutName": "ClipLib",
+      "uninstallDisplayName": "ClipLib",
+      "artifactName": "ClipLib Setup ${version}.${ext}",
       "deleteAppDataOnUninstall": false
     }
   },

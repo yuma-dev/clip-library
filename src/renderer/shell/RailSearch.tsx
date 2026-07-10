@@ -230,7 +230,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
 
   return (
     <label className="r-search" data-rail-tip="Search clips">
-      <img className="r-search-logo" src={logoUrl} alt="Clips" draggable={false} />
+      <img className="r-search-logo" src={logoUrl} alt="ClipLib" draggable={false} />
       <div className="r-search-field">
         <div className="r-search-hl" ref={overlayRef} aria-hidden="true">
           {runs.map((run, i) =>

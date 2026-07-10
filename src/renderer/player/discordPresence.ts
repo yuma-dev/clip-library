@@ -63,7 +63,7 @@ export function updateDiscordPresenceForClip(clip: PresenceClip, isPlaying = tru
   clearInterval(state.discordPresenceInterval);
 
   if (clip.tags && clip.tags.includes("Private")) {
-    updateDiscordPresence("Download Clip Library now!", "");
+    updateDiscordPresence("Download ClipLib now!", "");
     return;
   }
 
