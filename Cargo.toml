@@ -10,6 +10,7 @@ members = [
     "crates/core",
     "crates/profile",
     "crates/discord",
+    "crates/diagnostics",
     "src-tauri",
 ]
 
@@ -84,6 +85,7 @@ clipdip-hotkey  = { path = "crates/hotkey" }
 clipdip-core    = { path = "crates/core" }
 clipdip-profile = { path = "crates/profile" }
 clipdip-discord = { path = "crates/discord" }
+clipdip-diagnostics = { path = "crates/diagnostics" }
 
 [profile.release]
 opt-level = 3

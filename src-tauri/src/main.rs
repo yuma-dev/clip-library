@@ -137,6 +137,10 @@ struct AppState {
     /// roster warm so the save flow can snapshot it at hotkey time. Always
     /// present; reports `Disabled` when no client secret is compiled in.
     discord: Arc<clipdip_discord::DiscordHandle>,
+    /// Anonymous, opt-out diagnostics client. Drives the settings toggle and
+    /// the manual "export & upload diagnostics" action. Inert without a
+    /// compiled-in ingest key.
+    diagnostics: Arc<clipdip_diagnostics::Diagnostics>,
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -457,8 +461,15 @@ fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn update_config(config: serde_json::Value, state: State<'_, AppState>) -> Result<(), String> {
-    let cfg: clipdip_core::config::Config =
+    let mut cfg: clipdip_core::config::Config =
         serde_json::from_value(config).map_err(|e| e.to_string())?;
+    // Telemetry is owned by `set_telemetry_enabled` (which also notifies the
+    // running diagnostics client). Preserve whatever is on disk so this
+    // general settings round-trip can never clobber the opt-out toggle with a
+    // stale value from the UI's config object.
+    if let Ok(existing) = clipdip_core::config::Config::load_or_default(&state.config_path) {
+        cfg.telemetry = existing.telemetry;
+    }
     cfg.save(&state.config_path).map_err(|e| e.to_string())
 }
 
@@ -872,6 +883,43 @@ fn discord_current_roster(state: State<'_, AppState>) -> serde_json::Value {
     serde_json::to_value(state.discord.roster()).unwrap_or(serde_json::Value::Null)
 }
 
+// ---------- diagnostics commands ------------------------------------------
+
+/// Telemetry state for the settings UI: whether the opt-out toggle is on, and
+/// whether this build can actually report (an ingest key was compiled in).
+#[tauri::command]
+fn get_telemetry_status(state: State<'_, AppState>) -> serde_json::Value {
+    serde_json::json!({
+        "enabled": state.diagnostics.is_enabled(),
+        "configured": state.diagnostics.is_configured(),
+        "install_id": state.diagnostics.install_id(),
+    })
+}
+
+/// Flip the opt-out switch. Persists to config and tells the running client to
+/// start/stop reporting immediately.
+#[tauri::command]
+fn set_telemetry_enabled(enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let mut cfg = clipdip_core::config::Config::load_or_default(&state.config_path)
+        .map_err(|e| format!("load config: {e:#}"))?;
+    cfg.telemetry.enabled = enabled;
+    cfg.save(&state.config_path)
+        .map_err(|e| format!("save config: {e:#}"))?;
+    state.diagnostics.set_enabled(enabled);
+    info!("telemetry {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+/// Build and upload a diagnostic bundle now. Returns the server-assigned bundle
+/// id on success. Blocks on the network call (runs on Tauri's command thread).
+#[tauri::command]
+fn upload_diagnostics_bundle(
+    note: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<i64, String> {
+    state.diagnostics.upload_bundle_manual(note)
+}
+
 // ---------- capture loop --------------------------------------------------
 
 #[derive(Clone, Copy)]
@@ -1136,6 +1184,13 @@ fn health_loop(
         // the request, then exit; the restart replaces this monitor.
         if let Some(err) = video_error.lock().unwrap().clone() {
             error!("health: video capture thread died — requesting pipeline restart: {err}");
+            clipdip_diagnostics::report_capture_failure(
+                "video_thread_died",
+                format!("video capture thread died: {err}"),
+                serde_json::json!({
+                    "phase": capture_phase::name(phase.load(Ordering::Relaxed)),
+                }),
+            );
             notify_health(
                 &app,
                 &corner,
@@ -1187,6 +1242,14 @@ fn health_loop(
                     idle_secs = idle as f64 / 1e7,
                     stuck_in,
                     "capture wedged (no frames; thread stuck in this stage) — restarting Clipdip to recover"
+                );
+                clipdip_diagnostics::report_capture_failure(
+                    "capture_wedged",
+                    format!("capture wedged in {stuck_in} for {:.0}s — restarting app", idle as f64 / 1e7),
+                    serde_json::json!({
+                        "idle_secs": idle as f64 / 1e7,
+                        "stuck_in": stuck_in,
+                    }),
                 );
                 notify_health(
                     &app,
@@ -1274,6 +1337,11 @@ fn health_loop(
                 if bad >= 2 {
                     degraded = true;
                     warn!("health: degraded — {body}");
+                    clipdip_diagnostics::report_capture_failure(
+                        "capture_degraded",
+                        body.clone(),
+                        serde_json::json!({ "title": title }),
+                    );
                     notify_health(&app, &corner, &title, &body);
                 }
             }
@@ -1741,6 +1809,14 @@ fn run_capture_loop(
                             "capture failed {} times in 10 minutes — giving up on auto-restart",
                             auto_restarts.len() + 1
                         );
+                        clipdip_diagnostics::report_capture_failure(
+                            "capture_restart_giveup",
+                            format!(
+                                "capture failed {} times in 10 minutes — auto-restart stopped",
+                                auto_restarts.len() + 1
+                            ),
+                            serde_json::json!({ "restarts": auto_restarts.len() + 1 }),
+                        );
                         notify_health(
                             &app,
                             &notif_corner,
@@ -1919,6 +1995,12 @@ fn main() {
     // non-blocking log writer's background thread.
     let mut _log_guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
     let mut file_layer = None;
+    // Setter the diagnostics client uses to raise the file-log level when the
+    // server flips a per-install override (debug/trace). `None` restores the
+    // default. Populated only when the file log is actually created.
+    let mut set_log_level: Option<
+        Box<dyn Fn(Option<clipdip_diagnostics::LogLevel>) + Send + Sync>,
+    > = None;
 
     if let Some(dirs) = directories::ProjectDirs::from("", "", "clipdip") {
         let log_dir = dirs.data_local_dir().join("logs");
@@ -1952,11 +2034,24 @@ fn main() {
                 let (non_blocking, guard) = tracing_appender::non_blocking(file);
                 _log_guard = Some(guard);
 
+                // Wrap the level filter in a reload handle so the diagnostics
+                // client can bump this install to TRACE on the server's request
+                // and drop it back to DEBUG when the override expires.
+                use tracing_subscriber::filter::LevelFilter;
+                let (reload_filter, reload_handle) =
+                    tracing_subscriber::reload::Layer::new(LevelFilter::DEBUG);
                 let layer = tracing_subscriber::fmt::layer()
                     .with_writer(non_blocking)
                     .with_ansi(false)
-                    .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG);
+                    .with_filter(reload_filter);
                 file_layer = Some(layer);
+                set_log_level = Some(Box::new(move |level| {
+                    let target = match level {
+                        None | Some(clipdip_diagnostics::LogLevel::Debug) => LevelFilter::DEBUG,
+                        Some(clipdip_diagnostics::LogLevel::Trace) => LevelFilter::TRACE,
+                    };
+                    let _ = reload_handle.modify(|f| *f = target);
+                }));
             }
         }
     }
@@ -2003,6 +2098,32 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("."));
     let discord = Arc::new(clipdip_discord::spawn(discord_dir));
 
+    // Start the anonymous, opt-out diagnostics client. It reports capture
+    // failures / crashes and a heartbeat so problems on machines we don't own
+    // surface. Inert unless an ingest key was compiled in (CLIPDIP_INGEST_KEY)
+    // and the user hasn't opted out. Wired to the file-log reload handle so the
+    // server can raise this install's log level to debug a hard case.
+    let telemetry_enabled = clipdip_core::config::Config::load_or_default(&config_path)
+        .map(|c| c.telemetry.enabled)
+        .unwrap_or(true);
+    let diagnostics = clipdip_diagnostics::init(clipdip_diagnostics::InitOptions {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        enabled: telemetry_enabled,
+        on_log_level: set_log_level,
+        base_url: None,
+    });
+
+    // Report panics as `crash` events. The release build aborts on panic, so
+    // the reporter appends synchronously to the durable queue and it ships on
+    // the next launch.
+    {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            clipdip_diagnostics::report_crash(&info.to_string());
+            prev(info);
+        }));
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
@@ -2017,6 +2138,7 @@ fn main() {
             loop_tx: loop_tx.clone(),
             overlay_booted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             discord: discord.clone(),
+            diagnostics: diagnostics.clone(),
         })
         .setup(move |app| {
             // Log configured hotkeys so the user can confirm them in the console.
@@ -2106,6 +2228,9 @@ fn main() {
             discord_connect,
             discord_disconnect,
             discord_current_roster,
+            get_telemetry_status,
+            set_telemetry_enabled,
+            upload_diagnostics_bundle,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")

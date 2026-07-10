@@ -29,6 +29,7 @@ pub struct Config {
     pub profile: ProfileConfig,
     pub metadata: MetadataConfig,
     pub discord: DiscordConfig,
+    pub telemetry: TelemetryConfig,
     /// Replay window in seconds. Ring buffer is sized for this duration at
     /// `video.bitrate_bps` (plus ~20% headroom for audio + muxer overhead).
     pub replay_seconds: u32,
@@ -45,6 +46,7 @@ impl Default for Config {
             profile: ProfileConfig::default(),
             metadata: MetadataConfig::default(),
             discord: DiscordConfig::default(),
+            telemetry: TelemetryConfig::default(),
             replay_seconds: 60,
         }
     }
@@ -529,6 +531,27 @@ pub struct DiscordConfig {
 }
 
 impl Default for DiscordConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+// ---- telemetry ----------------------------------------------------------
+
+/// Anonymous, opt-out diagnostics. When enabled (the default), the app reports
+/// capture failures / crashes and a periodic heartbeat to the diagnostics
+/// server so problems on machines we don't own become visible. Identity is a
+/// random per-install id — no accounts, no PII. See `clipdip-diagnostics`.
+///
+/// Opt-out: `enabled = false` stops all network calls. The app also does
+/// nothing here unless an ingest key was compiled into the build.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryConfig {
+    pub enabled: bool,
+}
+
+impl Default for TelemetryConfig {
     fn default() -> Self {
         Self { enabled: true }
     }

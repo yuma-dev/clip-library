@@ -7,6 +7,7 @@ import {
   KeyRound, Volume2, MapPin, Timer, Disc,
   Settings2, Sparkles, ChevronRight, ChevronLeft, Check, X,
   AlertTriangle, CircleCheck, RefreshCw, Headphones, Users,
+  ShieldCheck, Upload,
 } from "lucide-react";
 
 // ---------- design tokens ---------------------------------------------------
@@ -2075,6 +2076,98 @@ function DiscordSettings({ enabled, onToggle }: { enabled: boolean; onToggle: (v
   );
 }
 
+interface TelemetryStatus {
+  enabled: boolean;
+  configured: boolean;
+  install_id: string;
+}
+
+/// Anonymous, opt-out diagnostics: a toggle plus a manual "export & upload
+/// diagnostics" action. Self-contained — reads/writes its own state via the
+/// dedicated backend commands (telemetry is deliberately kept out of the
+/// general config round-trip), so toggling it never restarts the pipeline.
+function TelemetrySettings() {
+  const [status, setStatus] = useState<TelemetryStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [upload, setUpload] = useState<"idle" | "working" | "done" | "error">("idle");
+
+  useEffect(() => {
+    invoke<TelemetryStatus>("get_telemetry_status").then(setStatus).catch(() => {});
+  }, []);
+
+  const enabled = status?.enabled ?? true;
+  const configured = status?.configured ?? false;
+
+  const toggle = async (v: boolean) => {
+    setBusy(true);
+    // Optimistic — reflect the switch immediately.
+    setStatus(s => (s ? { ...s, enabled: v } : s));
+    try {
+      await invoke("set_telemetry_enabled", { enabled: v });
+    } catch (e) {
+      console.error("set_telemetry_enabled:", e);
+      setStatus(s => (s ? { ...s, enabled: !v } : s)); // revert on failure
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doUpload = async () => {
+    setUpload("working");
+    try {
+      await invoke<number>("upload_diagnostics_bundle", { note: null });
+      setUpload("done");
+      setTimeout(() => setUpload("idle"), 4000);
+    } catch (e) {
+      console.error("upload_diagnostics_bundle:", e);
+      setUpload("error");
+      setTimeout(() => setUpload("idle"), 4000);
+    }
+  };
+
+  const ghostBtn: React.CSSProperties = {
+    height: 26, padding: "0 12px", borderRadius: 5,
+    border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.05)",
+    color: "rgba(255,255,255,0.8)", font: "600 11px/1 Inter, sans-serif",
+    cursor: upload === "working" ? "default" : "pointer", opacity: upload === "working" ? 0.6 : 1,
+    display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+  };
+
+  const uploadLabel =
+    upload === "working" ? "Uploading…"
+    : upload === "done" ? "Uploaded ✓"
+    : upload === "error" ? "Upload failed"
+    : "Export & upload";
+
+  return (
+    <>
+      <Row
+        Icon={ShieldCheck}
+        label="Send anonymous diagnostics"
+        hint={
+          configured
+            ? "Reports capture failures and crashes with a random install ID — no account, no personal data. Helps us fix issues we can't see."
+            : "Diagnostics reporting is not available in this build."
+        }
+      >
+        <DesignToggle value={enabled} onChange={toggle} disabled={busy || !configured} />
+      </Row>
+      {configured && (
+        <Row
+          Icon={Upload}
+          label="Diagnostic bundle"
+          hint="Zip your logs and config and upload them so we can debug a specific problem you're seeing."
+        >
+          <button style={ghostBtn} onClick={doUpload} disabled={upload === "working"}>
+            <Upload size={11} />
+            {uploadLabel}
+          </button>
+        </Row>
+      )}
+    </>
+  );
+}
+
 function OutputPanel({
   config, patchOutput, patchMetadata, patchDiscord, advanced, setAdvanced,
   autostartEnabled, autostartIsDev, onToggleAutostart,
@@ -2156,6 +2249,8 @@ function OutputPanel({
           enabled={config.discord.enabled}
           onToggle={v => patchDiscord("enabled", v)}
         />
+
+        <TelemetrySettings />
 
         <Row
           Icon={Settings2}
