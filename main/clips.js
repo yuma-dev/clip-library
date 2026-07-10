@@ -427,6 +427,68 @@ async function getClips(getSettings) {
 }
 
 /**
+ * Recursively sum the byte size of every file under `dir`. Mirrors walkClips'
+ * concurrent stat strategy but counts ALL files (videos, thumbnails, metadata)
+ * so the total reflects the folder's real disk footprint.
+ */
+async function dirSize(dir) {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  const tasks = entries.map(async (entry) => {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) return dirSize(fullPath);
+    if (entry.isFile()) {
+      try {
+        return (await fs.stat(fullPath)).size;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
+  });
+  return (await Promise.all(tasks)).reduce((a, b) => a + b, 0);
+}
+
+// Cached folder-size result so repeated renderer polls don't re-walk the tree.
+// Nothing depends on this value being fresh, so a stale-but-cheap hit within
+// the TTL is preferred over another full stat sweep.
+let folderSizeCache = { location: null, bytes: 0, at: 0 };
+const FOLDER_SIZE_TTL = 4 * 60 * 1000; // 4 min — comfortably below the 5-min poll.
+
+/**
+ * Total disk usage (bytes) of the configured clip folder. Recomputed at most
+ * once per TTL; returns the cached value instantly otherwise. Runs entirely in
+ * the main process off the UI thread, so it never touches renderer perf.
+ */
+async function getClipsFolderSize(getSettings) {
+  const settings = await getSettings();
+  const clipsFolder = settings?.clipLocation;
+  if (!clipsFolder) return { bytes: 0 };
+
+  const now = Date.now();
+  if (
+    folderSizeCache.location === clipsFolder &&
+    now - folderSizeCache.at < FOLDER_SIZE_TTL
+  ) {
+    return { bytes: folderSizeCache.bytes };
+  }
+
+  try {
+    const bytes = await dirSize(clipsFolder);
+    folderSizeCache = { location: clipsFolder, bytes, at: now };
+    return { bytes };
+  } catch (error) {
+    logger.error('Error computing clips folder size:', error);
+    // Fall back to the last known value rather than flashing 0.
+    return { bytes: folderSizeCache.location === clipsFolder ? folderSizeCache.bytes : 0 };
+  }
+}
+
+/**
  * Helper function for delays
  * @param {number} ms - Milliseconds to delay
  * @returns {Promise<void>}
@@ -544,6 +606,7 @@ module.exports = {
   startPeriodicSave,
   stopPeriodicSave,
   getClips,
+  getClipsFolderSize,
   deleteClip,
   revealClip
 };

@@ -1080,6 +1080,10 @@ ipcMain.handle('get-new-clips-info', async () => {
   return await clipsModule.getNewClipsInfo(getSettings);
 });
 
+ipcMain.handle('get-clips-folder-size', async () => {
+  return await clipsModule.getClipsFolderSize(getSettings);
+});
+
 ipcMain.handle('mark-clips-watched', async (event, clipNames) => {
   return await clipsModule.markClipsWatched(clipNames);
 });
