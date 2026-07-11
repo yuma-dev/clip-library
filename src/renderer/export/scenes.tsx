@@ -89,7 +89,18 @@ interface MixerTrack {
   name: string;
   volume: number; // 1 == 100%; range 0..2
   color: string; // #rrggbb
-  muted?: boolean;
+  muted?: boolean; // right-click soft mute (stays in mix, strikethrough)
+  hidden?: boolean; // removed from mix -> floats in the hidden tray as a pill
+}
+
+// Hidden/disabled track: a "pill" chip in the tray above the panel (_buildChip).
+function MixerChip({ track }: { track: MixerTrack }) {
+  return (
+    <button className="mixer__chip" type="button" style={{ color: track.color }} data-layer={`chip-${track.ordinal}`}>
+      <span className="mixer__chip-dot" />
+      <span className="mixer__chip-label">{track.name}</span>
+    </button>
+  );
 }
 
 function MixerRow({ track }: { track: MixerTrack }) {
@@ -130,6 +141,8 @@ function AudioMixerScene(spec: ExportSpec): ReactElement {
   const tracks = props.tracks ?? [];
   const pad = props.pad ?? 44;
   const width = props.panelWidth ?? 320;
+  const visible = tracks.filter((t) => !t.hidden);
+  const hidden = tracks.filter((t) => t.hidden);
   return (
     <div id="export-root" style={{ position: "relative", display: "inline-block", padding: pad }}>
       <div data-layer="background" style={{ position: "absolute", inset: 0, background: spec.background ?? "#0f0f11", overflow: "hidden" }}>
@@ -146,8 +159,15 @@ function AudioMixerScene(spec: ExportSpec): ReactElement {
         data-layer="panel"
         style={{ position: "relative", width, margin: 0, animation: "none" }}
       >
+        {hidden.length > 0 ? (
+          <div className="mixer__hidden-tray" data-layer="tray">
+            {hidden.map((t) => (
+              <MixerChip key={t.ordinal} track={t} />
+            ))}
+          </div>
+        ) : null}
         <div className="mixer__tracks">
-          {tracks.map((t) => (
+          {visible.map((t) => (
             <MixerRow key={t.ordinal} track={t} />
           ))}
         </div>
