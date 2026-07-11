@@ -66,6 +66,7 @@ export const SETTINGS_DEFAULTS: AppSettings = {
   // previous App.tsx behavior `s?.iconGreyscale ?? true`).
   iconGreyscale: true,
   showNewClipsIndicators: true,
+  onboardingVersion: 0,
   previewVolume: 0.1,
   ambientGlow: { ...AMBIENT_GLOW_DEFAULTS },
   cardGlow: { ...CARD_GLOW_DEFAULTS },
