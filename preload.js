@@ -145,16 +145,35 @@ const api = {
   quitApp: invoke("quit-app"),
 
   // --- Integrated clipdip ---
-  clipdip: {
-    getConfig: invoke("clipdip-get-config"),
-    setConfig: invoke("clipdip-set-config"),
-    getStatus: invoke("clipdip-status"),
-    start: invoke("clipdip-start"),
-    stop: invoke("clipdip-stop"),
-    restart: invoke("clipdip-restart"),
-    setAutostart: invoke("clipdip-set-autostart"),
-    setEnabled: invoke("clipdip-set-enabled"),
-  },
+  clipdip: (() => {
+    const control = (cmd, args) => ipcRenderer.invoke("clipdip-control", { cmd, args });
+    return {
+      getConfig: invoke("clipdip-get-config"),
+      setConfig: invoke("clipdip-set-config"),
+      getStatus: invoke("clipdip-status"),
+      start: invoke("clipdip-start"),
+      stop: invoke("clipdip-stop"),
+      restart: invoke("clipdip-restart"),
+      setAutostart: invoke("clipdip-set-autostart"),
+      setEnabled: invoke("clipdip-set-enabled"),
+      // Stateless CLI queries (work without a running instance).
+      listAudioDevices: invoke("clipdip-list-audio-devices"),
+      listMonitors: invoke("clipdip-list-monitors"),
+      getFilenameVariables: invoke("clipdip-filename-variables"),
+      previewFilename: invoke("clipdip-preview-filename"),
+      // Control server on the running instance; {ok:false,error:"not_running"}
+      // when it isn't up.
+      control,
+      getLiveStatus: () => control("status"),
+      testOverlay: (stage) => control("test_overlay", { stage }),
+      discordConnect: () => control("discord_connect"),
+      discordDisconnect: () => control("discord_disconnect"),
+      getTelemetryStatus: () => control("get_telemetry_status"),
+      setTelemetryEnabled: (enabled) => control("set_telemetry_enabled", { enabled }),
+      uploadDiagnostics: (note) => control("upload_diagnostics_bundle", { note: note ?? null }),
+      openClipsFolder: () => control("open_clips_folder"),
+    };
+  })(),
 
   // --- Signal to main (fire-and-forget) ---
   rendererReady: () => ipcRenderer.send("renderer-ready"),

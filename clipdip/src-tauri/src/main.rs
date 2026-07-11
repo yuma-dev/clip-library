@@ -154,6 +154,26 @@ struct AppState {
     /// the manual "export & upload diagnostics" action. Inert without a
     /// compiled-in ingest key.
     diagnostics: Arc<clipdip_diagnostics::Diagnostics>,
+    /// Most recent `pipeline-error` payload, retained for the control
+    /// server's `status` command. Cleared when the pipeline (re)starts
+    /// successfully.
+    pipeline_error: Arc<Mutex<Option<String>>>,
+}
+
+/// Emit a `pipeline-error` event and retain the message in state so the
+/// control server's `status` command can report it after the fact.
+fn report_pipeline_error(app: &AppHandle, err: String) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.pipeline_error.lock().unwrap() = Some(err.clone());
+    }
+    let _ = app.emit("pipeline-error", err);
+}
+
+/// Clear the retained pipeline error after a successful (re)start.
+fn clear_pipeline_error(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.pipeline_error.lock().unwrap() = None;
+    }
 }
 
 // ---------- event payloads ------------------------------------------------
@@ -1307,7 +1327,7 @@ fn spawn_hotkey_listener(
         }
         Err(e) => {
             warn!("hotkey listener spawn failed: {e:#}");
-            let _ = app.emit("pipeline-error", format!("hotkeys: {e:#}"));
+            report_pipeline_error(app, format!("hotkeys: {e:#}"));
             None
         }
     }
@@ -1678,7 +1698,7 @@ fn run_capture_loop(
         Ok(c) => c,
         Err(e) => {
             error!("config load: {e:#}");
-            let _ = app.emit("pipeline-error", format!("{e:#}"));
+            report_pipeline_error(&app, format!("{e:#}"));
             return;
         }
     };
@@ -1714,6 +1734,7 @@ fn run_capture_loop(
             info!("pipeline started");
             *ring_handle.lock().unwrap() = Some(p.ring());
             *pipeline_running.lock().unwrap() = true;
+            clear_pipeline_error(&app);
             let _ = app.emit("pipeline-status", serde_json::json!({"running": true}));
             if health_alerts {
                 monitor = Some(HealthMonitor::spawn(
@@ -1735,7 +1756,7 @@ fn run_capture_loop(
         }
         Err(e) => {
             error!("pipeline start: {e:#}");
-            let _ = app.emit("pipeline-error", format!("{e:#}"));
+            report_pipeline_error(&app, format!("{e:#}"));
             None
         }
     };
@@ -2174,7 +2195,7 @@ fn run_capture_loop(
                     Ok(c) => c,
                     Err(e) => {
                         error!("config load for restart: {e:#}");
-                        let _ = app.emit("pipeline-error", format!("{e:#}"));
+                        report_pipeline_error(&app, format!("{e:#}"));
                         continue;
                     }
                 };
@@ -2187,6 +2208,7 @@ fn run_capture_loop(
                         info!("pipeline restarted");
                         *ring_handle.lock().unwrap() = Some(p.ring());
                         *pipeline_running.lock().unwrap() = true;
+                        clear_pipeline_error(&app);
                         let _ = app.emit(
                             "pipeline-status",
                             serde_json::json!({"running": true}),
@@ -2211,7 +2233,7 @@ fn run_capture_loop(
                     }
                     Err(e) => {
                         error!("pipeline restart: {e:#}");
-                        let _ = app.emit("pipeline-error", format!("{e:#}"));
+                        report_pipeline_error(&app, format!("{e:#}"));
                         None
                     }
                 };
@@ -2335,9 +2357,304 @@ fn open_library(_app: &AppHandle) {
     }
 }
 
+// ---------- stateless CLI queries ------------------------------------------
+
+/// Enumerate physical displays via Win32 so `--list-monitors` works without
+/// a Tauri app handle. EnumDisplayMonitors returns monitors in the same
+/// order winit (and thus Tauri's `available_monitors`) reports them, so the
+/// index lines up with `video.output_index`.
+fn enumerate_monitors() -> Vec<serde_json::Value> {
+    use windows::Win32::Foundation::{LPARAM, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    };
+
+    unsafe extern "system" fn callback(
+        hmon: HMONITOR,
+        _hdc: HDC,
+        _rect: *mut RECT,
+        lparam: LPARAM,
+    ) -> BOOL {
+        let monitors = &mut *(lparam.0 as *mut Vec<serde_json::Value>);
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(hmon, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO).as_bool() {
+            let len = info
+                .szDevice
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(info.szDevice.len());
+            let rc = info.monitorInfo.rcMonitor;
+            // MONITORINFOF_PRIMARY
+            let is_primary = info.monitorInfo.dwFlags & 1 != 0;
+            monitors.push(serde_json::json!({
+                "index": monitors.len(),
+                "name": String::from_utf16_lossy(&info.szDevice[..len]),
+                "width": rc.right - rc.left,
+                "height": rc.bottom - rc.top,
+                "is_primary": is_primary,
+            }));
+        }
+        TRUE
+    }
+
+    let mut monitors: Vec<serde_json::Value> = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(
+            HDC(std::ptr::null_mut()),
+            None,
+            Some(callback),
+            LPARAM(&mut monitors as *mut _ as isize),
+        );
+    }
+    monitors
+}
+
+/// Handle the stateless query flags ClipLib's settings UI shells out for.
+/// Runs before any tauri / single-instance init, so these work whether or
+/// not another clipdip instance is running and never forward argv to it.
+/// A matched flag prints exactly one JSON line to stdout and exits the
+/// process (0 on success, 1 on failure); otherwise returns normally.
+fn handle_cli_query_flags() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let result: Option<Result<serde_json::Value, String>> =
+        if argv.iter().any(|a| a == "--list-audio-devices") {
+            Some(
+                clipdip_audio::list_devices()
+                    .map(|devices| serde_json::json!({ "devices": devices }))
+                    .map_err(|e| format!("{e:#}")),
+            )
+        } else if argv.iter().any(|a| a == "--list-monitors") {
+            Some(Ok(serde_json::json!({ "monitors": enumerate_monitors() })))
+        } else if argv.iter().any(|a| a == "--filename-variables") {
+            let variables: Vec<serde_json::Value> = clipdip_core::filename::VARIABLES
+                .iter()
+                .map(|v| {
+                    serde_json::json!({
+                        "token": v.token,
+                        "description": v.description,
+                        "example": v.example,
+                    })
+                })
+                .collect();
+            Some(Ok(serde_json::json!({ "variables": variables })))
+        } else if let Some(pos) = argv.iter().position(|a| a == "--preview-filename") {
+            Some(match argv.get(pos + 1) {
+                Some(template) => Ok(serde_json::json!({
+                    "preview": preview_filename(template.clone()),
+                })),
+                None => Err("--preview-filename requires a template argument".into()),
+            })
+        } else {
+            return;
+        };
+
+    match result {
+        Some(Ok(serde_json::Value::Object(mut payload))) => {
+            payload.insert("ok".into(), true.into());
+            println!("{}", serde_json::Value::Object(payload));
+            std::process::exit(0);
+        }
+        Some(Err(e)) => {
+            println!("{}", serde_json::json!({ "ok": false, "error": e }));
+            std::process::exit(1);
+        }
+        // Payloads above are always objects; unreachable in practice.
+        _ => std::process::exit(1),
+    }
+}
+
+// ---------- control server --------------------------------------------------
+
+/// `control.json` lives next to `config.toml` and tells ClipLib where the
+/// control server listens plus the token that authorizes requests.
+fn control_file_path() -> Option<PathBuf> {
+    let cfg = clipdip_core::config::Config::path().ok()?;
+    cfg.parent().map(|p| p.join("control.json"))
+}
+
+/// Start the TCP JSON-lines control server (127.0.0.1, ephemeral port) the
+/// ClipLib settings UI talks to. One request line per connection, one
+/// response line back, then the connection closes. Failure to start is
+/// logged and non-fatal — the app keeps working without the control surface.
+fn spawn_control_server(app: AppHandle) {
+    let Some(control_path) = control_file_path() else {
+        warn!("control server: could not resolve config directory, not starting");
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("clipdip-control".into())
+        .spawn(move || {
+            if let Err(e) = run_control_server(app, control_path) {
+                warn!("control server failed: {e:#}");
+            }
+        });
+    if let Err(e) = spawned {
+        warn!("control server thread spawn failed: {e}");
+    }
+}
+
+fn run_control_server(app: AppHandle, control_path: PathBuf) -> anyhow::Result<()> {
+    use std::fmt::Write as _;
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("getrandom: {e}"))?;
+    let token = bytes.iter().fold(String::with_capacity(32), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    let doc = serde_json::json!({
+        "port": port,
+        "token": token,
+        "pid": std::process::id(),
+    });
+    std::fs::write(&control_path, doc.to_string())?;
+    info!("control server listening on 127.0.0.1:{port}");
+
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        let app = app.clone();
+        let token = token.clone();
+        let _ = std::thread::Builder::new()
+            .name("clipdip-control-conn".into())
+            .spawn(move || handle_control_connection(stream, &app, &token));
+    }
+    Ok(())
+}
+
+fn handle_control_connection(stream: std::net::TcpStream, app: &AppHandle, token: &str) {
+    use std::io::{BufRead as _, BufReader, Write as _};
+
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+    let Ok(read_half) = stream.try_clone() else { return };
+    let mut line = String::new();
+    if BufReader::new(read_half).read_line(&mut line).is_err() {
+        return;
+    }
+    let response = control_dispatch(app, token, &line);
+    let mut stream = stream;
+    let _ = writeln!(stream, "{response}");
+}
+
+/// Parse + authorize one request line and run the command. Always returns a
+/// JSON object with `ok`; errors carry an `error` message.
+fn control_dispatch(app: &AppHandle, token: &str, line: &str) -> serde_json::Value {
+    let err = |msg: String| serde_json::json!({ "ok": false, "error": msg });
+
+    let req: serde_json::Value = match serde_json::from_str(line.trim()) {
+        Ok(v) => v,
+        Err(e) => return err(format!("malformed request: {e}")),
+    };
+    if req.get("token").and_then(|t| t.as_str()) != Some(token) {
+        return err("unauthorized".into());
+    }
+    let Some(cmd) = req.get("cmd").and_then(|c| c.as_str()) else {
+        return err("missing cmd".into());
+    };
+    let args = req.get("args").cloned().unwrap_or(serde_json::Value::Null);
+
+    match run_control_command(app, cmd, &args) {
+        Ok(payload) => {
+            let mut obj = match payload {
+                serde_json::Value::Object(m) => m,
+                serde_json::Value::Null => serde_json::Map::new(),
+                other => {
+                    let mut m = serde_json::Map::new();
+                    m.insert("result".into(), other);
+                    m
+                }
+            };
+            obj.insert("ok".into(), true.into());
+            serde_json::Value::Object(obj)
+        }
+        Err(e) => err(e),
+    }
+}
+
+/// The control command set — thin adapters over the same functions the
+/// Tauri commands use, so behavior stays identical between the legacy
+/// settings window and ClipLib.
+fn run_control_command(
+    app: &AppHandle,
+    cmd: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "app state unavailable".to_string())?;
+
+    match cmd {
+        "status" => Ok(serde_json::json!({
+            "pipeline_running": *state.pipeline_running.lock().unwrap(),
+            "pipeline_error": state.pipeline_error.lock().unwrap().clone(),
+            "buffer_stats": get_buffer_stats(state.clone()),
+            "discord": state.discord.status(),
+            "version": env!("CARGO_PKG_VERSION"),
+        })),
+        "get_pipeline_running" => Ok(serde_json::json!({
+            "running": get_pipeline_running(state),
+        })),
+        "test_overlay" => {
+            let stage = args
+                .get("stage")
+                .and_then(|s| s.as_str())
+                .ok_or("missing stage")?
+                .to_string();
+            tauri::async_runtime::block_on(test_overlay(app.clone(), state, stage))?;
+            Ok(serde_json::json!({}))
+        }
+        "discord_connect" => {
+            state.discord.connect();
+            Ok(serde_json::json!({}))
+        }
+        "discord_disconnect" => {
+            state.discord.disconnect();
+            Ok(serde_json::json!({}))
+        }
+        "open_clips_folder" => {
+            open_clips_folder(state)?;
+            Ok(serde_json::json!({}))
+        }
+        "get_telemetry_status" => Ok(get_telemetry_status(state)),
+        "set_telemetry_enabled" => {
+            let enabled = args
+                .get("enabled")
+                .and_then(|e| e.as_bool())
+                .ok_or("missing enabled")?;
+            set_telemetry_enabled(enabled, state)?;
+            Ok(serde_json::json!({}))
+        }
+        "upload_diagnostics_bundle" => {
+            let note = args
+                .get("note")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string());
+            let id = upload_diagnostics_bundle(note, state)?;
+            Ok(serde_json::json!({ "id": id }))
+        }
+        "restart_pipeline" => {
+            restart_pipeline(state)?;
+            Ok(serde_json::json!({}))
+        }
+        "reload_hotkeys" => {
+            reload_hotkeys(state)?;
+            Ok(serde_json::json!({}))
+        }
+        other => Err(format!("unknown command '{other}'")),
+    }
+}
+
 // ---------- main ----------------------------------------------------------
 
 fn main() {
+    // Stateless query flags exit here, before logging (stdout must stay
+    // pure JSON), single-instance forwarding, and tauri init.
+    handle_cli_query_flags();
     use tracing_subscriber::prelude::*;
 
     // Held for the whole process: dropping this guard flushes and stops the
@@ -2456,11 +2773,17 @@ fn main() {
     // Start the background Discord RPC manager. It keeps a warm connection
     // to the local Discord client and (once the user authorizes) tracks the
     // current voice-call roster. Tokens live next to the config file.
+    // With the feature enabled, an unauthenticated start prompts for
+    // authorization on its own (once per run) — no waiting for the user to
+    // find the Connect button in ClipLib's settings.
+    let discord_enabled = clipdip_core::config::Config::load_or_default(&config_path)
+        .map(|c| c.discord.enabled)
+        .unwrap_or(true);
     let discord_dir = config_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    let discord = Arc::new(clipdip_discord::spawn(discord_dir));
+    let discord = Arc::new(clipdip_discord::spawn(discord_dir, discord_enabled));
 
     // Start the anonymous, opt-out diagnostics client. It reports capture
     // failures / crashes and a heartbeat so problems on machines we don't own
@@ -2534,6 +2857,7 @@ fn main() {
             overlay_booted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             discord: discord.clone(),
             diagnostics: diagnostics.clone(),
+            pipeline_error: Arc::new(Mutex::new(None)),
         })
         .setup(move |app| {
             // A control invocation (--quit/--reload) that finds no running
@@ -2633,6 +2957,10 @@ fn main() {
                 run_capture_loop(handle, config_path, active, running, ring, tx, loop_rx)
             });
 
+            // Control surface for ClipLib's settings UI (TCP JSON-lines on
+            // localhost; port + token published via control.json).
+            spawn_control_server(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2681,7 +3009,14 @@ fn main() {
                         api.prevent_exit();
                     }
                 }
-                tauri::RunEvent::Exit => info!("run event: Exit"),
+                tauri::RunEvent::Exit => {
+                    info!("run event: Exit");
+                    // Best-effort: drop the control file so clients don't
+                    // try to reach a dead server.
+                    if let Some(p) = control_file_path() {
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
                 _ => {}
             }
         });

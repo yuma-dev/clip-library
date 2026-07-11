@@ -10,27 +10,44 @@
 
 // Mirror of clipdip's TOML config (clipdip crates/core/src/config.rs).
 // Every field is serde-defaulted on the Rust side, so partial objects are fine.
+
+/** Mode-tagged enum table; replaced whole on patch, never merged. */
+export type ClipdipRateControl =
+  | { mode: "constant_qp"; qp: number }
+  | { mode: "vbr"; avg_bps: number };
+
+/** Mode-tagged enum table; replaced whole on patch, never merged. */
+export type ClipdipRecordingQuality =
+  | { mode: "match_clips" }
+  | { mode: "constant_qp"; qp: number };
+
+/** Kind-tagged audio source entry (audio.sources[]). */
+export type ClipdipAudioSource =
+  | { kind: "system_loopback"; device_id?: string }
+  | { kind: "microphone"; device_id?: string }
+  | { kind: "process_loopback"; process_name?: string };
+
 export interface ClipdipConfig {
   replay_seconds?: number;
   video?: {
     output_index?: number;
-    capture_backend?: string;
+    capture_backend?: "auto" | "wgc" | "dxgi";
     fps?: number;
     bitrate_bps?: number;
     include_cursor?: boolean;
     gop_seconds?: number;
-    codec?: string;
-    rate_control?: Record<string, unknown>;
-    recording_quality?: boolean | Record<string, unknown>;
+    codec?: "prefer_av1" | "force_h264" | "force_av1";
+    rate_control?: ClipdipRateControl;
+    recording_quality?: ClipdipRecordingQuality;
   };
   audio?: {
-    sources?: Array<Record<string, unknown>>;
+    sources?: ClipdipAudioSource[];
     include_mix?: boolean;
   };
   output?: {
     directory?: string;
     filename_stem?: string;
-    ffmpeg_path?: string;
+    ffmpeg_path?: string | null;
     keep_sidecars?: boolean;
     audio_bitrate_bps?: number;
   };
@@ -42,7 +59,7 @@ export interface ClipdipConfig {
   notifications?: {
     enabled?: boolean;
     sound?: boolean;
-    corner?: string;
+    corner?: "top_left" | "top_right" | "bottom_left" | "bottom_right";
     auto_dismiss_secs?: number;
     health_alerts?: boolean;
   };
@@ -53,6 +70,66 @@ export interface ClipdipConfig {
   };
   discord?: { enabled?: boolean };
   telemetry?: { enabled?: boolean };
+  profile?: { report_interval_ms?: number };
+  [key: string]: unknown;
+}
+
+// --- Clipdip bridge payloads (stateless CLI queries + control server) -------
+
+/** WASAPI endpoint from `clipdip --list-audio-devices`. */
+export interface AudioDeviceInfo {
+  /** Stable WASAPI device ID; pin it via audio.sources[].device_id. */
+  id: string;
+  friendly_name: string;
+  flow: "Render" | "Capture";
+  /** System default endpoint for its flow. */
+  is_default: boolean;
+}
+
+/** Display from `clipdip --list-monitors`; index maps to video.output_index. */
+export interface MonitorInfo {
+  index: number;
+  name: string;
+  width: number;
+  height: number;
+  is_primary?: boolean;
+}
+
+/** Filename template token from `clipdip --filename-variables`. */
+export interface FilenameVariable {
+  token: string;
+  description: string;
+  example?: string;
+}
+
+/** Discord RPC connection state (control `status` -> discord). */
+export type DiscordStatus =
+  | { state: "disabled" }
+  | { state: "connecting" }
+  | { state: "discord_not_running" }
+  | { state: "needs_authorization" }
+  | { state: "connected"; user: string }
+  | { state: "error"; message: string };
+
+/** Control `status` response payload (merged with ok:true). */
+export interface LiveStatus {
+  pipeline_running: boolean;
+  /** Most recent pipeline error; cleared when the pipeline (re)starts. */
+  pipeline_error: string | null;
+  buffer_stats: {
+    measuring: boolean;
+    mb_per_minute: number;
+    clip_mb: number;
+    buffered_secs: number;
+  };
+  discord: DiscordStatus;
+  version: string;
+}
+
+/** Generic control-server response; `not_running` when clipdip is down. */
+export interface ClipdipControlResult {
+  ok: boolean;
+  error?: string;
   [key: string]: unknown;
 }
 
@@ -202,12 +279,38 @@ export interface ClipsApi {
       binaryFound: boolean;
       configExists: boolean;
       autostart: boolean;
+      /** false when the machine can't run clipdip (non-Windows / no NVIDIA GPU). */
+      supported?: boolean;
+      unsupportedReason?: string | null;
     }>;
     start(): Promise<{ success: boolean; error?: string; alreadyRunning?: boolean }>;
     stop(): Promise<{ success: boolean; forced?: boolean; alreadyStopped?: boolean }>;
     restart(): Promise<{ success: boolean; error?: string }>;
     setAutostart(enabled: boolean): Promise<{ success: boolean }>;
     setEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
+
+    // Stateless CLI queries (spawn the exe; no running instance needed).
+    listAudioDevices(): Promise<{ ok: boolean; error?: string; devices?: AudioDeviceInfo[] }>;
+    listMonitors(): Promise<{ ok: boolean; error?: string; monitors?: MonitorInfo[] }>;
+    getFilenameVariables(): Promise<{ ok: boolean; error?: string; variables?: FilenameVariable[] }>;
+    previewFilename(template: string): Promise<{ ok: boolean; error?: string; preview?: string }>;
+
+    /**
+     * Generic control-server call against the running clipdip instance.
+     * Resolves {ok:false, error:"not_running"} when it isn't up; never rejects.
+     */
+    control(cmd: string, args?: Record<string, unknown>): Promise<ClipdipControlResult>;
+    getLiveStatus(): Promise<({ ok: true } & LiveStatus) | { ok: false; error: string }>;
+    testOverlay(stage: "flow" | "notice" | "rec_on" | "rec_off"): Promise<ClipdipControlResult>;
+    discordConnect(): Promise<ClipdipControlResult>;
+    discordDisconnect(): Promise<ClipdipControlResult>;
+    getTelemetryStatus(): Promise<
+      | { ok: true; enabled: boolean; configured: boolean; install_id: string | null }
+      | { ok: false; error: string }
+    >;
+    setTelemetryEnabled(enabled: boolean): Promise<ClipdipControlResult>;
+    uploadDiagnostics(note?: string | null): Promise<ClipdipControlResult>;
+    openClipsFolder(): Promise<ClipdipControlResult>;
   };
 
   // --- Signal to main (fire-and-forget) ---

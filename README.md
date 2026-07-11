@@ -57,3 +57,8 @@ Need help troubleshooting a tricky issue? Head to **Settings → About** and use
 4. Start managing your clip collection!
 
 [VirusTotal Scan](https://www.virustotal.com/gui/file/3f0e9493f8529d93b22f976ec11e16905731a6024265c04914223d0fa4abcf38?nocache=1) (feel free to do your own as I might forget to do one on an update)
+
+## Legal
+
+- [Privacy Policy](PRIVACY.md)
+- [Terms of Service](TERMS.md)

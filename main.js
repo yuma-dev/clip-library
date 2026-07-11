@@ -715,10 +715,20 @@ app.whenReady().then(async () => {
   // Start periodic saves to prevent data loss
   clipsModule.startPeriodicSave(getSettings);
 
-  // Bring the integrated clipdip up if it's enabled but not running (it may
-  // already be running via its own login autostart — that's a no-op here).
+  // Bring the integrated clipdip up. Opt-out: the first launch where the
+  // user never chose (no clipdip.enabled key) auto-enables it — supported
+  // hardware only; a failed start records enabled=false so it never loops.
+  // Later launches just start it if it's enabled but not running.
   clipdipModule.init(getSettings);
-  clipdipModule.ensureStartedIfEnabled();
+  clipdipModule
+    .autoEnableIfUnconfigured(async (value) => {
+      settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
+      await saveSettings(settings);
+    }, settings.clipLocation)
+    .then((autoEnabled) => {
+      if (!autoEnabled) clipdipModule.ensureStartedIfEnabled();
+    })
+    .catch((error) => logger.warn(`Clipdip bootstrap failed: ${error.message}`));
 
   // The Clips → ClipLib rebrand renamed the exe, which orphans taskbar pins
   // (their .lnk targets the old Clips.exe path). Retarget any pin whose
@@ -788,6 +798,21 @@ ipcMain.handle('clipdip-set-autostart', async (event, enabled) => {
 });
 
 ipcMain.handle('clipdip-set-enabled', (event, enabled) => clipdipModule.setEnabled(enabled));
+
+// Stateless CLI queries (spawn the exe, parse its JSON line).
+ipcMain.handle('clipdip-list-audio-devices', () => clipdipModule.listAudioDevices());
+
+ipcMain.handle('clipdip-list-monitors', () => clipdipModule.listMonitors());
+
+ipcMain.handle('clipdip-filename-variables', () => clipdipModule.getFilenameVariables());
+
+ipcMain.handle('clipdip-preview-filename', (event, template) =>
+  clipdipModule.previewFilename(template));
+
+// Control-server call against the running instance ({ok:false,error:"not_running"}
+// when it isn't up).
+ipcMain.handle('clipdip-control', (event, payload) =>
+  clipdipModule.control(payload?.cmd, payload?.args));
 
 ipcMain.handle("get-clips", async () => {
   return await clipsModule.getClips(getSettings);

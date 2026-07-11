@@ -3627,3 +3627,415 @@ button {
   font-size: 11.5px;
   color: var(--color-text-muted);
 }
+
+/* ================= Clipdip settings ================= */
+
+/* Grouped nav: labeled divider between the library and clipdip sections. */
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav-group + .settings-nav-group {
+  margin-top: 14px;
+}
+.settings-nav-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding: 0 10px 6px;
+}
+
+/* Pipeline status pill (Recording / Capture error / Starting). */
+.clipdip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.clipdip-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+}
+.clipdip-pill.rec {
+  color: #f472b6;
+  border-color: rgba(244, 114, 182, 0.25);
+  background: rgba(244, 114, 182, 0.08);
+}
+.clipdip-pill.rec .clipdip-pill-dot {
+  background: #f472b6;
+  box-shadow: 0 0 7px rgba(244, 114, 182, 0.8);
+}
+.clipdip-pill.error {
+  color: #f08a7a;
+  border-color: rgba(240, 138, 122, 0.25);
+  background: rgba(240, 138, 122, 0.08);
+}
+.clipdip-pill.error .clipdip-pill-dot {
+  background: #f08a7a;
+}
+
+/* Info box (size estimate, filename preview). */
+.clipdip-infobox {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 6px 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.clipdip-infobox b {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.clipdip-infobox-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--color-accent-glyph);
+}
+
+/* Filename template help. */
+.filename-help {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  margin: 4px 0 0;
+}
+.filename-help-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.filename-help-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filename-help-vars {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  column-gap: 12px;
+  row-gap: 5px;
+  align-items: baseline;
+}
+.filename-help-var {
+  display: contents;
+}
+.filename-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-secondary);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filename-chip:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--color-text-primary);
+}
+.filename-help-example {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+/* Hotkey capture. */
+.hotkey-capture {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.hotkey-capture:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hotkey-capture.recording {
+  border-color: var(--color-accent-glyph);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+.hotkey-capture.rejected {
+  border-color: #f08a7a;
+  box-shadow: 0 0 0 3px rgba(240, 138, 122, 0.14);
+}
+.hotkey-capture-keys,
+.hotkey-capture-mods,
+.hotkey-capture-part {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.hotkey-capture-keys {
+  flex: 1;
+}
+.hotkey-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 21px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--color-border);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--color-text-primary);
+}
+.hotkey-chip.ghost {
+  color: var(--color-text-muted);
+}
+.hotkey-capture-plus {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.hotkey-capture-empty {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+.hotkey-capture-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+.hotkey-capture-msg.error {
+  color: #f08a7a;
+}
+.hotkey-capture-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent-glyph);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent-glyph) 65%, transparent);
+  animation: clipdipPulse 1.2s infinite;
+}
+.hotkey-capture-icon {
+  margin-left: auto;
+  flex: none;
+  color: var(--color-text-muted);
+}
+.hotkey-capture.recording .hotkey-capture-icon {
+  color: var(--color-accent-glyph);
+}
+@keyframes clipdipPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Corner picker (notification position). */
+.corner-picker {
+  position: relative;
+  width: 96px;
+  height: 60px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.corner-picker.disabled {
+  opacity: 0.5;
+}
+.corner-picker-slot {
+  position: absolute;
+  width: 24px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.corner-picker-slot:disabled {
+  cursor: default;
+}
+.corner-picker-slot:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+.corner-picker-slot.active {
+  background: var(--color-accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-accent) 45%, transparent),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.corner-picker-slot.top-left { top: 6px; left: 6px; }
+.corner-picker-slot.top-right { top: 6px; right: 6px; }
+.corner-picker-slot.bottom-left { bottom: 6px; left: 6px; }
+.corner-picker-slot.bottom-right { bottom: 6px; right: 6px; }
+
+/* Advanced disclosure. */
+.set-disclosure {
+  border-top: 0.5px solid var(--color-border);
+}
+.set-disclosure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 11px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.set-disclosure-toggle:hover {
+  color: var(--color-text-primary);
+}
+.set-disclosure-caret {
+  transition: transform 140ms ease;
+}
+.set-disclosure-caret.open {
+  transform: rotate(90deg);
+}
+.set-disclosure-body > .set-row {
+  border-top: 0.5px solid var(--color-border);
+}
+.set-disclosure-body > .set-row:first-child {
+  border-top: 0;
+}
+
+/* Audio sources list. */
+.audio-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.audio-source {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 10px 12px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+.audio-source-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.audio-source-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex: none;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent-glyph);
+}
+.audio-source-index {
+  padding: 3px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--color-text-muted);
+}
+.audio-source-remove {
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.audio-source-remove:hover:not(:disabled) {
+  background: rgba(240, 138, 122, 0.12);
+  color: #f08a7a;
+}
+.audio-source-device {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 36px;
+}
+.audio-source-device-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.audio-source-warn {
+  display: inline-flex;
+  color: #e3c06b;
+}
+.audio-source-note {
+  padding-left: 36px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+.audio-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.audio-source-spacer {
+  flex: 1;
+}
+
+/* Discord connection status text. */
+.clipdip-conn {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.clipdip-conn.connected {
+  color: #6bd18a;
+}
+
+/* Recording-dot preview button indicator. */
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+  flex: none;
+}
+.rec-dot.on {
+  background: #f472b6;
+  box-shadow: 0 0 7px rgba(244, 114, 182, 0.8);
+}
