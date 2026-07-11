@@ -96,6 +96,7 @@
     "electron-builder": "^24.13.3",
     "electron-reload": "^2.0.0-alpha.1",
     "electron-reloader": "^1.2.3",
+    "node-webpmux": "^3.2.1",
     "playwright": "^1.61.1",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
