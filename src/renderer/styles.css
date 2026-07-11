@@ -4202,14 +4202,6 @@ button {
   -webkit-user-drag: none;
   filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.55));
 }
-.ob-stage-caption {
-  position: absolute;
-  left: 42px;
-  bottom: 26px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
 /* Per-asset framing, derived from each file's measured alpha bounding box so
    the solid content always lands inside the stage while only transparent
    padding and glow hang off the edges (stage is ~592px wide at full size).
