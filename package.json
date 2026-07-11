@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "concurrently -k -n vite,electron -c cyan,green \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:full": "npm run build:clipdip && npm run dev",
     "dev:trace": "concurrently -k -n vite,electron -c cyan,green \"npm:dev:renderer\" \"npm:dev:electron:trace\"",
     "dev:renderer": "vite",
     "dev:electron": "wait-on tcp:127.0.0.1:5173 && electron .",
