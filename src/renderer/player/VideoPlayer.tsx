@@ -9,6 +9,8 @@ import {
   exportVideoWithFileSelection,
   type ProgressFn,
 } from "./playerExport";
+import { hideExportProgress, showExportProgress } from "./exportToast";
+import { installUiBlur } from "../ui/uiBlur";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
 import { useProfile } from "../shell/useProfile";
@@ -60,7 +62,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   const toast = useToast();
   const { connected: shareConnected } = useProfile();
   const [shareOpen, setShareOpen] = useState(false);
-  const exportTimerRef = useRef<number | undefined>(undefined);
   // Latest renameClip, read from the once-only init callbacks without stale closures.
   const renameRef = useRef(renameClip);
   renameRef.current = renameClip;
@@ -136,49 +137,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (!window.legacyState?.currentClip) updateDiscordPresenceBasedOnState();
   }, [clips, updateNavButtons]);
 
-  // Export progress toast — drives the legacy #export-toast markup imperatively
-  // (icon + title + %, with a --progress bar), matching the original wording.
-  const showExportProgress = useCallback<ProgressFn>((current, total, clipboard = false) => {
-    const toastEl = document.getElementById("export-toast");
-    const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;
-    const title = toastEl?.querySelector(".export-title") as HTMLElement | null;
-    const progressText = toastEl?.querySelector(".export-progress-text") as HTMLElement | null;
-    if (!toastEl || !content || !title || !progressText) return;
-
-    toastEl.classList.add("show");
-    const pct = Math.min(Math.round((current / total) * 100), 100);
-    content.style.setProperty("--progress", `${pct}%`);
-    progressText.textContent = `${pct}%`;
-
-    if (pct >= 100) {
-      content.classList.add("complete");
-      title.textContent = clipboard ? "Copied to clipboard!" : "Export complete!";
-      window.clearTimeout(exportTimerRef.current);
-      exportTimerRef.current = window.setTimeout(() => {
-        toastEl.classList.remove("show");
-        window.setTimeout(() => {
-          title.textContent = "Exporting...";
-          content.style.setProperty("--progress", "0%");
-          progressText.textContent = "0%";
-          content.classList.remove("complete");
-        }, 300);
-      }, 3000);
-    } else {
-      title.textContent = "Exporting...";
-      content.classList.remove("complete");
-    }
-  }, []);
-
-  // Hide + reset the export toast (on error).
-  const hideExportProgress = useCallback(() => {
-    const toastEl = document.getElementById("export-toast");
-    const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;
-    window.clearTimeout(exportTimerRef.current);
-    toastEl?.classList.remove("show");
-    content?.classList.remove("complete");
-    content?.style.setProperty("--progress", "0%");
-  }, []);
-
+  // Export progress toast is driven by the shared ./exportToast module (the
+  // #export-toast markup below is rendered once at document level and reused by
+  // both the player and the grid context menu).
   const runExport = useCallback(
     (fn: (p: ProgressFn) => Promise<void>) => {
       fn(showExportProgress).catch((err) => {
@@ -186,7 +147,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         toast.show(err?.message ? `Export failed: ${err.message}` : "Export failed", "error");
       });
     },
-    [showExportProgress, hideExportProgress, toast],
+    [toast],
   );
 
   // Delete the open clip: confirm, close the player, delete on disk, drop from list.
@@ -221,10 +182,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (!player || !state || initedRef.current) return;
     initedRef.current = true;
 
-    // The legacy player references window.uiBlur; provide a minimal shim
-    // (the overlay covers the screen anyway — real blur can come later).
-    const w = window as unknown as { uiBlur?: { enable(): void; disable(): void } };
-    if (!w.uiBlur) w.uiBlur = { enable() {}, disable() {} };
+    // The legacy player calls window.uiBlur.enable()/disable() on open/close;
+    // install the real refcounted blur before player.init runs so the grid
+    // actually blurs behind the player.
+    installUiBlur();
 
     // Seed the shared legacy state singleton.
     state.clipLocation = clipLocation;

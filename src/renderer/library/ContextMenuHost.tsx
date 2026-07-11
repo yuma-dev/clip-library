@@ -4,6 +4,8 @@ import ContextMenu from "../ui/ContextMenu";
 import { MenuDivider, MenuItem, MenuList } from "../ui/Menu";
 import { useToast } from "../ui/Toast";
 import { useConfirm } from "../ui/ConfirmDialog";
+import { exportClipToClipboard } from "../player/playerExport";
+import { hideExportProgress, showExportProgress } from "../player/exportToast";
 import type { LocalClip } from "./types";
 
 export interface ContextMenuHandle {
@@ -31,7 +33,7 @@ type View = "root" | "tags";
  * Isolated context-menu host: holds its own open/position/clip state so that
  * opening the menu does NOT re-render the (2000-card) grid. Cards trigger it
  * imperatively via the ref handle. "Manage tags" swaps the menu in place for a
- * searchable tag panel (Phase 5); Export stays stubbed until Phase 6.
+ * searchable tag panel; "Export to clipboard" copies the clip's saved trim.
  *
  * Single vs. multi: the host always works on a `clips` array. With one clip it
  * renders the classic per-clip menu; with several, actions loop over all of
@@ -73,6 +75,19 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
   const revealClip = () => {
     if (clip) window.clips.revealClip(clip.originalName);
     close();
+  };
+  // Export the current trim to the clipboard (legacy behaviour). Clipboard
+  // exports are single-clip only, so this is offered outside multi-select.
+  const exportClip = async () => {
+    if (!clip) return;
+    close();
+    try {
+      await exportClipToClipboard(clip.originalName, showExportProgress);
+    } catch (err) {
+      hideExportProgress();
+      const msg = (err as Error)?.message;
+      toast.show(msg ? `Export failed: ${msg}` : "Export failed", "error");
+    }
   };
   const resetTrim = async () => {
     if (clips.length === 0) return;
@@ -192,9 +207,11 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
               <MenuDivider />
             </>
           ) : null}
-          <MenuItem icon={<Upload size={15} />} disabled>
-            Export (Phase 6)
-          </MenuItem>
+          {!multi ? (
+            <MenuItem icon={<Upload size={15} />} onClick={exportClip}>
+              Export to clipboard
+            </MenuItem>
+          ) : null}
           <button type="button" role="menuitem" className="menu-item ctx-submenu" onClick={openTags}>
             <span className="menu-icon">
               <Tag size={15} />

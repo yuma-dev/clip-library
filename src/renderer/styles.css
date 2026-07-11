@@ -103,6 +103,27 @@ button {
   position: relative;
 }
 
+/* Real ui-blur (window.uiBlur / src/renderer/ui/uiBlur.ts): blurs the app
+   background — sidebar + main grid — behind the wrapped legacy player and other
+   non-portaled overlays. Portaled React modals blur via .modal-backdrop. */
+body.ui-blur .app-body {
+  filter: blur(6px) brightness(0.7);
+  transition: filter 180ms ease;
+  will-change: filter;
+}
+
+/* Clip the blur bleed so the filtered grid can't expand the scrollable area. */
+body.ui-blur .app-body,
+body.ui-blur-exit .app-body {
+  overflow: clip;
+  clip-path: inset(0);
+}
+
+/* Exit frame: snap the blur off without a reverse transition. */
+body.ui-blur-exit .app-body {
+  transition: none;
+}
+
 /* Dynamic mode: the rail floats OVER the grid (absolute overlay) so hovering it
    flies out on top instead of resizing the grid. The grid reserves only the
    collapsed footprint. */
