@@ -1381,21 +1381,16 @@ struct HealthMonitor {
 }
 
 /// Everything one `health_loop` needs; bundled so the two spawn sites
-/// don't repeat nine positional arguments.
+/// don't repeat a pile of positional arguments.
 struct HealthMonitorArgs {
     ring: Arc<clipdip_ringbuf::PacketRing>,
     liveness: Arc<std::sync::atomic::AtomicI64>,
-    /// Timestamp of the last frame with *new content* (repeats excluded).
-    real_liveness: Arc<std::sync::atomic::AtomicI64>,
     /// Error the video thread died with, if it has died.
     video_error: Arc<Mutex<Option<String>>>,
     phase: Arc<std::sync::atomic::AtomicU8>,
     replay_seconds: u32,
     /// Overlay corner for in-game health notices.
     corner: String,
-    /// `metadata.ignored_processes` — a fullscreen foreground app NOT on
-    /// this list is assumed to be a game for the blind-capture check.
-    ignored_processes: Vec<String>,
     /// Channel back into the capture loop, for requesting a pipeline
     /// restart when the video thread has died.
     ev_tx: crossbeam_channel::Sender<LoopEvent>,
@@ -1435,12 +1430,10 @@ fn health_loop(
     let HealthMonitorArgs {
         ring,
         liveness,
-        real_liveness,
         video_error,
         phase,
         replay_seconds,
         corner,
-        ignored_processes,
         ev_tx,
     } = args;
 
@@ -1455,15 +1448,6 @@ fn health_loop(
     // legitimate gap lasts that long, and the media clock already absorbs real
     // stalls shorter than the window.
     const WEDGE_RESTART_100NS: i64 = 150_000_000; // 15s
-    // Frames flowing but none of them carried NEW content for this long,
-    // while a fullscreen (presumably game) window is focused ⇒ the capture
-    // backend can't see what's on screen (exclusive fullscreen /
-    // independent flip / MPO). Clips saved in this state show a frozen
-    // frame or the bare desktop. A real game repaints continuously, so a
-    // minute of zero content-change with a fullscreen app focused is
-    // unambiguous; a static *desktop* is excluded by the fullscreen +
-    // not-ignored-process gate.
-    const BLIND_IDLE_100NS: i64 = 600_000_000; // 60s
     let window_100ns = replay_seconds as i64 * 10_000_000;
     // "Low" = the buffer dropped more than max(10%, 5s) below the window.
     let underfull_floor = window_100ns - (window_100ns / 10).max(50_000_000);
@@ -1595,8 +1579,6 @@ fn health_loop(
         } else {
             let idle = qpc_now_100ns() - live;
             let span = ring.stats().video_span_100ns;
-            let real = real_liveness.load(Ordering::Relaxed);
-            let real_idle = if real == 0 { 0 } else { qpc_now_100ns() - real };
             if idle > STALL_IDLE_100NS {
                 Some((
                     "Clipdip — capture stalled".into(),
@@ -1606,27 +1588,6 @@ fn health_loop(
                         idle as f64 / 1e7
                     ),
                 ))
-            } else if real_idle > BLIND_IDLE_100NS {
-                // Frames ARE flowing (idle is small) but they're all
-                // repeats — the capturer can't see new content. Only alert
-                // when a fullscreen, non-system app is focused: a game
-                // repaints every frame, so this state means clips are
-                // frozen/desktop-only. (This is the exact failure that
-                // used to pass every health check: 60 fps of repeats
-                // looked perfectly healthy while Valorant was invisible.)
-                metadata::foreground_fullscreen_app(&ignored_processes).map(|game| {
-                    (
-                        "Clipdip — game not being captured".into(),
-                        format!(
-                            "The captured image hasn't changed for {:.0}s while {} is \
-                             fullscreen. Clips saved now would show a frozen frame or \
-                             the desktop. Try Borderless/Windowed mode, or check \
-                             Clipdip's capture settings.",
-                            real_idle as f64 / 1e7,
-                            game
-                        ),
-                    )
-                })
             } else if polls as i64 > replay_seconds as i64 + 5 && span < underfull_floor {
                 // Only judge "low" once the buffer has had a full window to
                 // fill, so normal startup doesn't trip it.
@@ -1719,7 +1680,6 @@ fn run_capture_loop(
     let mut replay_seconds = cfg.replay_seconds;
     let mut health_alerts = cfg.notifications.enabled && cfg.notifications.health_alerts;
     let mut notif_corner = corner_slug(&cfg.notifications.corner);
-    let mut ignored_procs = cfg.metadata.ignored_processes.clone();
 
     // Timestamps of recent health-initiated pipeline restarts, for the
     // storm guard: a capture that re-dies immediately after every restart
@@ -1742,12 +1702,10 @@ fn run_capture_loop(
                     HealthMonitorArgs {
                         ring: p.ring(),
                         liveness: p.frame_liveness(),
-                        real_liveness: p.real_frame_liveness(),
                         video_error: p.video_error(),
                         phase: p.capture_phase(),
                         replay_seconds,
                         corner: notif_corner.clone(),
-                        ignored_processes: ignored_procs.clone(),
                         ev_tx: ev_tx.clone(),
                     },
                 ));
@@ -2202,7 +2160,6 @@ fn run_capture_loop(
                 replay_seconds = cfg.replay_seconds;
                 health_alerts = cfg.notifications.enabled && cfg.notifications.health_alerts;
                 notif_corner = corner_slug(&cfg.notifications.corner);
-                ignored_procs = cfg.metadata.ignored_processes.clone();
                 pipeline = match clipdip_core::Pipeline::start(cfg) {
                     Ok(p) => {
                         info!("pipeline restarted");
@@ -2219,12 +2176,10 @@ fn run_capture_loop(
                                 HealthMonitorArgs {
                                     ring: p.ring(),
                                     liveness: p.frame_liveness(),
-                                    real_liveness: p.real_frame_liveness(),
                                     video_error: p.video_error(),
                                     phase: p.capture_phase(),
                                     replay_seconds,
                                     corner: notif_corner.clone(),
-                                    ignored_processes: ignored_procs.clone(),
                                     ev_tx: ev_tx.clone(),
                                 },
                             ));

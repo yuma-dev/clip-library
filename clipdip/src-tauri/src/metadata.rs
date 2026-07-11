@@ -38,11 +38,8 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Shell::ExtractIconExW;
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowRect, GetWindowThreadProcessId,
+    DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowThreadProcessId,
     IsWindow, SendMessageTimeoutW, HICON, ICONINFO, SMTO_ABORTIFHUNG, SMTO_NORMAL, WM_GETTEXT,
     WM_GETTEXTLENGTH,
 };
@@ -243,50 +240,6 @@ pub fn write_gameinfo(
         .with_context(|| format!("create {}", out_path.display()))?;
     f.write_all(body.as_bytes())?;
     Ok(())
-}
-
-/// If the foreground window belongs to a non-system app AND covers its
-/// whole monitor (fullscreen or borderless), return the exe stem (e.g.
-/// `VALORANT-Win64-Shipping`). Used by the health monitor's blind-capture
-/// check: a fullscreen game repaints constantly, so "fullscreen app
-/// focused + captured image never changes" means capture can't see it.
-/// Returns `None` for windowed/system/desktop foregrounds so a static
-/// desktop never trips the alert.
-pub fn foreground_fullscreen_app(ignored: &[String]) -> Option<String> {
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let mut rect = windows::Win32::Foundation::RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return None;
-        }
-        let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        let mut mi = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if !GetMonitorInfoW(hmon, &mut mi).as_bool() {
-            return None;
-        }
-        let covers_monitor = rect.left <= mi.rcMonitor.left
-            && rect.top <= mi.rcMonitor.top
-            && rect.right >= mi.rcMonitor.right
-            && rect.bottom >= mi.rcMonitor.bottom;
-        if !covers_monitor {
-            return None;
-        }
-
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        let exe = exe_path_for_pid(pid)?;
-        let name = file_name_lossy(&exe)?;
-        if is_ignored(&name, ignored) {
-            return None;
-        }
-        exe.file_stem().map(|s| s.to_string_lossy().to_string())
-    }
 }
 
 fn is_ignored(exe_name: &str, ignored: &[String]) -> bool {

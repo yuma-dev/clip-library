@@ -110,13 +110,6 @@ pub struct Pipeline {
     /// writes it every frame; a health monitor compares it against
     /// `qpc_now_100ns()` to detect a live capture stall.
     frame_liveness: Arc<AtomicI64>,
-    /// Like [`frame_liveness`] but only updated on frames with *new
-    /// content* (`was_repeat == false`). If this stops advancing while
-    /// `frame_liveness` keeps ticking, the capturer is running but the
-    /// captured image never changes — the signature of a capture backend
-    /// that can't see a fullscreen game (frozen-frame / desktop-only
-    /// clips). A health monitor alerts on that divergence.
-    real_frame_liveness: Arc<AtomicI64>,
     /// Set (once) by the video thread if it exits with an error, so a
     /// supervisor can react immediately instead of waiting to join the
     /// thread at shutdown — before this existed, a dead capture thread
@@ -186,7 +179,6 @@ impl Pipeline {
         let active_codec: Arc<Mutex<Option<ActiveCodec>>> = Arc::new(Mutex::new(None));
         let codec_header: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let frame_liveness = Arc::new(AtomicI64::new(0));
-        let real_frame_liveness = Arc::new(AtomicI64::new(0));
         let video_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let capture_phase = Arc::new(AtomicU8::new(capture_phase::SLEEP));
         let recording_qp_boost = Arc::new(AtomicU32::new(QP_BOOST_OFF));
@@ -198,7 +190,6 @@ impl Pipeline {
             Arc::clone(&codec_header),
             Arc::clone(&media_clock),
             Arc::clone(&frame_liveness),
-            Arc::clone(&real_frame_liveness),
             Arc::clone(&capture_phase),
             Arc::clone(&recording_qp_boost),
             Arc::clone(&video_error),
@@ -226,7 +217,6 @@ impl Pipeline {
             recording_from: Mutex::new(None),
             _media_clock: media_clock,
             frame_liveness,
-            real_frame_liveness,
             video_error,
             capture_phase,
             recording_qp_boost,
@@ -249,14 +239,6 @@ impl Pipeline {
     /// detect a capture stall while the app is running.
     pub fn frame_liveness(&self) -> Arc<AtomicI64> {
         Arc::clone(&self.frame_liveness)
-    }
-
-    /// Shared handle to the raw-QPC timestamp of the most recent frame
-    /// with *new content* (not a CFR repeat). If [`frame_liveness`]
-    /// advances while this doesn't, capture is running but blind — e.g. a
-    /// fullscreen game presenting on a path the capture API can't see.
-    pub fn real_frame_liveness(&self) -> Arc<AtomicI64> {
-        Arc::clone(&self.real_frame_liveness)
     }
 
     /// The error the video thread died with, if it has died. A health
@@ -591,7 +573,6 @@ fn spawn_video_thread(
     codec_header: Arc<Mutex<Vec<u8>>>,
     media_clock: Arc<MediaClock>,
     frame_liveness: Arc<AtomicI64>,
-    real_frame_liveness: Arc<AtomicI64>,
     capture_phase: Arc<AtomicU8>,
     recording_qp_boost: Arc<AtomicU32>,
     video_error: Arc<Mutex<Option<String>>>,
@@ -607,7 +588,6 @@ fn spawn_video_thread(
                 codec_header,
                 media_clock,
                 frame_liveness,
-                real_frame_liveness,
                 capture_phase,
                 recording_qp_boost,
             );
@@ -647,7 +627,6 @@ fn video_loop(
     codec_header: Arc<Mutex<Vec<u8>>>,
     media_clock: Arc<MediaClock>,
     frame_liveness: Arc<AtomicI64>,
-    real_frame_liveness: Arc<AtomicI64>,
     capture_phase: Arc<AtomicU8>,
     recording_qp_boost: Arc<AtomicU32>,
 ) -> Result<()> {
@@ -896,13 +875,6 @@ fn video_loop(
         // during a stall, but this only updates when a frame is actually
         // produced, so `now - this` is the true time since last capture.
         frame_liveness.store(raw, Ordering::Relaxed);
-        // Content beacon: only frames that carried a NEW image. Repeats
-        // keep the CFR stream alive even when the capturer sees nothing,
-        // so `frame_liveness` alone can look perfectly healthy while every
-        // clip comes out frozen — the health monitor compares the two.
-        if !frame.was_repeat {
-            real_frame_liveness.store(raw, Ordering::Relaxed);
-        }
 
         let pts = media_clock.to_media(raw).max(last_emitted_pts + 1);
         last_emitted_pts = pts;
