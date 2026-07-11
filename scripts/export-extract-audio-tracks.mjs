@@ -8,6 +8,7 @@
 //   node scripts/export-extract-audio-tracks.mjs "<clip filename>" [options]
 //     --volumes 0.9,0.65,1.2,0.4   per-track volume (1 == 100%, >1 boosted); default all 1
 //     --muted 3                    comma-separated ordinals to render soft-muted
+//     --hidden 0                   comma-separated ordinals to disable (pill in the tray)
 //     --time <sec>                 backdrop frame timestamp (default duration/2 if >40s else 0)
 //     --clip-location <dir>        override clip folder (default: from settings.json)
 //     --user-data <dir>            override userData dir (default: %APPDATA%/clips)
@@ -68,6 +69,7 @@ if (streams.length === 0) {
 
 const volumes = (opt("volumes") ? opt("volumes").split(",").map(Number) : []).filter((n) => Number.isFinite(n));
 const mutedSet = new Set((opt("muted") ? opt("muted").split(",") : []).map((s) => Number(s.trim())));
+const hiddenSet = new Set((opt("hidden") ? opt("hidden").split(",") : []).map((s) => Number(s.trim())));
 
 const tracks = streams.map((s, ordinal) => {
   const tags = s.tags || {};
@@ -82,6 +84,7 @@ const tracks = streams.map((s, ordinal) => {
     color: COLOR_PALETTE[ordinal % COLOR_PALETTE.length],
     volume: volumes[ordinal] != null ? volumes[ordinal] : 1,
     muted: mutedSet.has(ordinal),
+    hidden: hiddenSet.has(ordinal),
   };
 });
 
@@ -103,7 +106,11 @@ execFileSync(ffmpegPath, ["-y", "-ss", String(time), "-i", clipPath, "-frames:v"
 });
 
 const layers = { composite: null, background: '[data-layer="background"]', panel: '[data-layer="panel"]' };
-tracks.forEach((t) => (layers[`row-${t.ordinal}`] = `[data-layer="row-${t.ordinal}"]`));
+if (tracks.some((t) => t.hidden)) layers.tray = '[data-layer="tray"]';
+tracks.forEach((t) => {
+  const kind = t.hidden ? "chip" : "row";
+  layers[`${kind}-${t.ordinal}`] = `[data-layer="${kind}-${t.ordinal}"]`;
+});
 
 const spec = {
   scene: "audioMixer",
@@ -119,7 +126,9 @@ fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
 console.log("spec:    ", specPath);
 console.log("backdrop:", backdrop, `(frame @ ${time.toFixed(2)}s)`);
 console.log("tracks:");
-tracks.forEach((t) =>
-  console.log(`  #${t.ordinal} ${Math.round(t.volume * 100)}%`.padEnd(12), t.color, " ", t.name + (t.muted ? "  (muted)" : "")),
-);
+tracks.forEach((t) => {
+  const state = t.hidden ? "  (disabled -> tray pill)" : t.muted ? "  (muted)" : "";
+  const level = t.hidden ? "  —  " : `${Math.round(t.volume * 100)}%`;
+  console.log(`  #${t.ordinal} ${level}`.padEnd(12), t.color, " ", t.name + state);
+});
 console.log("\nNext: npm run build:renderer && node scripts/export-capture.mjs", JSON.stringify(specPath), "--scale 3");
