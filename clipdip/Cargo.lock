@@ -489,6 +489,7 @@ dependencies = [
  "clipdip-ringbuf",
  "crossbeam-channel",
  "directories",
+ "getrandom 0.3.4",
  "png 0.17.16",
  "serde",
  "serde_json",

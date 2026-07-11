@@ -8,6 +8,14 @@ license.workspace = true
 name = "clipdip"
 path = "src/main.rs"
 
+[features]
+# Tauri decides dev vs prod by this feature (dev = !custom-protocol): without
+# it a plain `cargo build --release` yields a binary that loads devUrl
+# (http://localhost:1420) instead of the embedded frontend assets. `tauri dev`
+# still gets a dev binary because the CLI passes --no-default-features.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -25,6 +33,7 @@ tracing-subscriber.workspace = true
 tracing-appender = "0.2"
 crossbeam-channel.workspace = true
 base64 = "0.22"
+getrandom = "0.3"
 png = "0.17"
 windows.workspace = true
 directories.workspace = true

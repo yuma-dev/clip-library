@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const { spawn, execFile } = require('child_process');
+const net = require('net');
 const TOML = require('smol-toml');
 const logger = require('../utils/logger');
 
@@ -21,6 +22,11 @@ const RUN_VALUE_LEGACY = 'ClipDip';
 
 const configPath = () =>
   path.join(app.getPath('appData'), 'clipdip', 'config', 'config.toml');
+
+// Written by the running clipdip primary instance ({port, token, pid});
+// best-effort deleted on its exit, so treat it as possibly stale.
+const controlJsonPath = () =>
+  path.join(path.dirname(configPath()), 'control.json');
 
 let getSettings = async () => ({});
 
@@ -113,10 +119,19 @@ let reloadTimer = null;
 // settings actually changed).
 let pendingReload = 0;
 
+// Output keys the pipeline captures at start (used at mux time from the
+// startup snapshot). directory/filename_stem are re-read per save and need
+// no reload.
+const OUTPUT_RESTART_KEYS = ['audio_bitrate_bps', 'ffmpeg_path', 'keep_sidecars'];
+
 function reloadLevelFor(patch) {
   let level = 0;
-  for (const key of Object.keys(patch)) {
+  for (const [key, value] of Object.entries(patch)) {
     if (key === 'video' || key === 'audio' || key === 'replay_seconds') return 2;
+    if (key === 'output' && value && typeof value === 'object' &&
+        OUTPUT_RESTART_KEYS.some((k) => k in value)) {
+      return 2;
+    }
     if (key === 'hotkey') level = Math.max(level, 1);
   }
   return level;
@@ -252,6 +267,112 @@ async function restart() {
   return start();
 }
 
+// ---------- stateless CLI queries -------------------------------------------
+// Clipdip handles these flags before its tauri/single-instance init: it
+// prints one JSON line to stdout and exits, no running instance needed.
+
+// The exe may log noise before/after the payload; take the last line that
+// parses as JSON.
+function lastJsonLine(stdout) {
+  const lines = String(stdout || '').split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      /* not the payload line */
+    }
+  }
+  return null;
+}
+
+async function query(flag, extraArgs = []) {
+  let exe;
+  try {
+    exe = await resolveBinaryPath();
+    await fsp.access(exe, fs.constants.X_OK);
+  } catch {
+    return { ok: false, error: 'binary_not_found' };
+  }
+  return new Promise((resolve) => {
+    execFile(
+      exe,
+      [flag, ...extraArgs],
+      { windowsHide: true, timeout: 10000, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout) => {
+        const parsed = lastJsonLine(stdout);
+        if (parsed) return resolve(parsed);
+        const message = error ? error.message : `no JSON output from ${flag}`;
+        logger.warn(`Clipdip query ${flag} failed: ${message}`);
+        resolve({ ok: false, error: message });
+      }
+    );
+  });
+}
+
+const listAudioDevices = () => query('--list-audio-devices');
+const listMonitors = () => query('--list-monitors');
+const getFilenameVariables = () => query('--filename-variables');
+const previewFilename = (template) => query('--preview-filename', [String(template ?? '')]);
+
+// ---------- control server client (running instance) ------------------------
+// The primary clipdip instance listens on 127.0.0.1 (ephemeral port, token in
+// control.json next to config.toml), JSON-lines: one request line in, one
+// response line out, connection closes. Never throws to the renderer.
+
+const NOT_RUNNING = { ok: false, error: 'not_running' };
+
+async function control(cmd, args) {
+  let info;
+  try {
+    info = JSON.parse(await fsp.readFile(controlJsonPath(), 'utf8'));
+  } catch {
+    return { ...NOT_RUNNING };
+  }
+  if (!info || typeof info.port !== 'number' || typeof info.token !== 'string') {
+    return { ...NOT_RUNNING };
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let connectTimer = null;
+    let responseTimer = null;
+    const socket = net.connect({ host: '127.0.0.1', port: info.port });
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectTimer);
+      clearTimeout(responseTimer);
+      socket.destroy();
+      resolve(result);
+    };
+    connectTimer = setTimeout(() => done({ ...NOT_RUNNING }), 500);
+    socket.on('connect', () => {
+      clearTimeout(connectTimer);
+      responseTimer = setTimeout(() => done({ ...NOT_RUNNING }), 5000);
+      const request = { token: info.token, cmd: String(cmd) };
+      if (args && typeof args === 'object') request.args = args;
+      socket.write(`${JSON.stringify(request)}\n`);
+    });
+    let buffer = '';
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const nl = buffer.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const parsed = JSON.parse(buffer.slice(0, nl));
+        done(parsed && typeof parsed === 'object' ? parsed : { ok: false, error: 'bad response' });
+      } catch {
+        done({ ok: false, error: 'bad response' });
+      }
+    });
+    // Stale control.json (dead pid) surfaces as ECONNREFUSED here.
+    socket.on('error', () => done({ ...NOT_RUNNING }));
+    socket.on('close', () => done({ ...NOT_RUNNING }));
+  });
+}
+
 // ---------- autostart (registry Run value, points at clipdip exe) ------
 
 function regQuery(valueName) {
@@ -294,16 +415,63 @@ async function setAutostart(enabled) {
   return { success: true };
 }
 
+// ---------- platform support -------------------------------------------------
+// Clipdip captures with Windows Graphics Capture and encodes with NVENC, so
+// it needs Windows + an NVIDIA GPU. Checked once per app run; a failed
+// detection counts as supported (never lock users out on a flaky query —
+// clipdip itself surfaces a pipeline error if NVENC is really absent).
+
+let supportPromise = null;
+
+function detectSupport() {
+  if (supportPromise) return supportPromise;
+  supportPromise = (async () => {
+    if (process.platform !== 'win32') {
+      return { supported: false, reason: 'Clipdip only runs on Windows.' };
+    }
+    try {
+      const gpus = await new Promise((resolve, reject) => {
+        execFile(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command',
+            '(Get-CimInstance Win32_VideoController | ForEach-Object Name) -join "\n"'],
+          { windowsHide: true, timeout: 10000 },
+          (error, stdout) => (error ? reject(error) : resolve(String(stdout)))
+        );
+      });
+      if (!/nvidia|geforce|quadro|\brtx\b/i.test(gpus)) {
+        return {
+          supported: false,
+          reason: 'Clipdip needs an NVIDIA GPU — it records with NVENC, the encoder on NVIDIA cards.'
+        };
+      }
+      return { supported: true, reason: null };
+    } catch (error) {
+      logger.warn(`Clipdip GPU detection failed (assuming supported): ${error.message}`);
+      return { supported: true, reason: null };
+    }
+  })();
+  return supportPromise;
+}
+
 // ---------- status + startup hook -------------------------------------------
 
 async function getStatus() {
-  const [running, found, autostart, { exists }] = await Promise.all([
+  const [running, found, autostart, { exists }, support] = await Promise.all([
     isRunning(),
     binaryFound(),
     getAutostart(),
-    getConfig()
+    getConfig(),
+    detectSupport()
   ]);
-  return { running, binaryFound: found, configExists: exists, autostart };
+  return {
+    running,
+    binaryFound: found,
+    configExists: exists,
+    autostart,
+    supported: support.supported,
+    unsupportedReason: support.reason
+  };
 }
 
 // Called once from main.js after app ready: if clipdip is enabled but not
@@ -320,12 +488,72 @@ async function ensureStartedIfEnabled() {
   }
 }
 
+// Clipdip is opt-OUT: on the first launch where the user has never made a
+// choice (no clipdip.enabled key), enable it automatically — but only when
+// the machine supports it (Windows + NVIDIA) and the binary is present.
+// `persistEnabled` writes clipdip.enabled to settings.json; recording the
+// outcome either way means this runs at most once. On failure (spawn error,
+// or the process dying right after start) it records `false` so a broken
+// setup never retries on every launch.
+async function autoEnableIfUnconfigured(persistEnabled, clipLocation) {
+  const settings = await getSettings();
+  if (settings?.clipdip && 'enabled' in settings.clipdip) return false; // already decided
+  if (!(await binaryFound())) return false; // no binary yet (dev) — stay undecided
+  const support = await detectSupport();
+  if (!support.supported) {
+    logger.info(`Clipdip auto-enable skipped: ${support.reason}`);
+    return false; // stays undecided; the settings UI explains why
+  }
+
+  // First-time setup: aim clips straight at the library unless clipdip
+  // already has its own configured folder (pre-merge standalone users).
+  try {
+    const { exists, config } = await getConfig();
+    if ((!exists || !config?.output?.directory) && clipLocation) {
+      await setConfig({ output: { directory: clipLocation } });
+    }
+  } catch (error) {
+    logger.warn(`Clipdip first-run folder setup failed: ${error.message}`);
+  }
+
+  // Start-with-Windows is opt-out too.
+  await setAutostart(true).catch((e) => logger.warn(`Clipdip autostart enable failed: ${e.message}`));
+
+  const result = await start();
+  if (!result.success) {
+    logger.warn(`Clipdip auto-enable failed (${result.error}) — recording opt-out`);
+    await setAutostart(false).catch(() => {});
+    await persistEnabled(false);
+    return false;
+  }
+  await persistEnabled(true);
+  logger.info('Clipdip auto-enabled (opt-out default)');
+  // Discord authorization needs no nudge from here: an enabled clipdip
+  // prompts for it on its own at every start until authorized (see
+  // clipdip_discord::spawn's auto_authorize).
+
+  // Fail-safe: if the process dies within its first seconds (crash on init),
+  // flip the setting off so it doesn't zombie-start on every launch.
+  setTimeout(() => {
+    runningCache = { value: false, at: 0 };
+    isRunning().then(async (alive) => {
+      if (alive) return;
+      logger.warn('Clipdip exited right after auto-enable — disabling it');
+      await setAutostart(false).catch(() => {});
+      await persistEnabled(false).catch(() => {});
+    });
+  }, 8000);
+  return true;
+}
+
 // Explicit enable/disable side effects (called from the IPC handler).
 async function setEnabled(enabled) {
   if (enabled) {
     const result = await start();
     const settings = await getSettings();
-    if (settings?.clipdip?.autostart) {
+    // Autostart is opt-out: enabling clipdip brings it along unless the
+    // user explicitly turned it off.
+    if (settings?.clipdip?.autostart !== false) {
       await setAutostart(true).catch((e) => logger.warn(`Autostart enable failed: ${e.message}`));
     }
     return result;
@@ -347,5 +575,12 @@ module.exports = {
   setAutostart,
   setEnabled,
   ensureStartedIfEnabled,
-  resolveBinaryPath
+  autoEnableIfUnconfigured,
+  detectSupport,
+  resolveBinaryPath,
+  listAudioDevices,
+  listMonitors,
+  getFilenameVariables,
+  previewFilename,
+  control
 };

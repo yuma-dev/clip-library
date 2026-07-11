@@ -144,7 +144,15 @@ impl DiscordHandle {
 
 /// Spawn the background manager. Always returns a usable handle; if no
 /// client secret is available the handle simply reports `Disabled`.
-pub fn spawn(config_dir: PathBuf) -> DiscordHandle {
+///
+/// `auto_authorize` makes an unauthenticated start behave as if the user
+/// clicked Connect once: the consent popup shows as soon as a Discord pipe
+/// connects. Callers pass the config's `discord.enabled` so an opted-out
+/// install never prompts. Declining just parks the manager in
+/// `NeedsAuthorization` for the rest of the run — the next process start
+/// asks again, so an enabled-but-unauthenticated install can't silently
+/// stay disconnected.
+pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let roster = Arc::new(Mutex::new(None));
     let status = Arc::new(Mutex::new(DiscordStatus::Connecting));
@@ -166,7 +174,7 @@ pub fn spawn(config_dir: PathBuf) -> DiscordHandle {
         status: Arc::clone(&status),
         cmd_rx,
         nonce: AtomicU64::new(0),
-        want_authorize: AtomicBool::new(false),
+        want_authorize: AtomicBool::new(auto_authorize),
         reset: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
     };
