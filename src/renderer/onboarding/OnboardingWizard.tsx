@@ -213,7 +213,7 @@ function WizardShell({ onClose }: { onClose: (markSeen: boolean) => void }) {
               {step === "audio" ? <AudioStep /> : null}
               {step === "hotkeys" ? <HotkeysStep /> : null}
               {step === "discord" ? <DiscordStep /> : null}
-              {step === "done" ? <DoneStep unsupported={unsupported} /> : null}
+              {step === "done" ? <DoneStep /> : null}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -272,40 +272,40 @@ function WelcomeStep() {
       </div>
       <div className="ob-welcome-copy">
         <div className="ob-kicker">
-          <span className="dia">◇</span> Welcome to version 3.0
+          <span className="dia">◇</span> Welcome to 3.0
         </div>
-        <h1 className="ob-title">The biggest ClipLib update yet</h1>
+        <h1 className="ob-title">A whole new ClipLib</h1>
         <p className="ob-lede">
-          ClipLib has been rebuilt from the ground up — new logo, new design language, and a fully
-          reworked renderer that makes everything feel instant. Here's a quick tour of what's new.
+          New logo, new look, and under the hood the entire app got rebuilt. It's faster, it's
+          prettier, and it can now record your clips itself. Here's the short tour.
         </p>
         <ul className="ob-features">
           <li>
-            <Gauge size={15} />
+            <Gauge size={16} />
             <div>
               <strong>Fully new renderer</strong>
-              <span>The entire app was rewritten for speed — browsing, playback and search are dramatically faster.</span>
+              <span>Rebuilt from scratch. Browsing, search and playback all feel instant now.</span>
             </div>
           </li>
           <li>
-            <Scissors size={15} />
+            <Scissors size={16} />
             <div>
               <strong>ClipDip clipping engine</strong>
-              <span>A built-in replay-buffer recorder — replaces ShadowPlay, Moments or OBS.</span>
+              <span>Records your gameplay in the background. ShadowPlay, Moments and OBS can retire.</span>
             </div>
           </li>
           <li>
-            <AudioLines size={15} />
+            <AudioLines size={16} />
             <div>
-              <strong>Multi audio-track clips</strong>
-              <span>Game, mic and voice chat on separate tracks, remixable after the fact.</span>
+              <strong>Multi audio track</strong>
+              <span>Game, mic and voice chat each get their own track, so you can remix clips later.</span>
             </div>
           </li>
           <li>
-            <Users size={15} />
+            <Users size={16} />
             <div>
               <strong>Discord call integration</strong>
-              <span>Clips remember who was in the call with you.</span>
+              <span>Clips remember who was in the call when they happened.</span>
             </div>
           </li>
         </ul>
@@ -330,21 +330,22 @@ function ClipdipStep({
   onAutostart: (v: boolean) => void;
 }) {
   return (
-    <div className="ob-cols">
+    <div className="ob-split">
       <div className="ob-copy">
         <div className="ob-kicker">
           <span className="dia">◇</span> Meet ClipDip
         </div>
-        <h1 className="ob-title">Your new clipping engine</h1>
+        <h1 className="ob-title">ClipLib can record now</h1>
         <p className="ob-lede">
-          ClipDip records a rolling replay buffer in the background, as its own lightweight tray
-          app. Hit the hotkey and the last moments are saved straight into your library — no
-          ShadowPlay, SteelSeries Moments or OBS needed.
+          ClipDip sits in your tray and keeps a rolling replay buffer of your gameplay. Press the
+          hotkey and the last moments land straight in your library. That card on the right is
+          what pops up in game when a clip gets saved.
         </p>
         {unsupported ? (
           <div className="ob-note error">
             {unsupportedReason ?? "This machine can't run ClipDip (it needs Windows and an NVIDIA GPU)."}{" "}
-            Everything else in 3.0 still works — clips from other recorders show up as usual.
+            Everything else in 3.0 still works, and clips from other recorders show up like they
+            always did.
           </div>
         ) : (
           <div className="ob-rows">
@@ -352,8 +353,8 @@ function ClipdipStep({
               <div className="ob-row-info">
                 <div className="ob-row-title">Enable ClipDip</div>
                 <div className="ob-row-desc">
-                  On by default in 3.0 — flip this off if you'd rather keep your current recorder.
-                  You can change it anytime in Settings → ClipDip.
+                  On by default in 3.0. Flip it off if you want to stick with your current
+                  recorder, no hard feelings. You can change your mind anytime in Settings.
                 </div>
               </div>
               <Toggle checked={enable} onChange={onEnable} aria-label="Enable ClipDip" />
@@ -362,7 +363,7 @@ function ClipdipStep({
               <div className="ob-row-info">
                 <div className="ob-row-title">Start with Windows</div>
                 <div className="ob-row-desc">
-                  Launches the recorder at login, so you never miss a moment.
+                  Starts the recorder when you log in, so it's always ready.
                 </div>
               </div>
               <Toggle
@@ -375,9 +376,9 @@ function ClipdipStep({
           </div>
         )}
       </div>
-      <div className="ob-visual ob-visual-overlay">
+      <div className="ob-stage ob-stage-clipdip">
         <img src={overlayUrl} alt="ClipDip save notification" draggable={false} />
-        <div className="ob-visual-caption">The in-game overlay when a clip is saved</div>
+        <div className="ob-stage-caption">Saving a clip, live from in game</div>
       </div>
     </div>
   );
@@ -432,16 +433,16 @@ function AudioStep() {
     setSources(sources.map((s, i) => (i === idx ? { ...s, ...p } : s)));
 
   return (
-    <div className="ob-cols">
+    <div className="ob-split">
       <div className="ob-copy">
         <div className="ob-kicker">
           <span className="dia">◇</span> Multi audio track
         </div>
-        <h1 className="ob-title">Every source, its own track</h1>
+        <h1 className="ob-title">Fix your audio after the fact</h1>
         <p className="ob-lede">
-          ClipDip records each source on a separate track — so you can mute your mic, boost the
-          game or drop voice chat entirely, right in the player's new audio mixer, long after the
-          clip was saved.
+          Every source records to its own track. Mic too loud? Friend screaming? Pull that track
+          down in the player, long after the clip was saved. These are the sources ClipDip will
+          record:
         </p>
         <div className="ob-rows">
           {sources.map((src, i) => {
@@ -462,7 +463,7 @@ function AudioStep() {
                     { value: "microphone", label: "Microphone", hint: "Your voice" },
                     { value: "process_loopback", label: "Process loopback", hint: "One specific app" },
                   ]}
-                  width={172}
+                  width={168}
                   aria-label={`Source ${i + 1} kind`}
                 />
                 {src.kind !== "process_loopback" ? (
@@ -473,7 +474,7 @@ function AudioStep() {
                       update(i, { device_id: v === DEFAULT_DEVICE_VALUE ? undefined : v })
                     }
                     options={deviceOptionsFor(src.kind, devices)}
-                    width={216}
+                    width={212}
                     aria-label={`Source ${i + 1} device`}
                   />
                 ) : (
@@ -511,9 +512,9 @@ function AudioStep() {
           </div>
         </div>
       </div>
-      <div className="ob-visual">
+      <div className="ob-stage ob-stage-mixer">
         <img src={mixerUrl} alt="The new audio mixer in the player" draggable={false} />
-        <div className="ob-visual-caption">The new per-track mixer in the player</div>
+        <div className="ob-stage-caption">The mixer, right in the player</div>
       </div>
     </div>
   );
@@ -533,10 +534,10 @@ function HotkeysStep() {
       <div className="ob-kicker">
         <span className="dia">◇</span> Hotkeys
       </div>
-      <h1 className="ob-title">Save clips from anywhere</h1>
+      <h1 className="ob-title">The keys that save your clips</h1>
       <p className="ob-lede">
-        These work globally, in any game. Click one to record a different combo — some games grab
-        keys before ClipDip sees them, so uncommon combos are safest.
+        These work globally, in any game. Click one to change it. Some games eat common combos
+        before ClipDip gets to see them, so slightly unusual ones work best.
       </p>
       <div className="ob-rows">
         {HOTKEYS.map(([key, title, description, fallback]) => (
@@ -557,45 +558,117 @@ function HotkeysStep() {
   );
 }
 
+// Live Discord link status via the clipdip control server. Read-only-ish:
+// the one action we offer is re-asking Discord for authorization.
+function DiscordSetup() {
+  const { live, running } = useClipdip();
+  const [asking, setAsking] = useState(false);
+  const d = live?.discord ?? null;
+  const state = !running ? "clipdip_off" : (d?.state ?? "connecting");
+
+  const askAgain = async () => {
+    setAsking(true);
+    try {
+      await clipdipBridge().discordConnect();
+    } catch {
+      /* status poll reflects the outcome */
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const tone =
+    state === "connected" ? "ok" : state === "needs_authorization" || state === "connecting" ? "wait" : "idle";
+  const text =
+    state === "clipdip_off"
+      ? "ClipDip isn't running right now, so there's nothing to set up yet. It links up with Discord on its own once it's recording."
+      : state === "connected"
+        ? `Connected${d?.user ? ` as ${d.user}` : ""}. You're all set.`
+        : state === "discord_not_running"
+          ? "Discord doesn't seem to be open. Start it and ClipDip will find it."
+          : state === "needs_authorization"
+            ? "Discord is asking for permission. Check for a popup over in Discord."
+            : state === "connecting"
+              ? "Connecting to Discord..."
+              : state === "disabled"
+                ? "The Discord link is turned off in ClipDip's config."
+                : (d?.message ?? "Couldn't talk to Discord. It usually sorts itself out on the next try.");
+  const showButton = state === "needs_authorization" || state === "error" || state === "discord_not_running";
+
+  return (
+    <div className="ob-row ob-discord-status">
+      <div className="ob-row-info">
+        <div className="ob-row-title">
+          <span className={`ob-status-dot ${tone}`} /> Discord link
+        </div>
+        <div className="ob-row-desc">{text}</div>
+      </div>
+      {showButton ? (
+        <button type="button" className="btn" disabled={asking} onClick={() => void askAgain()}>
+          {asking ? "Asking..." : "Try again"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function DiscordStep() {
   return (
-    <div className="ob-cols">
+    <div className="ob-split">
       <div className="ob-copy">
         <div className="ob-kicker">
           <span className="dia">◇</span> Discord integration
         </div>
-        <h1 className="ob-title">Remember who was there</h1>
+        <h1 className="ob-title">Your clips know who was there</h1>
         <p className="ob-lede">
-          When you save a clip while in a Discord voice call, ClipDip tags it with everyone in the
-          channel. Their avatars show right on the clip — hover to see names, click to jump to
-          their shared clips.
+          Save a clip while you're in a voice call and everyone in the channel gets tagged on it.
+          Hover the avatars to see names, click one to jump to their shared clips.
         </p>
         <p className="ob-lede">
-          No setup needed here: the first time ClipDip runs alongside Discord, Discord asks once
-          for permission and it's connected from then on.
+          Setup is a single popup: Discord asks for permission once, and after that it just works.
         </p>
+        <div className="ob-rows">
+          <DiscordSetup />
+        </div>
       </div>
-      <div className="ob-visual">
+      <div className="ob-stage ob-stage-pills">
         <img src={pillsUrl} alt="Discord call participants shown on a clip" draggable={false} />
-        <div className="ob-visual-caption">Call participants, right on the clip</div>
+        <div className="ob-stage-caption">Who was in the call, right on the clip</div>
       </div>
     </div>
   );
 }
 
-function DoneStep({ unsupported }: { unsupported: boolean }) {
+function DoneStep() {
   return (
-    <div className="ob-copy ob-single">
+    <div className="ob-copy ob-single ob-done">
       <div className="ob-kicker">
-        <span className="dia">◇</span> All set
+        <span className="dia">◇</span> One more thing
       </div>
-      <h1 className="ob-title">Enjoy ClipLib 3.0</h1>
-      <p className="ob-lede">
-        {unsupported
-          ? "You're ready to go. Everything you just saw lives in Settings if you ever want to revisit it."
-          : "ClipDip keeps recording in the background from its tray icon — press your save hotkey in-game and the clip appears in your library. Everything you set up here can be changed anytime in Settings → ClipDip."}
+      <h1 className="ob-title">That's not all</h1>
+      <p className="ob-lede">A couple more things landed in 3.0 that deserve a mention:</p>
+      <div className="ob-cards">
+        <div className="ob-card">
+          <Users size={17} />
+          <strong>Feed and profiles</strong>
+          <span>
+            Share clips with your friends in the new feed. Profiles, badges, invites, mentions,
+            the whole thing.
+          </span>
+        </div>
+        <div className="ob-card">
+          <Gauge size={17} />
+          <strong>Faster everywhere</strong>
+          <span>
+            Startup, scrolling, opening clips. The rewrite made all of it quicker, especially on
+            big libraries.
+          </span>
+        </div>
+      </div>
+      <p className="ob-lede ob-outro">
+        That's the tour. Everything you saw lives in Settings if you want to dig deeper. Have fun
+        out there. <span className="dia">◇</span>
       </p>
-      <p className="ob-lede">Have fun, and happy clipping. <span className="dia">◇</span></p>
     </div>
   );
 }
