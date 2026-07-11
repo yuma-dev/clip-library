@@ -4220,12 +4220,11 @@ button {
   right: -198px;
   top: 46%;
 }
-/* mixer png 1273w: video frame runs to the file's right edge, so it must sit
-   flush (right 0), never past it. Content bottom-heavy gap -> nudge down. */
+/* mixer png 1273x1162: video frame runs to the file's right edge, so it must
+   sit flush (right 0), never past it. Content is vertically balanced. */
 .ob-stage-mixer img {
   width: 700px;
   right: 0;
-  top: 56%;
 }
 /* pills png 1067w: content ends at x877, the last 190px are transparent ->
    right -157 aligns the card's right edge with the panel border. */
