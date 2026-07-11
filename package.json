@@ -17,6 +17,8 @@
     "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && electron-builder --win",
     "build:clipdip": "cd clipdip && npm install --no-audit --no-fund && npm run build && cargo build --release -p clipdip",
     "vendor:clipdip": "node scripts/vendor-clipdip.mjs",
+    "release": "node scripts/release.mjs",
+    "release:preview": "node scripts/release-preview.mjs",
     "benchmark": "node benchmark/runner.js",
     "benchmark:verbose": "node benchmark/runner.js --verbose",
     "benchmark:json": "node benchmark/runner.js --output json",
