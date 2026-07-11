@@ -122,20 +122,32 @@ exporter (`scripts/export-overlay.mjs`, not the scene harness):
 
 ```bash
 node scripts/export-overlay.mjs           # -> export-out/overlay/{frozen.png, overlay.webp}
-#   --scale <n>    frozen still supersample (default 3)
-#   --anim-scale <n>  animation pass scale (default 2; lower = higher fps)
-#   --seconds <s>  animation length (default 2.8)
-#   --lossy        smaller WebP instead of lossless alpha
+#   --scale <n>       frozen still supersample (default 3)
+#   --anim-scale <n>  animation pass scale (default 2)
+#   --saving <s>      logical "Saving clip…" duration before the payoff (default 1.6)
+#   --slow <f>        capture slow-mo factor; lower = more fps + bigger file (default 0.4)
+#   --lossy           smaller WebP (lossy per-frame) instead of lossless alpha
 ```
 
 It serves the **real** `overlay.html` + logo and stubs `window.__TAURI_INTERNALS__`
 so the overlay runs its genuine saving→saved flow (slide-in, comet border, flash,
-sheen, sparkles) with no changes to the production file. Outputs a transparent
-frozen PNG and a transparent animated WebP. Note: the animated WebP is captured
-via real-time transparent screenshots (alpha rules out the GPU screencast path),
-so it lands around ~18fps — fine for a UI toast; raise `--seconds` or lower
-`--anim-scale` to trade smoothness/size. (The old `overlay-playground.html`
-design sandbox was removed; the exporter uses the production overlay.)
+sheen, sparkles) with no changes to the production file — `overlay_get_pending`
+returns a `saving` payload and the script fires `clip-saved` after `--saving`
+seconds. Outputs a transparent frozen PNG and a transparent animated WebP.
+
+Two details make the WebP correct:
+
+- **No trailing.** ffmpeg's WebP encoder composites transparent frames over each
+  other (ghost trails), so frames are muxed with `node-webpmux` at `blend:false`
+  + `dispose:true` — each frame fully replaces the previous.
+- **Smoothness.** Real-time transparent screenshots cap at ~18fps (alpha rules
+  out the GPU screencast path), so the in-page animations are slowed by `--slow`
+  during capture and the WebP is timed back to true speed → ~45fps effective.
+  Lower `--slow` for more fps (and a bigger file); default lands ~4–5MB lossless
+  (use `--lossy` to shrink).
+
+(The old `overlay-playground.html` design sandbox was removed; the exporter uses
+the production overlay.)
 
 ## Exporting a different component
 
