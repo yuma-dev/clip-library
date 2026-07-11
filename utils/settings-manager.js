@@ -30,6 +30,10 @@ const DEFAULT_SETTINGS = {
     // Dev/advanced override; empty -> resources/clipdip/clipdip.exe
     binaryPath: ''
   },
+  // Highest onboarding wizard version the user has completed/dismissed.
+  // 0 = never seen; the 3.0 wizard sets this to 3. Bump the constant in
+  // src/renderer/onboarding/OnboardingWizard.tsx to re-show for a release.
+  onboardingVersion: 0,
   // Whether to desaturate game icons in the clip list
   iconGreyscale: false,
   // Whether to show new clips indicators (green lines and group styling)

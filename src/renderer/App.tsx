@@ -11,6 +11,7 @@ import { AppNavContext, type AppNav } from "./shell/appNav";
 import { useToast } from "./ui/Toast";
 import { useProfile } from "./shell/useProfile";
 import VideoPlayer from "./player/VideoPlayer";
+import OnboardingWizard from "./onboarding/OnboardingWizard";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
 import type { Route } from "./routes";
@@ -248,6 +249,9 @@ export default function App() {
       {/* Feed player mounts once app-wide so any grid (feed route, profile
           overlay) can open remote clips through the feedPlayerBus. */}
       <FeedPlayer />
+      {/* One-time 3.0 intro + ClipDip setup. Self-gating on
+          settings.onboardingVersion; re-openable via __showOnboarding(). */}
+      <OnboardingWizard />
     </div>
     </AppNavContext.Provider>
   );
