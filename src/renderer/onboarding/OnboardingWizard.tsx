@@ -276,36 +276,35 @@ function WelcomeStep() {
         </div>
         <h1 className="ob-title">A whole new ClipLib</h1>
         <p className="ob-lede">
-          New logo, new look, and under the hood the entire app got rebuilt. It's faster, it's
-          prettier, and it can now record your clips itself. Here's the short tour.
+          New logo, new look, full rebuild under the hood. Here's the short tour.
         </p>
         <ul className="ob-features">
           <li>
-            <Gauge size={16} />
+            <Gauge size={15} />
             <div>
               <strong>Fully new renderer</strong>
-              <span>Rebuilt from scratch. Browsing, search and playback all feel instant now.</span>
+              <span>Rebuilt from scratch, everything feels instant now.</span>
             </div>
           </li>
           <li>
-            <Scissors size={16} />
+            <Scissors size={15} />
             <div>
               <strong>ClipDip clipping engine</strong>
-              <span>Records your gameplay in the background. ShadowPlay, Moments and OBS can retire.</span>
+              <span>Records your gameplay. ShadowPlay can retire.</span>
             </div>
           </li>
           <li>
-            <AudioLines size={16} />
+            <AudioLines size={15} />
             <div>
               <strong>Multi audio track</strong>
-              <span>Game, mic and voice chat each get their own track, so you can remix clips later.</span>
+              <span>Game, mic and voice chat on separate tracks.</span>
             </div>
           </li>
           <li>
-            <Users size={16} />
+            <Users size={15} />
             <div>
               <strong>Discord call integration</strong>
-              <span>Clips remember who was in the call when they happened.</span>
+              <span>Clips remember who was in the call.</span>
             </div>
           </li>
         </ul>
