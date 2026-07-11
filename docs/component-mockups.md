@@ -114,6 +114,29 @@ Layers: `composite`, `background`, `card`, `thumbnail`, `controls`, `title`,
 video area that matches a 1080p source frame 1:1 (avoids upscaling). Options:
 `--time <sec>`, `--width <px>`, `--no-share`.
 
+## The ClipDip overlay (separate, standalone)
+
+The clip-saved notification lives in the ClipDip subapp (`clipdip/overlay.html`),
+a self-contained Tauri overlay — not a clip-library component, so it has its own
+exporter (`scripts/export-overlay.mjs`, not the scene harness):
+
+```bash
+node scripts/export-overlay.mjs           # -> export-out/overlay/{frozen.png, overlay.webp}
+#   --scale <n>    frozen still supersample (default 3)
+#   --anim-scale <n>  animation pass scale (default 2; lower = higher fps)
+#   --seconds <s>  animation length (default 2.8)
+#   --lossy        smaller WebP instead of lossless alpha
+```
+
+It serves the **real** `overlay.html` + logo and stubs `window.__TAURI_INTERNALS__`
+so the overlay runs its genuine saving→saved flow (slide-in, comet border, flash,
+sheen, sparkles) with no changes to the production file. Outputs a transparent
+frozen PNG and a transparent animated WebP. Note: the animated WebP is captured
+via real-time transparent screenshots (alpha rules out the GPU screencast path),
+so it lands around ~18fps — fine for a UI toast; raise `--seconds` or lower
+`--anim-scale` to trade smoothness/size. (The old `overlay-playground.html`
+design sandbox was removed; the exporter uses the production overlay.)
+
 ## Exporting a different component
 
 The harness never changes — add a **scene**:
