@@ -23,7 +23,9 @@
     "benchmark": "node benchmark/runner.js",
     "benchmark:verbose": "node benchmark/runner.js --verbose",
     "benchmark:json": "node benchmark/runner.js --output json",
-    "benchmark:openclip": "node benchmark/runner.js --suite openclip --verbose"
+    "benchmark:openclip": "node benchmark/runner.js --suite openclip --verbose",
+    "export:extract": "node scripts/export-extract-clip.mjs",
+    "export:capture": "node scripts/export-capture.mjs"
   },
   "build": {
     "appId": "com.yuma-dev.clips",
@@ -93,6 +95,7 @@
     "electron-builder": "^24.13.3",
     "electron-reload": "^2.0.0-alpha.1",
     "electron-reloader": "^1.2.3",
+    "playwright": "^1.61.1",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
     "vite": "^6.4.3",

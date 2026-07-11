@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ClipLib — component export</title>
+    <!-- Transparent so per-layer captures come out on alpha; the composite paints
+         its own background via the scene's [data-layer="background"] element. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./export/main-export.tsx"></script>
+  </body>
+</html>

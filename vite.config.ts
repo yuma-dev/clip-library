@@ -25,5 +25,15 @@ export default defineConfig({
     // the renderer bundle and the packaged installer clobbering each other.
     outDir: path.resolve(__dirname, "renderer-dist"),
     emptyOutDir: true,
+    rollupOptions: {
+      // Two HTML entries: the app (index.html) and the component-mockup
+      // exporter (export.html — see docs/component-mockups.md). The exporter
+      // ships in the bundle harmlessly and is only ever opened over file://
+      // by the capture script.
+      input: {
+        index: path.resolve(__dirname, "src/renderer/index.html"),
+        export: path.resolve(__dirname, "src/renderer/export.html"),
+      },
+    },
   },
 });
