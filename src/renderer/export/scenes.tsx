@@ -6,7 +6,7 @@
 // want to export a new component; the harness + capture script stay untouched.
 // The `clipCard` scene below doubles as the reference implementation.
 
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import ClipCard from "../library/ClipCard";
 import type { ExportSpec, ClipFixture } from "./types";
 
@@ -73,6 +73,90 @@ function ClipCardScene(spec: ExportSpec): ReactElement {
   );
 }
 
+// ---------------------------------------------------------------------------
+// audioMixer — the multi audio-track panel (player-legacy/audio-tracks-manager.js).
+// Rendered statically from track data instead of a live Web Audio graph; the
+// row visuals mirror _paintRow() exactly (fill = clamp(v/2,0,1), boosted colour
+// when v > 1, value = round(v*100)%). Data comes from spec.props.tracks.
+// ---------------------------------------------------------------------------
+
+const BOOSTED_COLOR = "#f59e0b"; // matches audio-tracks-manager.js
+const ICON_X =
+  '<svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>';
+
+interface MixerTrack {
+  ordinal: number;
+  name: string;
+  volume: number; // 1 == 100%; range 0..2
+  color: string; // #rrggbb
+  muted?: boolean;
+}
+
+function MixerRow({ track }: { track: MixerTrack }) {
+  const v = track.volume;
+  const above = v > 1;
+  const pct = Math.max(0, Math.min(1, v / 2)) * 100;
+  const rowStyle = {
+    "--fill": `${pct}%`,
+    "--c1": `${track.color}55`,
+    "--c2": above ? `${BOOSTED_COLOR}aa` : `${track.color}88`,
+    color: track.color,
+  } as CSSProperties;
+  return (
+    <div className="mixer__row-wrap" data-layer={`row-${track.ordinal}`}>
+      <div className={`mixer__row${track.muted ? " mixer__row--muted" : ""}`} data-ordinal={track.ordinal} style={rowStyle}>
+        <div className="mixer__fill" />
+        <div className="mixer__unity" />
+        <div className="mixer__overlay">
+          <button className="mixer__dot" type="button" aria-label="Change color" />
+          <div className="mixer__name" title={track.name}>
+            {track.name}
+          </div>
+          <div className="mixer__value">{Math.round(v * 100)}%</div>
+          <button className="mixer__hide" type="button" aria-label="Hide from mix" dangerouslySetInnerHTML={{ __html: ICON_X }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AudioMixerScene(spec: ExportSpec): ReactElement {
+  const props = (spec.props ?? {}) as {
+    tracks?: MixerTrack[];
+    backdrop?: string | null;
+    panelWidth?: number;
+    pad?: number;
+  };
+  const tracks = props.tracks ?? [];
+  const pad = props.pad ?? 44;
+  const width = props.panelWidth ?? 320;
+  return (
+    <div id="export-root" style={{ position: "relative", display: "inline-block", padding: pad }}>
+      <div data-layer="background" style={{ position: "absolute", inset: 0, background: spec.background ?? "#0f0f11", overflow: "hidden" }}>
+        {props.backdrop ? (
+          <img
+            src={`file://${props.backdrop}`}
+            alt=""
+            style={{ width: "100%", height: "100%", objectFit: "cover", filter: "blur(28px) brightness(0.5) saturate(1.15)", transform: "scale(1.15)" }}
+          />
+        ) : null}
+      </div>
+      <div
+        id="audio-tracks-panel"
+        data-layer="panel"
+        style={{ position: "relative", width, margin: 0, animation: "none" }}
+      >
+        <div className="mixer__tracks">
+          {tracks.map((t) => (
+            <MixerRow key={t.ordinal} track={t} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const scenes: Record<string, Scene> = {
   clipCard: ClipCardScene,
+  audioMixer: AudioMixerScene,
 };
