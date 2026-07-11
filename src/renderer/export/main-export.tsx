@@ -13,6 +13,7 @@ import { installMockClips } from "./mockClips";
 import { scenes } from "./scenes";
 import type { ExportSpec } from "./types";
 import "../styles.css";
+import "../player/player.css"; // .mixer__* styles for the audioMixer scene
 
 const spec: ExportSpec = window.__EXPORT_SPEC__ ?? { scene: "clipCard", fixtures: [] };
 

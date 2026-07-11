@@ -78,6 +78,24 @@ image, or drop a participant. It's a plain, disposable file.
    `visibility` (layout preserved → layers stay aligned) and screenshots with
    `omitBackground` for transparency. `deviceScaleFactor` gives the supersample.
 
+## Second example: the audio mixer
+
+The `audioMixer` scene renders the multi audio-track panel
+(`player-legacy/audio-tracks-manager.js`) statically from track data:
+
+```bash
+# Track names/order/channels are read from the clip's real audio streams;
+# --volumes sets each track's level (1 = 100%, >1 shows the boosted colour).
+node scripts/export-extract-audio-tracks.mjs "VALORANT-Win64-Shipping 20.37.20 09.07.2026.mp4" --volumes 0.9,0.65,1.2,0.4
+npm run build:renderer
+node scripts/export-capture.mjs "export-out/VALORANT-Win64-Shipping 20.37.20 09.07.2026.mp4/mixer/spec.json" --scale 3
+```
+
+Layers: `composite`, `background` (blurred clip frame), `panel`, and one
+`row-<ordinal>` per track. Options: `--volumes a,b,c`, `--muted i,j` (soft-muted
+rows), `--time <sec>` (backdrop frame). Edit `spec.json > props.tracks` to tweak
+names, colours, or levels by hand.
+
 ## Exporting a different component
 
 The harness never changes — add a **scene**:
