@@ -25,7 +25,8 @@
     "benchmark:json": "node benchmark/runner.js --output json",
     "benchmark:openclip": "node benchmark/runner.js --suite openclip --verbose",
     "export:extract": "node scripts/export-extract-clip.mjs",
-    "export:capture": "node scripts/export-capture.mjs"
+    "export:capture": "node scripts/export-capture.mjs",
+    "export:overlay": "node scripts/export-overlay.mjs"
   },
   "build": {
     "appId": "com.yuma-dev.clips",
