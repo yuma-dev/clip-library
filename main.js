@@ -102,8 +102,8 @@ const clipsModule = require('./main/clips');
 // Dialogs Module - handles all Electron dialog interactions
 const dialogsModule = require('./main/dialogs');
 
-// Integrated clipper (clipdip binary): process lifecycle + TOML config bridge
-const clipperModule = require('./main/clipper');
+// Integrated clipdip (clipdip binary): process lifecycle + TOML config bridge
+const clipdipModule = require('./main/clipdip');
 
 // FFmpeg is initialized in the module, verify on startup
 ffmpegModule.initFFmpeg().catch(err => {
@@ -339,8 +339,8 @@ function hasValidPendingCliplibSession() {
 }
 
 async function handleCliplibProtocolUrl(protocolUrl) {
-  // Navigation deep links (e.g. cliplib://settings/clipper from the
-  // clipper's tray icon) — everything else falls through to the original
+  // Navigation deep links (e.g. cliplib://settings/clipdip from the
+  // clipdip's tray icon) — everything else falls through to the original
   // auth-callback handling.
   try {
     const url = new URL(protocolUrl);
@@ -417,6 +417,46 @@ async function handleCliplibProtocolUrl(protocolUrl) {
     });
   } finally {
     focusMainWindow();
+  }
+}
+
+// Retarget taskbar pins orphaned by the Clips → ClipLib exe rename. Windows
+// taskbar pins are .lnk files whose target is the exe's full path; renaming
+// the exe leaves them pointing at a file the upgrade deleted. Only touches
+// pins that target a now-missing Clips.exe.
+async function repairTaskbarPins() {
+  if (!app.isPackaged) return;
+  const fss = require('fs');
+  const pinDir = path.join(
+    app.getPath('appData'),
+    'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar'
+  );
+  let entries;
+  try {
+    entries = await fs.readdir(pinDir);
+  } catch {
+    return; // no pin folder — nothing pinned
+  }
+  for (const name of entries) {
+    if (!name.toLowerCase().endsWith('.lnk')) continue;
+    const lnkPath = path.join(pinDir, name);
+    try {
+      const details = shell.readShortcutLink(lnkPath);
+      const target = details?.target || '';
+      if (!target.toLowerCase().endsWith('\\clips.exe')) continue;
+      if (fss.existsSync(target)) continue; // still valid — leave it alone
+      shell.writeShortcutLink(lnkPath, 'replace', {
+        ...details,
+        target: process.execPath,
+        cwd: path.dirname(process.execPath),
+        icon: process.execPath,
+        iconIndex: 0,
+        appUserModelId: 'com.yuma-dev.clips'
+      });
+      logger.info(`Repaired orphaned taskbar pin: ${name}`);
+    } catch {
+      // unreadable/foreign .lnk — skip
+    }
   }
 }
 
@@ -563,6 +603,12 @@ async function createWindow() {
     processQueuedProtocolUrls().catch((error) => {
       logger.error('Failed processing protocol queue after renderer load:', error);
     });
+    // "Updated to vX" toast after a silent update landed.
+    try {
+      updaterModule.checkPostUpdateMarker(mainWindow);
+    } catch (error) {
+      logger.warn(`Post-update marker check failed: ${error.message}`);
+    }
   });
   
   if (isDev) {
@@ -669,10 +715,18 @@ app.whenReady().then(async () => {
   // Start periodic saves to prevent data loss
   clipsModule.startPeriodicSave(getSettings);
 
-  // Bring the integrated clipper up if it's enabled but not running (it may
+  // Bring the integrated clipdip up if it's enabled but not running (it may
   // already be running via its own login autostart — that's a no-op here).
-  clipperModule.init(getSettings);
-  clipperModule.ensureStartedIfEnabled();
+  clipdipModule.init(getSettings);
+  clipdipModule.ensureStartedIfEnabled();
+
+  // The Clips → ClipLib rebrand renamed the exe, which orphans taskbar pins
+  // (their .lnk targets the old Clips.exe path). Retarget any pin whose
+  // Clips.exe target no longer exists to the running exe. Idempotent; cheap
+  // no-op when there's nothing to repair.
+  repairTaskbarPins().catch((error) => {
+    logger.warn(`Taskbar pin repair failed: ${error.message}`);
+  });
 
   processQueuedProtocolUrls().catch((error) => {
     logger.error('Failed processing startup protocol queue:', error);
@@ -711,29 +765,29 @@ ipcMain.handle('get-settings', () => {
   return settings;
 });
 
-// --- Integrated clipper -----------------------------------------------------
+// --- Integrated clipdip -----------------------------------------------------
 
-ipcMain.handle('clipper-get-config', () => clipperModule.getConfig());
+ipcMain.handle('clipdip-get-config', () => clipdipModule.getConfig());
 
-ipcMain.handle('clipper-set-config', (event, patch) => clipperModule.setConfig(patch));
+ipcMain.handle('clipdip-set-config', (event, patch) => clipdipModule.setConfig(patch));
 
-ipcMain.handle('clipper-status', () => clipperModule.getStatus());
+ipcMain.handle('clipdip-status', () => clipdipModule.getStatus());
 
-ipcMain.handle('clipper-start', () => clipperModule.start());
+ipcMain.handle('clipdip-start', () => clipdipModule.start());
 
-ipcMain.handle('clipper-stop', () => clipperModule.quit());
+ipcMain.handle('clipdip-stop', () => clipdipModule.quit());
 
-ipcMain.handle('clipper-restart', () => clipperModule.restart());
+ipcMain.handle('clipdip-restart', () => clipdipModule.restart());
 
-// Side effects only — the renderer persists clipper.enabled/autostart through
+// Side effects only — the renderer persists clipdip.enabled/autostart through
 // its normal settings path (SettingsContext -> save-settings), which replaces
 // the whole settings object; writing settings here too would race that copy.
-ipcMain.handle('clipper-set-autostart', async (event, enabled) => {
-  await clipperModule.setAutostart(enabled);
+ipcMain.handle('clipdip-set-autostart', async (event, enabled) => {
+  await clipdipModule.setAutostart(enabled);
   return { success: true };
 });
 
-ipcMain.handle('clipper-set-enabled', (event, enabled) => clipperModule.setEnabled(enabled));
+ipcMain.handle('clipdip-set-enabled', (event, enabled) => clipdipModule.setEnabled(enabled));
 
 ipcMain.handle("get-clips", async () => {
   return await clipsModule.getClips(getSettings);

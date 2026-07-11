@@ -8,9 +8,9 @@
 // Verify each against the corresponding `main/` handler and tighten the types
 // as each phase starts consuming the channel.
 
-// Mirror of the clipper's TOML config (clipdip crates/core/src/config.rs).
+// Mirror of clipdip's TOML config (clipdip crates/core/src/config.rs).
 // Every field is serde-defaulted on the Rust side, so partial objects are fine.
-export interface ClipperConfig {
+export interface ClipdipConfig {
   replay_seconds?: number;
   video?: {
     output_index?: number;
@@ -192,11 +192,11 @@ export interface ClipsApi {
   importSteelseriesClips(...args: any[]): Promise<any>;
   quitApp(): Promise<any>;
 
-  // --- Integrated clipper (clipdip binary; config lives in its TOML) ---
-  clipper: {
-    getConfig(): Promise<{ exists: boolean; config: ClipperConfig }>;
+  // --- Integrated clipdip (clipdip binary; config lives in its TOML) ---
+  clipdip: {
+    getConfig(): Promise<{ exists: boolean; config: ClipdipConfig }>;
     /** Deep-merge patch into the TOML; a debounced --reload follows if running. */
-    setConfig(patch: Partial<ClipperConfig>): Promise<{ success: boolean }>;
+    setConfig(patch: Partial<ClipdipConfig>): Promise<{ success: boolean }>;
     getStatus(): Promise<{
       running: boolean;
       binaryFound: boolean;
@@ -231,6 +231,8 @@ export interface ClipsApi {
   onSteelseriesProgress(cb: ClipsEventCallback): ClipsUnsubscribe;
   onSteelseriesLog(cb: ClipsEventCallback): ClipsUnsubscribe;
   onShowUpdateNotification(cb: ClipsEventCallback): ClipsUnsubscribe;
+  /** Fired once after a silent update landed ({version}). */
+  onAppUpdated(cb: ClipsEventCallback): ClipsUnsubscribe;
   onDownloadProgress(cb: ClipsEventCallback): ClipsUnsubscribe;
   onUpdateDownloadError(cb: ClipsEventCallback): ClipsUnsubscribe;
   onUpdateDownloadComplete(cb: ClipsEventCallback): ClipsUnsubscribe;

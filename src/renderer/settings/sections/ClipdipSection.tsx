@@ -6,37 +6,37 @@ import Slider from "../../ui/Slider";
 import Select from "../../ui/Select";
 import { useSettings } from "../SettingsContext";
 import { useToast } from "../../ui/Toast";
-import type { ClipperConfig } from "../../../types/clips";
+import type { ClipdipConfig } from "../../../types/clips";
 
-type ClipperStatus = {
+type ClipdipStatus = {
   running: boolean;
   binaryFound: boolean;
   configExists: boolean;
   autostart: boolean;
 };
 
-// The clipper's own settings live in its TOML config (bridged over IPC by
-// main/clipper.js), NOT in the library's settings.json — so this section
-// keeps the TOML values in local state and saves via clipper.setConfig
-// (which deep-merges and live-reloads the running clipper, debounced).
+// Clipdip's own settings live in its TOML config (bridged over IPC by
+// main/clipdip.js), NOT in the library's settings.json — so this section
+// keeps the TOML values in local state and saves via clipdip.setConfig
+// (which deep-merges and live-reloads the running clipdip, debounced).
 // Only enabled/autostart/binaryPath are library settings.
-export default function ClipperSection() {
+export default function ClipdipSection() {
   const { settings, set } = useSettings();
   const toast = useToast();
 
-  const enabled = Boolean(settings.clipper?.enabled);
-  const autostart = Boolean(settings.clipper?.autostart);
-  const binaryPath = String(settings.clipper?.binaryPath ?? "");
+  const enabled = Boolean(settings.clipdip?.enabled);
+  const autostart = Boolean(settings.clipdip?.autostart);
+  const binaryPath = String(settings.clipdip?.binaryPath ?? "");
 
-  const [status, setStatus] = useState<ClipperStatus | null>(null);
-  const [config, setConfig] = useState<ClipperConfig | null>(null);
+  const [status, setStatus] = useState<ClipdipStatus | null>(null);
+  const [config, setConfig] = useState<ClipdipConfig | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Status poll while the section is visible.
   useEffect(() => {
     let alive = true;
     const tick = () => {
-      window.clips.clipper
+      window.clips.clipdip
         .getStatus()
         .then((s) => {
           if (alive) setStatus(s);
@@ -52,18 +52,18 @@ export default function ClipperSection() {
   }, []);
 
   useEffect(() => {
-    window.clips.clipper
+    window.clips.clipdip
       .getConfig()
       .then(({ config }) => setConfig(config))
       .catch(() => setConfig({}));
   }, []);
 
   // Optimistic local update + persisted patch. `patch` mirrors the TOML
-  // structure ({ video: { fps: 30 } }); main debounces the clipper reload.
+  // structure ({ video: { fps: 30 } }); main debounces the clipdip reload.
   const patch = useCallback(
-    (p: Partial<ClipperConfig>) => {
+    (p: Partial<ClipdipConfig>) => {
       setConfig((prev) => {
-        const next: ClipperConfig = structuredClone(prev ?? {});
+        const next: ClipdipConfig = structuredClone(prev ?? {});
         const merge = (t: Record<string, unknown>, s: Record<string, unknown>) => {
           for (const [k, v] of Object.entries(s)) {
             if (
@@ -79,23 +79,23 @@ export default function ClipperSection() {
         merge(next as Record<string, unknown>, p as Record<string, unknown>);
         return next;
       });
-      window.clips.clipper.setConfig(p).catch(() => toast.show("Failed to save clipper setting", "error"));
+      window.clips.clipdip.setConfig(p).catch(() => toast.show("Failed to save clipdip setting", "error"));
     },
     [toast],
   );
 
   const toggleEnabled = async (on: boolean) => {
     // Persist first so main's settings cache is current when setEnabled
-    // consults clipper.autostart.
-    const ok = await set("clipper.enabled", on);
+    // consults clipdip.autostart.
+    const ok = await set("clipdip.enabled", on);
     if (!ok) {
       toast.show("Failed to save setting", "error");
       return;
     }
     setBusy(true);
     try {
-      const result = await window.clips.clipper.setEnabled(on);
-      if (!result.success) toast.show(result.error || "Clipper failed to start", "error");
+      const result = await window.clips.clipdip.setEnabled(on);
+      if (!result.success) toast.show(result.error || "Clipdip failed to start", "error");
     } finally {
       setBusy(false);
       refreshStatus();
@@ -103,10 +103,10 @@ export default function ClipperSection() {
   };
 
   const toggleAutostart = async (on: boolean) => {
-    const ok = await set("clipper.autostart", on);
+    const ok = await set("clipdip.autostart", on);
     if (!ok) return void toast.show("Failed to save setting", "error");
     try {
-      await window.clips.clipper.setAutostart(on);
+      await window.clips.clipdip.setAutostart(on);
     } catch {
       toast.show("Failed to update autostart registry entry", "error");
     }
@@ -114,14 +114,14 @@ export default function ClipperSection() {
   };
 
   const refreshStatus = () => {
-    window.clips.clipper.getStatus().then(setStatus).catch(() => {});
+    window.clips.clipdip.getStatus().then(setStatus).catch(() => {});
   };
 
   const runAction = async (action: () => Promise<{ success: boolean; error?: string }>) => {
     setBusy(true);
     try {
       const result = await action();
-      if (!result.success) toast.show(result.error || "Clipper action failed", "error");
+      if (!result.success) toast.show(result.error || "Clipdip action failed", "error");
     } finally {
       setBusy(false);
       refreshStatus();
@@ -131,7 +131,7 @@ export default function ClipperSection() {
   const pickBinary = async () => {
     const file = await window.clips.openFolderDialog();
     if (file) {
-      const ok = await set("clipper.binaryPath", file);
+      const ok = await set("clipdip.binaryPath", file);
       if (!ok) toast.show("Failed to save setting", "error");
       refreshStatus();
     }
@@ -159,7 +159,7 @@ export default function ClipperSection() {
   return (
     <>
       <SetGroup
-        title="Clipper"
+        title="Clipdip"
         span2
         aside={
           <span className={`set-badge ${running ? "" : ""}`} style={{ opacity: 0.9 }}>
@@ -174,29 +174,29 @@ export default function ClipperSection() {
         }
       >
         <SetRow
-          title="Enable clipper"
+          title="Enable Clipdip"
           description="Background replay-buffer recorder. Runs as its own tray app and keeps recording when the library is closed."
         >
-          <Toggle checked={enabled} onChange={(v) => void toggleEnabled(v)} disabled={busy} aria-label="Enable clipper" />
+          <Toggle checked={enabled} onChange={(v) => void toggleEnabled(v)} disabled={busy} aria-label="Enable Clipdip" />
         </SetRow>
         <SetRow
           title="Start with Windows"
-          description="Launch the clipper on login — the library doesn't need to be running"
+          description="Launch Clipdip on login — the library doesn't need to be running"
         >
           <Toggle
             checked={autostart}
             onChange={(v) => void toggleAutostart(v)}
             disabled={controlsDisabled}
-            aria-label="Start clipper with Windows"
+            aria-label="Start Clipdip with Windows"
           />
         </SetRow>
         <SetRow
           title="Process"
-          description={running ? "The clipper is recording into its replay buffer" : "The clipper is not running"}
+          description={running ? "Clipdip is recording into its replay buffer" : "Clipdip is not running"}
           status={
             status && !status.binaryFound ? (
               <StatusLine tone="error">
-                Clipper binary not found — set its location below.
+                Clipdip binary not found — set its location below.
               </StatusLine>
             ) : undefined
           }
@@ -204,10 +204,10 @@ export default function ClipperSection() {
           <div style={{ display: "flex", gap: 8 }}>
             {running ? (
               <>
-                <button type="button" className="btn" disabled={busy} onClick={() => void runAction(window.clips.clipper.restart)}>
+                <button type="button" className="btn" disabled={busy} onClick={() => void runAction(window.clips.clipdip.restart)}>
                   <RotateCcw size={14} /> Restart
                 </button>
-                <button type="button" className="btn" disabled={busy} onClick={() => void runAction(window.clips.clipper.stop)}>
+                <button type="button" className="btn" disabled={busy} onClick={() => void runAction(window.clips.clipdip.stop)}>
                   <Square size={14} /> Stop
                 </button>
               </>
@@ -216,7 +216,7 @@ export default function ClipperSection() {
                 type="button"
                 className="btn"
                 disabled={busy || !status?.binaryFound}
-                onClick={() => void runAction(window.clips.clipper.start)}
+                onClick={() => void runAction(window.clips.clipdip.start)}
               >
                 <Play size={14} /> Start
               </button>
@@ -224,9 +224,9 @@ export default function ClipperSection() {
           </div>
         </SetRow>
         <SetRow
-          title="Clipper binary"
+          title="Clipdip binary"
           description={
-            <span className="set-mono">{binaryPath || "Bundled (resources/clipper/clipdip.exe)"}</span>
+            <span className="set-mono">{binaryPath || "Bundled (resources/clipdip/clipdip.exe)"}</span>
           }
         >
           <button type="button" className="btn" onClick={() => void pickBinary()}>
@@ -489,7 +489,7 @@ export default function ClipperSection() {
   );
 }
 
-/** Text input that commits on blur/Enter (clipper settings write TOML + reload). */
+/** Text input that commits on blur/Enter (clipdip settings write TOML + reload). */
 function TextInput({
   value,
   onCommit,
