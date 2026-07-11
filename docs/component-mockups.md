@@ -96,6 +96,24 @@ Layers: `composite`, `background` (blurred clip frame), `panel`, and one
 rows), `--time <sec>` (backdrop frame). Edit `spec.json > props.tracks` to tweak
 names, colours, or levels by hand.
 
+## Third example: the video player
+
+The `videoPlayer` scene renders the clip player overlay (`player/VideoPlayer.tsx`)
+as a still — the `<video>` swapped for a hi-res frame, controls forced visible,
+playhead at the given time, no trim:
+
+```bash
+# --time defaults to the middle (duration/2); --no-share hides the publish button.
+node scripts/export-extract-player.mjs "VALORANT-Win64-Shipping 20.37.20 09.07.2026.mp4"
+npm run build:renderer
+node scripts/export-capture.mjs "export-out/VALORANT-Win64-Shipping 20.37.20 09.07.2026.mp4/player/spec.json" --scale 2
+```
+
+Layers: `composite`, `background`, `card`, `thumbnail`, `controls`, `title`,
+`actions`, `progress`, `times`. Use `--width 960` with `--scale 2` for a 1920px
+video area that matches a 1080p source frame 1:1 (avoids upscaling). Options:
+`--time <sec>`, `--width <px>`, `--no-share`.
+
 ## Exporting a different component
 
 The harness never changes — add a **scene**:
