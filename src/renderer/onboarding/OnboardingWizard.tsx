@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import Toggle from "../ui/Toggle";
 import Select from "../ui/Select";
+import Slider from "../ui/Slider";
 import { useSettings } from "../settings/SettingsContext";
 import {
   ClipdipProvider,
@@ -274,9 +275,10 @@ function WelcomeStep() {
         <div className="ob-kicker">
           <span className="dia">◇</span> Welcome to 3.0
         </div>
-        <h1 className="ob-title">A whole new ClipLib</h1>
+        <h1 className="ob-title">Clips has a new Face</h1>
         <p className="ob-lede">
-          New logo, new look, full rebuild under the hood. Here's the short tour.
+          With a new logo, new look, new name and a full rebuild under the hood, ClipLib has
+          finally arrived in 2026. Here's what's new.
         </p>
         <ul className="ob-features">
           <li>
@@ -290,7 +292,7 @@ function WelcomeStep() {
             <Scissors size={15} />
             <div>
               <strong>ClipDip clipping engine</strong>
-              <span>Records your gameplay. ShadowPlay can retire.</span>
+              <span>A standalone, no bloat replacement for ShadowPlay/OBS</span>
             </div>
           </li>
           <li>
@@ -304,7 +306,7 @@ function WelcomeStep() {
             <Users size={15} />
             <div>
               <strong>Discord call integration</strong>
-              <span>Clips remember who was in the call.</span>
+              <span>ClipDip saves who was in the call.</span>
             </div>
           </li>
         </ul>
@@ -328,17 +330,20 @@ function ClipdipStep({
   onEnable: (v: boolean) => void;
   onAutostart: (v: boolean) => void;
 }) {
+  const { config, patch } = useClipdip();
+  const replaySeconds = Number(config?.replay_seconds ?? 60);
   return (
     <div className="ob-split">
       <div className="ob-copy">
         <div className="ob-kicker">
           <span className="dia">◇</span> Meet ClipDip
         </div>
-        <h1 className="ob-title">ClipLib can record now</h1>
+        <h1 className="ob-title">ClipLib can Clip now</h1>
         <p className="ob-lede">
-          ClipDip sits in your tray and keeps a rolling replay buffer of your gameplay. Press the
-          hotkey and the last moments land straight in your library. That card on the right is
-          what pops up in game when a clip gets saved.
+          ClipDip sits in your tray and is ready to save the last {replaySeconds} seconds of your
+          gameplay. Press the hotkey and the last moments land straight in your library. A long
+          needed replacement to Shadowplay/OBS/Steelseries Moments. Currently only NVIDIA Cards
+          supported, more to come.
         </p>
         {unsupported ? (
           <div className="ob-note error">
@@ -352,8 +357,8 @@ function ClipdipStep({
               <div className="ob-row-info">
                 <div className="ob-row-title">Enable ClipDip</div>
                 <div className="ob-row-desc">
-                  On by default in 3.0. Flip it off if you want to stick with your current
-                  recorder, no hard feelings. You can change your mind anytime in Settings.
+                  On by default. Flip it off if you want to stick with your current recorder. You
+                  can change your mind anytime in Settings.
                 </div>
               </div>
               <Toggle checked={enable} onChange={onEnable} aria-label="Enable ClipDip" />
@@ -372,12 +377,27 @@ function ClipdipStep({
                 aria-label="Start ClipDip with Windows"
               />
             </div>
+            <div className="ob-row">
+              <div className="ob-row-info">
+                <div className="ob-row-title">Replay length</div>
+                <div className="ob-row-desc">The longest clip you can save.</div>
+              </div>
+              <Slider
+                value={replaySeconds}
+                min={10}
+                max={300}
+                step={5}
+                disabled={!config}
+                onCommit={(v) => patch({ replay_seconds: v })}
+                format={(v) => `${v} s`}
+                aria-label="Replay length"
+              />
+            </div>
           </div>
         )}
       </div>
       <div className="ob-stage ob-stage-clipdip">
         <img src={overlayUrl} alt="ClipDip save notification" draggable={false} />
-        <div className="ob-stage-caption">Saving a clip, live from in game</div>
       </div>
     </div>
   );
@@ -513,7 +533,6 @@ function AudioStep() {
       </div>
       <div className="ob-stage ob-stage-mixer">
         <img src={mixerUrl} alt="The new audio mixer in the player" draggable={false} />
-        <div className="ob-stage-caption">The mixer, right in the player</div>
       </div>
     </div>
   );
@@ -632,7 +651,6 @@ function DiscordStep() {
       </div>
       <div className="ob-stage ob-stage-pills">
         <img src={pillsUrl} alt="Discord call participants shown on a clip" draggable={false} />
-        <div className="ob-stage-caption">Who was in the call, right on the clip</div>
       </div>
     </div>
   );
