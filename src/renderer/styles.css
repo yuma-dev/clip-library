@@ -4197,20 +4197,28 @@ button {
   color: var(--color-text-muted);
 }
 
-/* Per-asset framing: sized large and anchored past the right border so the
-   artwork runs off the panel edge (the panel overflow does the cropping). */
+/* Per-asset framing, derived from each file's measured alpha bounding box so
+   the solid content always lands inside the stage while only transparent
+   padding and glow hang off the edges (stage is ~592px wide at full size).
+   overlay.webp 1317w: card spans x270-1046 -> right -198 puts the card's
+   right edge flush with the panel border, glow streak bleeds past. */
 .ob-stage-clipdip img {
-  width: 860px;
-  right: -260px;
-  top: 42%;
+  width: 960px;
+  right: -198px;
+  top: 46%;
 }
+/* mixer png 1273w: video frame runs to the file's right edge, so it must sit
+   flush (right 0), never past it. Content bottom-heavy gap -> nudge down. */
 .ob-stage-mixer img {
-  width: 780px;
-  right: -120px;
+  width: 700px;
+  right: 0;
+  top: 56%;
 }
+/* pills png 1067w: content ends at x877, the last 190px are transparent ->
+   right -157 aligns the card's right edge with the panel border. */
 .ob-stage-pills img {
-  width: 800px;
-  right: -180px;
+  width: 880px;
+  right: -157px;
 }
 
 /* -- Feature list (welcome) -- */
