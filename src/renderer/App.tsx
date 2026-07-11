@@ -14,6 +14,7 @@ import VideoPlayer from "./player/VideoPlayer";
 import OnboardingWizard from "./onboarding/OnboardingWizard";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
+import { installDebugTools } from "./shell/debugTools";
 import type { Route } from "./routes";
 
 const PIN_KEY = "clip-library:rail-pinned";
@@ -182,6 +183,9 @@ export default function App() {
       window.clips?.rendererReady();
     }
   }, [lib.loading]);
+
+  // Debug hooks: window.loadingScreenTest + Ctrl/Cmd+Shift+L, and the F6 egg.
+  useEffect(() => installDebugTools(), []);
 
   return (
     <AppNavContext.Provider value={appNav}>

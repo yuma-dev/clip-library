@@ -125,3 +125,22 @@ export async function exportAudioWithFileSelection(onProgress?: ProgressFn): Pro
   const savePath = await window.clips.openSaveDialog("audio", clip.originalName, clip.customName);
   if (savePath) await exportAudio(savePath, onProgress);
 }
+
+/**
+ * Export a clip that is NOT open in the player (grid right-click menu) to the
+ * clipboard. Loads the saved trim/volume/speed from disk — the clip has no live
+ * player state or multi-track mix to read — mirroring the legacy
+ * exportClipFromContextMenu (always a clipboard export).
+ */
+export async function exportClipToClipboard(originalName: string, onProgress?: ProgressFn): Promise<void> {
+  const info = await window.clips.getClipInfo(originalName);
+  const trim = await window.clips.getTrim(originalName);
+  const start = trim ? trim.start : 0;
+  const end = trim ? trim.end : (info?.format?.duration ?? 0);
+  const volume = await window.clips.getVolume(originalName).catch(() => 1);
+  const speed = await window.clips.getSpeed(originalName).catch(() => 1);
+  onProgress?.(0, 100, true);
+  const res = await window.clips.exportTrimmedVideo(originalName, start, end, volume, speed);
+  if (res?.success) onProgress?.(100, 100, true);
+  else throw new Error(res?.error || "Export failed");
+}
