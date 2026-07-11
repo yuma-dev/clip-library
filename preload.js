@@ -144,16 +144,16 @@ const api = {
   importSteelseriesClips: invoke("import-steelseries-clips"),
   quitApp: invoke("quit-app"),
 
-  // --- Integrated clipper ---
-  clipper: {
-    getConfig: invoke("clipper-get-config"),
-    setConfig: invoke("clipper-set-config"),
-    getStatus: invoke("clipper-status"),
-    start: invoke("clipper-start"),
-    stop: invoke("clipper-stop"),
-    restart: invoke("clipper-restart"),
-    setAutostart: invoke("clipper-set-autostart"),
-    setEnabled: invoke("clipper-set-enabled"),
+  // --- Integrated clipdip ---
+  clipdip: {
+    getConfig: invoke("clipdip-get-config"),
+    setConfig: invoke("clipdip-set-config"),
+    getStatus: invoke("clipdip-status"),
+    start: invoke("clipdip-start"),
+    stop: invoke("clipdip-stop"),
+    restart: invoke("clipdip-restart"),
+    setAutostart: invoke("clipdip-set-autostart"),
+    setEnabled: invoke("clipdip-set-enabled"),
   },
 
   // --- Signal to main (fire-and-forget) ---
@@ -165,6 +165,7 @@ const api = {
   onCheckActivityState: subscribe("check-activity-state"),
   onCliplibAuthEvent: subscribe("cliplib-auth-event"),
   onCliplibNavigate: subscribe("cliplib-navigate"),
+  onAppUpdated: subscribe("app-updated"),
   onExportProgress: subscribe("export-progress"),
   onShowFallbackNotice: subscribe("show-fallback-notice"),
   onShowDecodeFallbackNotice: subscribe("show-decode-fallback-notice"),

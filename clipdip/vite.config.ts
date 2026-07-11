@@ -20,14 +20,13 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
-  // Two entry points so the overlay window doesn't have to download +
-  // parse the settings UI bundle (lucide-react, Tailwind, Radix, etc.)
-  // before it can render. In dev mode each entry has its own module
-  // graph too, so Vite only transforms what each window actually needs.
+  // Only the notification overlay is built and embedded in the binary. The
+  // old React settings app (index.html + src/App.tsx) is retired — ClipLib's
+  // Settings → Clipdip page owns configuration now. The source stays in the
+  // repo as reference, excluded from the build.
   build: {
     rollupOptions: {
       input: {
-        main: path.resolve(__dirname, "index.html"),
         overlay: path.resolve(__dirname, "overlay.html"),
       },
     },

@@ -1,11 +1,11 @@
-// Integrated clipper (the clipdip binary) — process lifecycle + config bridge.
+// Integrated clipdip (the recorder binary) — process lifecycle + config bridge.
 //
-// The clipper is a standalone tray app: we spawn it fully detached so it
+// Clipdip is a standalone tray app: we spawn it fully detached so it
 // survives the library quitting, and control the running instance through
 // its single-instance guard (`clipdip.exe --reload` / `--quit` forward the
 // flag into the running process and exit). Its settings live in a TOML file
 // (%APPDATA%\clipdip\config\config.toml) that we read/write directly; the
-// running clipper picks changes up via --reload.
+// running clipdip picks changes up via --reload.
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -30,24 +30,24 @@ function init(settingsGetter) {
 
 async function resolveBinaryPath() {
   const settings = await getSettings();
-  const override = settings?.clipper?.binaryPath;
+  const override = settings?.clipdip?.binaryPath;
   if (override && typeof override === 'string' && override.trim()) {
     const p = override.trim();
     // The picker hands us a folder; a direct exe path also works.
     return p.toLowerCase().endsWith('.exe') ? p : path.join(p, EXE_NAME);
   }
   if (!app.isPackaged) {
-    // Dev convenience: use the sibling clipdip repo's release build (or the
-    // vendored copy) so the clipper works without configuring a path.
+    // Dev convenience: use the in-repo cargo build (clipdip/ subtree) or the
+    // vendored copy, so clipdip works without configuring a path.
     const candidates = [
-      path.resolve(__dirname, '..', 'vendor', 'clipper', EXE_NAME),
-      path.resolve(__dirname, '..', '..', 'clipdip', 'target', 'release', EXE_NAME)
+      path.resolve(__dirname, '..', 'clipdip', 'target', 'release', EXE_NAME),
+      path.resolve(__dirname, '..', 'vendor', 'clipdip', EXE_NAME)
     ];
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) return candidate;
     }
   }
-  return path.join(process.resourcesPath, 'clipper', EXE_NAME);
+  return path.join(process.resourcesPath, 'clipdip', EXE_NAME);
 }
 
 async function binaryFound() {
@@ -67,7 +67,7 @@ async function getConfig() {
     return { exists: true, config: TOML.parse(raw) };
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      logger.warn(`Clipper config read failed: ${error.message}`);
+      logger.warn(`Clipdip config read failed: ${error.message}`);
     }
     return { exists: false, config: {} };
   }
@@ -108,7 +108,7 @@ async function snapshotOnce(file) {
 
 let reloadTimer = null;
 // Highest reload level needed by the patches since the last flush.
-// 0 = none (clipper re-reads these sections per operation), 1 = hotkeys only,
+// 0 = none (clipdip re-reads these sections per operation), 1 = hotkeys only,
 // 2 = full pipeline restart (clears the replay buffer — only when capture
 // settings actually changed).
 let pendingReload = 0;
@@ -133,7 +133,7 @@ async function setConfig(patch) {
   await fsp.writeFile(tmp, serialized, 'utf8');
   await fsp.rename(tmp, file);
 
-  // Debounce the reload: a full restart clears the clipper's replay buffer,
+  // Debounce the reload: a full restart clears clipdip's replay buffer,
   // so a burst of settings edits should cost one restart, not one each.
   pendingReload = Math.max(pendingReload, reloadLevelFor(patch));
   if (reloadTimer) clearTimeout(reloadTimer);
@@ -146,7 +146,7 @@ async function setConfig(patch) {
       .then((running) =>
         running ? sendControlFlag(level === 2 ? '--reload' : '--reload-hotkeys') : null
       )
-      .catch((error) => logger.warn(`Clipper reload failed: ${error.message}`));
+      .catch((error) => logger.warn(`Clipdip reload failed: ${error.message}`));
   }, 1500);
 
   return { success: true };
@@ -174,15 +174,37 @@ function isRunning() {
   });
 }
 
+// clipdip needs an ffmpeg for muxing, but we don't ship one next to it —
+// the library already bundles ffmpeg-static. Point clipdip's config at it
+// whenever the configured path is missing or stale (e.g. after an app update
+// moved the unpacked asar path). Deliberate user overrides that still exist
+// on disk are left alone.
+async function ensureFfmpegPath() {
+  let libFfmpeg;
+  try {
+    libFfmpeg = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
+  } catch {
+    return; // clipdip falls back to a sibling ffmpeg or PATH
+  }
+  if (!fs.existsSync(libFfmpeg)) return;
+  const { config } = await getConfig();
+  const current = config?.output?.ffmpeg_path;
+  if (current && current !== libFfmpeg && fs.existsSync(current)) return;
+  if (current === libFfmpeg) return;
+  logger.info(`Pointing clipdip at the library ffmpeg: ${libFfmpeg}`);
+  await setConfig({ output: { ffmpeg_path: libFfmpeg } });
+}
+
 async function start() {
   if (await isRunning()) return { success: true, alreadyRunning: true };
   const exe = await resolveBinaryPath();
   try {
     await fsp.access(exe, fs.constants.X_OK);
   } catch {
-    return { success: false, error: `Clipper binary not found at ${exe}` };
+    return { success: false, error: `Clipdip binary not found at ${exe}` };
   }
-  // detached + unref + ignored stdio: the clipper must outlive the library —
+  await ensureFfmpegPath().catch((e) => logger.warn(`ffmpeg path sync failed: ${e.message}`));
+  // detached + unref + ignored stdio: clipdip must outlive the library —
   // it is its own tray app the user may rely on with the library closed.
   const child = spawn(exe, [], {
     detached: true,
@@ -192,7 +214,7 @@ async function start() {
   });
   child.unref();
   runningCache = { value: true, at: Date.now() };
-  logger.info(`Clipper started (${exe})`);
+  logger.info(`Clipdip started (${exe})`);
   return { success: true };
 }
 
@@ -217,7 +239,7 @@ async function quit() {
     if (!(await isRunning())) return { success: true };
     await new Promise((r) => setTimeout(r, 400));
   }
-  logger.warn('Clipper did not exit after --quit; force-killing');
+  logger.warn('Clipdip did not exit after --quit; force-killing');
   await new Promise((resolve) => {
     execFile('taskkill', ['/F', '/IM', EXE_NAME], { windowsHide: true }, () => resolve());
   });
@@ -230,7 +252,7 @@ async function restart() {
   return start();
 }
 
-// ---------- autostart (registry Run value, points at the clipper exe) ------
+// ---------- autostart (registry Run value, points at clipdip exe) ------
 
 function regQuery(valueName) {
   return new Promise((resolve) => {
@@ -284,17 +306,17 @@ async function getStatus() {
   return { running, binaryFound: found, configExists: exists, autostart };
 }
 
-// Called once from main.js after app ready: if the clipper is enabled but not
+// Called once from main.js after app ready: if clipdip is enabled but not
 // running (e.g. library launched manually, autostart off), bring it up.
 async function ensureStartedIfEnabled() {
   try {
     const settings = await getSettings();
-    if (!settings?.clipper?.enabled) return;
+    if (!settings?.clipdip?.enabled) return;
     if (await isRunning()) return;
     const result = await start();
-    if (!result.success) logger.warn(`Clipper autostart-on-launch failed: ${result.error}`);
+    if (!result.success) logger.warn(`Clipdip autostart-on-launch failed: ${result.error}`);
   } catch (error) {
-    logger.warn(`Clipper startup hook failed: ${error.message}`);
+    logger.warn(`Clipdip startup hook failed: ${error.message}`);
   }
 }
 
@@ -303,7 +325,7 @@ async function setEnabled(enabled) {
   if (enabled) {
     const result = await start();
     const settings = await getSettings();
-    if (settings?.clipper?.autostart) {
+    if (settings?.clipdip?.autostart) {
       await setAutostart(true).catch((e) => logger.warn(`Autostart enable failed: ${e.message}`));
     }
     return result;

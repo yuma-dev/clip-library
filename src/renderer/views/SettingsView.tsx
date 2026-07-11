@@ -18,7 +18,7 @@ import ExportSection from "../settings/sections/ExportSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
 import CliplibSection from "../settings/sections/CliplibSection";
-import ClipperSection from "../settings/sections/ClipperSection";
+import ClipdipSection from "../settings/sections/ClipdipSection";
 import { useSettings } from "../settings/SettingsContext";
 import { useToast } from "../ui/Toast";
 import type { UseClips } from "../library/useClips";
@@ -26,7 +26,7 @@ import type { UseLibraryFilter } from "../library/useLibraryFilter";
 
 type SectionId =
   | "general"
-  | "clipper"
+  | "clipdip"
   | "appearance"
   | "player"
   | "export"
@@ -36,7 +36,7 @@ type SectionId =
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; blurb: string }[] = [
   { id: "general", label: "General", icon: Settings2, blurb: "Library location, integrations, and tags" },
-  { id: "clipper", label: "Clipper", icon: Videotape, blurb: "Replay buffer, hotkeys, and recording" },
+  { id: "clipdip", label: "Clipdip", icon: Videotape, blurb: "Replay buffer, hotkeys, and recording" },
   { id: "appearance", label: "Appearance", icon: Palette, blurb: "Font and library visuals" },
   { id: "player", label: "Player", icon: MonitorPlay, blurb: "Previews and the ambient glow" },
   { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
@@ -135,7 +135,7 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
             </header>
 
             {section === "general" ? <GeneralSection lib={lib} filter={filter} /> : null}
-            {section === "clipper" ? <ClipperSection /> : null}
+            {section === "clipdip" ? <ClipdipSection /> : null}
             {section === "appearance" ? <AppearanceSection /> : null}
             {section === "player" ? <PlayerSection sampleThumb={sampleThumb} /> : null}
             {section === "export" ? <ExportSection /> : null}

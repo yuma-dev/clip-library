@@ -8,6 +8,7 @@ import FeedPage from "./feed/FeedPage";
 import FeedPlayer from "./feed/FeedPlayer";
 import ProfilePage from "./feed/ProfilePage";
 import { AppNavContext, type AppNav } from "./shell/appNav";
+import { useToast } from "./ui/Toast";
 import { useProfile } from "./shell/useProfile";
 import VideoPlayer from "./player/VideoPlayer";
 import { useClips } from "./library/useClips";
@@ -51,8 +52,19 @@ export default function App() {
   const filter = useLibraryFilter(lib.clips);
   const readySent = useRef(false);
 
+  // Post-silent-update confirmation ("Updated to vX") — main fires this once
+  // when the version we're running matches the update marker it wrote before
+  // restarting into the installer.
+  const toast = useToast();
+  useEffect(() => {
+    const unsubscribe = window.clips?.onAppUpdated?.((payload: { version?: string }) => {
+      if (payload?.version) toast.show(`Updated to v${payload.version}`);
+    });
+    return unsubscribe;
+  }, [toast]);
+
   // Navigation deep links from main (cliplib://settings/<section> — e.g. the
-  // clipper tray icon opening Settings → Clipper). The nonce makes repeated
+  // clipdip tray icon opening Settings → Clipdip). The nonce makes repeated
   // tray clicks re-apply the section even when it hasn't changed.
   const [settingsIntent, setSettingsIntent] = useState<{ section?: string; nonce: number } | null>(null);
   useEffect(() => {

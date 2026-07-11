@@ -4,7 +4,13 @@ const axios = require('axios');
 const semver = require('semver');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const logger = require('../utils/logger');
+const clipdipModule = require('./clipdip');
+
+// Written just before the silent installer runs; read back on next boot to
+// show the "Updated to vX" toast (clipdip-style post-update confirmation).
+const pendingUpdateMarkerPath = () => path.join(app.getPath('userData'), 'pending-update.json');
 
 // Constants
 const GITHUB_OWNER = 'yuma-dev';
@@ -296,16 +302,64 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
   sendToRenderer('download-progress', 100, mainWindow);
   sendToRenderer('update-download-complete', { path: tempPath }, mainWindow);
 
-  const openResult = await shell.openPath(tempPath);
-  if (openResult) {
-    throw new Error(`Failed to launch installer: ${openResult}`);
+  // Silent apply: the user already chose this by clicking the update pill —
+  // no wizard, no prompts. Stop the bundled clipdip first (the installer
+  // replaces resources\clipdip\clipdip.exe and NSIS can't swap a running
+  // exe), run NSIS silently, and have it relaunch the app when done. The
+  // relaunched app's startup hook brings clipdip back up.
+  try {
+    await clipdipModule.quit();
+  } catch (error) {
+    logger.warn(`Stopping clipdip before update failed: ${error.message}`);
   }
 
-  logger.info(`Update downloaded successfully (${stats.size} bytes), installer launched`);
+  try {
+    fs.writeFileSync(
+      pendingUpdateMarkerPath(),
+      JSON.stringify({ version, at: Date.now() })
+    );
+  } catch (error) {
+    logger.warn(`Could not write update marker: ${error.message}`);
+  }
+
+  const installer = spawn(tempPath, ['/S', '--force-run'], {
+    detached: true,
+    stdio: 'ignore'
+  });
+  installer.unref();
+
+  logger.info(`Update downloaded (${stats.size} bytes), silent installer started`);
 
   setTimeout(() => {
     app.quit();
-  }, 1000);
+  }, 500);
+}
+
+/**
+ * Post-update confirmation: if the marker written before the silent install
+ * matches the version we're now running, tell the renderer to toast it.
+ * Called by main.js once the renderer has loaded.
+ */
+function checkPostUpdateMarker(mainWindow) {
+  const markerPath = pendingUpdateMarkerPath();
+  let marker = null;
+  try {
+    marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  } catch {
+    return; // no marker — normal launch
+  }
+  try {
+    fs.unlinkSync(markerPath);
+  } catch {
+    /* ignore */
+  }
+  const version = typeof marker?.version === 'string' ? marker.version : null;
+  if (version && version === app.getVersion()) {
+    logger.info(`Silent update landed: now running v${version}`);
+    sendToRenderer('app-updated', { version }, mainWindow);
+  } else if (version) {
+    logger.warn(`Update marker version v${version} does not match running v${app.getVersion()} — update may not have applied`);
+  }
 }
 
 async function downloadUpdateWithRetries(options) {
@@ -515,5 +569,6 @@ async function checkForUpdates(mainWindow, options = {}) {
 
 module.exports = {
   init,
-  checkForUpdates
+  checkForUpdates,
+  checkPostUpdateMarker
 };

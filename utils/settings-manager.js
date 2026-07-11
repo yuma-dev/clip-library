@@ -21,13 +21,13 @@ const DEFAULT_SETTINGS = {
     serverUrl: 'https://friends.cliplib.app',
     apiToken: ''
   },
-  // Integrated clipper (the bundled clipdip binary). Only library-side keys
-  // live here — the clipper's own settings are in its TOML config, bridged
-  // by main/clipper.js.
-  clipper: {
+  // Integrated clipdip (the bundled binary). Only library-side keys
+  // live here — clipdip's own settings are in its TOML config, bridged
+  // by main/clipdip.js.
+  clipdip: {
     enabled: false,
     autostart: false,
-    // Dev/advanced override; empty -> resources/clipper/clipdip.exe
+    // Dev/advanced override; empty -> resources/clipdip/clipdip.exe
     binaryPath: ''
   },
   // Whether to desaturate game icons in the clip list

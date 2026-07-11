@@ -944,8 +944,19 @@ fn start_silent_update(app: AppHandle) {
 /// Background auto-update checker: polls the GitHub Releases `latest.json`
 /// every 30 seconds. Runs only in release builds (a dev build at 0.x would
 /// nag about every published release) unless CLIPDIP_FORCE_UPDATE_CHECK=1.
+/// Self-updating is retired: the binary ships inside ClipLib and the
+/// library's updater replaces it in lockstep with the app. A self-updated
+/// clipdip would drift from the config schema the library's settings UI
+/// was written against. Flip only for a standalone build.
+const SELF_UPDATER_ENABLED: bool = false;
+
 fn spawn_update_checker(app: AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
+
+    if !SELF_UPDATER_ENABLED {
+        info!("self-updater disabled (ClipLib manages clipdip updates)");
+        return;
+    }
 
     let forced = matches!(
         std::env::var("CLIPDIP_FORCE_UPDATE_CHECK").as_deref(),
@@ -2270,6 +2281,10 @@ fn capture_desktop_thumbnail() -> Option<String> {
 
 // ---------- helpers -------------------------------------------------------
 
+// Legacy: the built-in React settings window. Retired — configuration lives
+// in ClipLib's Settings → Clipdip page and index.html is no longer built or
+// embedded. Kept for reference.
+#[allow(dead_code)]
 fn open_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -2292,11 +2307,9 @@ fn open_main_window(app: &AppHandle) {
     }
 }
 
-/// Open the ClipLib library app directly on its Clipper settings page via
+/// Open the ClipLib library app directly on its Clipdip settings page via
 /// the `cliplib://` protocol. Windows starts (or focuses) the library.
-/// If the protocol isn't registered — library not installed / never run —
-/// fall back to our own settings window so the tray icon is never dead.
-fn open_library(app: &AppHandle) {
+fn open_library(_app: &AppHandle) {
     use windows::core::w;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -2305,16 +2318,20 @@ fn open_library(app: &AppHandle) {
         ShellExecuteW(
             None,
             w!("open"),
-            w!("cliplib://settings/clipper"),
+            w!("cliplib://settings/clipdip"),
             PCWSTR::null(),
             PCWSTR::null(),
             SW_SHOWNORMAL,
         )
     };
-    // ShellExecuteW returns a value > 32 on success.
+    // ShellExecuteW returns a value > 32 on success. No fallback UI — the
+    // binary ships inside ClipLib, so an unregistered protocol means the
+    // library was removed out from under us; nothing sensible to open.
     if result.0 as usize <= 32 {
-        info!("cliplib:// protocol not available (ShellExecuteW={}), opening own settings window", result.0 as usize);
-        open_main_window(app);
+        warn!(
+            "cliplib:// protocol not available (ShellExecuteW={}) — is ClipLib installed?",
+            result.0 as usize
+        );
     }
 }
 

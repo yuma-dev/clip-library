@@ -1,7 +1,7 @@
 {
   "name": "clips",
   "displayName": "ClipLib",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
   "main": "main.js",
@@ -14,8 +14,9 @@
     "dev:electron:trace": "wait-on tcp:127.0.0.1:5173 && node scripts/electron-trace.js",
     "typecheck": "tsc --noEmit",
     "build:renderer": "vite build",
-    "build": "npm run build:renderer && electron-builder --win",
-    "vendor:clipper": "node scripts/vendor-clipper.mjs",
+    "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && electron-builder --win",
+    "build:clipdip": "cd clipdip && npm install --no-audit --no-fund && npm run build && cargo build --release -p clipdip",
+    "vendor:clipdip": "node scripts/vendor-clipdip.mjs",
     "benchmark": "node benchmark/runner.js",
     "benchmark:verbose": "node benchmark/runner.js --verbose",
     "benchmark:json": "node benchmark/runner.js --output json",
@@ -46,8 +47,8 @@
     ],
     "extraResources": [
       {
-        "from": "vendor/clipper/",
-        "to": "clipper/"
+        "from": "vendor/clipdip/",
+        "to": "clipdip/"
       }
     ],
     "asarUnpack": [
@@ -62,14 +63,14 @@
       "appId": "com.yuma-dev.clips"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": false,
+      "oneClick": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "ClipLib",
       "uninstallDisplayName": "ClipLib",
       "artifactName": "ClipLib Setup ${version}.${ext}",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     }
   },
   "keywords": [],
