@@ -28,3 +28,4 @@ package-lock.json
 .modularization-snapshot.json
 GEMINI.md
 vendor/
+RELEASE_DRAFT.md
