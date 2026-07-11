@@ -1420,7 +1420,10 @@ body.ui-blur-exit .app-body {
 /* ---- Popover + menu ---- */
 .popover {
   position: fixed;
-  z-index: 120;
+  /* Popovers are click-spawned and transient — they must float above every
+     surface that can host one, including the onboarding wizard (4500) and
+     the share modal (10000). */
+  z-index: 12000;
 }
 
 .menu {

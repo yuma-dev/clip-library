@@ -38,6 +38,12 @@ const SEEK_SETTLE_DELAY_MS = 25;
 // Debounce for the fast-path seek snap fired from the video's 'seeked' event.
 // Coalesces the burst of seeks that happen mid-scrub-drag into one snap.
 const SEEKED_SNAP_DEBOUNCE_MS = 20;
+// The combined "Mix" track (first stream of clipdip multi-track recordings)
+// only exists so clips stay playable in players that read a single audio
+// stream. In here every source plays on its own track, so the Mix starts in
+// the hidden tray unless the user has explicitly restored it (a saved global
+// pref always wins over this default).
+const hiddenByDefault = (trackName) => trackName === 'Mix';
 // During the first ~250 ms after video.play() — and any time video.currentTime
 // stops advancing while we believe the video is playing — assume the video
 // element is warming up. Audio that races ahead in that window must NOT be
@@ -167,7 +173,7 @@ class AudioTracksManager {
       const globalPref = prefs[trackName] || {};
       // `hidden` = removed from active mix into the floating tray (global pref).
       // `muted`  = right-click soft mute, per-clip. Either silences the track.
-      const hidden = !!globalPref.hidden;
+      const hidden = globalPref.hidden !== undefined ? !!globalPref.hidden : hiddenByDefault(trackName);
       const color = typeof globalPref.color === 'string' && /^#[0-9a-f]{6}$/i.test(globalPref.color)
         ? globalPref.color
         : COLOR_PALETTE[meta.ordinal % COLOR_PALETTE.length];
@@ -682,7 +688,10 @@ class AudioTracksManager {
   _setHidden(track, hidden) {
     const next = !!hidden;
     this._applyHiddenByName(track.name, next);
-    this._persistGlobal(track, { hidden: next ? true : null });
+    // Tracks that are hidden by default (the Mix) need an explicit `false` to
+    // stick — a null would strip the key and the default would re-hide them.
+    const persisted = next ? true : (hiddenByDefault(track.name) ? false : null);
+    this._persistGlobal(track, { hidden: persisted });
     this._renderRows();
   }
 
