@@ -1348,10 +1348,13 @@ fn notify_native(app: &AppHandle, title: &str, body: &str) {
 /// user saw none of them. So health alerts go BOTH ways: the toast (for
 /// desktop visibility + the Action Center trail) and the in-game overlay
 /// notice (the same always-on-top window the clip-saved card uses).
+/// Overlay shows only the short `title` (it auto-dismisses and can't be
+/// screenshotted, so long prose is wasted there); the native toast carries
+/// the detailed `body` for the action center.
 fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
     notify_native(app, title, body);
     let notice = NoticePayload {
-        message: format!("{title} — {body}"),
+        message: title.to_string(),
         corner: corner.to_string(),
     };
     if let Some(state) = app.try_state::<AppState>() {
@@ -1492,7 +1495,7 @@ fn health_loop(
             notify_health(
                 &app,
                 &corner,
-                "Clipdip — capture stopped",
+                "Capture error, restarting",
                 "Screen capture hit an error and is restarting. The replay buffer starts refilling now.",
             );
             let _ = ev_tx.send(LoopEvent::RestartAfterFailure);
@@ -1552,7 +1555,7 @@ fn health_loop(
                 notify_health(
                     &app,
                     &corner,
-                    "Clipdip — capture froze",
+                    "Capture froze, restarting Clipdip",
                     "Screen capture stopped responding. Restarting Clipdip to recover…",
                 );
                 // Let the toast surface before the process exits.
@@ -1567,7 +1570,7 @@ fn health_loop(
             // wedge check, no stall alert, nothing).
             if polls > 15 {
                 Some((
-                    "Clipdip — capture never started".into(),
+                    "Capture never started, check settings".into(),
                     format!(
                         "No frames have been captured since capture started \
                          ({polls}s ago). Check the monitor / capture settings."
@@ -1581,7 +1584,7 @@ fn health_loop(
             let span = ring.stats().video_span_100ns;
             if idle > STALL_IDLE_100NS {
                 Some((
-                    "Clipdip — capture stalled".into(),
+                    format!("No new frames for {:.0}s", idle as f64 / 1e7),
                     format!(
                         "No frames captured for {:.0}s. Clips saved now won't show \
                          the screen until capture resumes.",
@@ -1592,7 +1595,11 @@ fn health_loop(
                 // Only judge "low" once the buffer has had a full window to
                 // fill, so normal startup doesn't trip it.
                 Some((
-                    "Clipdip — replay buffer low".into(),
+                    format!(
+                        "Replay buffer low ({:.0}s of {}s)",
+                        span as f64 / 1e7,
+                        replay_seconds
+                    ),
                     format!(
                         "Buffer holds only {:.0}s of your {}s replay window. A clip \
                          saved now would be short.",
@@ -1629,7 +1636,7 @@ fn health_loop(
                     notify_health(
                         &app,
                         &corner,
-                        "Clipdip — capture recovered",
+                        "Capture recovered",
                         "Replay capture is healthy again and the buffer is refilling.",
                     );
                 }
@@ -2116,7 +2123,7 @@ fn run_capture_loop(
                         notify_health(
                             &app,
                             &notif_corner,
-                            "Clipdip — capture keeps failing",
+                            "Capture stopped after repeated failures",
                             "Screen capture failed repeatedly and is now stopped. \
                              Check the capture settings (monitor / backend) and restart \
                              capture from the Clipdip window.",
