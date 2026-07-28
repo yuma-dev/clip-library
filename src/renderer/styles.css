@@ -3732,6 +3732,48 @@ body.ui-blur-exit .app-body {
   color: var(--color-accent-glyph);
 }
 
+/* Clipdip notification history (settings > notifications). */
+.clipdip-notif-history {
+  margin: 2px 0 8px;
+  border-radius: 10px;
+  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.04));
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.clipdip-notif-entry {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.clipdip-notif-entry:last-child {
+  border-bottom: none;
+}
+.clipdip-notif-time {
+  flex: none;
+  min-width: 74px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.clipdip-notif-text {
+  color: var(--color-text-muted);
+}
+.clipdip-notif-text b {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.clipdip-notif-entry.kind-health b,
+.clipdip-notif-entry.kind-error b {
+  color: var(--color-warning, #e8b34b);
+}
+.clipdip-notif-empty {
+  padding: 10px 12px;
+  color: var(--color-text-muted);
+}
+
 /* Filename template help. */
 .filename-help {
   flex-direction: column;

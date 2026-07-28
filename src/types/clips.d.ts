@@ -37,6 +37,8 @@ export interface ClipdipConfig {
     include_cursor?: boolean;
     gop_seconds?: number;
     codec?: "prefer_av1" | "force_h264" | "force_av1";
+    /** Bitrate ceiling override: absent = automatic per quality tier, 0 = uncapped, n = explicit bps. */
+    quality_cap_bps?: number;
     rate_control?: ClipdipRateControl;
     recording_quality?: ClipdipRecordingQuality;
   };

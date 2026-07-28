@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { CirclePlay, Save } from "lucide-react";
 import { SetGroup, SetRow } from "../../rows";
 import Toggle from "../../../ui/Toggle";
 import Slider from "../../../ui/Slider";
 import { useToast } from "../../../ui/Toast";
-import { clipdipBridge, useClipdip } from "./ClipdipContext";
+import { clipdipBridge, useClipdip, usePoll, type NotificationRecord } from "./ClipdipContext";
 import { CornerPicker } from "./controls";
 
 export default function ClipdipNotificationsSection() {
@@ -78,6 +78,8 @@ export default function ClipdipNotificationsSection() {
         </SetRow>
       </SetGroup>
 
+      <NotificationHistory running={running} />
+
       <SetGroup title="Preview" span2>
         <SetRow
           title="Preview on screen"
@@ -109,5 +111,67 @@ export default function ClipdipNotificationsSection() {
         </SetRow>
       </SetGroup>
     </>
+  );
+}
+
+// Recent notifications (health alerts, saves, errors) with timestamps, so
+// what an auto-dismissing overlay toast said can be read back later.
+function NotificationHistory({ running }: { running: boolean }) {
+  const [items, setItems] = useState<NotificationRecord[] | null>(null);
+  // An older clipdip binary answers the history command with "unknown
+  // command" — show a version hint instead of an eternally empty group.
+  const [unsupported, setUnsupported] = useState(false);
+
+  const load = useCallback(() => {
+    clipdipBridge()
+      .control("get_notification_history")
+      .then((r) => {
+        if (r.ok && Array.isArray(r.notifications)) {
+          setUnsupported(false);
+          setItems(r.notifications as NotificationRecord[]);
+        } else if (!r.ok && /unknown command/i.test(r.error ?? "")) {
+          setUnsupported(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  usePoll(load, 10000, running);
+
+  const fmtTime = (ms: number) => {
+    const d = new Date(ms);
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return sameDay ? time : `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${time}`;
+  };
+
+  return (
+    <SetGroup title="History" span2>
+      <SetRow
+        title="Recent notifications"
+        description={
+          !running
+            ? "Available while Clipdip is running"
+            : unsupported
+              ? "Requires a newer Clipdip version"
+              : "Every notice Clipdip has shown, with the full text of health alerts"
+        }
+      />
+      {running && !unsupported && items && items.length > 0 ? (
+        <div className="clipdip-notif-history">
+          {items.slice(0, 50).map((n, i) => (
+            <div key={`${n.at_ms}-${i}`} className={`clipdip-notif-entry kind-${n.kind}`}>
+              <span className="clipdip-notif-time">{fmtTime(n.at_ms)}</span>
+              <span className="clipdip-notif-text">
+                <b>{n.title}</b>
+                {n.body ? <span className="clipdip-notif-body"> {n.body}</span> : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : running && !unsupported && items ? (
+        <div className="clipdip-notif-history clipdip-notif-empty">No notifications yet.</div>
+      ) : null}
+    </SetGroup>
   );
 }

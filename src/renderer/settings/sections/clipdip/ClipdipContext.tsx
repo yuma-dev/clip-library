@@ -54,6 +54,18 @@ export interface BufferStats {
   mb_per_minute: number;
   clip_mb: number;
   buffered_secs: number;
+  /** True while the replay window is truncated by the ring's memory ceiling. */
+  memory_limited?: boolean;
+  bytes_used_mb?: number;
+  budget_mb?: number;
+}
+
+export interface NotificationRecord {
+  /** Unix epoch milliseconds when the notification was shown. */
+  at_ms: number;
+  kind: "health" | "clip" | "recording" | "notice" | "error" | string;
+  title: string;
+  body: string;
 }
 
 export interface LiveStatus {
