@@ -66,6 +66,10 @@ class Logger {
             this.currentLogFile = path.join(this.logPath, `app-${timestamp}.log`);
             
             await this.writeInitialLogEntry();
+
+            // One log file accumulates per launch; prune old ones in the
+            // background so init never waits on directory scans.
+            this.cleanOldLogs().catch(() => {});
         } catch (error) {
             console.error('Failed to initialize logger:', error);
         }
