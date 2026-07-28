@@ -31,7 +31,7 @@ use clipdip_muxer::{mux_with_ffmpeg_cli, resolve_ffmpeg_path, AudioTrack, VideoB
 use clipdip_ringbuf::{EncodedPacket, MediaClock, PacketRing, STREAM_VIDEO};
 
 use crate::config::{
-    AudioSource, CaptureBackendCfg, CodecPreferenceCfg, Config, RateControlCfg,
+    max_bps_for_quality, AudioSource, CaptureBackendCfg, CodecPreferenceCfg, Config, RateControlCfg,
     RecordingQualityCfg,
 };
 use crate::filename::FilenameVars;
@@ -163,8 +163,15 @@ impl Pipeline {
     /// continues). Failure to start the video thread aborts the whole
     /// pipeline.
     pub fn start(cfg: Config) -> Result<Self> {
+        let byte_budget = cfg.ring_byte_budget();
+        info!(
+            window_secs = cfg.replay_seconds,
+            budget_mb = byte_budget / 1_000_000,
+            sizing = if cfg.memory.max_ring_mb > 0 { "manual" } else { "auto" },
+            "ring buffer sized"
+        );
         let ring = Arc::new(PacketRing::with_time_window(
-            cfg.ring_byte_budget(),
+            byte_budget,
             cfg.ring_time_window_100ns(),
         ));
 
@@ -326,13 +333,14 @@ impl Pipeline {
             .ok_or_else(|| anyhow!("no video in buffer yet — wait ~1s after start and retry"))?;
         self.ring.set_hold(Some(anchor));
         *rec = Some(anchor);
-        // Boost encode quality for the recording's duration. CQP only —
-        // NVENC can't switch rate-control mode on a live session — and
-        // never *worse* than the clip quality (a recording QP above the
-        // clip QP is treated as "match clips"). The video thread picks the
-        // new target up on its next frame and reconfigures NVENC; the
-        // first ≤1 GOP of the recording (the pre-anchor footage) stays at
-        // clip quality.
+        // Boost encode quality for the recording's duration. Quality
+        // modes only (plain or capped CQP — the boost value is the same
+        // 0-51 quality scale under both; VBR keeps its average) and never
+        // *worse* than the clip quality (a recording QP above the clip QP
+        // is treated as "match clips"). The video thread picks the new
+        // target up on its next frame and reconfigures NVENC; the first
+        // ≤1 GOP of the recording (the pre-anchor footage) stays at clip
+        // quality.
         if let (
             RateControlCfg::ConstantQp { qp },
             RecordingQualityCfg::ConstantQp { qp: rec_qp },
@@ -635,6 +643,15 @@ fn video_loop(
         CaptureBackendCfg::Wgc => CaptureBackend::Wgc,
         CaptureBackendCfg::Dxgi => CaptureBackend::Dxgi,
     };
+
+    /// Quality caps are referenced to 1440p60; scale to the session's
+    /// actual pixel rate so 1080p and 4K users get proportionate ceilings.
+    /// Clamped to [0.25, 4] against degenerate resolutions/framerates.
+    fn scale_cap_to_pixel_rate(reference_bps: u32, w: u32, h: u32, fps: u32) -> u32 {
+        const REF_PIXEL_RATE: f64 = 2560.0 * 1440.0 * 60.0;
+        let rate = w as f64 * h as f64 * fps.max(1) as f64;
+        (reference_bps as f64 * (rate / REF_PIXEL_RATE).clamp(0.25, 4.0)) as u32
+    }
     let (mut dup, device, context) = Capturer::create(
         backend,
         cfg.video.output_index,
@@ -655,7 +672,21 @@ fn video_loop(
         CodecPreferenceCfg::ForceAv1 => CodecPreference::ForceAv1,
     };
     let rate_control = match cfg.video.rate_control {
-        RateControlCfg::ConstantQp { qp } => RateControl::ConstantQp { qp },
+        // CQP runs capped by default: same quality on ordinary content, a
+        // hard ceiling on runaway scenes (issue #4: 98 Mbps at QP 26).
+        // `quality_cap_bps = 0` is the explicit uncapped escape hatch.
+        RateControlCfg::ConstantQp { qp } => match cfg.video.quality_cap_bps {
+            Some(0) => RateControl::ConstantQp { qp },
+            cap => RateControl::CappedQuality {
+                cq: qp,
+                max_bps: scale_cap_to_pixel_rate(
+                    cap.unwrap_or_else(|| max_bps_for_quality(qp)),
+                    w,
+                    h,
+                    cfg.video.fps,
+                ),
+            },
+        },
         RateControlCfg::Vbr { avg_bps } => RateControl::Vbr { avg_bps },
     };
 
@@ -738,12 +769,37 @@ fn video_loop(
         let boost = recording_qp_boost.load(Ordering::Relaxed);
         let target = if boost == QP_BOOST_OFF { None } else { Some(boost) };
         if target != applied_qp_boost {
-            if let RateControlCfg::ConstantQp { qp: base_qp } = cfg.video.rate_control {
-                let qp = target.unwrap_or(base_qp);
-                match encoder.reconfigure_rate_control(RateControl::ConstantQp { qp }) {
-                    Ok(()) => info!(qp, boosted = target.is_some(), "encoder quality reconfigured"),
+            // Rebuild from the SAME variant the session was opened with —
+            // NVENC (and our reconfigure guard) can't switch rate-control
+            // mode on a live session. `rate_control` is the mapped,
+            // pixel-rate-scaled value the encoder started from.
+            let new_rc = match rate_control {
+                RateControl::ConstantQp { qp: base_qp } => {
+                    Some(RateControl::ConstantQp { qp: target.unwrap_or(base_qp) })
+                }
+                RateControl::CappedQuality { cq: base_cq, max_bps } => {
+                    // While boosted, raise the ceiling 1.5x too — a better
+                    // quality target under the clip-tier cap would just
+                    // pin recordings at the cap and encode nothing extra.
+                    Some(match target {
+                        Some(cq) => RateControl::CappedQuality {
+                            cq,
+                            max_bps: max_bps.saturating_add(max_bps / 2),
+                        },
+                        None => RateControl::CappedQuality { cq: base_cq, max_bps },
+                    })
+                }
+                RateControl::Vbr { .. } => None,
+            };
+            // `rc` here is the pre-derate request — the encoder logs the
+            // effective post-derate config itself on success.
+            if let Some(rc) = new_rc {
+                match encoder.reconfigure_rate_control(rc) {
+                    Ok(()) => {
+                        info!(?rc, boosted = target.is_some(), "encoder quality reconfigure requested")
+                    }
                     Err(e) => warn!(
-                        qp,
+                        ?rc,
                         "encoder quality reconfigure failed — recording continues at \
                          the previous quality: {e:#}"
                     ),
@@ -953,21 +1009,25 @@ fn save_clip_with_stem(
     // the very first IDR) — fall back to the oldest IDR so we still emit
     // a playable clip rather than refusing to save.
     if t_min_override.is_none() && idr_at_or_before.is_none() {
-        // This is the "short clip" symptom. With the media-clock stall
-        // compensation in place it should only happen in the first seconds
-        // after start; if it shows up otherwise, capture lost more time
-        // than the clock could fold out (e.g. a stall longer than the whole
-        // window) and the log below pins down how short the buffer was.
+        // This is the "short clip" symptom. Causes, in likelihood order:
+        // the app just started; the byte budget starved the window
+        // (`bytes_used` at/near `byte_budget` below); or capture lost more
+        // time than the media clock could fold out (a stall longer than
+        // the whole window).
         let oldest_video_pts = snapshot
             .iter()
             .find(|p| p.stream_id == STREAM_VIDEO)
             .map(|p| p.pts_100ns)
             .unwrap_or(t_last);
+        let stats = ring.stats();
         warn!(
             requested_window_secs = cfg.replay_seconds,
             buffered_secs = (t_last - oldest_video_pts) as f64 / 1e7,
+            ring_bytes_used_mb = stats.bytes_used / 1_000_000,
+            ring_byte_budget_mb = stats.byte_budget / 1_000_000,
             "replay buffer shorter than configured window — clip will be \
-             truncated (capture stall or app just started)"
+             truncated (app just started, byte-budget starvation, or a \
+             capture stall)"
         );
     }
     let first_idr = idr_at_or_before
@@ -1012,6 +1072,11 @@ fn save_clip_with_stem(
         output = %mp4_path.display(),
         "saving clip"
     );
+
+    // The configured directory may not exist yet (fresh default config, or
+    // a folder the user deleted) — a save must never fail on that.
+    std::fs::create_dir_all(&cfg.output.directory)
+        .with_context(|| format!("create output dir {}", cfg.output.directory.display()))?;
 
     let mut vf = File::create(&video_path)
         .with_context(|| format!("create {}", video_path.display()))?;

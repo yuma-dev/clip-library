@@ -26,7 +26,7 @@
 
 mod bundle;
 mod client;
-mod paths;
+pub mod paths;
 mod queue;
 
 use client::{HttpClient, SendOutcome};

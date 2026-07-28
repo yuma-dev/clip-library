@@ -56,6 +56,17 @@ pub enum RateControl {
     /// - AV1: 0–255 (lower = higher quality; ~28 is roughly equivalent to
     ///   H.264 QP 20 perceptually)
     ConstantQp { qp: u32 },
+    /// Constant quality with a hard bitrate ceiling: NVENC target-quality
+    /// VBR (`targetQuality` + `maxBitRate`/VBV). Below the cap it behaves
+    /// like constant quality; scenes that would exceed `max_bps` trade
+    /// quality down instead of running away — the worst-case clip size is
+    /// bounded, which pure CQP can never guarantee.
+    ///
+    /// `cq` uses the H.264 0–51 scale for BOTH codecs — NVENC's
+    /// `targetQuality` field is codec-agnostic (do NOT apply the AV1 ×4
+    /// QP scaling here). `max_bps` is the final cap for this session; the
+    /// encoder derates it ~0.6× for AV1 internally.
+    CappedQuality { cq: u32, max_bps: u32 },
     /// Variable bitrate with `avg_bps` average target. Peak is set to
     /// 1.5× average by the encoder.
     Vbr { avg_bps: u32 },

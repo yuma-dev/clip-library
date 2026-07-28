@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::Arc;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D11::{
@@ -242,6 +242,12 @@ impl NvEncoderD3D11 {
 
         enc_cfg.rcParams.version = NV_ENC_RC_PARAMS_VER;
         apply_rate_control(&mut enc_cfg.rcParams, active_codec, config.rate_control);
+
+        // Dump of the effective encode config (driver preset defaults +
+        // our overrides). Preset defaults vary by driver version, so this
+        // line is what makes "what did the encoder actually run with"
+        // answerable from a user's log. Re-logged on every reconfigure.
+        log_effective_config(&enc_cfg);
 
         // ---- initialize -------------------------------------------------
         let mut init = NV_ENC_INITIALIZE_PARAMS::default();
@@ -510,6 +516,7 @@ impl NvEncoderD3D11 {
             return Err(e);
         }
         self.config.rate_control = rc;
+        log_effective_config(&self.enc_cfg);
         Ok(())
     }
 
@@ -1134,6 +1141,28 @@ fn resolve_codec(pref: CodecPreference, supported: &[GUID]) -> Result<ActiveCode
     }
 }
 
+/// Log the encode config as NVENC will actually run it — post
+/// `apply_rate_control`, so derates/clamps are already reflected. Called
+/// at session init and after every successful reconfigure.
+fn log_effective_config(enc_cfg: &NV_ENC_CONFIG) {
+    let rc = &enc_cfg.rcParams;
+    info!(
+        rc_mode = rc.rateControlMode,
+        qp_inter_p = rc.constQP.qpInterP,
+        qp_intra = rc.constQP.qpIntra,
+        avg_bps = rc.averageBitRate,
+        max_bps = rc.maxBitRate,
+        vbv_size = rc.vbvBufferSize,
+        rc_bitfields = format!("{:#x}", rc.bitfields),
+        lookahead_depth = rc.lookaheadDepth,
+        multi_pass = rc.multiPass,
+        target_quality = rc.targetQuality,
+        frame_interval_p = enc_cfg.frameIntervalP,
+        gop_length = enc_cfg.gopLength,
+        "effective NVENC config"
+    );
+}
+
 /// Write `rc` into `rc_params`. Shared by session init and
 /// [`NvEncoderD3D11::reconfigure_rate_control`] so both paths scale and
 /// clamp QP identically.
@@ -1168,6 +1197,46 @@ fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: 
             // preset query may have left non-zero defaults behind.
             rc_params.averageBitRate = 0;
             rc_params.maxBitRate = 0;
+        }
+        RateControl::CappedQuality { cq, max_bps } => {
+            // Target-quality VBR: constant quality below the cap, hard
+            // ceiling above it. `averageBitRate = 0` + `targetQuality`
+            // puts NVENC in CQ mode; `maxBitRate` + a 1-second VBV bound
+            // the worst case — the VBV only engages on sustained bursts,
+            // so ordinary content encodes exactly like constant quality.
+            //
+            // AV1 gets ~0.6× the cap: at equal perceptual quality it
+            // needs far fewer bits than H.264, so an H264-sized ceiling
+            // on AV1 would never engage and silently un-cap the mode.
+            let cap = match codec {
+                ActiveCodec::Av1 => (max_bps as u64 * 6 / 10) as u32,
+                _ => max_bps,
+            };
+            rc_params.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+            // `targetQuality` is codec-agnostic 0–51 (no AV1 ×4 scaling —
+            // the field is u8 and 26×4 would be off-scale garbage). Floor
+            // at 1: a value of 0 means "auto" to NVENC and would silently
+            // discard the quality target for hand-edited qp=0 configs.
+            let cq = cq.clamp(1, 51);
+            rc_params.targetQuality = cq as u8;
+            rc_params.targetQualityLSB = 0;
+            rc_params.averageBitRate = 0;
+            rc_params.maxBitRate = cap;
+            rc_params.vbvBufferSize = cap;
+            rc_params.vbvInitialDelay = 0;
+            // Keep the ConstantQp arm's keyframe headroom (see its comment
+            // on static-content IDR "pumping"): in CQ mode `initialRCQP`
+            // is the rate controller's starting hint, so seed intra ~4 QP
+            // better than delta. Bit 2 of the packed bitfields word is
+            // enableInitialRCQP.
+            rc_params.initialRCQP = NV_ENC_QP {
+                qpInterP: cq,
+                qpInterB: cq,
+                qpIntra: cq.saturating_sub(4).max(1),
+            };
+            rc_params.bitfields |= 1 << 2;
+            // VBR ignores constQP; zero the preset leftovers for tidiness.
+            rc_params.constQP = NV_ENC_QP { qpInterP: 0, qpInterB: 0, qpIntra: 0 };
         }
         RateControl::Vbr { avg_bps } => {
             // VBR with a hard average target. CBR would honor bitrate

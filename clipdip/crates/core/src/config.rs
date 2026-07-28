@@ -30,10 +30,22 @@ pub struct Config {
     pub metadata: MetadataConfig,
     pub discord: DiscordConfig,
     pub telemetry: TelemetryConfig,
-    /// Replay window in seconds. Ring buffer is sized for this duration at
-    /// `video.bitrate_bps` (plus ~20% headroom for audio + muxer overhead).
+    pub memory: MemoryConfig,
+    /// Replay window in seconds. The ring buffer evicts by time to hold
+    /// exactly this much footage; its memory ceiling comes from
+    /// [`Config::ring_byte_budget`].
     pub replay_seconds: u32,
+    /// One-time-migration marker. Files written before the marker existed
+    /// deserialize as 0 (field-level default) and get each migration up to
+    /// [`CONFIG_REVISION`] applied exactly once on load; after that the
+    /// stamped revision makes every migrated value a free user choice
+    /// again. Fresh configs start at the current revision.
+    #[serde(default)]
+    pub config_revision: u32,
 }
+
+/// Bump when adding a migration to [`Config::migrate`].
+pub const CONFIG_REVISION: u32 = 1;
 
 impl Default for Config {
     fn default() -> Self {
@@ -47,8 +59,62 @@ impl Default for Config {
             metadata: MetadataConfig::default(),
             discord: DiscordConfig::default(),
             telemetry: TelemetryConfig::default(),
+            memory: MemoryConfig::default(),
             replay_seconds: 60,
+            config_revision: CONFIG_REVISION,
         }
+    }
+}
+
+/// Sizing assumption for the ring's CQP memory ceiling: a deliberate
+/// overestimate of what NVENC produces at the preset QPs (16-32) even at
+/// 4K high-motion, so byte eviction stays a runaway backstop and never the
+/// thing that decides how many seconds the buffer holds. If
+/// `ring_memory_pressure` telemetry ever shows real users pinned at the
+/// resulting ceiling, bump this (or build measured-rate sizing).
+const CQP_SAFETY_BPS: u64 = 150_000_000;
+
+/// Budget allowance for the audio the ring buffers alongside video: raw
+/// f32-48k PCM at the endpoint's native channel count. Stereo is ~0.38
+/// MB/s per source, but 7.1 surround endpoints are real in the wild
+/// (issue #4's reporter: 8-channel loopback = 1.54 MB/s), and WASAPI
+/// delivers ~100 packets/s per source, each paying
+/// `size_of::<EncodedPacket>()` in accounting overhead. 32 Mbps covers
+/// two 8-channel sources with margin.
+const AUDIO_PCM_ALLOWANCE_BPS: u64 = 32_000_000;
+
+/// Replay-buffer memory policy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    /// Manual override for the ring's memory ceiling, in MiB. `0` (the
+    /// default) sizes automatically from the quality mode and physical
+    /// RAM — the right choice for almost everyone. Hand-edit this only if
+    /// the app reports the replay window is limited by memory and you'd
+    /// rather spend more RAM than lower quality. Values are clamped to
+    /// half of physical RAM. Applies on the next pipeline (re)start.
+    pub max_ring_mb: u32,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self { max_ring_mb: 0 }
+    }
+}
+
+/// Total physical RAM in bytes via `GlobalMemoryStatusEx`. Falls back to
+/// 8 GiB if the call fails (it practically can't), keeping the budget sane.
+fn physical_ram_bytes() -> u64 {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `status` is a properly initialized MEMORYSTATUSEX with
+    // dwLength set, as the API requires.
+    match unsafe { GlobalMemoryStatusEx(&mut status) } {
+        Ok(()) => status.ullTotalPhys,
+        Err(_) => 8 * 1024 * 1024 * 1024,
     }
 }
 
@@ -70,7 +136,36 @@ impl Config {
     /// config there and return it.
     pub fn load_or_default(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("parse {}", path.display())),
+            Ok(s) => {
+                let mut cfg: Self =
+                    toml::from_str(&s).with_context(|| format!("parse {}", path.display()))?;
+                // A downgraded binary's settings save strips the
+                // `config_revision` stamp (it serializes the old struct),
+                // which would re-run value migrations against what are
+                // now the user's deliberate choices. The sidecar marker
+                // survives such rewrites: once it exists, migrations only
+                // restamp the revision, never touch values again.
+                let marker = path.with_extension("toml.migrated");
+                if cfg.migrate(marker.exists()) {
+                    // One-time keepsake of the pre-migration file — the
+                    // TOML serializer is comment-lossy, and this is the
+                    // first write hand-editing users didn't initiate.
+                    let backup = path.with_extension("toml.bak");
+                    if !backup.exists() {
+                        let _ = std::fs::copy(path, &backup);
+                    }
+                    // Persist so the migration runs exactly once; a failed
+                    // save just means it re-runs next load, which is
+                    // harmless (migrations are idempotent).
+                    if let Err(e) = cfg.save(path) {
+                        tracing::warn!("config migration save failed: {e:#}");
+                    }
+                    if let Err(e) = std::fs::write(&marker, CONFIG_REVISION.to_string()) {
+                        tracing::warn!("config migration marker write failed: {e:#}");
+                    }
+                }
+                Ok(cfg)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let cfg = Self::default();
                 cfg.save(path)?;
@@ -78,6 +173,29 @@ impl Config {
             }
             Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
         }
+    }
+
+    /// Apply one-time migrations for configs written by older versions.
+    /// Returns true if anything changed (caller persists). With
+    /// `already_migrated` set (the sidecar marker exists), value changes
+    /// are skipped and only the revision is restamped — the missing stamp
+    /// then means "an old binary rewrote the file", not "never migrated".
+    fn migrate(&mut self, already_migrated: bool) -> bool {
+        if self.config_revision >= CONFIG_REVISION {
+            return false;
+        }
+        if !already_migrated && self.config_revision < 1 {
+            // Revision 1: the default keyframe interval moved 1.0 -> 2.0
+            // (idle bitrate is dominated by the once-per-GOP IDR; see
+            // `gop_seconds`). Every pre-revision config persists 1.0
+            // explicitly because the writers rewrite the whole file, so
+            // exactly 1.0 means "old default", not a user choice.
+            if (self.video.gop_seconds - 1.0).abs() < f32::EPSILON {
+                self.video.gop_seconds = 2.0;
+            }
+        }
+        self.config_revision = CONFIG_REVISION;
+        true
     }
 
     /// Serialize and write atomically (tmp file + rename).
@@ -93,23 +211,52 @@ impl Config {
         Ok(())
     }
 
-    /// Byte budget for the packet ring. This is a *safety cap*, not the
+    /// Byte budget for the packet ring. This is a *safety ceiling*, not the
     /// sizing mechanism — the ring evicts by time (`replay_seconds`), so
-    /// resident memory tracks the encoder's actual bitrate. Under CQP the
-    /// real bitrate floats with scene complexity and can far exceed the
-    /// `bitrate_bps` hint on busy scenes; cap at 2× the nominal size so
-    /// byte eviction never truncates the replay window in practice.
+    /// resident memory tracks the encoder's actual bitrate and normally
+    /// sits well below this cap.
+    ///
+    /// Derivation (issue #4): under constant-QP the encoder has no bitrate
+    /// target, so the ceiling comes from `CQP_SAFETY_BPS`, a generous
+    /// overestimate of real CQP output. Under VBR the encoder's actual
+    /// average target is known, so 2× that absorbs bursts. Both include an
+    /// allowance for the raw-PCM audio sharing the ring, and both are
+    /// clamped against physical RAM so a big window on a small machine
+    /// degrades to an honest "window limited by memory" alert instead of
+    /// paging the system out. `memory.max_ring_mb` overrides the automatic
+    /// ceiling (still RAM-guarded).
     pub fn ring_byte_budget(&self) -> usize {
-        let video = (self.replay_seconds as u64 * self.video.bitrate_bps as u64) / 8;
-        ((video * 2) as usize).max(1024 * 1024)
+        self.ring_byte_budget_with_ram(physical_ram_bytes())
+    }
+
+    /// [`Config::ring_byte_budget`] with physical RAM injected, for tests.
+    fn ring_byte_budget_with_ram(&self, phys_ram: u64) -> usize {
+        const MIB: u64 = 1024 * 1024;
+        let window = self.replay_seconds as u64;
+        let budget = if self.memory.max_ring_mb > 0 {
+            (self.memory.max_ring_mb as u64 * MIB).min(phys_ram / 2)
+        } else {
+            let video = match self.video.rate_control {
+                RateControlCfg::Vbr { avg_bps } => window * avg_bps as u64 / 8 * 2,
+                RateControlCfg::ConstantQp { .. } => window * CQP_SAFETY_BPS / 8,
+            };
+            let audio = window * AUDIO_PCM_ALLOWANCE_BPS / 8;
+            let ram_clamp = (phys_ram / 4).clamp(1024 * MIB, 4096 * MIB);
+            (video + audio).min(ram_clamp)
+        };
+        (budget as usize).max(1024 * 1024)
     }
 
     /// Replay window in 100-ns ticks for the ring's time-based eviction.
-    /// Two seconds of slack on top of `replay_seconds` so the save path
-    /// always finds an IDR at/before the window start — guaranteeing the
-    /// saved clip covers the full configured duration.
+    /// Slack on top of `replay_seconds` so the save path always finds an
+    /// IDR at/before the window start — guaranteeing the saved clip covers
+    /// the full configured duration. The slack must exceed one GOP: with
+    /// eviction cutting at IDR boundaries, less than `gop_seconds` of
+    /// slack intermittently leaves no IDR at-or-before the window start
+    /// and the save falls back to a truncated clip.
     pub fn ring_time_window_100ns(&self) -> i64 {
-        (self.replay_seconds as i64 + 2) * 10_000_000
+        let slack = (self.video.gop_seconds.max(1.0) + 1.0).max(2.0) as f64;
+        ((self.replay_seconds as f64 + slack) * 1e7) as i64
     }
 }
 
@@ -128,16 +275,22 @@ pub struct VideoConfig {
     /// `wgc` / `dxgi` force a specific backend.
     pub capture_backend: CaptureBackendCfg,
     pub fps: u32,
-    /// Used to size the packet ring buffer ([`Config::ring_byte_budget`]).
-    /// Under the default CQP rate-control this is a *hint*, not the actual
-    /// encoder bitrate — pick generously so the ring isn't undersized on
-    /// busy scenes. When `rate_control = Vbr { .. }` it doubles as the
-    /// encoder's average-bitrate target.
+    /// Seed value for the VBR target-bitrate slider in the settings UIs.
+    /// Not read anywhere else: the encoder's VBR target comes from
+    /// `rate_control.avg_bps`, and ring sizing
+    /// ([`Config::ring_byte_budget`]) derives from the rate-control mode
+    /// directly (it historically derived from this field, which under CQP
+    /// nothing ever set — issue #4).
     pub bitrate_bps: u32,
     /// Composite the OS mouse cursor onto each frame. DXGI Desktop
     /// Duplication never includes it natively.
     pub include_cursor: bool,
-    /// IDR (keyframe) interval in seconds.
+    /// IDR (keyframe) interval in seconds. Default 2.0: on static content
+    /// the bitstream is essentially one full-frame IDR per GOP (P-frames
+    /// are near-free skips), so idle bitrate scales inversely with this —
+    /// 1.0 measured ~2x the idle size of 2.0 for no visible benefit. The
+    /// ring's eviction granularity and the worst-case "clip starts early"
+    /// overshoot both equal one GOP, which keeps 2.0 comfortable.
     pub gop_seconds: f32,
     /// Codec preference. `PreferAv1` (default) uses AV1 on RTX 40-series
     /// and newer, transparently falls back to H.264 elsewhere.
@@ -145,6 +298,18 @@ pub struct VideoConfig {
     /// Rate-control mode. Default is CQP (constant quality, bitrate floats
     /// with scene complexity) — same model as NVIDIA ShadowPlay.
     pub rate_control: RateControlCfg,
+    /// Bitrate ceiling applied on top of `ConstantQp` (ignored under VBR,
+    /// which caps itself). `None` (missing key, the default) = automatic:
+    /// [`max_bps_for_quality`] picks a generous cap for the quality tier
+    /// so runaway scenes can't balloon clips (issue #4: 98 Mbps at
+    /// "Balanced"). `Some(0)` = uncapped, the pre-cap behavior. `Some(n)`
+    /// = explicit cap in bps, referenced to 1440p60 H264 (scaled by
+    /// pixel rate and codec like the automatic value). A separate field —
+    /// not a rate-control variant — so configs written by this version
+    /// still load on older binaries, which simply ignore the key and run
+    /// uncapped CQP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_cap_bps: Option<u32>,
     /// Encode quality while a *manual recording* is in progress. Manual
     /// recordings are meant to be kept and uploaded, so they default to a
     /// noticeably higher quality (QP 14 ≈ 2× the bitrate of the QP-20
@@ -161,8 +326,9 @@ impl Default for VideoConfig {
             fps: 60,
             bitrate_bps: 30_000_000,
             include_cursor: true,
-            gop_seconds: 1.0,
+            gop_seconds: 2.0,
             codec: CodecPreferenceCfg::default(),
+            quality_cap_bps: None,
             rate_control: RateControlCfg::default(),
             recording_quality: RecordingQualityCfg::default(),
         }
@@ -196,7 +362,10 @@ pub enum CodecPreferenceCfg {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum RateControlCfg {
     /// Constant quantization. `qp` scale is codec-specific; if unset the
-    /// encoder picks a sensible default (H.264 ~20, AV1 ~28).
+    /// encoder picks a sensible default (H.264 ~20, AV1 ~28). Combined
+    /// with [`VideoConfig::quality_cap_bps`] this runs as capped quality
+    /// by default — same quality on ordinary content, hard bitrate
+    /// ceiling on runaway scenes.
     ConstantQp {
         #[serde(default = "default_qp")]
         qp: u32,
@@ -208,6 +377,20 @@ pub enum RateControlCfg {
 impl Default for RateControlCfg {
     fn default() -> Self {
         Self::ConstantQp { qp: default_qp() }
+    }
+}
+
+/// Automatic bitrate ceiling for a quality tier, referenced to 1440p60
+/// H264 (the pipeline scales by actual pixel rate; the encoder derates
+/// AV1 ~0.6×). Values are deliberately generous — the cap exists to bound
+/// the runaway tail (issue #4 measured 98 Mbps at "Balanced"), not to
+/// shave ordinary clips.
+pub fn max_bps_for_quality(qp: u32) -> u32 {
+    match qp {
+        q if q >= 32 => 25_000_000,  // Space saver
+        q if q >= 26 => 60_000_000,  // Balanced
+        q if q >= 20 => 80_000_000,  // High quality
+        _ => 100_000_000,            // Maximum
     }
 }
 
@@ -610,5 +793,152 @@ mod tests {
         cfg.video.bitrate_bps = 0;
         // Floor at 1 MiB so a degenerate config doesn't yield a zero ring.
         assert!(cfg.ring_byte_budget() >= 1024 * 1024);
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn cqp_budget_ignores_bitrate_bps_and_scales_with_window() {
+        // Issue #4: bitrate_bps must play no role under CQP. A 120s window
+        // sizes from CQP_SAFETY_BPS + audio allowance, RAM permitting.
+        let mut cfg = Config::default();
+        cfg.replay_seconds = 120;
+        cfg.video.bitrate_bps = 5_000_000; // stale VBR leftover, must be inert
+        let budget = cfg.ring_byte_budget_with_ram(32 * GIB) as u64;
+        let expected = 120 * (CQP_SAFETY_BPS + AUDIO_PCM_ALLOWANCE_BPS) / 8;
+        assert_eq!(budget, expected.min(4096 * 1024 * 1024));
+        // Far above the old fiction-derived 900 MB cap.
+        assert!(budget > 2 * GIB, "got {budget}");
+    }
+
+    #[test]
+    fn vbr_budget_uses_encoder_target_plus_audio() {
+        let mut cfg = Config::default();
+        cfg.replay_seconds = 120;
+        cfg.video.rate_control = RateControlCfg::Vbr { avg_bps: 5_000_000 };
+        let budget = cfg.ring_byte_budget_with_ram(32 * GIB) as u64;
+        let expected = 120 * (5_000_000u64 * 2 + AUDIO_PCM_ALLOWANCE_BPS) / 8;
+        assert_eq!(budget, expected);
+        // The old 5-Mbps trap produced a 150 MB budget; audio allowance
+        // alone keeps this comfortably above that.
+        assert!(budget > 300 * 1024 * 1024, "got {budget}");
+    }
+
+    #[test]
+    fn ram_clamp_bounds_the_automatic_budget() {
+        let mut cfg = Config::default();
+        cfg.replay_seconds = 300; // slider max — would want ~6 GiB unclamped
+        // 8 GiB machine: clamp = phys/4 = 2 GiB.
+        assert_eq!(cfg.ring_byte_budget_with_ram(8 * GIB) as u64, 2 * GIB);
+        // 64 GiB machine: clamp saturates at 4 GiB.
+        assert_eq!(cfg.ring_byte_budget_with_ram(64 * GIB) as u64, 4 * GIB);
+        // Tiny machine: clamp floors at 1 GiB.
+        assert_eq!(cfg.ring_byte_budget_with_ram(2 * GIB) as u64, 1 * GIB);
+    }
+
+    #[test]
+    fn manual_override_is_respected_and_ram_guarded() {
+        let mut cfg = Config::default();
+        cfg.replay_seconds = 120;
+        cfg.memory.max_ring_mb = 300;
+        assert_eq!(
+            cfg.ring_byte_budget_with_ram(32 * GIB) as u64,
+            300 * 1024 * 1024
+        );
+        // Hand-edited far past physical RAM: guarded to half of it.
+        cfg.memory.max_ring_mb = 1_000_000;
+        assert_eq!(cfg.ring_byte_budget_with_ram(8 * GIB) as u64, 4 * GIB);
+    }
+
+    #[test]
+    fn quality_cap_defaults_to_auto_and_stays_off_disk() {
+        // Missing key = automatic capping; the key is skipped on
+        // serialize so configs stay loadable by older binaries.
+        let cfg = Config::default();
+        assert_eq!(cfg.video.quality_cap_bps, None);
+        let s = toml::to_string_pretty(&cfg).unwrap();
+        assert!(!s.contains("quality_cap_bps"));
+        let old: Config = toml::from_str("replay_seconds = 60").unwrap();
+        assert_eq!(old.video.quality_cap_bps, None);
+
+        // Explicit values round-trip.
+        let cfg: Config =
+            toml::from_str("[video]\nquality_cap_bps = 0\n").unwrap();
+        assert_eq!(cfg.video.quality_cap_bps, Some(0));
+    }
+
+    #[test]
+    fn quality_cap_ladder_is_generous_and_monotonic() {
+        assert_eq!(max_bps_for_quality(32), 25_000_000); // Space saver
+        assert_eq!(max_bps_for_quality(26), 60_000_000); // Balanced
+        assert_eq!(max_bps_for_quality(20), 80_000_000); // High (default)
+        assert_eq!(max_bps_for_quality(16), 100_000_000); // Maximum
+        // Issue #4's reporter: Balanced bursts measured ~98 Mbps got a
+        // 60 Mbps ceiling — bounded, but far above ShadowPlay's 40.
+        assert!(max_bps_for_quality(26) > 40_000_000);
+    }
+
+    #[test]
+    fn migration_bumps_old_default_gop_once() {
+        // Pre-revision file with the old default: migrated.
+        let mut cfg: Config =
+            toml::from_str("replay_seconds = 60\n[video]\ngop_seconds = 1.0\n").unwrap();
+        assert_eq!(cfg.config_revision, 0);
+        assert!(cfg.migrate(false));
+        assert_eq!(cfg.video.gop_seconds, 2.0);
+        assert_eq!(cfg.config_revision, CONFIG_REVISION);
+        // Idempotent: nothing further to do.
+        assert!(!cfg.migrate(false));
+
+        // Pre-revision file with a deliberate non-default value: revision
+        // stamped, value untouched.
+        let mut cfg: Config =
+            toml::from_str("replay_seconds = 60\n[video]\ngop_seconds = 0.5\n").unwrap();
+        assert!(cfg.migrate(false));
+        assert_eq!(cfg.video.gop_seconds, 0.5);
+
+        // Post-revision file where the user chose 1.0 on purpose: kept.
+        let mut cfg: Config = toml::from_str(
+            "replay_seconds = 60\nconfig_revision = 1\n[video]\ngop_seconds = 1.0\n",
+        )
+        .unwrap();
+        assert!(!cfg.migrate(false));
+        assert_eq!(cfg.video.gop_seconds, 1.0);
+
+        // Stamp stripped by an old binary's settings save, but the marker
+        // says we already migrated: restamp only, keep the user's 1.0.
+        let mut cfg: Config =
+            toml::from_str("replay_seconds = 60\n[video]\ngop_seconds = 1.0\n").unwrap();
+        assert!(cfg.migrate(true));
+        assert_eq!(cfg.video.gop_seconds, 1.0);
+        assert_eq!(cfg.config_revision, CONFIG_REVISION);
+    }
+
+    #[test]
+    fn ring_slack_tracks_gop_length() {
+        let mut cfg = Config::default();
+        cfg.replay_seconds = 60;
+        // Default 2s GOP: slack = gop + 1 = 3s.
+        assert_eq!(cfg.ring_time_window_100ns(), 63 * 10_000_000);
+        // Short GOP keeps the historical 2s floor.
+        cfg.video.gop_seconds = 0.5;
+        assert_eq!(cfg.ring_time_window_100ns(), 62 * 10_000_000);
+        // Long GOP grows the slack so the save cut always finds an IDR
+        // at-or-before the window start.
+        cfg.video.gop_seconds = 5.0;
+        assert_eq!(cfg.ring_time_window_100ns(), 66 * 10_000_000);
+    }
+
+    #[test]
+    fn legacy_toml_without_memory_section_gets_auto_sizing() {
+        // Every pre-existing config.toml explicitly persists bitrate_bps
+        // and has no [memory] table — it must load and size the new way.
+        let cfg: Config = toml::from_str(
+            "replay_seconds = 120\n[video]\nbitrate_bps = 30000000\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.memory.max_ring_mb, 0);
+        let budget = cfg.ring_byte_budget_with_ram(32 * GIB) as u64;
+        assert!(budget > 2 * GIB, "got {budget}");
     }
 }
