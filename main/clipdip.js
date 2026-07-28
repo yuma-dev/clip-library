@@ -514,7 +514,8 @@ async function ensureStartedIfEnabled() {
   try {
     const settings = await getSettings();
     if (!settings?.clipdip?.enabled) return;
-    if (await isRunning()) return;
+    // No isRunning early-return: start() no-ops on a running instance but
+    // still repairs a missing output folder.
     const result = await start();
     if (!result.success) logger.warn(`Clipdip autostart-on-launch failed: ${result.error}`);
   } catch (error) {
@@ -529,7 +530,7 @@ async function ensureStartedIfEnabled() {
 // outcome either way means this runs at most once. On failure (spawn error,
 // or the process dying right after start) it records `false` so a broken
 // setup never retries on every launch.
-async function autoEnableIfUnconfigured(persistEnabled, clipLocation) {
+async function autoEnableIfUnconfigured(persistEnabled) {
   const settings = await getSettings();
   if (settings?.clipdip && 'enabled' in settings.clipdip) return false; // already decided
   if (!(await binaryFound())) return false; // no binary yet (dev) — stay undecided
@@ -539,16 +540,9 @@ async function autoEnableIfUnconfigured(persistEnabled, clipLocation) {
     return false; // stays undecided; the settings UI explains why
   }
 
-  // First-time setup: aim clips straight at the library unless clipdip
-  // already has its own configured folder (pre-merge standalone users).
-  try {
-    const { exists, config } = await getConfig();
-    if ((!exists || !config?.output?.directory) && clipLocation) {
-      await setConfig({ output: { directory: clipLocation } });
-    }
-  } catch (error) {
-    logger.warn(`Clipdip first-run folder setup failed: ${error.message}`);
-  }
+  // First-time output folder setup happens inside start() (see
+  // ensureOutputDirectory): clips aim straight at the library unless clipdip
+  // already has its own existing folder (pre-merge standalone users).
 
   // Start-with-Windows is opt-out too.
   await setAutostart(true).catch((e) => logger.warn(`Clipdip autostart enable failed: ${e.message}`));

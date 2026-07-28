@@ -96,6 +96,9 @@ const fileWatcherModule = require('./main/file-watcher');
 // Discord RPC module (lazy — discord-rpc is heavy and not needed to open the window)
 const discordModule = lazyModule('./main/discord');
 
+// Discord profile widget pusher (lazy; inert without its userData token file)
+const discordWidgetModule = lazyModule('./main/discord-widget');
+
 // Clips module
 const clipsModule = require('./main/clips');
 
@@ -698,6 +701,11 @@ app.whenReady().then(async () => {
     if (settings.enableDiscordRPC && !isBenchmarkMode) {
       discordModule.initDiscordRPC(getSettings);
     }
+    if (!isBenchmarkMode) {
+      // Owner-only profile widget pusher; inert unless its token file exists
+      // in userData (see main/discord-widget.js).
+      discordWidgetModule.init(getSettings);
+    }
 
     // Skip update check in benchmark mode
     if (isBenchmarkMode) {
@@ -724,7 +732,7 @@ app.whenReady().then(async () => {
     .autoEnableIfUnconfigured(async (value) => {
       settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
       await saveSettings(settings);
-    }, settings.clipLocation)
+    })
     .then((autoEnabled) => {
       if (!autoEnabled) clipdipModule.ensureStartedIfEnabled();
     })
