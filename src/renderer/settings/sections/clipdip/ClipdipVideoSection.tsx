@@ -11,11 +11,15 @@ type RateControl = { mode: "constant_qp"; qp: number } | { mode: "vbr"; avg_bps:
 type RecordingQuality = { mode: "match_clips" } | { mode: "constant_qp"; qp: number };
 
 // Named quality presets over the encoder's QP (+6 QP roughly halves size).
+// Each tier also carries an automatic bitrate ceiling (max_bps_for_quality
+// in the core config) so chaotic scenes can't balloon clip sizes. Mbps
+// figures are 1440p60 reference values; the enforced cap scales with
+// resolution/fps and is lower under AV1, hence "around".
 const QUALITY_PRESETS = [
-  { qp: 32, label: "Space saver", desc: "Visibly compressed, about a quarter of High quality's size" },
-  { qp: 26, label: "Balanced", desc: "Looks great in motion at about half of High quality's size" },
-  { qp: 20, label: "High quality", desc: "Crisp, clean picture. The default" },
-  { qp: 16, label: "Maximum", desc: "Near-perfect picture, large files" },
+  { qp: 32, label: "Space saver", desc: "Visibly compressed, about a quarter of High quality's size. Busy scenes cap out around 25 Mbps" },
+  { qp: 26, label: "Balanced", desc: "Looks great in motion at about half of High quality's size. Busy scenes cap out around 60 Mbps" },
+  { qp: 20, label: "High quality", desc: "Crisp, clean picture. The default. Busy scenes cap out around 80 Mbps" },
+  { qp: 16, label: "Maximum", desc: "Near-perfect picture, large files. Busy scenes cap out around 100 Mbps" },
 ];
 
 // Quality while a manual recording runs. qp null = match clips (no boost).
@@ -117,7 +121,15 @@ export default function ClipdipVideoSection() {
       <SetGroup title="Quality">
         <SetRow
           title="Quality and size"
-          description={presetIdx === -1 ? "Custom encoder settings are active (see Advanced)" : QUALITY_PRESETS[presetIdx].desc}
+          description={
+            presetIdx === -1
+              ? "Custom encoder settings are active (see Advanced)"
+              : video?.quality_cap_bps === 0
+                ? `${QUALITY_PRESETS[presetIdx].desc.split(". Busy scenes")[0]}. Bitrate cap disabled in the config file`
+                : typeof video?.quality_cap_bps === "number"
+                  ? `${QUALITY_PRESETS[presetIdx].desc.split(". Busy scenes")[0]}. Custom bitrate cap set in the config file`
+                  : QUALITY_PRESETS[presetIdx].desc
+          }
         >
           <PresetSlider
             presets={QUALITY_PRESETS}
@@ -227,7 +239,7 @@ export default function ClipdipVideoSection() {
           ) : null}
           <SetRow title="Keyframe interval" description="Lower is more seek-friendly but heavier">
             <Slider
-              value={Number(video?.gop_seconds ?? 1)}
+              value={Number(video?.gop_seconds ?? 2)}
               min={0.5}
               max={5}
               step={0.1}
@@ -266,12 +278,18 @@ function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
   const { live, running } = useClipdip();
   const stats = live?.buffer_stats;
   const fmt = (n: number) => (n >= 100 ? Math.round(n).toString() : n.toFixed(1));
+  const fmtCap = (mb: number) => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.round(mb)} MB`);
 
   return (
     <div className="clipdip-infobox">
       <Gauge size={13} className="clipdip-infobox-icon" />
       {!running ? (
         <span>Size estimate is available while Clipdip is running.</span>
+      ) : stats?.measuring && stats.memory_limited ? (
+        <span>
+          Memory limit reached: the buffer holds <b>{Math.round(stats.buffered_secs)} s</b> of your {replaySeconds} s
+          replay length at the {fmtCap(stats.budget_mb ?? 0)} cap. Lower quality or shorten the replay length.
+        </span>
       ) : stats?.measuring ? (
         <span>
           At current screen activity: about <b>{fmt(stats.mb_per_minute)} MB per minute</b>, a {replaySeconds} s clip
