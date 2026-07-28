@@ -27,10 +27,21 @@ pub struct HttpClient {
     key: String,
     install_id: String,
     app_version: String,
+    machine_key: Option<String>,
+    session_id: String,
+    session_started_at: String,
 }
 
 impl HttpClient {
-    pub fn new(base: String, key: String, install_id: String, app_version: String) -> Self {
+    pub fn new(
+        base: String,
+        key: String,
+        install_id: String,
+        app_version: String,
+        machine_key: Option<String>,
+        session_id: String,
+        session_started_at: String,
+    ) -> Self {
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
@@ -41,17 +52,41 @@ impl HttpClient {
             key,
             install_id,
             app_version,
+            machine_key,
+            session_id,
+            session_started_at,
         }
     }
 
     /// POST /v1/heartbeat — records the beat and returns the current config
     /// (log-level override, min supported version). Errors are swallowed by the
     /// caller and simply retried on the next tick.
-    pub fn heartbeat(&self) -> anyhow::Result<ServerConfig> {
-        let body = serde_json::json!({
+    ///
+    /// `machine` (hardware profile) rides along only on the first successful
+    /// beat of a session; `app` whenever it changed. The server COALESCEs
+    /// omitted fields, so leaving them off never erases stored values.
+    pub fn heartbeat(
+        &self,
+        machine: Option<&serde_json::Value>,
+        app: Option<&serde_json::Value>,
+    ) -> anyhow::Result<ServerConfig> {
+        let mut body = serde_json::json!({
+            "protocol": 2,
             "install_id": self.install_id,
             "app_version": self.app_version,
+            "session_id": self.session_id,
+            "session_started_at": self.session_started_at,
+            "channel": "stable",
         });
+        if let Some(mk) = &self.machine_key {
+            body["machine_key"] = serde_json::Value::String(mk.clone());
+        }
+        if let Some(m) = machine {
+            body["machine"] = m.clone();
+        }
+        if let Some(a) = app {
+            body["app"] = a.clone();
+        }
         let resp = self
             .agent
             .post(&format!("{}/v1/heartbeat", self.base))
@@ -135,6 +170,26 @@ impl HttpClient {
             .and_then(|b| b.as_i64())
             .ok_or_else(|| "server did not return a bundle_id".to_string())
     }
+}
+
+/// POST /v1/session/end — best-effort, never blocking shutdown for more than
+/// ~2 s. Called from exit paths outside the manager thread (which may be mid
+/// backoff), so it builds its own short-fuse agent. Unknown session ids are
+/// accepted silently server-side, and the result is deliberately ignored.
+pub fn session_end_blocking(base: &str, key: &str, install_id: &str, session_id: &str, reason: &str) {
+    let body = serde_json::json!({
+        "install_id": install_id,
+        "session_id": session_id,
+        "reason": reason,
+    });
+    let _ = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .post(&format!("{}/v1/session/end", base.trim_end_matches('/')))
+        .set("X-Clipdip-Key", key)
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string());
 }
 
 /// Parse a `Retry-After` header (delta-seconds form) into a duration.

@@ -95,6 +95,26 @@ impl Capturer {
                             "WGC init failed — falling back to DXGI Desktop Duplication \
                              (fullscreen-exclusive games may not be captured): {e:#}"
                         );
+                        // The silent degradation behind "my clip is just my
+                        // desktop": DXGI can't see fullscreen-exclusive
+                        // games. Was only a local warn before. Once per
+                        // 15 min — rebuild loops retry this path.
+                        if let clipdip_diagnostics::Gate::Send { suppressed } =
+                            clipdip_diagnostics::gate(
+                                "wgc_init_failed_fell_back_to_dxgi",
+                                std::time::Duration::from_secs(900),
+                            )
+                        {
+                            clipdip_diagnostics::report_capture_failure_with(
+                                "wgc_init_failed_fell_back_to_dxgi",
+                                clipdip_diagnostics::Severity::Warning,
+                                format!("WGC init failed, fell back to DXGI: {e:#}"),
+                                serde_json::json!({
+                                    "output_index": output_index,
+                                    "occurrences": suppressed + 1,
+                                }),
+                            );
+                        }
                         let mut d = DesktopDuplicator::new(device, context, output_index)?;
                         d.set_include_cursor(include_cursor);
                         Ok(Capturer::Dxgi(d))

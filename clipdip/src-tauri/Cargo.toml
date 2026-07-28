@@ -37,6 +37,9 @@ getrandom = "0.3"
 png = "0.17"
 windows.workspace = true
 directories.workspace = true
+# Telemetry machine profile: CPU model string from the registry + OS build.
+winreg = "0.55"
+windows-version = "0.1"
 # WebView2 settings access (disable Edge autofill on the rename input).
 # webview2-com is the same version Tauri 2 links; it binds against
 # windows-core 0.61 while the workspace pins 0.58 for our COM code, so

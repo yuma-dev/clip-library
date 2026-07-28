@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod machine_profile;
 mod metadata;
+mod shutdown_watch;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -84,6 +86,54 @@ const CONSOLE_SCRIPT: &str = r#"
     var orig = console[l].bind(console);
     console[l] = function() { orig.apply(console, arguments); fwd(l, arguments); };
   });
+  // Uncaught errors and unhandled rejections were previously invisible:
+  // only explicit console.* calls got forwarded. Ship them as structured
+  // telemetry events, deduped per stack hash. Paths are stripped down to
+  // basenames HERE, before anything leaves the page.
+  var reported = {};
+  function stackFrames(err) {
+    try {
+      var lines = String((err && err.stack) || '').split('\n').slice(0, 6);
+      return lines.map(function(l) {
+        return l.replace(/[A-Za-z]:[\\\/][^\s)]*[\\\/]/g, '')
+                .replace(/https?:\/\/[^\s)]*\//g, '')
+                .trim();
+      }).filter(Boolean).slice(0, 5);
+    } catch(e) { return []; }
+  }
+  function hashStr(s) {
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) { h = ((h << 5) + h + s.charCodeAt(i)) | 0; }
+    return (h >>> 0).toString(16);
+  }
+  function reportJsError(code, name, message, frames) {
+    try {
+      var fp = hashStr(code + '|' + name + '|' + frames.join('|'));
+      var now = Date.now();
+      if (reported[fp] && now - reported[fp] < 60000) return;
+      reported[fp] = now;
+      if (window.__TAURI_INTERNALS__) {
+        window.__TAURI_INTERNALS__.invoke('report_frontend_event', {
+          windowLabel: label,
+          code: code,
+          message: (name ? name + ': ' : '') + String(message).slice(0, 500),
+          context: { frames: frames, fingerprint: fp }
+        }).catch(function(){});
+      }
+    } catch(e) {}
+  }
+  try {
+    window.addEventListener('error', function(e) {
+      var err = e.error || {};
+      reportJsError('js_uncaught_error', err.name || 'Error',
+        e.message || String(err.message || ''), stackFrames(err));
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      var r = e.reason || {};
+      reportJsError('js_unhandled_rejection', r.name || 'Rejection',
+        String(r.message || r).slice(0, 500), stackFrames(r));
+    });
+  } catch(e) {}
   // Devtools helper: call testNotification() to trigger a fake clip-save flow.
   try {
     window.testNotification = function() {
@@ -1003,8 +1053,13 @@ fn start_silent_update(app: AppHandle) {
     }
 
     std::thread::spawn(move || {
-        let fail = |e: String| {
+        let fail = |e: String, version: Option<&str>| {
             warn!("silent update failed: {e}");
+            clipdip_diagnostics::report_error(
+                "update_install_failed",
+                format!("silent update failed: {e}"),
+                Some(serde_json::json!({ "target_version": version })),
+            );
             if let Some(state) = app.try_state::<AppState>() {
                 state.update_installing.store(false, Ordering::SeqCst);
             }
@@ -1014,12 +1069,12 @@ fn start_silent_update(app: AppHandle) {
         };
         let updater = match app.updater() {
             Ok(u) => u,
-            Err(e) => return fail(e.to_string()),
+            Err(e) => return fail(e.to_string(), None),
         };
         let update = match tauri::async_runtime::block_on(updater.check()) {
             Ok(Some(u)) => u,
-            Ok(None) => return fail("update no longer available".into()),
-            Err(e) => return fail(e.to_string()),
+            Ok(None) => return fail("update no longer available".into(), None),
+            Err(e) => return fail(e.to_string(), None),
         };
         // Marker before install: next launch shows the "updated" toast
         // only if the running version equals the marker (i.e. it landed).
@@ -1029,6 +1084,9 @@ fn start_silent_update(app: AppHandle) {
             }
         }
         info!("downloading update v{} for silent install", update.version);
+        // Session ends here whether NSIS kills us or the restart below
+        // runs — the installer gives no later hook. Bounded at ~2s.
+        clipdip_diagnostics::session_end("update");
         match tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {})) {
             Ok(()) => {
                 // Quiet NSIS usually kills + relaunches us itself; restart
@@ -1036,7 +1094,7 @@ fn start_silent_update(app: AppHandle) {
                 info!("silent update installed — restarting");
                 app.restart();
             }
-            Err(e) => fail(e.to_string()),
+            Err(e) => fail(e.to_string(), Some(&update.version)),
         }
     });
 }
@@ -1146,6 +1204,57 @@ fn forward_console(window_label: String, level: String, msg: String) {
         "error" => tracing::error!(target: "js", "[{window_label}] {msg}"),
         "warn"  => tracing::warn!(target: "js", "[{window_label}] {msg}"),
         _       => tracing::info!(target: "js", "[{window_label}] {msg}"),
+    }
+}
+
+/// Structured frontend failure reports (uncaught JS errors, unhandled
+/// rejections, the overlay save-timeout watchdog). This is the only
+/// webview-writable telemetry surface, so it is locked down: allowlisted
+/// codes only, path-scrubbed message, rate-gated per code+fingerprint on
+/// top of the JS-side dedupe.
+#[tauri::command]
+fn report_frontend_event(
+    window_label: String,
+    code: String,
+    message: String,
+    context: Option<serde_json::Value>,
+) {
+    let (kind, severity) = match code.as_str() {
+        "js_uncaught_error" | "js_unhandled_rejection" => {
+            (clipdip_diagnostics::EventKind::Error, clipdip_diagnostics::Severity::Error)
+        }
+        "overlay_saving_timeout" => (
+            clipdip_diagnostics::EventKind::CaptureFailure,
+            clipdip_diagnostics::Severity::Error,
+        ),
+        _ => return, // unknown codes are dropped, not forwarded
+    };
+    let fingerprint = context
+        .as_ref()
+        .and_then(|c| c.get("fingerprint"))
+        .and_then(|f| f.as_str())
+        .map(str::to_string);
+    let gate_key = format!("{code}:{}", fingerprint.as_deref().unwrap_or(""));
+    let clipdip_diagnostics::Gate::Send { suppressed } =
+        clipdip_diagnostics::gate(&gate_key, std::time::Duration::from_secs(60))
+    else {
+        return;
+    };
+    let mut context = context.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("window".into(), window_label.into());
+        obj.insert("occurrences".into(), (suppressed + 1).into());
+    }
+    if let Some(d) = clipdip_diagnostics::global() {
+        d.report(clipdip_diagnostics::Event {
+            kind,
+            code: Some(code),
+            message: Some(clipdip_diagnostics::scrub_user_paths(&message)),
+            context: Some(context),
+            attach_log: true,
+            severity,
+            fingerprint,
+        });
     }
 }
 
@@ -1408,6 +1517,18 @@ fn spawn_hotkey_listener(
         Err(e) => warn!("esc binding parse failed: {e:#}"),
     }
     if binding_defs.is_empty() {
+        // Every configured hotkey failed to parse: the app is a dead tray
+        // icon. Which binding was invalid matters; the strings themselves
+        // are config content and stay local.
+        clipdip_diagnostics::report_error(
+            "hotkeys_all_invalid",
+            "all configured hotkeys failed to parse — no hotkeys registered",
+            Some(serde_json::json!({
+                "save_valid": clipdip_hotkey::HotkeyBinding::parse(&cfg.hotkey.save_clip).is_ok(),
+                "rename_valid": clipdip_hotkey::HotkeyBinding::parse(&cfg.hotkey.rename_clip).is_ok(),
+                "record_valid": clipdip_hotkey::HotkeyBinding::parse(&cfg.hotkey.toggle_recording).is_ok(),
+            })),
+        );
         return None;
     }
 
@@ -1428,6 +1549,26 @@ fn spawn_hotkey_listener(
         }
         Err(e) => {
             warn!("hotkey listener spawn failed: {e:#}");
+            // Root of "hotkeys don't work" reports: raw-input registration
+            // held by another process/anti-cheat, window creation failure.
+            let chain = format!("{e:#}");
+            let step = if chain.contains("CreateWindowExW") {
+                "create_window"
+            } else if chain.contains("RegisterRawInputDevices") {
+                "register_raw_input"
+            } else if chain.contains("spawn") {
+                "thread_spawn"
+            } else {
+                "thread_died"
+            };
+            clipdip_diagnostics::report_error(
+                "hotkey_listener_spawn_failed",
+                format!("hotkey listener spawn failed ({step}): {chain}"),
+                Some(serde_json::json!({
+                    "step": step,
+                    "binding_count": binding_defs.len(),
+                })),
+            );
             report_pipeline_error(app, format!("hotkeys: {e:#}"));
             None
         }
@@ -1697,6 +1838,9 @@ fn health_loop(
                 );
                 // Let the toast surface before the process exits.
                 std::thread::sleep(Duration::from_millis(1200));
+                // Deliberate exit after a fatal capture failure — the server
+                // vocabulary for that is `crash` (distinct from `died`).
+                clipdip_diagnostics::session_end("crash");
                 app.restart();
             }
         }
@@ -1757,8 +1901,9 @@ fn health_loop(
                              the replay length."
                         );
                         warn!("health: {body}");
-                        clipdip_diagnostics::report_capture_failure(
+                        clipdip_diagnostics::report_capture_failure_with(
                             "ring_memory_pressure",
+                            clipdip_diagnostics::Severity::Warning,
                             body.clone(),
                             serde_json::json!({
                                 "span_secs": span_secs,
@@ -1793,8 +1938,9 @@ fn health_loop(
                 if bad >= 2 {
                     degraded = true;
                     warn!("health: degraded — {body}");
-                    clipdip_diagnostics::report_capture_failure(
+                    clipdip_diagnostics::report_capture_failure_with(
                         "capture_degraded",
+                        clipdip_diagnostics::Severity::Warning,
                         body.clone(),
                         serde_json::json!({ "title": title }),
                     );
@@ -1833,6 +1979,50 @@ fn health_loop(
             }
         }
     }
+}
+
+/// Build and push the telemetry heartbeat's `app` block: resolved encoder +
+/// capture mode (only when the pipeline actually opened them — the capture
+/// health matrix must never be attributed from config), current settings,
+/// lifetime clip counter, and free space on the clips volume. The diagnostics
+/// manager re-sends only when the value changes.
+fn push_app_info(
+    cfg: &clipdip_core::config::Config,
+    session: Option<clipdip_core::pipeline::SessionInfo>,
+) {
+    let mut app = serde_json::json!({
+        "replay_seconds": cfg.replay_seconds,
+        "fps": cfg.video.fps,
+        "clips_saved_total": clipdip_diagnostics::clips_saved_total(),
+    });
+    if let Some(gb) = clipdip_core::diskinfo::free_disk_gb(&cfg.output.directory) {
+        app["storage_free_gb"] = gb.into();
+    }
+    if let Some(s) = session {
+        app["encoder"] = s.encoder_slug().into();
+        app["capture_mode"] = s.capture_mode_slug().into();
+        app["resolution"] = format!("{}x{}", s.width, s.height).into();
+    }
+    clipdip_diagnostics::update_app_info(app);
+}
+
+/// After a successful pipeline start, wait (off-thread) for the video thread
+/// to open the encoder, then push the resolved app block. Falls back to a
+/// config-only block if the encoder never comes up.
+fn push_app_info_when_ready(
+    session_info: Arc<Mutex<Option<clipdip_core::pipeline::SessionInfo>>>,
+    cfg: clipdip_core::config::Config,
+) {
+    std::thread::spawn(move || {
+        for _ in 0..20 {
+            if let Some(s) = *session_info.lock().unwrap() {
+                push_app_info(&cfg, Some(s));
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        push_app_info(&cfg, None);
+    });
 }
 
 fn run_capture_loop(
@@ -1878,9 +2068,11 @@ fn run_capture_loop(
     // Start the pipeline after hotkeys are live. On failure we emit the error
     // and keep the event loop running so hotkeys remain registered.
     let mut monitor: Option<HealthMonitor> = None;
+    let cfg_for_app_block = cfg.clone();
     let mut pipeline = match clipdip_core::Pipeline::start(cfg) {
         Ok(p) => {
             info!("pipeline started");
+            push_app_info_when_ready(p.session_info_handle(), cfg_for_app_block);
             *ring_handle.lock().unwrap() = Some(p.ring());
             *pipeline_running.lock().unwrap() = true;
             clear_pipeline_error(&app);
@@ -1904,6 +2096,10 @@ fn run_capture_loop(
         Err(e) => {
             error!("pipeline start: {e:#}");
             report_pipeline_error(&app, format!("{e:#}"));
+            // Config-only app block, deliberately without an encoder field
+            // so capture-health attribution never reflects a pipeline that
+            // did not actually run.
+            push_app_info(&cfg_for_app_block, None);
             None
         }
     };
@@ -1913,6 +2109,17 @@ fn run_capture_loop(
             LoopEvent::Save | LoopEvent::ToggleRecording => {
                 let Some(ref pipeline) = pipeline else {
                     warn!("save/record hotkey fired but pipeline is not running");
+                    // The loudest user-visible failure: a hotkey press that
+                    // does nothing at all.
+                    if let clipdip_diagnostics::Gate::Send { suppressed } =
+                        clipdip_diagnostics::gate("hotkey_no_pipeline", std::time::Duration::from_secs(60))
+                    {
+                        clipdip_diagnostics::report_error(
+                            "hotkey_no_pipeline",
+                            "save/record hotkey fired but the pipeline is not running",
+                            Some(serde_json::json!({ "occurrences": suppressed + 1 })),
+                        );
+                    }
                     continue;
                 };
 
@@ -1953,7 +2160,31 @@ fn run_capture_loop(
                                     }
                                 }
                             }
-                            Err(e) => warn!("start recording: {e:#}"),
+                            Err(e) => {
+                                warn!("start recording: {e:#}");
+                                let chain = format!("{e:#}");
+                                let cause = if chain.contains("already in progress") {
+                                    "already_in_progress"
+                                } else {
+                                    "no_video_yet"
+                                };
+                                if let clipdip_diagnostics::Gate::Send { suppressed } =
+                                    clipdip_diagnostics::gate(
+                                        "recording_start_failed",
+                                        std::time::Duration::from_secs(60),
+                                    )
+                                {
+                                    clipdip_diagnostics::report_error_with(
+                                        "recording_start_failed",
+                                        clipdip_diagnostics::Severity::Warning,
+                                        format!("manual recording failed to start ({cause})"),
+                                        Some(serde_json::json!({
+                                            "cause": cause,
+                                            "occurrences": suppressed + 1,
+                                        })),
+                                    );
+                                }
+                            }
                         }
                         continue;
                     }
@@ -2233,6 +2464,26 @@ fn run_capture_loop(
                             } else {
                                 error!("save clip: {e:#}");
                             }
+                            // The aggregate save-failure event. The chain is
+                            // path-scrubbed; specific causes (disk full, mux,
+                            // no IDR) already shipped their own codes deeper
+                            // in the stack, this is the user-visible outcome.
+                            if let clipdip_diagnostics::Gate::Send { suppressed } =
+                                clipdip_diagnostics::gate("clip_save_failed", std::time::Duration::from_secs(60))
+                            {
+                                clipdip_diagnostics::report_capture_failure(
+                                    "clip_save_failed",
+                                    format!(
+                                        "clip save failed: {}",
+                                        clipdip_diagnostics::scrub_user_paths(&format!("{e:#}"))
+                                    ),
+                                    serde_json::json!({
+                                        "save_kind": save_kind.as_str(),
+                                        "elapsed_ms": t0.elapsed().as_millis() as u64,
+                                        "occurrences": suppressed + 1,
+                                    }),
+                                );
+                            }
                             if notifs_enabled {
                                 tear_down_overlay(&app, format!("{e:#}"));
                             }
@@ -2243,6 +2494,14 @@ fn run_capture_loop(
                             } else {
                                 error!("save clip thread panicked");
                             }
+                            clipdip_diagnostics::report_crash_event(
+                                "save_thread_panicked",
+                                "save clip thread panicked",
+                                Some(serde_json::json!({
+                                    "save_kind": save_kind.as_str(),
+                                    "elapsed_ms": t0.elapsed().as_millis() as u64,
+                                })),
+                            );
                             if notifs_enabled {
                                 tear_down_overlay(&app, "save thread panicked".to_string());
                             }
@@ -2794,7 +3053,24 @@ fn run_control_command(
         "get_notification_history" => Ok(serde_json::json!({
             "notifications": get_notification_history(),
         })),
-        other => Err(format!("unknown command '{other}'")),
+        other => {
+            // ClipLib sent a command this clipdip build doesn't know —
+            // a direct detector for bridge version skew.
+            if let clipdip_diagnostics::Gate::Send { suppressed } =
+                clipdip_diagnostics::gate("control_unknown_command", std::time::Duration::from_secs(60))
+            {
+                clipdip_diagnostics::report_error_with(
+                    "control_unknown_command",
+                    clipdip_diagnostics::Severity::Warning,
+                    format!("control server received unknown command '{other}'"),
+                    Some(serde_json::json!({
+                        "cmd": other,
+                        "occurrences": suppressed + 1,
+                    })),
+                );
+            }
+            Err(format!("unknown command '{other}'"))
+        }
     }
 }
 
@@ -2939,14 +3215,24 @@ fn main() {
     // surface. Inert unless an ingest key was compiled in (CLIPDIP_INGEST_KEY)
     // and the user hasn't opted out. Wired to the file-log reload handle so the
     // server can raise this install's log level to debug a hard case.
-    let telemetry_enabled = clipdip_core::config::Config::load_or_default(&config_path)
+    let startup_cfg = clipdip_core::config::Config::load_or_default(&config_path);
+    let telemetry_enabled = startup_cfg
+        .as_ref()
         .map(|c| c.telemetry.enabled)
         .unwrap_or(true);
+    // One-shot hardware profile for the heartbeat's machine block. Collected
+    // regardless of the opt-out state (cheap, local); only ever sent when
+    // telemetry is on.
+    let machine = startup_cfg
+        .as_ref()
+        .ok()
+        .map(|c| machine_profile::collect(c));
     let diagnostics = clipdip_diagnostics::init(clipdip_diagnostics::InitOptions {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         enabled: telemetry_enabled,
         on_log_level: set_log_level,
         base_url: None,
+        machine,
     });
 
     // Report panics as `crash` events. The release build aborts on panic, so
@@ -2955,7 +3241,19 @@ fn main() {
     {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            clipdip_diagnostics::report_crash(&info.to_string());
+            // Thread name + a backtrace make the dashboard's crash groups
+            // actionable; the scrubber keeps Windows usernames out of the
+            // payload (panic messages love embedding paths).
+            let thread = std::thread::current()
+                .name()
+                .unwrap_or("unnamed")
+                .to_string();
+            let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+            let bt_short: String = backtrace.chars().take(3000).collect();
+            let message = clipdip_diagnostics::scrub_user_paths(&format!(
+                "{thread}: {info}\n{bt_short}"
+            ));
+            clipdip_diagnostics::report_crash(&message);
             prev(info);
         }));
     }
@@ -3080,6 +3378,14 @@ fn main() {
                     let _ = std::fs::remove_file(&marker);
                     let v = v.trim().to_string();
                     if v == env!("CARGO_PKG_VERSION") {
+                        // The true end-to-end update success signal: the
+                        // installed build actually booted.
+                        clipdip_diagnostics::report_custom(
+                            "update_completed",
+                            clipdip_diagnostics::Severity::Info,
+                            format!("update to v{v} landed and booted"),
+                            Some(serde_json::json!({ "version": v })),
+                        );
                         let app2 = app.handle().clone();
                         std::thread::spawn(move || {
                             // Give WebView2 + the pipeline a beat to settle
@@ -3091,6 +3397,19 @@ fn main() {
                         info!(
                             "stale update marker (v{v}, running v{}) — ignored",
                             env!("CARGO_PKG_VERSION")
+                        );
+                        // Install ran but a different version is running —
+                        // a silently failed or rolled-back install.
+                        clipdip_diagnostics::report_error(
+                            "update_stale_marker",
+                            format!(
+                                "update marker v{v} but running v{} — install silently failed?",
+                                env!("CARGO_PKG_VERSION")
+                            ),
+                            Some(serde_json::json!({
+                                "marker_version": v,
+                                "running_version": env!("CARGO_PKG_VERSION"),
+                            })),
                         );
                     }
                 }
@@ -3110,6 +3429,10 @@ fn main() {
             // localhost; port + token published via control.json).
             spawn_control_server(app.handle().clone());
 
+            // Hidden window watching for WM_QUERYENDSESSION so an OS
+            // shutdown ends the telemetry session as "shutdown", not "died".
+            shutdown_watch::spawn();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3128,6 +3451,7 @@ fn main() {
             restart_pipeline,
             get_buffer_stats,
             forward_console,
+            report_frontend_event,
             overlay_get_pending,
             test_notification,
             test_overlay,
@@ -3161,6 +3485,11 @@ fn main() {
                 }
                 tauri::RunEvent::Exit => {
                     info!("run event: Exit");
+                    // Clean shutdown beacon (tray quit, --quit, control-flag
+                    // exit all funnel here). No-op if an earlier exit path
+                    // (update, wedge restart, OS shutdown) already reported
+                    // with a more specific reason. Bounded at ~2s.
+                    clipdip_diagnostics::session_end("quit");
                     // Best-effort: drop the control file so clients don't
                     // try to reach a dead server.
                     if let Some(p) = control_file_path() {

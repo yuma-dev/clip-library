@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -505,17 +505,21 @@ dependencies = [
  "webview2-com",
  "windows 0.58.0",
  "windows-core 0.61.2",
+ "windows-version",
+ "winreg",
 ]
 
 [[package]]
 name = "clipdip-audio"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
+ "clipdip-diagnostics",
  "clipdip-ringbuf",
  "crossbeam-channel",
  "parking_lot",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "windows 0.58.0",
@@ -524,10 +528,12 @@ dependencies = [
 
 [[package]]
 name = "clipdip-capture"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
+ "clipdip-diagnostics",
  "clipdip-profile",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
@@ -537,12 +543,13 @@ dependencies = [
 
 [[package]]
 name = "clipdip-core"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clipdip-audio",
  "clipdip-capture",
+ "clipdip-diagnostics",
  "clipdip-encoder",
  "clipdip-hotkey",
  "clipdip-muxer",
@@ -562,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-diagnostics"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -576,12 +583,13 @@ dependencies = [
  "tracing",
  "ureq",
  "uuid",
+ "winreg",
  "zip 2.4.2",
 ]
 
 [[package]]
 name = "clipdip-discord"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -595,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-encoder"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "clipdip-profile",
@@ -610,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-hotkey"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -622,17 +630,19 @@ dependencies = [
 
 [[package]]
 name = "clipdip-muxer"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "anyhow",
+ "clipdip-diagnostics",
  "clipdip-ringbuf",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
 ]
 
 [[package]]
 name = "clipdip-profile"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "parking_lot",
  "tracing",
@@ -641,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-ringbuf"
-version = "1.0.2"
+version = "3.1.0"
 dependencies = [
  "parking_lot",
  "tracing",

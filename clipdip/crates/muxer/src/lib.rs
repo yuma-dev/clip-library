@@ -86,10 +86,22 @@ pub fn mux_with_ffmpeg_cli(
     output_mp4: &Path,
 ) -> Result<()> {
     if !video_h264.exists() {
+        // Should be unreachable (the caller just wrote it) — which makes it
+        // a high-signal bug event: AV quarantine or a cleanup race.
+        clipdip_diagnostics::report_error(
+            "mux_input_missing",
+            "video sidecar vanished before mux",
+            Some(serde_json::json!({ "input": "video" })),
+        );
         bail!("video input does not exist: {}", video_h264.display());
     }
-    for t in audio_tracks {
+    for (idx, t) in audio_tracks.iter().enumerate() {
         if !t.path.exists() {
+            clipdip_diagnostics::report_error(
+                "mux_input_missing",
+                "audio sidecar vanished before mux",
+                Some(serde_json::json!({ "input": "audio", "track_index": idx })),
+            );
             bail!("audio input does not exist: {}", t.path.display());
         }
     }
@@ -245,17 +257,63 @@ pub fn mux_with_ffmpeg_cli(
 
     debug!(?cmd, "running ffmpeg mux");
 
-    // Stream ffmpeg's stderr to our stderr so warnings/progress are visible.
-    cmd.stdout(Stdio::null()).stderr(Stdio::inherit());
+    // Capture stderr instead of inheriting it: in the windowed release
+    // build (CREATE_NO_WINDOW) an inherited stderr goes nowhere, and a mux
+    // failure used to leave nothing but an exit code. The captured output
+    // is forwarded to tracing below so local logs keep the diagnostics.
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to spawn ffmpeg at {}", ffmpeg.display()))?;
-    if !status.success() {
-        return Err(anyhow!(
-            "ffmpeg exited with status {}",
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into())
-        ));
+    let output = cmd.output().inspect_err(|e| {
+        // NotFound = ffmpeg missing at the resolved location (broken
+        // bundle, ClipLib path bridge failed); PermissionDenied = usually
+        // AV quarantine. Ship-blocking either way.
+        if let clipdip_diagnostics::Gate::Send { .. } =
+            clipdip_diagnostics::gate("ffmpeg_not_found", std::time::Duration::from_secs(600))
+        {
+            clipdip_diagnostics::report_error(
+                "ffmpeg_not_found",
+                format!("failed to spawn ffmpeg: {}", e.kind()),
+                Some(serde_json::json!({
+                    "io_kind": format!("{:?}", e.kind()),
+                })),
+            );
+        }
+    });
+    let output = output.with_context(|| format!("failed to spawn ffmpeg at {}", ffmpeg.display()))?;
+    let stderr_text = String::from_utf8_lossy(&output.stderr);
+    if !stderr_text.trim().is_empty() {
+        debug!("ffmpeg stderr: {}", stderr_text.trim());
+    }
+    if !output.status.success() {
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        if let clipdip_diagnostics::Gate::Send { .. } =
+            clipdip_diagnostics::gate("ffmpeg_mux_failed", std::time::Duration::from_secs(600))
+        {
+            // Tail of stderr, path-scrubbed, so the dashboard sees the
+            // actual ffmpeg diagnostic instead of just an exit code.
+            let mut tail_start = stderr_text.len().saturating_sub(4096);
+            while !stderr_text.is_char_boundary(tail_start) {
+                tail_start += 1;
+            }
+            let tail = clipdip_diagnostics::scrub_user_paths(&stderr_text[tail_start..]);
+            clipdip_diagnostics::report_error(
+                "ffmpeg_mux_failed",
+                format!("ffmpeg exited with status {code}"),
+                Some(serde_json::json!({
+                    "exit_code": code,
+                    "bitstream": video_bitstream.ffmpeg_format(),
+                    "track_count": audio_tracks.len(),
+                    "do_mix": do_mix,
+                    "fps": video_fps,
+                    "stderr_tail": tail.trim(),
+                })),
+            );
+        }
+        return Err(anyhow!("ffmpeg exited with status {code}"));
     }
 
     info!(

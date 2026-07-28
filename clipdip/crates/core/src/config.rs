@@ -104,7 +104,8 @@ impl Default for MemoryConfig {
 
 /// Total physical RAM in bytes via `GlobalMemoryStatusEx`. Falls back to
 /// 8 GiB if the call fails (it practically can't), keeping the budget sane.
-fn physical_ram_bytes() -> u64 {
+/// `pub` so the telemetry machine profile can reuse it.
+pub fn physical_ram_bytes() -> u64 {
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     let mut status = MEMORYSTATUSEX {
         dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
@@ -137,8 +138,33 @@ impl Config {
     pub fn load_or_default(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(s) => {
-                let mut cfg: Self =
-                    toml::from_str(&s).with_context(|| format!("parse {}", path.display()))?;
+                let mut cfg: Self = toml::from_str(&s)
+                    .inspect_err(|e| {
+                        // Corrupt config: some callers bail (capture loop
+                        // dies), others silently run on defaults — either
+                        // way a user's settings just vanished. Called on
+                        // every save/restart/command, hence the hour gate.
+                        // Line/col + size only: toml's error text can quote
+                        // file content (paths, device ids).
+                        if let clipdip_diagnostics::Gate::Send { suppressed } =
+                            clipdip_diagnostics::gate(
+                                "config_parse_failed",
+                                std::time::Duration::from_secs(3600),
+                            )
+                        {
+                            clipdip_diagnostics::report_error(
+                                "config_parse_failed",
+                                "config.toml failed to parse",
+                                Some(serde_json::json!({
+                                    "span": e.span().map(|s| format!("{s:?}")),
+                                    "file_bytes": s.len(),
+                                    "bak_exists": path.with_extension("toml.bak").exists(),
+                                    "occurrences": suppressed + 1,
+                                })),
+                            );
+                        }
+                    })
+                    .with_context(|| format!("parse {}", path.display()))?;
                 // A downgraded binary's settings save strips the
                 // `config_revision` stamp (it serializes the old struct),
                 // which would re-run value migrations against what are
@@ -147,6 +173,7 @@ impl Config {
                 // restamp the revision, never touch values again.
                 let marker = path.with_extension("toml.migrated");
                 if cfg.migrate(marker.exists()) {
+                    let from_revision = cfg.config_revision; // already restamped; informational
                     // One-time keepsake of the pre-migration file — the
                     // TOML serializer is comment-lossy, and this is the
                     // first write hand-editing users didn't initiate.
@@ -157,11 +184,43 @@ impl Config {
                     // Persist so the migration runs exactly once; a failed
                     // save just means it re-runs next load, which is
                     // harmless (migrations are idempotent).
+                    let mut save_ok = true;
+                    let mut marker_ok = true;
                     if let Err(e) = cfg.save(path) {
                         tracing::warn!("config migration save failed: {e:#}");
+                        save_ok = false;
                     }
                     if let Err(e) = std::fs::write(&marker, CONFIG_REVISION.to_string()) {
                         tracing::warn!("config migration marker write failed: {e:#}");
+                        marker_ok = false;
+                    }
+                    // Once per hour: a *failed* migration save re-runs this
+                    // block on every subsequent load.
+                    if let clipdip_diagnostics::Gate::Send { .. } = clipdip_diagnostics::gate(
+                        "config_migrated",
+                        std::time::Duration::from_secs(3600),
+                    ) {
+                        if save_ok {
+                            clipdip_diagnostics::report_custom(
+                                "config_migrated",
+                                clipdip_diagnostics::Severity::Info,
+                                format!("config migrated to revision {CONFIG_REVISION}"),
+                                Some(serde_json::json!({
+                                    "to_revision": CONFIG_REVISION,
+                                    "restamped_revision": from_revision,
+                                    "marker_ok": marker_ok,
+                                })),
+                            );
+                        } else {
+                            clipdip_diagnostics::report_error(
+                                "config_migration_save_failed",
+                                "config migration computed but could not be persisted",
+                                Some(serde_json::json!({
+                                    "to_revision": CONFIG_REVISION,
+                                    "marker_ok": marker_ok,
+                                })),
+                            );
+                        }
                     }
                 }
                 Ok(cfg)
@@ -200,14 +259,37 @@ impl Config {
 
     /// Serialize and write atomically (tmp file + rename).
     pub fn save(&self, path: &Path) -> Result<()> {
+        // A failed save means the user's settings silently don't stick.
+        let report = |stage: &'static str, kind: Option<std::io::ErrorKind>| {
+            if let clipdip_diagnostics::Gate::Send { suppressed } =
+                clipdip_diagnostics::gate("config_save_failed", std::time::Duration::from_secs(60))
+            {
+                clipdip_diagnostics::report_error(
+                    "config_save_failed",
+                    format!("config save failed at {stage}"),
+                    Some(serde_json::json!({
+                        "stage": stage,
+                        "io_kind": kind.map(|k| format!("{k:?}")),
+                        "occurrences": suppressed + 1,
+                    })),
+                );
+            }
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
+                .inspect_err(|e| report("dir", Some(e.kind())))
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        let body = toml::to_string_pretty(self).context("serialize config to TOML")?;
+        let body = toml::to_string_pretty(self)
+            .inspect_err(|_| report("serialize", None))
+            .context("serialize config to TOML")?;
         let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, body).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, path).with_context(|| format!("rename into {}", path.display()))?;
+        std::fs::write(&tmp, body)
+            .inspect_err(|e| report("write", Some(e.kind())))
+            .with_context(|| format!("write {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .inspect_err(|e| report("rename", Some(e.kind())))
+            .with_context(|| format!("rename into {}", path.display()))?;
         Ok(())
     }
 

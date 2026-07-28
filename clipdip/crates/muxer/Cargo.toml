@@ -9,4 +9,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 clipdip-ringbuf.workspace = true
+clipdip-diagnostics.workspace = true
+serde_json.workspace = true
 # ffmpeg-next added in task #5 (needs vcpkg FFmpeg dev install — see CONTRIBUTING)
