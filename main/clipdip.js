@@ -207,10 +207,44 @@ async function ensureFfmpegPath() {
   if (current && current !== libFfmpeg && fs.existsSync(current)) return;
   if (current === libFfmpeg) return;
   logger.info(`Pointing clipdip at the library ffmpeg: ${libFfmpeg}`);
-  await setConfig({ output: { ffmpeg_path: libFfmpeg } });
+  // clipdip's own startup may rewrite the config at the same moment (its
+  // one-time migration save fires on the first post-update launch, and an
+  // autostarted clipdip races this exact boot). A lost write here would
+  // resurrect the dead pre-update ffmpeg path until the next settings-
+  // driven restart, so verify the write landed and re-apply if not.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await setConfig({ output: { ffmpeg_path: libFfmpeg } });
+    await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+    const check = await getConfig().catch(() => null);
+    if (check?.config?.output?.ffmpeg_path === libFfmpeg) return;
+    logger.warn('ffmpeg path write did not stick, retrying');
+  }
+  logger.warn('ffmpeg path kept reverting; giving up until next start');
+}
+
+// Clipdip must always save somewhere that exists — its save pipeline fails
+// outright when the output directory is missing, and its own default
+// (Videos\Clipdip) is never created up front. Whenever the configured
+// directory is unset or gone from disk, aim it at the library's clip folder
+// so clips land in the library. Folders that exist (e.g. a pre-merge
+// standalone clipdip setup or a deliberate override) are left alone.
+async function ensureOutputDirectory() {
+  const settings = await getSettings();
+  const clipLocation = settings?.clipLocation;
+  if (!clipLocation || !fs.existsSync(clipLocation)) return;
+  const { config } = await getConfig();
+  const current = config?.output?.directory;
+  if (current && fs.existsSync(current)) return;
+  logger.info(`Pointing clipdip output at the library clips folder: ${clipLocation}`);
+  await setConfig({ output: { directory: clipLocation } });
 }
 
 async function start() {
+  // Repair runs even when clipdip is already up: it re-reads the output
+  // directory on every save, so no reload is needed for it to take effect.
+  await ensureOutputDirectory().catch((e) =>
+    logger.warn(`Clipdip output folder sync failed: ${e.message}`)
+  );
   if (await isRunning()) return { success: true, alreadyRunning: true };
   const exe = await resolveBinaryPath();
   try {
