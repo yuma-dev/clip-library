@@ -253,11 +253,80 @@ async function collectClipdipData(archive, manifest) {
     }
 }
 
+// Crashpad minidumps are the only trace of a native crash; nothing reaches
+// the app log. Metadata only (dumps can be tens of MB); the JSON tells us
+// whether crashes happened and where support can ask the user to fetch them.
+async function collectCrashDumps(archive, manifest) {
+    const report = {
+        crashDumpsPath: null,
+        dumpCount: 0,
+        dumps: [],
+        lastCrashReport: null
+    };
+
+    try {
+        report.crashDumpsPath = app.getPath('crashDumps');
+    } catch {
+        // crashDumps path unavailable on this platform/build; still emit the JSON
+    }
+
+    try {
+        const { crashReporter } = require('electron');
+        const last = crashReporter.getLastCrashReport();
+        if (last) {
+            report.lastCrashReport = { id: last.id, date: last.date };
+        }
+    } catch {
+        // crashReporter not started; nothing to report
+    }
+
+    if (report.crashDumpsPath && (await pathExists(report.crashDumpsPath))) {
+        // Windows Crashpad puts .dmp files under reports\; macOS/Linux use
+        // completed/new/pending. Scan all so the collector is layout-agnostic.
+        for (const sub of ['reports', 'completed', 'new', 'pending']) {
+            const dir = path.join(report.crashDumpsPath, sub);
+            if (!(await pathExists(dir))) continue;
+            try {
+                for (const entry of await fsp.readdir(dir)) {
+                    if (!entry.toLowerCase().endsWith('.dmp')) continue;
+                    try {
+                        const stat = await fsp.stat(path.join(dir, entry));
+                        report.dumps.push({
+                            file: `${sub}/${entry}`,
+                            size: stat.size,
+                            modifiedAt: stat.mtime.toISOString()
+                        });
+                    } catch {
+                        // Skip unreadable dump
+                    }
+                }
+            } catch {
+                // Skip unreadable directory
+            }
+        }
+        report.dumps.sort((a, b) => (a.modifiedAt < b.modifiedAt ? 1 : -1));
+        report.dumpCount = report.dumps.length;
+    }
+
+    const json = JSON.stringify(report, null, 2);
+    archive.append(json, { name: 'crashes/crashpad-dumps.json' });
+    manifest.files.push({
+        archivePath: 'crashes/crashpad-dumps.json',
+        sourcePath: report.crashDumpsPath,
+        size: Buffer.byteLength(json),
+        type: 'generated',
+        description: 'Crashpad minidump metadata (native crash evidence; dumps themselves stay on disk)'
+    });
+}
+
 async function createDiagnosticsBundle(options = {}) {
     const progressCallback = typeof options === 'function'
         ? options
         : options.progressCallback;
     const explicitPath = typeof options === 'object' ? options.savePath : undefined;
+    const note = typeof options === 'object' && typeof options.note === 'string'
+        ? options.note.trim()
+        : '';
 
     const userDataPath = app.getPath('userData');
     const reportDir = path.join(userDataPath, DIAGNOSTICS_DIR);
@@ -276,7 +345,7 @@ async function createDiagnosticsBundle(options = {}) {
         files: []
     };
 
-    const totalStages = 7;
+    const totalStages = 8;
     let completed = 0;
 
     emitProgress(progressCallback, 'initializing', completed, totalStages);
@@ -291,6 +360,17 @@ async function createDiagnosticsBundle(options = {}) {
     });
 
     archive.pipe(output);
+
+    if (note) {
+        archive.append(note, { name: 'note.txt' });
+        manifest.files.push({
+            archivePath: 'note.txt',
+            sourcePath: null,
+            size: Buffer.byteLength(note),
+            type: 'generated',
+            description: "User's description of the problem"
+        });
+    }
 
     await collectSystemInfo(userDataPath, archive, manifest);
     emitProgress(progressCallback, 'system-info', ++completed, totalStages);
@@ -312,6 +392,9 @@ async function createDiagnosticsBundle(options = {}) {
 
     await collectClipdipData(archive, manifest);
     emitProgress(progressCallback, 'clipdip', ++completed, totalStages);
+
+    await collectCrashDumps(archive, manifest);
+    emitProgress(progressCallback, 'crash-dumps', ++completed, totalStages);
 
     const manifestJson = JSON.stringify(manifest, null, 2);
     archive.append(manifestJson, { name: 'manifest.json' });
@@ -338,7 +421,7 @@ async function createDiagnosticsBundle(options = {}) {
  * @param {Object} eventSender - Event sender for progress updates
  * @returns {Promise<Object>} Result object with success status
  */
-async function generateDiagnosticsZip(targetPath, eventSender) {
+async function generateDiagnosticsZip(targetPath, eventSender, options = {}) {
     if (!targetPath) {
         return { success: false, error: 'No output path provided' };
     }
@@ -346,6 +429,7 @@ async function generateDiagnosticsZip(targetPath, eventSender) {
     try {
         const result = await createDiagnosticsBundle({
             savePath: targetPath,
+            note: options?.note,
             progressCallback: (progress) => {
                 if (eventSender && !eventSender.isDestroyed()) {
                     eventSender.send('diagnostics-progress', progress);

@@ -2744,6 +2744,10 @@ body.ui-blur-exit .app-body {
 .cliplib-input:focus {
   border-color: var(--color-border-hover);
 }
+.cliplib-input::placeholder {
+  color: var(--color-text-muted);
+  opacity: 0.55;
+}
 .cliplib-token-create {
   display: flex;
   gap: 8px;

@@ -38,3 +38,4 @@ AGENT.md
 agents/
 docs/
 RENDERER-REWRITE-PLAN.md
+main/ingest-key.generated.json

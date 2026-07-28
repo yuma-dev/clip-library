@@ -21,8 +21,77 @@ const DIAGNOSTICS_STAGE_LABELS: Record<string, string> = {
   "activity-logs": "Bundling activity history",
   "console-buffers": "Capturing console output",
   clipdip: "Gathering clipdip logs and state",
+  "crash-dumps": "Checking for crash dumps",
   complete: "Complete",
 };
+
+// Cycled through the note textarea's placeholder by the typing animation
+// below. Written like real user reports on purpose (typos and all) so the
+// field reads as "type something like this", not as UI copy.
+const NOTE_EXAMPLES = [
+  "my clips from last night arent showing up",
+  "pressed the clip button and nothing got saved",
+  "exported a clip and it has no sound",
+  "thumbnails are just black squares for some clips",
+  "clipdip keeps saying recording stopped every few minutes",
+  "got a save failed notification, the file is 0 bytes",
+  "app takes like 30 seconds to open since the update",
+  "cant share clips, upload always fails at the end",
+  "video stutters when i scrub through the timeline",
+  "my valorant clips show the wrong game name",
+  "app crashed when i deleted a bunch of clips at once",
+  "replay buffer only goes back 20 seconds instead of 60",
+  "clips save to the wrong folder since the last update",
+  "trimmed a clip but the export is still full length",
+  "search doesnt find clips i tagged yesterday",
+  "ram usage climbs to 8gb after a few hours, see issue #42",
+  "clip saved but its a black screen with audio",
+  "the volume slider resets itself every time",
+  "hotkey stopped working after i tabbed out of my game",
+  "audio is out of sync on longer clips",
+];
+
+/**
+ * Types example reports into the placeholder character by character, holds,
+ * deletes fast, moves on to the next. Paused while the user has text (the
+ * placeholder is invisible then anyway).
+ */
+function useTypedPlaceholder(active: boolean): string {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    if (!active) return;
+    let phraseIndex = Math.floor(Math.random() * NOTE_EXAMPLES.length);
+    let pos = 0;
+    let deleting = false;
+    let timer: number;
+    const tick = () => {
+      const phrase = NOTE_EXAMPLES[phraseIndex];
+      if (!deleting) {
+        pos += 1;
+        setText(phrase.slice(0, pos));
+        if (pos >= phrase.length) {
+          deleting = true;
+          timer = window.setTimeout(tick, 2400);
+        } else {
+          timer = window.setTimeout(tick, 12 + Math.random() * 20);
+        }
+      } else {
+        pos = Math.max(0, pos - 3);
+        setText(phrase.slice(0, pos));
+        if (pos === 0) {
+          deleting = false;
+          phraseIndex = (phraseIndex + 1) % NOTE_EXAMPLES.length;
+          timer = window.setTimeout(tick, 600);
+        } else {
+          timer = window.setTimeout(tick, 14);
+        }
+      }
+    };
+    timer = window.setTimeout(tick, 400);
+    return () => window.clearTimeout(timer);
+  }, [active]);
+  return text;
+}
 
 /** Open a link in the system browser (legacy diagnostics used shell.openExternal). */
 function openExternal(url: string): void {
@@ -60,6 +129,8 @@ export default function AboutSection() {
 
   const [uploadStatus, setUploadStatus] = useState<Status | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [note, setNote] = useState("");
+  const typedPlaceholder = useTypedPlaceholder(note.length === 0);
 
   useEffect(() => {
     window.clips
@@ -134,7 +205,7 @@ export default function AboutSection() {
       generatingRef.current = true;
       setGenerating(true);
       setDiagStatus({ tone: "progress", text: "Preparing diagnostics bundle…" });
-      const response = await window.clips.generateDiagnosticsZip(targetPath);
+      const response = await window.clips.generateDiagnosticsZip(targetPath, { note: note.trim() });
       if (!response?.success) throw new Error(response?.error ?? "Unknown error");
       const sizeText = typeof response.size === "number" ? ` (${formatBytes(response.size)})` : "";
       setDiagStatus({ tone: "success", text: `Saved to ${response.zipPath}${sizeText}` });
@@ -149,12 +220,18 @@ export default function AboutSection() {
   const uploadLogs = async () => {
     if (uploading) return;
     setUploading(true);
-    setUploadStatus({ tone: "progress", text: "Uploading logs…" });
+    // Reuse the zip stage progress while the bundle is being built.
+    generatingRef.current = true;
+    setUploadStatus({ tone: "progress", text: "Building and uploading bundle…" });
     try {
-      // Renderer console is captured main-side (console-message); no payload needed.
-      const response = await window.clips.uploadSessionLogs();
+      const response = await window.clips.uploadDiagnosticsBundle({ note: note.trim() });
       if (!response?.success) throw new Error(response?.error ?? "Unknown error");
-      if (response.url) {
+      if (response.bundleId != null) {
+        const sizeText = typeof response.size === "number" ? ` (${formatBytes(response.size)})` : "";
+        setUploadStatus({ tone: "success", text: `Uploaded bundle #${response.bundleId}${sizeText}` });
+        toast.show("Diagnostics uploaded", "success");
+      } else if (response.url) {
+        // Text-upload fallback (build without an ingest key).
         setUploadStatus({ tone: "success", link: response.url });
         try {
           await navigator.clipboard.writeText(response.url);
@@ -163,12 +240,14 @@ export default function AboutSection() {
           /* clipboard denied — link is still shown */
         }
       } else {
-        setUploadStatus({ tone: "success", text: "Uploaded. Share link not provided." });
+        setUploadStatus({ tone: "success", text: "Uploaded." });
       }
     } catch (err) {
       setUploadStatus({ tone: "error", text: `Upload failed: ${(err as Error).message}` });
     } finally {
       setUploading(false);
+      generatingRef.current = false;
+      setDiagStatus(null);
     }
   };
 
@@ -203,43 +282,63 @@ export default function AboutSection() {
 
       <SetGroup title="Diagnostics">
         <SetRow
-          title="Generate diagnostics zip"
-          description="Bundle app + clipdip logs, settings, console output, and system info to share for troubleshooting"
-          status={diagStatus?.text ? <StatusLine tone={diagStatus.tone}>{diagStatus.text}</StatusLine> : undefined}
+          stacked
+          title="Describe the problem"
+          description="What happened, when, and with which clip or game. If there's a GitHub issue for it, include the link or number."
         >
-          <button type="button" className="btn" disabled={generating} onClick={() => void generateDiagnostics()}>
-            <Archive size={14} /> {generating ? "Generating…" : "Generate zip"}
-          </button>
+          <textarea
+            className="cliplib-input"
+            style={{ width: "100%", minHeight: 72, resize: "vertical" }}
+            rows={3}
+            value={note}
+            spellCheck={false}
+            placeholder={typedPlaceholder}
+            onChange={(e) => setNote(e.target.value)}
+          />
         </SetRow>
         <SetRow
-          title="Upload session logs"
-          description="Upload the current run's logs (app, console, and clipdip) and get a shareable link"
+          title="Send diagnostics"
+          description="One bundle with logs, settings, and system info from both ClipLib and clipdip"
           status={
-            uploadStatus ? (
-              <StatusLine tone={uploadStatus.tone}>
-                {uploadStatus.link ? (
-                  <>
-                    Uploaded. Share link:{" "}
-                    <a
-                      href={uploadStatus.link}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (uploadStatus.link) openExternal(uploadStatus.link);
-                      }}
-                    >
-                      {uploadStatus.link}
-                    </a>
-                  </>
-                ) : (
-                  uploadStatus.text
-                )}
-              </StatusLine>
-            ) : undefined
+            <>
+              {uploadStatus ? (
+                <StatusLine tone={uploadStatus.tone}>
+                  {uploadStatus.link ? (
+                    <>
+                      Uploaded. Share link:{" "}
+                      <a
+                        href={uploadStatus.link}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (uploadStatus.link) openExternal(uploadStatus.link);
+                        }}
+                      >
+                        {uploadStatus.link}
+                      </a>
+                    </>
+                  ) : (
+                    uploadStatus.text
+                  )}
+                </StatusLine>
+              ) : undefined}
+              {diagStatus?.text ? <StatusLine tone={diagStatus.tone}>{diagStatus.text}</StatusLine> : undefined}
+            </>
           }
         >
-          <button type="button" className="btn" disabled={uploading} onClick={() => void uploadLogs()}>
-            <UploadCloud size={14} /> {uploading ? "Uploading…" : "Upload logs"}
-          </button>
+          <div className="set-btn-row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={uploading || !note.trim()}
+              title={note.trim() ? undefined : "Describe the problem first"}
+              onClick={() => void uploadLogs()}
+            >
+              <UploadCloud size={14} /> {uploading ? "Uploading…" : "Export and upload"}
+            </button>
+            <button type="button" className="btn" disabled={generating} onClick={() => void generateDiagnostics()}>
+              <Archive size={14} /> {generating ? "Generating…" : "Save zip"}
+            </button>
+          </div>
         </SetRow>
       </SetGroup>
     </>

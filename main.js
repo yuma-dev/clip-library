@@ -1,5 +1,5 @@
 if (require("electron-squirrel-startup")) return;
-const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen, crashReporter } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 
 // ClipLib rebrand keeps the pre-rename data: packaged Electron derives
@@ -18,6 +18,24 @@ app.setAppUserModelId('com.yuma-dev.clips');
 const logger = require('./utils/logger');
 const consoleBuffer = require('./utils/console-log-buffer');
 consoleBuffer.patchConsole();
+
+// Native crashes (Electron/Node/GPU) bypass the logger entirely; Crashpad
+// minidumps in userData\Crashpad are the only trace, so keep them locally.
+// Never uploaded; the diagnostics zip surfaces their metadata.
+crashReporter.start({ uploadToServer: false });
+
+// A main-process JS crash would otherwise kill the process before anything
+// reaches userData\logs. Log it first, then exit; the timeout guarantees we
+// don't hang on a broken async logger.
+process.on('uncaughtException', (error) => {
+  setTimeout(() => process.exit(1), 2000);
+  Promise.resolve(logger.error('[fatal] uncaughtException in main process:', error))
+    .then(() => process.exit(1), () => process.exit(1));
+});
+process.on('unhandledRejection', (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  logger.error('[fatal] unhandledRejection in main process (continuing):', error);
+});
 
 // Benchmark mode detection and harness initialization
 const isBenchmarkMode = process.env.CLIPS_BENCHMARK === '1';
@@ -754,6 +772,14 @@ app.whenReady().then(async () => {
   processQueuedProtocolUrls().catch((error) => {
     logger.error('Failed processing startup protocol queue:', error);
   });
+
+  // Prune stale settings backups and diagnostics zips well after startup;
+  // lazyModule keeps the require itself off the startup path too.
+  setTimeout(() => {
+    lazyModule('./main/storage-maintenance')
+      .run()
+      .catch((error) => logger.warn(`Storage maintenance failed: ${error.message}`));
+  }, 10_000);
 });
 
 app.on("window-all-closed", () => {
@@ -985,12 +1011,21 @@ ipcMain.handle('show-diagnostics-save-dialog', async () => {
   return dialogsModule.showDiagnosticsSaveDialog(mainWindow);
 });
 
-ipcMain.handle('generate-diagnostics-zip', async (event, targetPath) => {
-  return diagnosticsModule.generateDiagnosticsZip(targetPath, event.sender);
+ipcMain.handle('generate-diagnostics-zip', async (event, targetPath, options) => {
+  return diagnosticsModule.generateDiagnosticsZip(targetPath, event.sender, options);
 });
 
 ipcMain.handle('upload-session-logs', async (event, payload) => {
   return logUploader.uploadSessionLogs(payload);
+});
+
+ipcMain.handle('upload-diagnostics-bundle', async (event, payload) => {
+  return logUploader.uploadDiagnosticsBundle({
+    ...(payload || {}),
+    progressCallback: (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('diagnostics-progress', progress);
+    }
+  });
 });
 
 ipcMain.handle('test-share-connection', async (event, overrides) => {

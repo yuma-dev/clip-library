@@ -265,6 +265,7 @@ export interface ClipsApi {
   // --- Diagnostics / misc ---
   generateDiagnosticsZip(...args: any[]): Promise<any>;
   uploadSessionLogs(...args: any[]): Promise<any>;
+  uploadDiagnosticsBundle(...args: any[]): Promise<any>;
   logWatchSession(...args: any[]): Promise<any>;
   getFfmpegVersion(): Promise<string>;
   getExportAccelerationStatus(): Promise<any>;

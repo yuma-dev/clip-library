@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Play, RotateCcw, Square, Upload } from "lucide-react";
+import { FolderOpen, Play, RotateCcw, Square } from "lucide-react";
 import { SetGroup, SetRow, StatusLine } from "../../rows";
 import Toggle from "../../../ui/Toggle";
 import { useSettings } from "../../SettingsContext";
@@ -154,12 +154,13 @@ export default function ClipdipGeneralSection() {
 // Anonymous, opt-out diagnostics. Reads/writes its own state via the control
 // server (deliberately outside the config round-trip, so toggling never
 // restarts the pipeline). Requires a running clipdip.
+//
+// Manual diagnostic sharing lives in Settings → About → Diagnostics: one
+// universal bundle covering both the library and clipdip.
 function TelemetryGroup() {
   const { running } = useClipdip();
   const [telemetry, setTelemetry] = useState<{ enabled: boolean; configured: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [upload, setUpload] = useState<"idle" | "working" | "done" | "error">("idle");
-  const [uploadDetail, setUploadDetail] = useState<string | null>(null);
 
   useEffect(() => {
     if (!running) setTelemetry(null);
@@ -194,24 +195,6 @@ function TelemetryGroup() {
     }
   };
 
-  const doUpload = async () => {
-    setUpload("working");
-    setUploadDetail(null);
-    try {
-      const r = await clipdipBridge().uploadDiagnostics(null);
-      if (r.ok) {
-        setUpload("done");
-        const id = (r as Record<string, unknown>).id ?? (r as Record<string, unknown>).result;
-        if (id != null && typeof id !== "object") setUploadDetail(String(id));
-      } else {
-        setUpload("error");
-        setUploadDetail(r.error ?? null);
-      }
-    } catch {
-      setUpload("error");
-    }
-  };
-
   return (
     <SetGroup title="Diagnostics" span2>
       <SetRow
@@ -230,26 +213,6 @@ function TelemetryGroup() {
           disabled={busy || !available}
           aria-label="Send anonymous diagnostics"
         />
-      </SetRow>
-      <SetRow
-        title="Diagnostic bundle"
-        description="Zips logs and config and uploads them for debugging"
-        status={
-          upload === "done" ? (
-            <StatusLine tone="success">Uploaded{uploadDetail ? ` (${uploadDetail})` : ""}</StatusLine>
-          ) : upload === "error" ? (
-            <StatusLine tone="error">Upload failed{uploadDetail ? `: ${uploadDetail}` : ""}</StatusLine>
-          ) : undefined
-        }
-      >
-        <button
-          type="button"
-          className="btn"
-          disabled={!available || upload === "working"}
-          onClick={() => void doUpload()}
-        >
-          <Upload size={14} /> {upload === "working" ? "Uploading" : "Export and upload"}
-        </button>
       </SetRow>
     </SetGroup>
   );

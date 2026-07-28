@@ -138,6 +138,7 @@ const api = {
   // --- Diagnostics / misc ---
   generateDiagnosticsZip: invoke("generate-diagnostics-zip"),
   uploadSessionLogs: invoke("upload-session-logs"),
+  uploadDiagnosticsBundle: invoke("upload-diagnostics-bundle"),
   logWatchSession: invoke("log-watch-session"),
   getFfmpegVersion: invoke("get-ffmpeg-version"),
   getExportAccelerationStatus: invoke("get-export-acceleration-status"),
