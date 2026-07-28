@@ -8,6 +8,7 @@
 // running clipdip picks changes up via --reload.
 const { app } = require('electron');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const fsp = fs.promises;
 const { spawn, execFile } = require('child_process');
@@ -574,6 +575,59 @@ async function autoEnableIfUnconfigured(persistEnabled) {
   return true;
 }
 
+// ---------- diagnostics ------------------------------------------------------
+// Everything a bug report about the recorder needs, gathered from clipdip's
+// own on-disk state plus a live snapshot from its control server. Secrets
+// are deliberately excluded: control.json (auth token) and
+// discord_tokens.json never appear in the candidate list.
+
+const dataDirPath = () =>
+  path.join(
+    process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+    'clipdip',
+    'data'
+  );
+
+function diagnosticFileCandidates() {
+  const logsDir = path.join(dataDirPath(), 'logs');
+  return [
+    { name: 'clipdip.log', path: path.join(logsDir, 'clipdip.log'), description: 'Clipdip rolling log (current generation)' },
+    { name: 'clipdip.log.old', path: path.join(logsDir, 'clipdip.log.old'), description: 'Clipdip rolling log (previous generation)' },
+    { name: 'config.toml', path: configPath(), description: 'Clipdip configuration' },
+    { name: 'notification-history.json', path: path.join(dataDirPath(), 'notification-history.json'), description: 'Recent clipdip notifications (capped at 200)' },
+    { name: 'diag-queue.jsonl', path: path.join(dataDirPath(), 'diag-queue.jsonl'), description: 'Clipdip crash/capture-failure events not yet flushed to telemetry' },
+    { name: 'install_id', path: path.join(dataDirPath(), 'install_id'), description: 'Anonymous install id (join key for server-side telemetry)' }
+  ];
+}
+
+async function collectDiagnosticFiles() {
+  const found = [];
+  for (const candidate of diagnosticFileCandidates()) {
+    try {
+      const stat = await fsp.stat(candidate.path);
+      if (stat.isFile()) found.push({ ...candidate, size: stat.size });
+    } catch {
+      /* absent — clipdip may never have run on this machine */
+    }
+  }
+  return found;
+}
+
+// Live state that exists nowhere on disk — ring buffer usage vs budget,
+// pipeline running/error — comes from the running instance's control server;
+// the bridge-level status covers the not-running case.
+async function getDiagnosticsSnapshot() {
+  const [bridgeStatus, liveStatus] = await Promise.all([
+    getStatus().catch((error) => ({ error: error.message })),
+    control('status')
+  ]);
+  return {
+    generatedAt: new Date().toISOString(),
+    bridge: bridgeStatus,
+    live: liveStatus
+  };
+}
+
 // Explicit enable/disable side effects (called from the IPC handler).
 async function setEnabled(enabled) {
   if (enabled) {
@@ -610,5 +664,7 @@ module.exports = {
   listMonitors,
   getFilenameVariables,
   previewFilename,
-  control
+  control,
+  collectDiagnosticFiles,
+  getDiagnosticsSnapshot
 };

@@ -4,6 +4,9 @@ const os = require('os');
 const archiver = require('archiver');
 const { app } = require('electron');
 const logger = require('../utils/logger');
+const consoleBuffer = require('../utils/console-log-buffer');
+const rendererConsole = require('../main/renderer-console-capture');
+const clipdipModule = require('../main/clipdip');
 
 const fsp = fs.promises;
 
@@ -183,6 +186,73 @@ async function collectSettingsSnapshot(userDataPath, archive, manifest) {
     }
 }
 
+// Console output only exists in memory (main: patched console ring buffer;
+// renderer: webContents 'console-message' capture) — dump both so the zip
+// carries what never reached the log file.
+function collectConsoleBuffers(archive, manifest) {
+    const buffers = [
+        {
+            archivePath: 'console/main-console.txt',
+            text: consoleBuffer.getBufferText(),
+            description: 'Main-process console output (in-memory ring buffer)'
+        },
+        {
+            archivePath: 'console/renderer-console.txt',
+            text: rendererConsole.getBufferText(),
+            description: 'Renderer console output (captured via console-message)'
+        }
+    ];
+    for (const { archivePath, text, description } of buffers) {
+        const content = text || '(empty)';
+        archive.append(content, { name: archivePath });
+        manifest.files.push({
+            archivePath,
+            sourcePath: null,
+            size: Buffer.byteLength(content),
+            type: 'generated',
+            description
+        });
+    }
+}
+
+// Clipdip (the integrated recorder) keeps its own logs and state under
+// %LOCALAPPDATA%\clipdip and %APPDATA%\clipdip — a recording bug report is
+// useless without them. Secrets (control.json token, discord_tokens.json)
+// are excluded by the bridge's candidate list.
+async function collectClipdipData(archive, manifest) {
+    try {
+        const files = await clipdipModule.collectDiagnosticFiles();
+        for (const file of files) {
+            const archivePath = `clipdip/${file.name}`;
+            archive.file(file.path, { name: archivePath });
+            manifest.files.push({
+                archivePath,
+                sourcePath: file.path,
+                size: file.size,
+                type: 'clipdip',
+                description: file.description
+            });
+        }
+    } catch (error) {
+        logger.warn('Failed to collect clipdip diagnostic files:', error);
+    }
+
+    try {
+        const snapshot = await clipdipModule.getDiagnosticsSnapshot();
+        const json = JSON.stringify(snapshot, null, 2);
+        archive.append(json, { name: 'clipdip/status.json' });
+        manifest.files.push({
+            archivePath: 'clipdip/status.json',
+            sourcePath: null,
+            size: Buffer.byteLength(json),
+            type: 'generated',
+            description: 'Live clipdip state (ring buffer usage, pipeline status) — memory-only, lost after restart'
+        });
+    } catch (error) {
+        logger.warn('Failed to capture clipdip status snapshot:', error);
+    }
+}
+
 async function createDiagnosticsBundle(options = {}) {
     const progressCallback = typeof options === 'function'
         ? options
@@ -206,7 +276,7 @@ async function createDiagnosticsBundle(options = {}) {
         files: []
     };
 
-    const totalStages = 5;
+    const totalStages = 7;
     let completed = 0;
 
     emitProgress(progressCallback, 'initializing', completed, totalStages);
@@ -236,6 +306,12 @@ async function createDiagnosticsBundle(options = {}) {
 
     await collectActivityLogs(userDataPath, archive, manifest);
     emitProgress(progressCallback, 'activity-logs', ++completed, totalStages);
+
+    collectConsoleBuffers(archive, manifest);
+    emitProgress(progressCallback, 'console-buffers', ++completed, totalStages);
+
+    await collectClipdipData(archive, manifest);
+    emitProgress(progressCallback, 'clipdip', ++completed, totalStages);
 
     const manifestJson = JSON.stringify(manifest, null, 2);
     archive.append(manifestJson, { name: 'manifest.json' });
