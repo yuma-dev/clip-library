@@ -11,6 +11,8 @@ tracing.workspace = true
 windows.workspace = true
 windows-core.workspace = true
 clipdip-profile.workspace = true
+clipdip-diagnostics.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

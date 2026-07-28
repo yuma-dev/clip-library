@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "build:renderer": "vite build",
     "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && node scripts/gen-ingest-key.mjs && electron-builder --win",
-    "build:clipdip": "cd clipdip && npm install --no-audit --no-fund && npm run build && node -e \"const fs=require('fs'),d=new Date();fs.utimesSync('src-tauri/src/main.rs',d,d)\" && cargo build --release -p clipdip",
+    "build:clipdip": "node scripts/sync-clipdip-version.mjs && cd clipdip && npm install --no-audit --no-fund && npm run build && node -e \"const fs=require('fs'),d=new Date();fs.utimesSync('src-tauri/src/main.rs',d,d)\" && cargo build --release -p clipdip",
     "vendor:clipdip": "node scripts/vendor-clipdip.mjs",
     "release": "node scripts/release.mjs",
     "release:preview": "node scripts/release-preview.mjs",

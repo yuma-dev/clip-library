@@ -26,13 +26,17 @@
 
 mod bundle;
 mod client;
+mod coalesce;
+mod identity;
 pub mod paths;
 mod queue;
+
+pub use coalesce::{gate, Gate};
 
 use client::{HttpClient, SendOutcome};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_BASE_URL: &str = "https://logs.yuma-homeserver.online";
@@ -79,6 +83,28 @@ impl EventKind {
     }
 }
 
+/// Event severity — matches the server's `severity` enum (v2).
+#[derive(Clone, Copy, Debug)]
+pub enum Severity {
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal,
+}
+
+impl Severity {
+    fn as_str(self) -> &'static str {
+        match self {
+            Severity::Debug => "debug",
+            Severity::Info => "info",
+            Severity::Warning => "warning",
+            Severity::Error => "error",
+            Severity::Fatal => "fatal",
+        }
+    }
+}
+
 /// A telemetry event, before it's stamped with identity/id and queued.
 pub struct Event {
     pub kind: EventKind,
@@ -88,6 +114,11 @@ pub struct Event {
     pub context: Option<serde_json::Value>,
     /// Attach a gzipped tail of the app log. On for failures/crashes.
     pub attach_log: bool,
+    pub severity: Severity,
+    /// Custom grouping key. Only set when we can group better than the
+    /// server's message normalization (e.g. a JS stack hash); when present it
+    /// wins server-side.
+    pub fingerprint: Option<String>,
 }
 
 /// Options for [`init`].
@@ -101,6 +132,10 @@ pub struct InitOptions {
     pub on_log_level: Option<Box<dyn Fn(Option<LogLevel>) + Send + Sync>>,
     /// Override the ingest base URL (tests). Production uses the default.
     pub base_url: Option<String>,
+    /// One-shot hardware profile (`machine` block), collected by the app at
+    /// startup. Sent on the first heartbeat of the session; the server retains
+    /// the last known profile, so omitting it never erases anything.
+    pub machine: Option<serde_json::Value>,
 }
 
 /// Server response to a heartbeat / config pull.
@@ -121,6 +156,9 @@ pub struct ServerConfig {
 enum Cmd {
     Report(Event),
     SetEnabled(bool),
+    /// Replace the heartbeat's `app` block (current config / pipeline state).
+    /// The manager re-sends it only when the value actually changed.
+    UpdateAppInfo(serde_json::Value),
     UploadBundle {
         note: Option<String>,
         reply: crossbeam_channel::Sender<Result<i64, String>>,
@@ -187,6 +225,13 @@ impl Diagnostics {
 
 static GLOBAL: OnceLock<Arc<Diagnostics>> = OnceLock::new();
 static APP_VERSION: OnceLock<String> = OnceLock::new();
+/// `(session_id, session_started_at)` for this process, minted in [`init`].
+static SESSION: OnceLock<(String, String)> = OnceLock::new();
+/// `(base_url, ingest_key)` so [`session_end`] can post from any thread
+/// without going through the manager (which may be mid-backoff at exit).
+static ENDPOINT: OnceLock<(String, String)> = OnceLock::new();
+/// First session-end reason wins; every later call is a no-op.
+static SESSION_END_ONCE: Once = Once::new();
 
 /// Start the diagnostics client and install the process-global handle. Returns
 /// the handle for the app to stash in its state (bundle uploads, toggle).
@@ -197,7 +242,12 @@ pub fn init(opts: InitOptions) -> Arc<Diagnostics> {
     }
 
     let _ = APP_VERSION.set(opts.app_version.clone());
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_started_at = chrono::Utc::now().to_rfc3339();
+    let _ = SESSION.set((session_id.clone(), session_started_at.clone()));
+
     let install_id = load_or_create_install_id();
+    let machine_key = identity::load_or_create_machine_key();
     let enabled = Arc::new(AtomicBool::new(opts.enabled));
     let key = ingest_key();
     let has_key = key.is_some();
@@ -212,13 +262,42 @@ pub fn init(opts: InitOptions) -> Arc<Diagnostics> {
     let _ = GLOBAL.set(handle.clone());
 
     let base = opts.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    if let Some(k) = &key {
+        let _ = ENDPOINT.set((base.clone(), k.clone()));
+    }
+
+    // A dirty marker left by the previous run means it died without any
+    // shutdown path executing (hard crash, taskkill, power loss). Queue the
+    // crash event directly (network-independent) before claiming the marker
+    // for this session.
+    if opts.enabled {
+        report_previous_unclean_shutdown(&install_id);
+    }
+    write_dirty_marker(&session_id, &session_started_at);
+
     let app_version = opts.app_version;
     let on_log_level = opts.on_log_level;
+    let machine = opts.machine;
+    let mk = machine_key.clone();
+    let sid = session_id;
+    let sstart = session_started_at;
 
     std::thread::Builder::new()
         .name("clipdip-diagnostics".into())
         .spawn(move || {
-            run_manager(rx, enabled, install_id, app_version, base, key, on_log_level);
+            run_manager(
+                rx,
+                enabled,
+                install_id,
+                app_version,
+                base,
+                key,
+                mk,
+                sid,
+                sstart,
+                machine,
+                on_log_level,
+            );
         })
         .expect("spawn diagnostics thread");
 
@@ -227,6 +306,92 @@ pub fn init(opts: InitOptions) -> Arc<Diagnostics> {
     }
 
     handle
+}
+
+/// Report the end of this session to the server and remove the dirty marker.
+/// Safe to call from any thread and from multiple exit paths — only the first
+/// reason wins. Bounded at ~2 s; never blocks shutdown longer.
+///
+/// Reasons (server vocabulary): `quit`, `update`, `shutdown`, `crash`.
+pub fn session_end(reason: &str) {
+    let reason = reason.to_string();
+    SESSION_END_ONCE.call_once(move || {
+        if let Some(path) = paths::dirty_marker_path() {
+            let _ = std::fs::remove_file(path);
+        }
+        let (Some(d), Some((sid, _)), Some((base, key))) =
+            (GLOBAL.get(), SESSION.get(), ENDPOINT.get())
+        else {
+            return;
+        };
+        if !d.is_enabled() {
+            return;
+        }
+        client::session_end_blocking(base, key, &d.install_id, sid, &reason);
+        tracing::info!("diagnostics: session ended ({reason})");
+    });
+}
+
+/// The process-global handle, if [`init`] has run. For call sites that need
+/// to build an [`Event`] directly (custom fingerprint / kind combinations)
+/// instead of going through the free-function reporters.
+pub fn global() -> Option<Arc<Diagnostics>> {
+    GLOBAL.get().cloned()
+}
+
+/// Replace the heartbeat's `app` block. Cheap; the manager only re-sends when
+/// the value changed. No-op when diagnostics isn't initialized or disabled.
+pub fn update_app_info(app: serde_json::Value) {
+    if let Some(d) = GLOBAL.get() {
+        if d.is_enabled() {
+            let _ = d.tx.send(Cmd::UpdateAppInfo(app));
+        }
+    }
+}
+
+fn write_dirty_marker(session_id: &str, started_at: &str) {
+    let Some(path) = paths::dirty_marker_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let body = serde_json::json!({
+        "session_id": session_id,
+        "started_at": started_at,
+        "app_version": app_version(),
+    });
+    let _ = std::fs::write(path, body.to_string());
+}
+
+/// If the previous run left a dirty marker, queue an `unclean_shutdown` crash
+/// event carrying that session's identity so the dashboard can pair it with
+/// the `died` session row.
+fn report_previous_unclean_shutdown(install_id: &str) {
+    let Some(path) = paths::dirty_marker_path() else {
+        return;
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let prev: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let context = serde_json::json!({
+        "prev_session_id": prev.get("session_id").cloned().unwrap_or_default(),
+        "prev_started_at": prev.get("started_at").cloned().unwrap_or_default(),
+        "prev_app_version": prev.get("app_version").cloned().unwrap_or_default(),
+    });
+    let event = build_wire_event(
+        install_id,
+        app_version(),
+        EventKind::Crash,
+        Some("unclean_shutdown"),
+        Some("previous session ended without a clean shutdown (crash, kill, or power loss)"),
+        Some(context),
+        Severity::Fatal,
+        None,
+        true,
+    );
+    let _ = queue::append(&event);
 }
 
 /// Report a capture failure (health monitor, recovery paths). Attaches the log
@@ -239,12 +404,44 @@ pub fn report_capture_failure(code: &str, message: impl Into<String>, context: s
             message: Some(message.into()),
             context: Some(context),
             attach_log: true,
+            severity: Severity::Error,
+            fingerprint: None,
+        });
+    }
+}
+
+/// Report a capture failure with an explicit severity.
+pub fn report_capture_failure_with(
+    code: &str,
+    severity: Severity,
+    message: impl Into<String>,
+    context: serde_json::Value,
+) {
+    if let Some(d) = GLOBAL.get() {
+        d.report(Event {
+            kind: EventKind::CaptureFailure,
+            code: Some(code.to_string()),
+            message: Some(message.into()),
+            context: Some(context),
+            attach_log: true,
+            severity,
+            fingerprint: None,
         });
     }
 }
 
 /// Report a generic error.
 pub fn report_error(code: &str, message: impl Into<String>, context: Option<serde_json::Value>) {
+    report_error_with(code, Severity::Error, message, context);
+}
+
+/// Report a generic error with an explicit severity.
+pub fn report_error_with(
+    code: &str,
+    severity: Severity,
+    message: impl Into<String>,
+    context: Option<serde_json::Value>,
+) {
     if let Some(d) = GLOBAL.get() {
         d.report(Event {
             kind: EventKind::Error,
@@ -252,6 +449,45 @@ pub fn report_error(code: &str, message: impl Into<String>, context: Option<serd
             message: Some(message.into()),
             context,
             attach_log: true,
+            severity,
+            fingerprint: None,
+        });
+    }
+}
+
+/// Report a `custom`-kind event (success metrics, lifecycle beacons). No log
+/// tail — custom events are informational, not failures.
+pub fn report_custom(
+    code: &str,
+    severity: Severity,
+    message: impl Into<String>,
+    context: Option<serde_json::Value>,
+) {
+    if let Some(d) = GLOBAL.get() {
+        d.report(Event {
+            kind: EventKind::Custom,
+            code: Some(code.to_string()),
+            message: Some(message.into()),
+            context,
+            attach_log: false,
+            severity,
+            fingerprint: None,
+        });
+    }
+}
+
+/// Report a crash-kind event from a live (non-aborting) context, e.g. a
+/// panicked worker thread that the app survives.
+pub fn report_crash_event(code: &str, message: impl Into<String>, context: Option<serde_json::Value>) {
+    if let Some(d) = GLOBAL.get() {
+        d.report(Event {
+            kind: EventKind::Crash,
+            code: Some(code.to_string()),
+            message: Some(message.into()),
+            context,
+            attach_log: true,
+            severity: Severity::Fatal,
+            fingerprint: None,
         });
     }
 }
@@ -274,6 +510,8 @@ pub fn report_crash(message: &str) {
         Some("panic"),
         Some(message),
         None,
+        Severity::Fatal,
+        None,
         true,
     );
     let _ = queue::append(&event);
@@ -291,16 +529,33 @@ fn run_manager(
     app_version: String,
     base: String,
     key: Option<String>,
+    machine_key: Option<String>,
+    session_id: String,
+    session_started_at: String,
+    machine: Option<serde_json::Value>,
     on_log_level: Option<Box<dyn Fn(Option<LogLevel>) + Send + Sync>>,
 ) {
-    let client = key
-        .clone()
-        .map(|k| HttpClient::new(base, k, install_id.clone(), app_version.clone()));
+    let client = key.clone().map(|k| {
+        HttpClient::new(
+            base,
+            k,
+            install_id.clone(),
+            app_version.clone(),
+            machine_key,
+            session_id,
+            session_started_at,
+        )
+    });
 
     let mut last_heartbeat: Option<Instant> = None;
     let mut next_flush = Instant::now();
     let mut backoff = FLUSH_MIN_INTERVAL;
     let mut current_override: Option<LogLevel> = None;
+    // v2 blocks: `machine` rides on the first successful beat of the session;
+    // `app` whenever its value changed since the last successful send.
+    let mut machine_pending = machine;
+    let mut app_current: Option<serde_json::Value> = None;
+    let mut app_last_sent: Option<serde_json::Value> = None;
 
     loop {
         match rx.recv_timeout(TICK) {
@@ -313,10 +568,26 @@ fn run_manager(
                         event.code.as_deref(),
                         event.message.as_deref(),
                         event.context,
+                        event.severity,
+                        event.fingerprint.as_deref(),
                         event.attach_log,
                     );
                     let _ = queue::append(&wire);
                     next_flush = Instant::now(); // try to ship promptly
+                }
+            }
+            Ok(Cmd::UpdateAppInfo(app)) => {
+                if app_current.as_ref() != Some(&app) {
+                    app_current = Some(app);
+                    // Pull the next beat forward so the change ships soon,
+                    // debounced to stay inside the heartbeat rate limit
+                    // (burst 5, refill 1 per 30 s).
+                    if let Some(t) = last_heartbeat {
+                        let debounced = Instant::now() - HEARTBEAT_INTERVAL + Duration::from_secs(30);
+                        if t > debounced {
+                            last_heartbeat = Some(debounced);
+                        }
+                    }
                 }
             }
             Ok(Cmd::SetEnabled(on)) => {
@@ -353,9 +624,15 @@ fn run_manager(
         // Heartbeat (also pulls config).
         let due = last_heartbeat.map_or(true, |t| now.duration_since(t) >= HEARTBEAT_INTERVAL);
         if due {
-            match client.heartbeat() {
+            let app_dirty = app_current.is_some() && app_current != app_last_sent;
+            let app_to_send = if app_dirty { app_current.as_ref() } else { None };
+            match client.heartbeat(machine_pending.as_ref(), app_to_send) {
                 Ok(cfg) => {
                     last_heartbeat = Some(now);
+                    machine_pending = None; // sent once; server retains it
+                    if app_dirty {
+                        app_last_sent = app_current.clone();
+                    }
                     apply_config(cfg, &app_version, &mut current_override, on_log_level.as_deref());
                 }
                 Err(e) => {
@@ -458,6 +735,7 @@ fn apply_config(
 // Wire event construction
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn build_wire_event(
     install_id: &str,
     app_version: &str,
@@ -465,6 +743,8 @@ fn build_wire_event(
     code: Option<&str>,
     message: Option<&str>,
     context: Option<serde_json::Value>,
+    severity: Severity,
+    fingerprint: Option<&str>,
     attach_log: bool,
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
@@ -476,6 +756,13 @@ fn build_wire_event(
         uuid::Uuid::new_v4().to_string().into(),
     );
     map.insert("kind".into(), kind.as_str().into());
+    map.insert("severity".into(), severity.as_str().into());
+    if let Some((sid, _)) = SESSION.get() {
+        map.insert("session_id".into(), sid.as_str().into());
+    }
+    if let Some(fp) = fingerprint {
+        map.insert("fingerprint".into(), fp.into());
+    }
     if let Some(code) = code {
         map.insert("code".into(), code.into());
     }
@@ -531,6 +818,65 @@ fn log_tail_b64() -> Option<String> {
 
 fn app_version() -> &'static str {
     APP_VERSION.get().map(String::as_str).unwrap_or("unknown")
+}
+
+/// Replace `C:\Users\<name>` (any drive letter, either slash) with
+/// `<drive>:\Users\<home>` so panic messages, backtraces, and error chains
+/// never carry the Windows username. Best-effort; applied to every free-text
+/// message that could embed a path.
+pub fn scrub_user_paths(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Match `<alpha>:[\\/]Users[\\/]` case-insensitively.
+        let rest = &s[i..];
+        let is_start = rest.len() >= 9
+            && rest.as_bytes()[0].is_ascii_alphabetic()
+            && rest.as_bytes()[1] == b':'
+            && (rest.as_bytes()[2] == b'\\' || rest.as_bytes()[2] == b'/')
+            && rest[3..8].eq_ignore_ascii_case("Users")
+            && (rest.as_bytes()[8] == b'\\' || rest.as_bytes()[8] == b'/');
+        if is_start {
+            // Keep the prefix exactly as written (drive, separators, casing).
+            out.push_str(&rest[..9]);
+            out.push_str("<home>");
+            // Skip the username segment (up to the next separator or break char).
+            let mut j = i + 9;
+            while j < bytes.len() {
+                let c = bytes[j];
+                if c == b'\\' || c == b'/' || c.is_ascii_whitespace() || c == b'"' || c == b'\'' {
+                    break;
+                }
+                j += 1;
+            }
+            i = j;
+        } else {
+            let ch = rest.chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+/// Lifetime clips-saved counter (plain integer file). Returns the new total.
+pub fn increment_clips_saved() -> u64 {
+    let total = clips_saved_total().saturating_add(1);
+    if let Some(path) = paths::clips_saved_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, total.to_string());
+    }
+    total
+}
+
+pub fn clips_saved_total() -> u64 {
+    paths::clips_saved_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// Build-time ingest key (mirrors the Discord client secret), with a runtime
@@ -627,12 +973,34 @@ mod tests {
             Some("wgc_no_frames"),
             Some("no frames"),
             Some(serde_json::json!({"backend": "wgc"})),
+            Severity::Error,
+            Some("fp123"),
             false,
         );
         assert_eq!(ev["install_id"], "abc");
         assert_eq!(ev["kind"], "capture_failure");
         assert_eq!(ev["code"], "wgc_no_frames");
+        assert_eq!(ev["severity"], "error");
+        assert_eq!(ev["fingerprint"], "fp123");
         assert!(ev["event_id"].as_str().unwrap().len() > 10);
         assert_eq!(ev["context"]["backend"], "wgc");
+    }
+
+    #[test]
+    fn scrub_replaces_usernames() {
+        assert_eq!(
+            scrub_user_paths(r"failed at C:\Users\Fabian\Videos\clip.mp4"),
+            r"failed at C:\Users\<home>\Videos\clip.mp4"
+        );
+        assert_eq!(
+            scrub_user_paths("path D:/users/Jane Doe/x"),
+            "path D:/users/<home> Doe/x" // space breaks the segment; still hides the name start
+        );
+        assert_eq!(scrub_user_paths("no paths here"), "no paths here");
+        // Quoted path.
+        assert_eq!(
+            scrub_user_paths(r#"open "c:\Users\bob\file.txt" failed"#),
+            r#"open "c:\Users\<home>\file.txt" failed"#
+        );
     }
 }

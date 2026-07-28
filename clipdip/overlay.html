@@ -761,6 +761,15 @@
         savingTimeoutTimer = setTimeout(() => {
           if (state.phase === "saving") {
             console.warn("[overlay] saving timeout — dismissing");
+            // The "no clip-error event ever fired" hole: the save died in a
+            // way nothing else reports (process killed mid-mux, ffmpeg
+            // crash). Backend gates and forwards this as telemetry.
+            invoke("report_frontend_event", {
+              windowLabel: "overlay",
+              code: "overlay_saving_timeout",
+              message: "overlay gave up waiting for clip-saved",
+              context: { elapsed_ms: SAVING_TIMEOUT_MS, kind: state.kind || "clip" },
+            }).catch(() => {});
             dismiss();
           }
         }, SAVING_TIMEOUT_MS);

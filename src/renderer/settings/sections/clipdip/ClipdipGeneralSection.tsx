@@ -203,7 +203,7 @@ function TelemetryGroup() {
           !running
             ? "Available while Clipdip is running"
             : configured
-              ? "Capture failures and crashes with a random install ID. No account, no personal data."
+              ? "Crashes, capture failures, and basic hardware info (GPU, OS, RAM) with random ids. Error reports include a tail of Clipdip's log. No file names, no window titles, no personal data. Full list in TELEMETRY.md."
               : "Not available in this build"
         }
       >

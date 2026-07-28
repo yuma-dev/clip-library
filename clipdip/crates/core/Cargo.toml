@@ -25,3 +25,4 @@ clipdip-ringbuf.workspace = true
 clipdip-muxer.workspace = true
 clipdip-hotkey.workspace = true
 clipdip-profile.workspace = true
+clipdip-diagnostics.workspace = true

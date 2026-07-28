@@ -141,7 +141,35 @@ impl AudioCapture {
         if let Some(t) = self.thread.take() {
             match t.join() {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => warn!(kind = ?self.kind, "audio capture thread error: {e:#}"),
+                Ok(Err(e)) => {
+                    warn!(kind = ?self.kind, "audio capture thread error: {e:#}");
+                    // Mid-session audio death was completely invisible: the
+                    // thread error only surfaces here, at pipeline stop, as
+                    // a warn. AUDCLNT_E_DEVICE_INVALIDATED (0x88890004,
+                    // endpoint unplugged / format changed) gets its own
+                    // code — the "my clip has no sound" cohort. The message
+                    // stays generic; the chain can embed device-id strings.
+                    let chain = format!("{e:#}").to_ascii_lowercase();
+                    let device_lost = chain.contains("0x88890004");
+                    let code = if device_lost { "audio_device_lost" } else { "audio_thread_exited" };
+                    if let clipdip_diagnostics::Gate::Send { suppressed } =
+                        clipdip_diagnostics::gate(code, std::time::Duration::from_secs(60))
+                    {
+                        clipdip_diagnostics::report_error_with(
+                            code,
+                            clipdip_diagnostics::Severity::Warning,
+                            if device_lost {
+                                "audio device invalidated mid-session (unplugged or format changed)"
+                            } else {
+                                "audio capture thread exited with an error"
+                            },
+                            Some(serde_json::json!({
+                                "audio_kind": format!("{:?}", self.kind),
+                                "occurrences": suppressed + 1,
+                            })),
+                        );
+                    }
+                }
                 Err(_) => warn!(kind = ?self.kind, "audio capture thread panicked"),
             }
         }

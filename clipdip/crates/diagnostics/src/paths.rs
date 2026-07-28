@@ -44,3 +44,17 @@ pub fn install_id_path() -> Option<PathBuf> {
 pub fn config_path() -> Option<PathBuf> {
     dirs().map(|d| d.config_dir().join("config.toml"))
 }
+
+/// Dirty-shutdown marker: written at session start with the session's identity,
+/// removed on any clean exit. Present at boot ⇒ the previous session died
+/// without a shutdown path running (hard crash, taskkill, power loss).
+pub fn dirty_marker_path() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("session_dirty"))
+}
+
+/// Lifetime clips-saved counter (a plain integer). Feeds the heartbeat's
+/// `app.clips_saved_total`; kept out of config.toml so the ClipLib bridge's
+/// config writes can never race it.
+pub fn clips_saved_path() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("clips_saved_total"))
+}

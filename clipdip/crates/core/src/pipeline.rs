@@ -77,6 +77,37 @@ pub struct AudioMeta {
     pub fmt: WaveFormat,
 }
 
+/// Facts about the running capture session, populated by the video thread
+/// once the encoder is open. Feeds the telemetry heartbeat's `app` block
+/// (resolved encoder + backend + real dimensions), so the dashboard's
+/// GPU x encoder health matrix reflects what actually ran, not the config.
+#[derive(Clone, Copy, Debug)]
+pub struct SessionInfo {
+    pub codec: ActiveCodec,
+    /// `"wgc"` or `"dxgi"` — the backend that actually resolved (Auto picks).
+    pub backend: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl SessionInfo {
+    /// Server-side encoder slug (the capture-health matrix groups on this).
+    pub fn encoder_slug(&self) -> &'static str {
+        match self.codec {
+            ActiveCodec::H264 => "nvenc_h264",
+            ActiveCodec::Av1 => "nvenc_av1",
+        }
+    }
+
+    /// Server-side capture-mode slug.
+    pub fn capture_mode_slug(&self) -> &'static str {
+        match self.backend {
+            "wgc" => "wgc",
+            _ => "desktop_duplication",
+        }
+    }
+}
+
 pub struct Pipeline {
     cfg: Config,
     ring: Arc<PacketRing>,
@@ -128,6 +159,9 @@ pub struct Pipeline {
     /// recordings encode at `video.recording_quality` while replay-buffer
     /// footage stays at the cheaper clip quality.
     recording_qp_boost: Arc<AtomicU32>,
+    /// Set once by the video thread after the encoder opens (see
+    /// [`SessionInfo`]). `None` until then, or forever if init failed.
+    session_info: Arc<Mutex<Option<SessionInfo>>>,
 }
 
 /// Sentinel in [`Pipeline::recording_qp_boost`]: no boost, run at the
@@ -189,6 +223,7 @@ impl Pipeline {
         let video_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let capture_phase = Arc::new(AtomicU8::new(capture_phase::SLEEP));
         let recording_qp_boost = Arc::new(AtomicU32::new(QP_BOOST_OFF));
+        let session_info: Arc<Mutex<Option<SessionInfo>>> = Arc::new(Mutex::new(None));
         let video_thread = spawn_video_thread(
             cfg.clone(),
             Arc::clone(&ring),
@@ -200,6 +235,7 @@ impl Pipeline {
             Arc::clone(&capture_phase),
             Arc::clone(&recording_qp_boost),
             Arc::clone(&video_error),
+            Arc::clone(&session_info),
         )?;
 
         let reporter_thread = if clipdip_profile::enabled() {
@@ -227,7 +263,20 @@ impl Pipeline {
             video_error,
             capture_phase,
             recording_qp_boost,
+            session_info,
         })
+    }
+
+    /// Facts about the live capture session, once the encoder is open.
+    pub fn session_info(&self) -> Option<SessionInfo> {
+        *self.session_info.lock().unwrap()
+    }
+
+    /// Shared handle to [`Self::session_info`], for a watcher thread that
+    /// wants to observe the video thread populating it without holding a
+    /// borrow of the pipeline.
+    pub fn session_info_handle(&self) -> Arc<Mutex<Option<SessionInfo>>> {
+        Arc::clone(&self.session_info)
     }
 
     pub fn config(&self) -> &Config {
@@ -490,8 +539,32 @@ fn start_audio(
                 continue;
             }
         };
-        let friendly_name = resolve_friendly_name(kind, device_id.as_deref(), &devices)
-            .unwrap_or_else(|| fallback_friendly_name(kind));
+        let resolved_name = resolve_friendly_name(kind, device_id.as_deref(), &devices);
+        // A pinned device id that no longer enumerates = "your saved mic is
+        // gone". Silent today (the source may still start on it, or fail
+        // below) — report the mismatch itself, without names or ids.
+        if device_id.is_some() && resolved_name.is_none() && !devices.is_empty() {
+            if let clipdip_diagnostics::Gate::Send { .. } =
+                clipdip_diagnostics::gate("audio_pinned_device_missing", Duration::from_secs(900))
+            {
+                let want_flow = match kind {
+                    AudioKind::SystemLoopback => DeviceFlow::Render,
+                    AudioKind::Microphone => DeviceFlow::Capture,
+                };
+                clipdip_diagnostics::report_error_with(
+                    "audio_pinned_device_missing",
+                    clipdip_diagnostics::Severity::Warning,
+                    "pinned audio device not found among enumerated endpoints",
+                    Some(serde_json::json!({
+                        "audio_kind": format!("{kind:?}"),
+                        "is_default_available": devices
+                            .iter()
+                            .any(|d| d.flow == want_flow && d.is_default),
+                    })),
+                );
+            }
+        }
+        let friendly_name = resolved_name.unwrap_or_else(|| fallback_friendly_name(kind));
         match AudioCapture::start(kind, stream_id, device_id, Arc::clone(&ring), Arc::clone(&clock))
         {
             Ok(cap) => {
@@ -505,10 +578,40 @@ fn start_audio(
                 });
                 handles.push(cap);
             }
-            Err(e) => warn!(?kind, "failed to start audio source: {e:#}"),
+            Err(e) => {
+                warn!(?kind, "failed to start audio source: {e:#}");
+                // Message stays generic: the anyhow chain can embed device
+                // id strings, so the detail lives only in the attached log.
+                clipdip_diagnostics::report_error(
+                    "audio_source_start_failed",
+                    format!("audio source failed to start ({})", extract_hresult(&format!("{e:#}"))),
+                    Some(serde_json::json!({
+                        "audio_kind": format!("{kind:?}"),
+                        "pinned": source.device_id().is_some(),
+                        "hresult": extract_hresult(&format!("{e:#}")),
+                    })),
+                );
+            }
         }
     }
     (meta, handles)
+}
+
+/// Pull the first `0x8....` HRESULT-looking token out of an error chain, so
+/// the event message groups by failure code without carrying the free text
+/// (which can embed device-id strings).
+fn extract_hresult(chain: &str) -> String {
+    let lower = chain.to_ascii_lowercase();
+    if let Some(pos) = lower.find("0x8") {
+        let token: String = lower[pos..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == 'x')
+            .take(10)
+            .collect();
+        token
+    } else {
+        "no_hresult".to_string()
+    }
 }
 
 fn resolve_friendly_name(
@@ -584,6 +687,7 @@ fn spawn_video_thread(
     capture_phase: Arc<AtomicU8>,
     recording_qp_boost: Arc<AtomicU32>,
     video_error: Arc<Mutex<Option<String>>>,
+    session_info: Arc<Mutex<Option<SessionInfo>>>,
 ) -> Result<JoinHandle<Result<()>>> {
     std::thread::Builder::new()
         .name("clipdip-video".into())
@@ -598,6 +702,7 @@ fn spawn_video_thread(
                 frame_liveness,
                 capture_phase,
                 recording_qp_boost,
+                session_info,
             );
             if let Err(e) = &result {
                 // Surface the failure NOW — the JoinHandle result is only
@@ -618,6 +723,48 @@ fn spawn_video_thread(
 /// `acquire_frame` slow ⇒ DXGI / GPU / capture-blocking software; `encode_frame`
 /// slow ⇒ NVENC / GPU; neither slow but the stall detector still fires ⇒ the
 /// thread was descheduled (OS scheduling / power), not any capture call.
+/// Bucket an NVENC init failure chain into a stable cause slug so the
+/// dashboard splits the "encoder won't start" population by root cause
+/// (no driver vs old driver vs session limit vs bad resolution). String
+/// matching on the anyhow chain — brittle by nature, so `other` is the
+/// safe default and each arm matches text our own crates emit.
+fn classify_encoder_error(chain: &str) -> &'static str {
+    let c = chain.to_ascii_lowercase();
+    if c.contains("nvencodeapi64") && (c.contains("load") || c.contains("not found") || c.contains("module")) {
+        "nvenc_dll_load_failed"
+    } else if c.contains("driver too old") || c.contains("driver does not support") {
+        "nvenc_driver_too_old"
+    } else if c.contains("open") && c.contains("session") && c.contains("10") {
+        // NV_ENC_ERR_OUT_OF_MEMORY on open = the concurrent-session limit
+        // (OBS/ShadowPlay/Discord already encoding on consumer GPUs).
+        "nvenc_session_limit"
+    } else if c.contains("openencodesession") || (c.contains("open") && c.contains("session")) {
+        "nvenc_open_session_failed"
+    } else if c.contains("status 8") || c.contains("status 12") || c.contains("unsupported_param") || c.contains("invalid_param") {
+        "nvenc_unsupported_param"
+    } else if c.contains("does not support") && (c.contains("h.264") || c.contains("av1") || c.contains("codec")) {
+        "codec_forced_unavailable"
+    } else {
+        "other"
+    }
+}
+
+/// Same idea for capturer creation failures.
+fn classify_capture_error(chain: &str) -> &'static str {
+    let c = chain.to_ascii_lowercase();
+    if c.contains("enumoutputs") || c.contains("output index") || c.contains("get output") {
+        "dxgi_output_not_found"
+    } else if c.contains("duplicateoutput") || c.contains("duplicate output") {
+        "dxgi_duplicate_output_failed"
+    } else if c.contains("not supported on this windows build") || c.contains("issupported") {
+        "wgc_unsupported_os"
+    } else if c.contains("d3d11createdevice") || c.contains("create d3d11") {
+        "d3d11_device_create_failed"
+    } else {
+        "other"
+    }
+}
+
 fn warn_if_slow(stage: &str, elapsed: Duration) {
     const SLOW_MS: u128 = 250;
     let ms = elapsed.as_millis();
@@ -637,11 +784,17 @@ fn video_loop(
     frame_liveness: Arc<AtomicI64>,
     capture_phase: Arc<AtomicU8>,
     recording_qp_boost: Arc<AtomicU32>,
+    session_info: Arc<Mutex<Option<SessionInfo>>>,
 ) -> Result<()> {
     let backend = match cfg.video.capture_backend {
         CaptureBackendCfg::Auto => CaptureBackend::Auto,
         CaptureBackendCfg::Wgc => CaptureBackend::Wgc,
         CaptureBackendCfg::Dxgi => CaptureBackend::Dxgi,
+    };
+    let backend_cfg_name = match cfg.video.capture_backend {
+        CaptureBackendCfg::Auto => "auto",
+        CaptureBackendCfg::Wgc => "wgc",
+        CaptureBackendCfg::Dxgi => "dxgi",
     };
 
     /// Quality caps are referenced to 1440p60; scale to the session's
@@ -657,6 +810,22 @@ fn video_loop(
         cfg.video.output_index,
         cfg.video.include_cursor,
     )
+    .inspect_err(|e| {
+        let chain = format!("{e:#}");
+        if let clipdip_diagnostics::Gate::Send { .. } =
+            clipdip_diagnostics::gate("capturer_create_failed", Duration::from_secs(60))
+        {
+            clipdip_diagnostics::report_capture_failure(
+                "capturer_create_failed",
+                format!("capturer create failed ({}): {chain}", classify_capture_error(&chain)),
+                serde_json::json!({
+                    "backend_cfg": backend_cfg_name,
+                    "output_index": cfg.video.output_index,
+                    "cause": classify_capture_error(&chain),
+                }),
+            );
+        }
+    })
     .with_context(|| {
         format!(
             "create D3D11 device + capturer on output {} \
@@ -690,6 +859,7 @@ fn video_loop(
         RateControlCfg::Vbr { avg_bps } => RateControl::Vbr { avg_bps },
     };
 
+    let gop_length = (cfg.video.fps as f32 * cfg.video.gop_seconds).round() as u32;
     let mut encoder = NvEncoderD3D11::new(
         device.clone(),
         EncoderConfig {
@@ -697,15 +867,42 @@ fn video_loop(
             height: h,
             fps_num: cfg.video.fps,
             fps_den: 1,
-            gop_length: (cfg.video.fps as f32 * cfg.video.gop_seconds).round() as u32,
+            gop_length,
             codec_preference,
             rate_control,
         },
     )
+    .inspect_err(|e| {
+        let chain = format!("{e:#}");
+        let cause = classify_encoder_error(&chain);
+        if let clipdip_diagnostics::Gate::Send { .. } = clipdip_diagnostics::gate(
+            &format!("encoder_init_failed:{cause}"),
+            Duration::from_secs(60),
+        ) {
+            clipdip_diagnostics::report_capture_failure(
+                "encoder_init_failed",
+                format!("NVENC init failed ({cause}): {chain}"),
+                serde_json::json!({
+                    "cause": cause,
+                    "width": w,
+                    "height": h,
+                    "fps": cfg.video.fps,
+                    "gop_length": gop_length,
+                    "codec_pref": format!("{:?}", cfg.video.codec),
+                }),
+            );
+        }
+    })
     .context("init NVENC encoder")?;
 
     let codec_now = encoder.active_codec();
     *active_codec.lock().unwrap() = Some(codec_now);
+    *session_info.lock().unwrap() = Some(SessionInfo {
+        codec: codec_now,
+        backend: dup.backend_name(),
+        width: w,
+        height: h,
+    });
     let header_bytes = encoder.header().to_vec();
     let header_len = header_bytes.len();
     *codec_header.lock().unwrap() = header_bytes;
@@ -834,6 +1031,7 @@ fn video_loop(
                     backend = dup.backend_name(),
                     "capture failed: {e:#} — rebuilding capturer"
                 );
+                let rebuild_started = Instant::now();
                 let mut rebuilt = None;
                 for attempt in 1..=120u32 {
                     if stop.load(Ordering::Relaxed) {
@@ -849,6 +1047,25 @@ fn video_loop(
                     ) {
                         Ok(c) => {
                             if (c.width(), c.height()) != (w, h) {
+                                if let clipdip_diagnostics::Gate::Send { .. } = clipdip_diagnostics::gate(
+                                    "capture_size_changed",
+                                    Duration::from_secs(60),
+                                ) {
+                                    clipdip_diagnostics::report_capture_failure_with(
+                                        "capture_size_changed",
+                                        clipdip_diagnostics::Severity::Warning,
+                                        format!(
+                                            "display mode changed {}x{} -> {}x{} — pipeline restart required",
+                                            w, h, c.width(), c.height()
+                                        ),
+                                        serde_json::json!({
+                                            "old_w": w, "old_h": h,
+                                            "new_w": c.width(), "new_h": c.height(),
+                                            "backend": c.backend_name(),
+                                            "output_index": cfg.video.output_index,
+                                        }),
+                                    );
+                                }
                                 return Err(anyhow!(
                                     "display mode changed to {}x{} while the encoder \
                                      runs at {}x{} — pipeline restart required",
@@ -862,6 +1079,21 @@ fn video_loop(
                                 attempt,
                                 backend = c.backend_name(),
                                 "capture rebuilt after error"
+                            );
+                            // One event per rebuild episode. "recovered on
+                            // attempt 1" is a benign HDCP/mode blip;
+                            // "attempt 87" is a real problem.
+                            clipdip_diagnostics::report_capture_failure_with(
+                                "capture_rebuild_recovered",
+                                clipdip_diagnostics::Severity::Info,
+                                format!(
+                                    "capture rebuilt after {attempt} attempts (original error: {e:#})"
+                                ),
+                                serde_json::json!({
+                                    "attempt": attempt,
+                                    "downtime_ms": rebuild_started.elapsed().as_millis() as u64,
+                                    "backend": c.backend_name(),
+                                }),
                             );
                             rebuilt = Some(c);
                             break;
@@ -878,6 +1110,15 @@ fn video_loop(
                         if stop.load(Ordering::Relaxed) {
                             break;
                         }
+                        clipdip_diagnostics::report_capture_failure(
+                            "capture_rebuild_exhausted",
+                            format!("could not rebuild capture after 60s (last error: {e:#})"),
+                            serde_json::json!({
+                                "attempts": 120,
+                                "backend": dup.backend_name(),
+                                "output_index": cfg.video.output_index,
+                            }),
+                        );
                         return Err(anyhow!(
                             "could not rebuild capture after 60s of retries \
                              (last capture error: {e:#})"
@@ -986,7 +1227,21 @@ fn save_clip_with_stem(
         .rev()
         .find(|p| p.stream_id == STREAM_VIDEO)
         .map(|p| p.pts_100ns)
-        .ok_or_else(|| anyhow!("no video packets in ring yet — wait ~1s after start and retry"))?;
+        .ok_or_else(|| {
+            if let clipdip_diagnostics::Gate::Send { suppressed } =
+                clipdip_diagnostics::gate("save_no_video_packets", Duration::from_secs(60))
+            {
+                clipdip_diagnostics::report_capture_failure(
+                    "save_no_video_packets",
+                    "save requested but no video packets in ring",
+                    serde_json::json!({
+                        "snapshot_len": snapshot.len(),
+                        "occurrences": suppressed + 1,
+                    }),
+                );
+            }
+            anyhow!("no video packets in ring yet — wait ~1s after start and retry")
+        })?;
     let window_100ns = (cfg.replay_seconds as i64) * 10_000_000;
     let t_min = t_min_override.unwrap_or(t_last - window_100ns);
     let mut oldest_idr: Option<usize> = None;
@@ -1020,28 +1275,66 @@ fn save_clip_with_stem(
             .map(|p| p.pts_100ns)
             .unwrap_or(t_last);
         let stats = ring.stats();
+        let buffered_secs = (t_last - oldest_video_pts) as f64 / 1e7;
         warn!(
             requested_window_secs = cfg.replay_seconds,
-            buffered_secs = (t_last - oldest_video_pts) as f64 / 1e7,
+            buffered_secs,
             ring_bytes_used_mb = stats.bytes_used / 1_000_000,
             ring_byte_budget_mb = stats.byte_budget / 1_000_000,
             "replay buffer shorter than configured window — clip will be \
              truncated (app just started, byte-budget starvation, or a \
              capture stall)"
         );
+        // The "1-second clip" bug shape. Every occurrence ships — low
+        // frequency, and each carries the ring state needed to tell "app
+        // just started" from byte starvation from a long stall.
+        clipdip_diagnostics::report_capture_failure_with(
+            "clip_truncated_short_window",
+            clipdip_diagnostics::Severity::Warning,
+            format!(
+                "buffer holds only {buffered_secs:.0}s of the {}s replay window",
+                cfg.replay_seconds
+            ),
+            serde_json::json!({
+                "requested_window_secs": cfg.replay_seconds,
+                "buffered_secs": buffered_secs,
+                "ring_bytes_used_mb": stats.bytes_used / 1_000_000,
+                "ring_byte_budget_mb": stats.byte_budget / 1_000_000,
+            }),
+        );
     }
-    let first_idr = idr_at_or_before
-        .or(oldest_idr)
-        .ok_or_else(|| anyhow!("no video IDR in ring yet — wait ~1s after start and retry"))?;
+    let first_idr = idr_at_or_before.or(oldest_idr).ok_or_else(|| {
+        if let clipdip_diagnostics::Gate::Send { suppressed } =
+            clipdip_diagnostics::gate("save_no_idr", Duration::from_secs(60))
+        {
+            clipdip_diagnostics::report_capture_failure(
+                "save_no_idr",
+                "save requested but no video IDR in ring",
+                serde_json::json!({
+                    "snapshot_len": snapshot.len(),
+                    "occurrences": suppressed + 1,
+                }),
+            );
+        }
+        anyhow!("no video IDR in ring yet — wait ~1s after start and retry")
+    })?;
 
     let video_pkts: Vec<&EncodedPacket> = snapshot[first_idr..]
         .iter()
         .filter(|p| p.stream_id == STREAM_VIDEO)
         .collect();
-    let t0 = video_pkts
-        .first()
-        .map(|p| p.pts_100ns)
-        .ok_or_else(|| anyhow!("video IDR found but no packets after it"))?;
+    let t0 = video_pkts.first().map(|p| p.pts_100ns).ok_or_else(|| {
+        if let clipdip_diagnostics::Gate::Send { suppressed } =
+            clipdip_diagnostics::gate("save_idr_no_packets", Duration::from_secs(60))
+        {
+            clipdip_diagnostics::report_capture_failure(
+                "save_idr_no_packets",
+                "video IDR found but no packets after it",
+                serde_json::json!({ "occurrences": suppressed + 1 }),
+            );
+        }
+        anyhow!("video IDR found but no packets after it")
+    })?;
 
     // Real fps measured from the QPC span of the captured packets. The
     // capture loop drops frames under load (DXGI acquire can stall for
@@ -1073,12 +1366,56 @@ fn save_clip_with_stem(
         "saving clip"
     );
 
+    // Disk-failure reporter for the sidecar/mux write path. Paths never
+    // leave the machine: only the io kind, a volume category, and free
+    // space go out. StorageFull (or the raw Win32 disk-full codes) gets
+    // its own `disk_full` code — a whole user cohort on its own.
+    let report_disk_error = |stage: &'static str, err: &std::io::Error| {
+        let raw = err.raw_os_error();
+        let is_full = matches!(err.kind(), std::io::ErrorKind::StorageFull)
+            || matches!(raw, Some(112) | Some(39));
+        let code = if is_full { "disk_full" } else { "bitstream_write_failed" };
+        if let clipdip_diagnostics::Gate::Send { suppressed } =
+            clipdip_diagnostics::gate(code, Duration::from_secs(60))
+        {
+            clipdip_diagnostics::report_error(
+                code,
+                format!("clip write failed at {stage}: {}", err.kind()),
+                Some(serde_json::json!({
+                    "stage": stage,
+                    "io_kind": format!("{:?}", err.kind()),
+                    "os_error": raw,
+                    "volume": crate::diskinfo::volume_category(&cfg.output.directory),
+                    "free_gb": crate::diskinfo::free_disk_gb(&cfg.output.directory),
+                    "occurrences": suppressed + 1,
+                })),
+            );
+        }
+    };
+
     // The configured directory may not exist yet (fresh default config, or
     // a folder the user deleted) — a save must never fail on that.
     std::fs::create_dir_all(&cfg.output.directory)
+        .inspect_err(|e| {
+            if let clipdip_diagnostics::Gate::Send { .. } =
+                clipdip_diagnostics::gate("output_dir_create_failed", Duration::from_secs(60))
+            {
+                clipdip_diagnostics::report_error(
+                    "output_dir_create_failed",
+                    format!("could not create output directory: {}", e.kind()),
+                    Some(serde_json::json!({
+                        "io_kind": format!("{:?}", e.kind()),
+                        "volume": crate::diskinfo::volume_category(&cfg.output.directory),
+                        "free_gb": crate::diskinfo::free_disk_gb(&cfg.output.directory),
+                    })),
+                );
+            }
+        })
         .with_context(|| format!("create output dir {}", cfg.output.directory.display()))?;
 
+    let save_started = Instant::now();
     let mut vf = File::create(&video_path)
+        .inspect_err(|e| report_disk_error("create", e))
         .with_context(|| format!("create {}", video_path.display()))?;
     // For AV1: ffmpeg's `obu` demuxer (low-overhead bitstream) requires
     // every Temporal Unit — including the one carrying the initial
@@ -1093,15 +1430,19 @@ fn save_clip_with_stem(
         // OBU_TEMPORAL_DELIMITER, obu_has_size_field=1, payload size=0
         const AV1_TD: [u8; 2] = [0x12, 0x00];
         vf.write_all(&AV1_TD)
+            .inspect_err(|e| report_disk_error("header", e))
             .with_context(|| format!("write TD to {}", video_path.display()))?;
         vf.write_all(codec_header)
+            .inspect_err(|e| report_disk_error("header", e))
             .with_context(|| format!("write SEQ_HDR to {}", video_path.display()))?;
     } else if !codec_header.is_empty() {
         vf.write_all(codec_header)
+            .inspect_err(|e| report_disk_error("header", e))
             .with_context(|| format!("write header to {}", video_path.display()))?;
     }
     for p in &video_pkts {
         vf.write_all(&p.bytes)
+            .inspect_err(|e| report_disk_error("packet", e))
             .with_context(|| format!("write {}", video_path.display()))?;
     }
     vf.sync_all().ok();
@@ -1137,7 +1478,29 @@ fn save_clip_with_stem(
                 bitrate_bps: cfg.output.audio_bitrate_bps,
                 offset_secs,
             }),
-            Err(e) => warn!(stream_id, %label, "WAV write failed: {e:#}"),
+            Err(e) => {
+                warn!(stream_id, %label, "WAV write failed: {e:#}");
+                if let clipdip_diagnostics::Gate::Send { suppressed } =
+                    clipdip_diagnostics::gate("wav_write_failed", Duration::from_secs(60))
+                {
+                    // Positional stream id only — labels can embed device
+                    // names, which never leave the machine.
+                    clipdip_diagnostics::report_error_with(
+                        "wav_write_failed",
+                        clipdip_diagnostics::Severity::Warning,
+                        "WAV sidecar write failed — clip will be missing an audio track",
+                        Some(serde_json::json!({
+                            "stream_id": stream_id,
+                            "sample_rate": fmt.sample_rate,
+                            "channels": fmt.channels,
+                            "bits": fmt.bits_per_sample,
+                            "volume": crate::diskinfo::volume_category(&cfg.output.directory),
+                            "free_gb": crate::diskinfo::free_disk_gb(&cfg.output.directory),
+                            "occurrences": suppressed + 1,
+                        })),
+                    );
+                }
+            }
         }
     }
 
@@ -1171,6 +1534,29 @@ fn save_clip_with_stem(
         }
     }
     info!(path = %mp4_path.display(), "clip saved");
+
+    // Success metric: the denominator for every save-failure rate, and the
+    // fps/size/latency distributions that surface quality regressions
+    // without a bug report. Numeric fields only — no path, no stem.
+    let total = clipdip_diagnostics::increment_clips_saved();
+    let mp4_bytes = std::fs::metadata(&mp4_path).map(|m| m.len()).unwrap_or(0);
+    clipdip_diagnostics::report_custom(
+        "clip_saved",
+        clipdip_diagnostics::Severity::Info,
+        format!("clip saved ({span_secs:.0}s, {actual_fps:.0}fps)"),
+        Some(serde_json::json!({
+            "duration_secs": span_secs,
+            "actual_fps": actual_fps,
+            "target_fps": cfg.video.fps,
+            "video_packets": video_pkts.len(),
+            "mp4_bytes": mp4_bytes,
+            "save_ms": save_started.elapsed().as_millis() as u64,
+            "codec": video_ext,
+            "audio_tracks": audio_tracks.len(),
+            "kind": if t_min_override.is_some() { "recording" } else { "clip" },
+            "clips_saved_total": total,
+        })),
+    );
     Ok(mp4_path)
 }
 

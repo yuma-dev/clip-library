@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.2"
+version = "3.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
@@ -59,6 +59,8 @@ windows = { version = "0.58", features = [
     "Win32_Security",
     "Win32_System_Threading",
     "Win32_System_LibraryLoader",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
     "Win32_System_Performance",
     "Win32_System_SystemInformation",
     "Win32_System_Variant",

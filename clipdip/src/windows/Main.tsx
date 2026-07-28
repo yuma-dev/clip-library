@@ -2172,7 +2172,7 @@ function TelemetrySettings() {
         label="Send anonymous diagnostics"
         hint={
           configured
-            ? "Reports capture failures and crashes with a random install ID — no account, no personal data. Helps us fix issues we can't see."
+            ? "Reports crashes, capture failures, and basic hardware info (GPU, OS, RAM) with random ids. Error reports include a tail of Clipdip's log. No file names, no window titles, no personal data. See TELEMETRY.md for the full list."
             : "Diagnostics reporting is not available in this build."
         }
       >
