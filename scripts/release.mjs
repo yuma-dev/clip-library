@@ -175,13 +175,20 @@ function publishGitHubRelease(tag, notesFile, assets, options) {
   runCommand('gh', args, { stdio: 'inherit' });
 }
 
+// With shell:true, Node concatenates args unquoted (see DEP0190), so an arg
+// with a space ("ClipLib v3.1.0") splits into two. Quote anything unsafe.
+function shellQuote(args) {
+  if (process.platform !== 'win32') return args;
+  return args.map((arg) => (/[\s"^&|<>()]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg));
+}
+
 function commandSucceeds(command, args) {
-  const result = spawnSync(command, args, { cwd: root, stdio: 'ignore', shell: process.platform === 'win32' });
+  const result = spawnSync(command, shellQuote(args), { cwd: root, stdio: 'ignore', shell: process.platform === 'win32' });
   return result.status === 0;
 }
 
 function runCommand(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = spawnSync(command, shellQuote(args), {
     cwd: root,
     env: process.env,
     stdio: options.stdio ?? 'pipe',
