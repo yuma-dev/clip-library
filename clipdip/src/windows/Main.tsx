@@ -53,6 +53,7 @@ interface Config {
     bitrate_bps: number;
     include_cursor: boolean;
     gop_seconds: number;
+    quality_cap_bps?: number;
     codec: CodecPreference;
     rate_control: RateControl;
     recording_quality: RecordingQuality;
@@ -1578,11 +1579,16 @@ function OnboardingModal({
 // Named quality presets over the encoder's QP. The +6-QP-halves-size rule
 // of thumb makes the steps roughly 25% / 50% / 100% / 160% of the default.
 // QP is on the H.264 0–51 scale; the encoder matches AV1 internally.
+// Each tier also carries an automatic bitrate ceiling (see
+// max_bps_for_quality in the core config) so a chaotic scene can't
+// balloon clip sizes. The Mbps figures are 1440p60 reference values;
+// the enforced cap scales with resolution/fps and is lower under AV1,
+// hence "around".
 const QUALITY_PRESETS = [
-  { qp: 32, label: "Space saver",  desc: "Visibly compressed — roughly a quarter of High quality's file size." },
-  { qp: 26, label: "Balanced",     desc: "Looks great in motion at about half of High quality's file size." },
-  { qp: 20, label: "High quality", desc: "Crisp, clean picture — the default." },
-  { qp: 16, label: "Maximum",      desc: "Near-perfect picture. Files get large." },
+  { qp: 32, label: "Space saver",  desc: "Visibly compressed, roughly a quarter of High quality's file size. Busy scenes cap out around 25 Mbps." },
+  { qp: 26, label: "Balanced",     desc: "Looks great in motion at about half of High quality's file size. Busy scenes cap out around 60 Mbps." },
+  { qp: 20, label: "High quality", desc: "Crisp, clean picture. The default. Busy scenes cap out around 80 Mbps." },
+  { qp: 16, label: "Maximum",      desc: "Near-perfect picture. Files get large. Busy scenes cap out around 100 Mbps." },
 ];
 
 // Quality used while a manual recording (start/stop hotkey) is running.
@@ -1601,6 +1607,9 @@ type BufferStats = {
   mb_per_minute: number;
   clip_mb: number;
   buffered_secs: number;
+  memory_limited?: boolean;
+  bytes_used_mb?: number;
+  budget_mb?: number;
 };
 
 /// Live file-size readout, measured from the actual encoded bytes in the
@@ -1634,7 +1643,19 @@ function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
       color: "rgba(255,255,255,0.62)",
     }}>
       <Gauge size={13} style={{ flexShrink: 0, marginTop: 1, color: ACCENT_TIP + "99" }} />
-      {stats?.measuring ? (
+      {stats?.measuring && stats.memory_limited ? (
+        <span>
+          Memory limit reached: the buffer holds{" "}
+          <b style={{ color: "rgba(255,255,255,0.85)", fontWeight: 600 }}>
+            {Math.round(stats.buffered_secs)} s
+          </b>
+          {" "}of your {replaySeconds} s replay length at the{" "}
+          {(stats.budget_mb ?? 0) >= 1000
+            ? `${((stats.budget_mb ?? 0) / 1000).toFixed(1)} GB`
+            : `${Math.round(stats.budget_mb ?? 0)} MB`}{" "}
+          cap. Lower quality or shorten the replay length.
+        </span>
+      ) : stats?.measuring ? (
         <span>
           At current screen activity: ≈{" "}
           <b style={{ color: "rgba(255,255,255,0.85)", fontWeight: 600 }}>
@@ -1691,7 +1712,7 @@ function VideoPanel({
     <PanelShell>
       <PanelHeader Icon={Video} title="Video" subtitle="ClipDip keeps a rolling buffer of recent gameplay. Tune what gets captured and how heavy the file is." />
       <PanelBody>
-        <Row Icon={Timer} label="Replay buffer" hint="The longest clip you can save. Larger buffers use more memory.">
+        <Row Icon={Timer} label="Replay length" hint="The longest clip you can save. Longer replay lengths use more memory.">
           <DesignSlider
             value={config.replay_seconds}
             onChange={v => patch("replay_seconds", v)}
@@ -1732,7 +1753,11 @@ function VideoPanel({
           label="Quality & size"
           hint={presetIdx === -1
             ? "Custom encoder settings are active (see Advanced). Moving this slider replaces them with a preset."
-            : QUALITY_PRESETS[presetIdx].desc}
+            : config.video.quality_cap_bps === 0
+              ? `${QUALITY_PRESETS[presetIdx].desc.split(". Busy scenes")[0]}. Bitrate cap disabled in the config file.`
+              : typeof config.video.quality_cap_bps === "number"
+                ? `${QUALITY_PRESETS[presetIdx].desc.split(". Busy scenes")[0]}. Custom bitrate cap set in the config file.`
+                : QUALITY_PRESETS[presetIdx].desc}
         >
           <DesignSlider
             value={presetIdx === -1 ? 2 : presetIdx}
@@ -2442,8 +2467,100 @@ function NotificationsPanel({ config, patchNotif }: {
           />
         </Row>
         <OverlayPreviewRow enabled={config.notifications.enabled} />
+        <NotificationHistoryList />
       </PanelBody>
     </PanelShell>
+  );
+}
+
+type NotificationRecord = {
+  at_ms: number;
+  kind: string;
+  title: string;
+  body: string;
+};
+
+// Recent notifications with timestamps and full alert text — the overlay
+// toasts auto-dismiss, so this is where their content can be read back
+// (and screenshotted) later.
+function NotificationHistoryList() {
+  const [items, setItems] = useState<NotificationRecord[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      invoke<NotificationRecord[]>("get_notification_history")
+        .then(h => { if (alive) setItems(h); })
+        // Transient IPC failure: keep showing what we have rather than
+        // flashing the empty state for a poll cycle.
+        .catch(() => {});
+    };
+    tick();
+    const id = window.setInterval(tick, 10_000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, []);
+
+  const fmtTime = (ms: number) => {
+    const d = new Date(ms);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return sameDay ? time : `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${time}`;
+  };
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{
+        font: "600 11px/1 Inter, sans-serif",
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+        color: "rgba(255,255,255,0.4)",
+        marginBottom: 8,
+      }}>
+        Recent notifications
+      </div>
+      <div style={{
+        borderRadius: 10,
+        background: "rgb(20,20,25)",
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.045)",
+        maxHeight: 240,
+        overflowY: "auto",
+        font: "400 11.5px/1.45 Inter, sans-serif",
+      }}>
+        {items && items.length > 0 ? items.slice(0, 50).map((n, i) => (
+          <div key={`${n.at_ms}-${i}`} style={{
+            display: "flex",
+            gap: 10,
+            alignItems: "baseline",
+            padding: "7px 12px",
+            borderBottom: i < Math.min(items.length, 50) - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+          }}>
+            <span style={{
+              flex: "none",
+              minWidth: 74,
+              color: "rgba(255,255,255,0.4)",
+              fontVariantNumeric: "tabular-nums",
+            }}>
+              {fmtTime(n.at_ms)}
+            </span>
+            <span style={{ color: "rgba(255,255,255,0.55)" }}>
+              <b style={{
+                fontWeight: 600,
+                color: n.kind === "health" || n.kind === "error"
+                  ? "#e8b34b"
+                  : "rgba(255,255,255,0.85)",
+              }}>
+                {n.title}
+              </b>
+              {n.body ? <span> {n.body}</span> : null}
+            </span>
+          </div>
+        )) : (
+          <div style={{ padding: "10px 12px", color: "rgba(255,255,255,0.4)" }}>
+            No notifications yet.
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2498,7 +2615,7 @@ export default function MainWindow() {
       .catch(() => {
         setConfig({
           replay_seconds: 60,
-          video: { output_index: 0, capture_backend: "auto", fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 1.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 }, recording_quality: { mode: "constant_qp", qp: 14 } },
+          video: { output_index: 0, capture_backend: "auto", fps: 60, bitrate_bps: 30_000_000, include_cursor: true, gop_seconds: 2.0, codec: "prefer_av1", rate_control: { mode: "constant_qp", qp: 20 }, recording_quality: { mode: "constant_qp", qp: 14 } },
           audio: { sources: [{ kind: "system_loopback" }, { kind: "microphone" }], include_mix: true },
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10", toggle_recording: "Ctrl+Alt+F9" },

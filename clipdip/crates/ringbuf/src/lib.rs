@@ -13,11 +13,14 @@
 //!
 //! - **Time**: a GOP whose successor IDR is already older than
 //!   `newest_video_pts - time_window` contributes nothing to the replay
-//!   window and goes. This is the primary trigger — the byte budget is
-//!   only a hint (under CQP the encoder's real bitrate floats with scene
-//!   complexity), so time is what actually guarantees the configured
-//!   replay duration is retained.
+//!   window and goes. This is the primary trigger; it is what guarantees
+//!   the configured replay duration is retained.
 //! - **Bytes**: hard safety cap so a runaway bitrate can't eat all RAM.
+//!   When this trigger evicts a GOP that is still inside the time window,
+//!   the replay window is being truncated by memory pressure — the ring
+//!   records that moment in `pressure_eviction_pts` so a health monitor
+//!   can tell "buffer short because memory" apart from "buffer short
+//!   because capture gapped".
 //!
 //! Both guarantee:
 //!
@@ -110,8 +113,53 @@ pub struct PacketRing {
 pub struct RingStats {
     /// Encoded video payload bytes currently buffered.
     pub video_bytes: u64,
+    /// Of `video_bytes`, the bytes belonging to keyframes. On static
+    /// content nearly all bits are the once-per-GOP IDR — this split is
+    /// what makes that measurable from a user's log.
+    pub video_keyframe_bytes: u64,
     /// PTS span from oldest to newest buffered video packet (100-ns ticks).
     pub video_span_100ns: i64,
+    /// Total accounted bytes (all streams, incl. per-packet overhead) —
+    /// the number the byte budget is enforced against.
+    pub bytes_used: u64,
+    /// The ring's byte budget (eviction cap).
+    pub byte_budget: u64,
+    /// Newest video PTS seen so far (`i64::MIN` until the first video
+    /// packet). Recency baseline for the two stamps below, which live on
+    /// the same media timeline.
+    pub newest_video_pts: i64,
+    /// Newest video PTS at the last time a *time-fresh* GOP was evicted by
+    /// the byte budget (`i64::MIN` = never). A recent value means the
+    /// replay window is currently truncated by memory pressure.
+    pub pressure_eviction_pts: i64,
+    /// Newest video PTS at the moment the last manual-recording hold was
+    /// released (`i64::MIN` = never). Releasing a hold evicts the whole
+    /// backlog at once, so byte-pressure signals within roughly one window
+    /// of this point are expected and not a steady state.
+    pub hold_released_pts: i64,
+}
+
+impl RingStats {
+    /// A time-fresh GOP was byte-evicted within the last `2 * window` of
+    /// media time: the replay window is (or very recently was) truncated
+    /// by memory pressure rather than a capture gap.
+    pub fn pressure_recent(&self, window_100ns: i64) -> bool {
+        self.pressure_eviction_pts != i64::MIN
+            && self.newest_video_pts != i64::MIN
+            && self.newest_video_pts - self.pressure_eviction_pts <= 2 * window_100ns
+    }
+
+    /// The post-recording eviction burst has settled. Releasing a hold
+    /// flushes the whole recording backlog at once, stamping pressure
+    /// evictions that say nothing about steady state — treat pressure as
+    /// meaningful only once the release is at least as old as the
+    /// pressure-recency horizon above, so the two tests can never
+    /// disagree about the same stamp.
+    pub fn past_hold_grace(&self, window_100ns: i64) -> bool {
+        self.hold_released_pts == i64::MIN
+            || self.newest_video_pts == i64::MIN
+            || self.newest_video_pts - self.hold_released_pts > 2 * window_100ns
+    }
 }
 
 struct RingInner {
@@ -127,6 +175,10 @@ struct RingInner {
     /// While `Some(pts)`, no packet with `pts_100ns >= pts` is ever
     /// evicted (manual-recording hold).
     hold_from_pts: Option<i64>,
+    /// See [`RingStats::pressure_eviction_pts`].
+    pressure_eviction_pts: i64,
+    /// See [`RingStats::hold_released_pts`].
+    hold_released_pts: i64,
 }
 
 impl PacketRing {
@@ -144,6 +196,8 @@ impl PacketRing {
                 time_window_100ns,
                 newest_video_pts: i64::MIN,
                 hold_from_pts: None,
+                pressure_eviction_pts: i64::MIN,
+                hold_released_pts: i64::MIN,
             }),
         }
     }
@@ -152,7 +206,14 @@ impl PacketRing {
     /// the pin (`None`). Releasing re-applies the time window + byte budget
     /// on the next push.
     pub fn set_hold(&self, pts: Option<i64>) {
-        self.inner.lock().hold_from_pts = pts;
+        let mut g = self.inner.lock();
+        // Stamp the release moment so the health monitor can grace-period
+        // the burst of byte-pressure evictions a long recording leaves
+        // behind (the backlog all evicts on the next few pushes).
+        if pts.is_none() && g.hold_from_pts.is_some() {
+            g.hold_released_pts = g.newest_video_pts;
+        }
+        g.hold_from_pts = pts;
     }
 
     /// PTS of the newest video keyframe currently buffered, if any. Used
@@ -207,10 +268,14 @@ impl PacketRing {
     pub fn stats(&self) -> RingStats {
         let g = self.inner.lock();
         let mut video_bytes: u64 = 0;
+        let mut video_keyframe_bytes: u64 = 0;
         let mut first_pts: Option<i64> = None;
         let mut last_pts: i64 = 0;
         for p in g.packets.iter().filter(|p| p.stream_id == STREAM_VIDEO) {
             video_bytes += p.bytes.len() as u64;
+            if p.is_keyframe {
+                video_keyframe_bytes += p.bytes.len() as u64;
+            }
             if first_pts.is_none() {
                 first_pts = Some(p.pts_100ns);
             }
@@ -218,7 +283,13 @@ impl PacketRing {
         }
         RingStats {
             video_bytes,
+            video_keyframe_bytes,
             video_span_100ns: first_pts.map_or(0, |f| last_pts - f),
+            bytes_used: g.bytes_used as u64,
+            byte_budget: g.byte_budget as u64,
+            newest_video_pts: g.newest_video_pts,
+            pressure_eviction_pts: g.pressure_eviction_pts,
+            hold_released_pts: g.hold_released_pts,
         }
     }
 
@@ -276,6 +347,15 @@ impl RingInner {
 
             if !stale && self.bytes_used <= self.byte_budget {
                 break;
+            }
+
+            // A time-fresh GOP evicted purely by the byte budget means the
+            // replay window is being truncated by memory pressure. Skip the
+            // stamp while a hold is active: recording holds intentionally
+            // grow the ring past the budget, so pre-hold evictions there
+            // are expected, not a steady state worth alerting on.
+            if !stale && self.hold_from_pts.is_none() {
+                self.pressure_eviction_pts = self.newest_video_pts;
             }
 
             for _ in 0..cut {
@@ -501,6 +581,55 @@ mod tests {
             .filter(|p| p.is_keyframe && p.stream_id == STREAM_VIDEO)
             .count();
         assert_eq!(fixed_idrs, 8);
+    }
+
+    #[test]
+    fn pressure_flag_set_only_on_time_fresh_byte_eviction() {
+        // Large window (nothing goes stale), tiny byte budget: eviction is
+        // purely byte-driven, so the pressure flag must be stamped.
+        let r = PacketRing::with_time_window(500, 1_000_000);
+        for gop in 0..5 {
+            let base = gop * 10;
+            r.push(video_idr(base, 200));
+            r.push(video_p(base + 1, 200));
+        }
+        let s = r.stats();
+        assert!(s.pressure_eviction_pts != i64::MIN, "byte eviction of fresh GOPs must stamp the flag");
+        assert_eq!(s.pressure_eviction_pts, 40, "stamp anchors on newest video pts at eviction time");
+        assert_eq!(s.bytes_used, r.bytes_used() as u64);
+        assert_eq!(s.byte_budget, 500);
+    }
+
+    #[test]
+    fn pressure_flag_not_set_on_stale_time_eviction() {
+        // Huge byte budget, tiny window: eviction is purely time-driven.
+        let r = PacketRing::with_time_window(usize::MAX, 10);
+        for gop in 0..4 {
+            let base = gop * 10;
+            r.push(video_idr(base, 10));
+            r.push(video_p(base + 5, 10));
+        }
+        assert!(r.len() < 8, "time eviction must have run");
+        assert_eq!(r.stats().pressure_eviction_pts, i64::MIN);
+    }
+
+    #[test]
+    fn pressure_flag_not_set_during_hold_and_release_is_stamped() {
+        // Hold active: the ring overshoots the budget by design; pre-hold
+        // byte evictions must not stamp the pressure flag.
+        let r = PacketRing::with_time_window(50, 1_000_000);
+        r.set_hold(Some(10));
+        for gop in 0..5 {
+            let base = gop * 10;
+            r.push(video_idr(base, 1000));
+            r.push(video_p(base + 5, 1000));
+        }
+        assert_eq!(r.stats().pressure_eviction_pts, i64::MIN);
+        assert_eq!(r.stats().hold_released_pts, i64::MIN);
+
+        r.set_hold(None);
+        let s = r.stats();
+        assert_eq!(s.hold_released_pts, 45, "release stamps the newest video pts");
     }
 
     #[test]

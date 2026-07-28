@@ -392,6 +392,7 @@ fn exclude_from_capture(w: &tauri::WebviewWindow) {
 /// and also clears the stashed pending payload so a freshly-mounted
 /// overlay can't hydrate the dead session.
 fn tear_down_overlay(app: &AppHandle, err: String) {
+    record_notification("error", "Clip save failed", &err);
     if let Some(state) = app.try_state::<AppState>() {
         *state.pending_saving.lock().unwrap() = None;
         *state.pending_saved.lock().unwrap() = None;
@@ -406,6 +407,85 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
         let _ = overlay.emit("clip-error", err);
         let _ = overlay.destroy();
     }
+}
+
+// ---------- notification history ------------------------------------------
+
+/// One shown notification, kept so the user can look up (and screenshot)
+/// what an auto-dismissing overlay toast said. Overlay notices can't be
+/// screenshotted in the moment and Windows Focus Assist eats native toasts
+/// during fullscreen play — this is the durable trail for both.
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct NotificationRecord {
+    /// Unix epoch milliseconds when the notification was shown.
+    at_ms: u64,
+    /// `"health"`, `"clip"`, `"recording"`, `"notice"`, or `"error"`.
+    kind: String,
+    title: String,
+    #[serde(default)]
+    body: String,
+}
+
+const NOTIFICATION_HISTORY_CAP: usize = 200;
+
+fn notification_history_path() -> Option<PathBuf> {
+    clipdip_diagnostics::paths::data_dir().map(|d| d.join("notification-history.json"))
+}
+
+/// In-memory history, hydrated from disk on first use so it survives
+/// restarts. Guarded by one mutex; writes rewrite the whole (small,
+/// capped) file, which keeps load/save trivially consistent.
+fn notification_history() -> &'static Mutex<Vec<NotificationRecord>> {
+    static HISTORY: std::sync::OnceLock<Mutex<Vec<NotificationRecord>>> =
+        std::sync::OnceLock::new();
+    HISTORY.get_or_init(|| {
+        let loaded = notification_history_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<Vec<NotificationRecord>>(&s).ok())
+            .unwrap_or_default();
+        Mutex::new(loaded)
+    })
+}
+
+/// Append one record and persist. Failure to persist only costs history
+/// across a restart, never the notification itself.
+fn record_notification(kind: &str, title: &str, body: &str) {
+    let at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut h = notification_history().lock().unwrap();
+    h.push(NotificationRecord {
+        at_ms,
+        kind: kind.to_string(),
+        title: title.to_string(),
+        body: body.to_string(),
+    });
+    let len = h.len();
+    if len > NOTIFICATION_HISTORY_CAP {
+        h.drain(..len - NOTIFICATION_HISTORY_CAP);
+    }
+    if let Some(path) = notification_history_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_string(&*h) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    warn!("notification history write failed: {e:#}");
+                }
+            }
+            Err(e) => warn!("notification history serialize failed: {e:#}"),
+        }
+    }
+}
+
+/// Newest-first history for the settings UIs.
+#[tauri::command]
+fn get_notification_history() -> Vec<NotificationRecord> {
+    let mut h = notification_history().lock().unwrap().clone();
+    h.reverse();
+    h
 }
 
 // ---------- tauri commands ------------------------------------------------
@@ -1104,9 +1184,19 @@ struct BufferStats {
     /// (the other fields are zero in that case).
     measuring: bool,
     mb_per_minute: f64,
-    /// `mb_per_minute` scaled to the configured replay window.
+    /// `mb_per_minute` scaled to what a clip saved right now would cover:
+    /// the configured replay window, or the (shorter) buffered span while
+    /// the buffer is still filling or memory-limited.
     clip_mb: f64,
     buffered_secs: f64,
+    /// True when the replay window is currently truncated by the ring's
+    /// memory ceiling (a recent byte-budget eviction of time-fresh
+    /// footage). The settings UIs switch to honest copy on this.
+    memory_limited: bool,
+    /// Total ring occupancy (all streams incl. raw PCM audio), MB.
+    bytes_used_mb: f64,
+    /// The ring's memory ceiling, MB.
+    budget_mb: f64,
 }
 
 #[tauri::command]
@@ -1137,11 +1227,22 @@ fn get_buffer_stats(state: State<'_, AppState>) -> BufferStats {
     let audio_streams = sources + usize::from(cfg.audio.include_mix && sources >= 2);
     let audio_bytes_per_sec = audio_streams as f64 * cfg.output.audio_bitrate_bps as f64 / 8.0;
     let mb_per_minute = (video_bytes_per_sec + audio_bytes_per_sec) * 60.0 / 1_000_000.0;
+    // Same classification the health monitor uses (shared predicates on
+    // RingStats so the two can't drift), plus a span gate: only claim
+    // "memory limited" while the buffer actually holds less than the
+    // configured window — a refilled buffer with a lingering stamp is fine.
+    let window_100ns = cfg.replay_seconds as i64 * 10_000_000;
+    let memory_limited = s.pressure_recent(window_100ns)
+        && s.past_hold_grace(window_100ns)
+        && span_secs + 3.0 < cfg.replay_seconds as f64;
     BufferStats {
         measuring: true,
         mb_per_minute,
-        clip_mb: mb_per_minute * cfg.replay_seconds as f64 / 60.0,
+        clip_mb: mb_per_minute * span_secs.min(cfg.replay_seconds as f64) / 60.0,
         buffered_secs: span_secs,
+        memory_limited,
+        bytes_used_mb: s.bytes_used as f64 / 1_000_000.0,
+        budget_mb: s.byte_budget as f64 / 1_000_000.0,
     }
 }
 
@@ -1333,6 +1434,15 @@ fn spawn_hotkey_listener(
     }
 }
 
+/// "870 MB" / "1.4 GB" for notification copy.
+fn fmt_size(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1e9)
+    } else {
+        format!("{} MB", bytes / 1_000_000)
+    }
+}
+
 /// Native Windows toast. No-op-safe: failure to show is swallowed (a missing
 /// notification must never take down capture).
 fn notify_native(app: &AppHandle, title: &str, body: &str) {
@@ -1352,6 +1462,7 @@ fn notify_native(app: &AppHandle, title: &str, body: &str) {
 /// screenshotted, so long prose is wasted there); the native toast carries
 /// the detailed `body` for the action center.
 fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
+    record_notification("health", title, body);
     notify_native(app, title, body);
     let notice = NoticePayload {
         message: title.to_string(),
@@ -1375,6 +1486,10 @@ fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
 ///   no frame has been produced for seconds (GPU/display power transition).
 /// - **Replay buffer low** — the buffered video span has dropped well below
 ///   the configured window, so a clip saved *right now* would be short.
+///   Split by cause: byte-budget truncation (the ring's pressure stamp is
+///   recent) is a stable fact of the settings + machine and alerts once
+///   per pipeline run with no "recovered" counterpart; a capture gap keeps
+///   the debounced alert/recover pair.
 ///
 /// Hysteresis (fire only after the condition persists, clear only after it's
 /// been gone a few ticks) keeps a flaky moment from spamming toasts.
@@ -1459,6 +1574,12 @@ fn health_loop(
     let mut bad = 0u32; // consecutive degraded ticks (debounce in)
     let mut good = 0u32; // consecutive healthy ticks (debounce out)
     let mut degraded = false;
+    // Memory pressure is a steady configuration fact, not a transient:
+    // alert exactly once per pipeline run (the monitor respawns with the
+    // pipeline, which also resets this) and never emit a "recovered"
+    // counterpart for it. Without the latch the gap debounce turns a
+    // stable state into an endless low/recovered toast ping-pong.
+    let mut memory_alerted = false;
     // Only auto-restart once capture has actually worked this session, so a
     // wedge that somehow happens at startup can't cause a restart loop.
     let mut seen_healthy = false;
@@ -1517,10 +1638,26 @@ fn health_loop(
                 (qpc_now_100ns() - live_now) as f64 / 1e7
             };
             let stats = ring.stats();
+            let span_secs = stats.video_span_100ns as f64 / 1e7;
+            // Effective video bitrate and how much of it is keyframes.
+            // On static content the once-per-GOP IDR dominates — this pair
+            // is what proves (or refutes) that from a user's log.
+            let video_mbps = if span_secs > 0.0 {
+                stats.video_bytes as f64 * 8.0 / span_secs / 1e6
+            } else {
+                0.0
+            };
+            let kf_share = if stats.video_bytes > 0 {
+                stats.video_keyframe_bytes as f64 / stats.video_bytes as f64
+            } else {
+                0.0
+            };
             debug!(
                 frame_idle_secs = idle_secs,
-                ring_span_secs = stats.video_span_100ns as f64 / 1e7,
+                ring_span_secs = span_secs,
                 ring_video_mb = stats.video_bytes / 1_000_000,
+                video_mbps = format!("{video_mbps:.1}"),
+                keyframe_share = format!("{kf_share:.2}"),
                 phase = capture_phase::name(phase.load(Ordering::Relaxed)),
                 "capture heartbeat"
             );
@@ -1594,19 +1731,56 @@ fn health_loop(
             } else if polls as i64 > replay_seconds as i64 + 5 && span < underfull_floor {
                 // Only judge "low" once the buffer has had a full window to
                 // fill, so normal startup doesn't trip it.
-                Some((
-                    format!(
-                        "Replay buffer low ({:.0}s of {}s)",
-                        span as f64 / 1e7,
-                        replay_seconds
-                    ),
-                    format!(
-                        "Buffer holds only {:.0}s of your {}s replay window. A clip \
-                         saved now would be short.",
-                        span as f64 / 1e7,
-                        replay_seconds
-                    ),
-                ))
+                //
+                // Classify the cause. A recent byte-budget eviction of
+                // time-fresh footage means the window is truncated by the
+                // memory ceiling (a stable fact of the current settings +
+                // machine); anything else is a capture gap (transient).
+                // Any recent pressure stamp routes here and stays out of
+                // the gap alert — stopping a manual recording flushes its
+                // whole backlog at once, and those expected stamps must
+                // suppress the gap toast too, not just the memory one.
+                // The hold-release grace only gates whether the one-shot
+                // memory notice may fire.
+                let stats = ring.stats();
+                if stats.pressure_recent(window_100ns) {
+                    if stats.past_hold_grace(window_100ns) && !memory_alerted {
+                        memory_alerted = true;
+                        let span_secs = span as f64 / 1e7;
+                        let rate = stats.bytes_used as f64 / span_secs.max(1.0);
+                        let needed = fmt_size((rate * replay_seconds as f64) as u64);
+                        let budget = fmt_size(stats.byte_budget);
+                        let body = format!(
+                            "Buffer holds {span_secs:.0} s of your {replay_seconds} s \
+                             replay length. Keeping all of it needs about {needed} but \
+                             the memory limit is {budget}. Lower quality or shorten \
+                             the replay length."
+                        );
+                        warn!("health: {body}");
+                        clipdip_diagnostics::report_capture_failure(
+                            "ring_memory_pressure",
+                            body.clone(),
+                            serde_json::json!({
+                                "span_secs": span_secs,
+                                "replay_seconds": replay_seconds,
+                                "needed_mb": (rate * replay_seconds as f64 / 1e6) as u64,
+                                "budget_mb": stats.byte_budget / 1_000_000,
+                            }),
+                        );
+                        notify_health(&app, &corner, "Replay limited by memory", &body);
+                    }
+                    None
+                } else {
+                    Some((
+                        "Replay buffer low".to_string(),
+                        format!(
+                            "Buffer holds only {:.0}s of your {}s replay window. A clip \
+                             saved now would be short.",
+                            span as f64 / 1e7,
+                            replay_seconds
+                        ),
+                    ))
+                }
             } else {
                 None
             }
@@ -1633,12 +1807,20 @@ fn health_loop(
                 if good >= 3 {
                     degraded = false;
                     info!("health: capture recovered");
-                    notify_health(
-                        &app,
-                        &corner,
-                        "Capture recovered",
-                        "Replay capture is healthy again and the buffer is refilling.",
-                    );
+                    // The refill claim must be honest: a gap-degraded ring
+                    // that runs into the byte budget while refilling routes
+                    // to the (quiet) memory path above, which lands here —
+                    // don't promise a full buffer that memory won't allow.
+                    let stats = ring.stats();
+                    let body = if stats.video_span_100ns < underfull_floor
+                        && stats.pressure_recent(window_100ns)
+                    {
+                        "Replay capture is healthy again. The replay length \
+                         is still limited by memory."
+                    } else {
+                        "Replay capture is healthy again and the buffer is refilling."
+                    };
+                    notify_health(&app, &corner, "Capture recovered", body);
                 }
             }
             // Already alerted and still bad, or healthy and still fine: reset
@@ -1752,6 +1934,7 @@ fn run_capture_loop(
                                 // Recordings are silent by design — only the
                                 // overlay notice + the red dot.
                                 if cur.notifications.enabled {
+                                    record_notification("notice", "Recording started", "");
                                     let corner = corner_slug(&cur.notifications.corner);
                                     let notice = NoticePayload {
                                         message: "Recording started".into(),
@@ -2024,6 +2207,7 @@ fn run_capture_loop(
                             }
 
                             if notifs_enabled {
+                                record_notification(save_kind.as_str(), &title, &path_str);
                                 let payload = ClipSavedPayload {
                                     path: path_str,
                                     title,
@@ -2607,6 +2791,9 @@ fn run_control_command(
             reload_hotkeys(state)?;
             Ok(serde_json::json!({}))
         }
+        "get_notification_history" => Ok(serde_json::json!({
+            "notifications": get_notification_history(),
+        })),
         other => Err(format!("unknown command '{other}'")),
     }
 }
@@ -2955,6 +3142,7 @@ fn main() {
             set_telemetry_enabled,
             upload_diagnostics_bundle,
             get_pending_update,
+            get_notification_history,
         ])
         .build(tauri::generate_context!())
         .expect("error building clipdip")
