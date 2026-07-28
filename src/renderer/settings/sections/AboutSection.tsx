@@ -19,6 +19,8 @@ const DIAGNOSTICS_STAGE_LABELS: Record<string, string> = {
   "settings-files": "Gathering settings files",
   "settings-snapshot": "Capturing settings snapshot",
   "activity-logs": "Bundling activity history",
+  "console-buffers": "Capturing console output",
+  clipdip: "Gathering clipdip logs and state",
   complete: "Complete",
 };
 
@@ -149,7 +151,8 @@ export default function AboutSection() {
     setUploading(true);
     setUploadStatus({ tone: "progress", text: "Uploading logs…" });
     try {
-      const response = await window.clips.uploadSessionLogs({ rendererConsoleLogs: "" });
+      // Renderer console is captured main-side (console-message); no payload needed.
+      const response = await window.clips.uploadSessionLogs();
       if (!response?.success) throw new Error(response?.error ?? "Unknown error");
       if (response.url) {
         setUploadStatus({ tone: "success", link: response.url });
@@ -201,7 +204,7 @@ export default function AboutSection() {
       <SetGroup title="Diagnostics">
         <SetRow
           title="Generate diagnostics zip"
-          description="Bundle logs, settings, and system info to share for troubleshooting"
+          description="Bundle app + clipdip logs, settings, console output, and system info to share for troubleshooting"
           status={diagStatus?.text ? <StatusLine tone={diagStatus.tone}>{diagStatus.text}</StatusLine> : undefined}
         >
           <button type="button" className="btn" disabled={generating} onClick={() => void generateDiagnostics()}>
@@ -210,7 +213,7 @@ export default function AboutSection() {
         </SetRow>
         <SetRow
           title="Upload session logs"
-          description="Upload the current run's logs and get a shareable link"
+          description="Upload the current run's logs (app, console, and clipdip) and get a shareable link"
           status={
             uploadStatus ? (
               <StatusLine tone={uploadStatus.tone}>

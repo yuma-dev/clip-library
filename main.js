@@ -99,6 +99,9 @@ const discordModule = lazyModule('./main/discord');
 // Discord profile widget pusher (lazy; inert without its userData token file)
 const discordWidgetModule = lazyModule('./main/discord-widget');
 
+// Renderer console ring buffer for diagnostics (log upload + zip)
+const rendererConsoleCapture = require('./main/renderer-console-capture');
+
 // Clips module
 const clipsModule = require('./main/clips');
 
@@ -570,6 +573,8 @@ async function createWindow() {
       webSecurity: !isDev,
     },
   });
+
+  rendererConsoleCapture.attach(mainWindow.webContents);
 
   // Renderer rewrite: the React renderer draws its own titlebar strip; native
   // window controls come from `titleBarOverlay` above. custom-electron-titlebar
