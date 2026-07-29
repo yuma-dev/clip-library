@@ -15,6 +15,7 @@ const { spawn, execFile } = require('child_process');
 const net = require('net');
 const TOML = require('smol-toml');
 const logger = require('../utils/logger');
+const telemetry = require('./telemetry');
 
 const EXE_NAME = 'clipdip.exe';
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
@@ -69,12 +70,23 @@ async function binaryFound() {
 // ---------- config bridge --------------------------------------------------
 
 async function getConfig() {
+  let raw = null;
   try {
-    const raw = await fsp.readFile(configPath(), 'utf8');
+    raw = await fsp.readFile(configPath(), 'utf8');
     return { exists: true, config: TOML.parse(raw) };
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.warn(`Clipdip config read failed: ${error.message}`);
+      // The empty config we return here is what the next setConfig merges
+      // into, so an unreadable file becomes an overwritten one.
+      telemetry.event('clipdip_config_parse_failed', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: {
+          file_bytes: typeof raw === 'string' ? Buffer.byteLength(raw, 'utf8') : 0,
+          errno: error?.code
+        }
+      });
     }
     return { exists: false, config: {} };
   }
@@ -183,6 +195,16 @@ function isRunning() {
       { windowsHide: true },
       (error, stdout) => {
         const running = !error && typeof stdout === 'string' && stdout.toLowerCase().includes(EXE_NAME);
+        if (error) {
+          // A failed probe reads as "not running" everywhere, so clipdip looks
+          // stopped for the rest of the session.
+          telemetry.event('clipdip_isrunning_probe_failed', {
+            kind: telemetry.KIND.SILENT_FAILURE,
+            severity: telemetry.SEVERITY.WARNING,
+            context: { errno: error?.code },
+            coalesceMs: 600000
+          });
+        }
         runningCache = { value: running, at: Date.now() };
         resolve(running);
       }
@@ -221,6 +243,11 @@ async function ensureFfmpegPath() {
     logger.warn('ffmpeg path write did not stick, retrying');
   }
   logger.warn('ffmpeg path kept reverting; giving up until next start');
+  telemetry.event('clipdip_ffmpeg_path_unstable', {
+    kind: telemetry.KIND.DEGRADED,
+    severity: telemetry.SEVERITY.WARNING,
+    context: { attempts: 3 }
+  });
 }
 
 // Clipdip must always save somewhere that exists — its save pipeline fails
@@ -250,7 +277,12 @@ async function start() {
   const exe = await resolveBinaryPath();
   try {
     await fsp.access(exe, fs.constants.X_OK);
-  } catch {
+  } catch (error) {
+    telemetry.event('clipdip_start_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { binary_found: false, errno: error?.code }
+    });
     return { success: false, error: `Clipdip binary not found at ${exe}` };
   }
   await ensureFfmpegPath().catch((e) => logger.warn(`ffmpeg path sync failed: ${e.message}`));
@@ -359,14 +391,29 @@ const previewFilename = (template) => query('--preview-filename', [String(templa
 
 const NOT_RUNNING = { ok: false, error: 'not_running' };
 
+// Six distinct failure modes all answer `not_running`, so a hung clipdip is
+// indistinguishable from a stopped one. Report the mode, return the same value.
+// A missing control.json is skipped: that is genuinely "not running".
+function reportControlFailure(mode) {
+  telemetry.event('clipdip_control_failed', {
+    kind: telemetry.KIND.SILENT_FAILURE,
+    severity: telemetry.SEVERITY.ERROR,
+    context: { mode },
+    fingerprint: telemetry.hash32(`clipdip_control|${mode}`),
+    coalesceMs: 300000
+  });
+}
+
 async function control(cmd, args) {
   let info;
   try {
     info = JSON.parse(await fsp.readFile(controlJsonPath(), 'utf8'));
-  } catch {
+  } catch (error) {
+    if (error?.code !== 'ENOENT') reportControlFailure('stale_json');
     return { ...NOT_RUNNING };
   }
   if (!info || typeof info.port !== 'number' || typeof info.token !== 'string') {
+    reportControlFailure('stale_json');
     return { ...NOT_RUNNING };
   }
   return new Promise((resolve) => {
@@ -382,10 +429,16 @@ async function control(cmd, args) {
       socket.destroy();
       resolve(result);
     };
-    connectTimer = setTimeout(() => done({ ...NOT_RUNNING }), 500);
+    connectTimer = setTimeout(() => {
+      reportControlFailure('connect_timeout');
+      done({ ...NOT_RUNNING });
+    }, 500);
     socket.on('connect', () => {
       clearTimeout(connectTimer);
-      responseTimer = setTimeout(() => done({ ...NOT_RUNNING }), 5000);
+      responseTimer = setTimeout(() => {
+        reportControlFailure('response_timeout');
+        done({ ...NOT_RUNNING });
+      }, 5000);
       const request = { token: info.token, cmd: String(cmd) };
       if (args && typeof args === 'object') request.args = args;
       socket.write(`${JSON.stringify(request)}\n`);
@@ -397,14 +450,22 @@ async function control(cmd, args) {
       if (nl === -1) return;
       try {
         const parsed = JSON.parse(buffer.slice(0, nl));
+        if (!parsed || typeof parsed !== 'object') reportControlFailure('bad_json');
         done(parsed && typeof parsed === 'object' ? parsed : { ok: false, error: 'bad response' });
       } catch {
+        reportControlFailure('bad_json');
         done({ ok: false, error: 'bad response' });
       }
     });
     // Stale control.json (dead pid) surfaces as ECONNREFUSED here.
-    socket.on('error', () => done({ ...NOT_RUNNING }));
-    socket.on('close', () => done({ ...NOT_RUNNING }));
+    socket.on('error', (error) => {
+      if (!settled) reportControlFailure(error?.code === 'ECONNREFUSED' ? 'econnrefused' : 'socket_error');
+      done({ ...NOT_RUNNING });
+    });
+    socket.on('close', () => {
+      if (!settled) reportControlFailure('socket_error');
+      done({ ...NOT_RUNNING });
+    });
   });
 }
 
@@ -548,6 +609,7 @@ async function autoEnableIfUnconfigured(persistEnabled) {
   // Start-with-Windows is opt-out too.
   await setAutostart(true).catch((e) => logger.warn(`Clipdip autostart enable failed: ${e.message}`));
 
+  const startedAt = Date.now();
   const result = await start();
   if (!result.success) {
     logger.warn(`Clipdip auto-enable failed (${result.error}) — recording opt-out`);
@@ -568,6 +630,11 @@ async function autoEnableIfUnconfigured(persistEnabled) {
     isRunning().then(async (alive) => {
       if (alive) return;
       logger.warn('Clipdip exited right after auto-enable — disabling it');
+      telemetry.event('clipdip_died_after_start', {
+        kind: telemetry.KIND.CRASH,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { ms_to_death: Date.now() - startedAt }
+      });
       await setAutostart(false).catch(() => {});
       await persistEnabled(false).catch(() => {});
     });

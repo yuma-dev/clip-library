@@ -15,6 +15,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
 const ffprobePath = require('@ffprobe-installer/ffprobe').path.replace('app.asar', 'app.asar.unpacked');
 const logger = require('../utils/logger');
+const telemetry = require('./telemetry');
 const { logActivity } = require('../utils/activity-tracker');
 const NVENC_STATUS_TTL_MS = 5 * 60 * 1000;
 const DECODER_LIST_TTL_MS = 5 * 60 * 1000;
@@ -154,6 +155,123 @@ const preferredDecodeModeByCodec = new Map();
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 
+const PROBE_FALLBACK_COALESCE_MS = 600000;
+
+/**
+ * Split a child_process error into the two telemetry-safe fields it can carry.
+ * `code` is a string errno when the spawn itself failed and a number when the
+ * process ran and exited non-zero. Accepts both a raw Error and the
+ * `{ error, stdout, stderr }` shape execFileAsync rejects with.
+ */
+function execErrorCodes(rejection) {
+  const error = rejection && rejection.error ? rejection.error : rejection;
+  const code = error?.code;
+  return {
+    errno: typeof code === 'string' ? code : undefined,
+    exit_code: typeof code === 'number' ? code : undefined
+  };
+}
+
+/** Pull the numeric exit code out of a fluent-ffmpeg error message. */
+function parseFfmpegExitCode(error) {
+  const match = String(error?.message || '').match(/exited with code (-?\d+)/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Reduce raw NVENC failure text to a short enum. The raw text can contain the
+ * input path, so it must never leave the machine.
+ * @returns {'no_encoder'|'driver'|'device'|'other'}
+ */
+function classifyNvencFailure(rawText) {
+  const text = String(rawText || '').toLowerCase();
+  if (/unknown encoder|encoder not found|no such encoder|cannot find encoder/.test(text)) {
+    return 'no_encoder';
+  }
+  if (/driver|nvcuda|nvml|version mismatch|minimum required/.test(text)) {
+    return 'driver';
+  }
+  if (/no capable devices|no device|device not found|no_device|invalid device|out of memory|not supported/.test(text)) {
+    return 'device';
+  }
+  return 'other';
+}
+
+/**
+ * Promote the export benchmark that already gets built per export. Numbers and
+ * enum strings only: `decodeErrors` holds raw ffmpeg stderr and is dropped.
+ */
+function reportExportBenchmark(benchmark) {
+  if (!benchmark || typeof benchmark !== 'object') return;
+  const context = {};
+  for (const [key, value] of Object.entries(benchmark)) {
+    if (key === 'decodeErrors' || key === 'timestamp') continue;
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
+      context[key] = value;
+    } else if (Array.isArray(value)) {
+      context[key] = value.filter((v) => typeof v === 'string' || typeof v === 'number');
+    }
+  }
+
+  telemetry.event('export_succeeded', {
+    kind: telemetry.KIND.CUSTOM,
+    severity: telemetry.SEVERITY.INFO,
+    context
+  });
+
+  const encoder = typeof benchmark.encoder === 'string' ? benchmark.encoder : 'unknown';
+  if (Number.isFinite(benchmark.elapsedMs)) {
+    telemetry.metric('export_ms', benchmark.elapsedMs, { unit: 'ms', dims: { encoder } });
+  }
+  // The realtime factor is an unbounded speedup (routinely 6x to 40x on a
+  // hardware encoder) and the ingest API's `ratio` unit is a 0..1 fraction, so
+  // it has no usable buckets above 1. Record the clip duration instead: paired
+  // with export_ms above, the fleet factor is sum(duration)/sum(elapsed) server
+  // side. The exact per-export value still rides on export_succeeded.
+  if (Number.isFinite(benchmark.clipDurationSeconds)) {
+    telemetry.metric('export_source_ms', benchmark.clipDurationSeconds * 1000, {
+      unit: 'ms',
+      dims: { encoder }
+    });
+  }
+  if (Number.isFinite(benchmark.outputBytes)) {
+    telemetry.metric('export_output_bytes', benchmark.outputBytes, {
+      unit: 'bytes',
+      dims: { encoder }
+    });
+  }
+}
+
+/**
+ * Read the clipboard back after a write. `clipboard.writeBuffer` has no return
+ * value and no error path, so a mismatch is the only failure signal available.
+ */
+function verifyClipboardWrite(filePath) {
+  let written = false;
+  try {
+    if (process.platform === 'win32') {
+      const readBack = clipboard.readBuffer('FileNameW');
+      written = Boolean(readBack)
+        && readBack.length > 0
+        && readBack.toString('ucs2').replace(/\0+$/, '') === filePath;
+    } else {
+      written = clipboard.readText() === filePath;
+    }
+  } catch (error) {
+    written = false;
+  }
+  if (written) return;
+
+  const report = (outputBytes) => {
+    telemetry.event('clipboard_copy_unverified', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { output_bytes: outputBytes }
+    });
+  };
+  fs.stat(filePath).then((stats) => report(stats.size), () => report(undefined));
+}
+
 /**
  * Verify FFmpeg is working on startup
  */
@@ -162,6 +280,14 @@ function initFFmpeg() {
     execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
       if (error) {
         logger.error('Error getting ffmpeg version:', error);
+        // The app still boots fully after this rejects, with a broken ffmpeg.
+        // Every export and every thumbnail then fails one by one.
+        telemetry.event('ffmpeg_init_failed', {
+          kind: telemetry.KIND.CRASH,
+          severity: telemetry.SEVERITY.FATAL,
+          context: execErrorCodes(error),
+          error
+        });
         reject(error);
       } else {
         logger.info('FFmpeg version:', stdout);
@@ -279,6 +405,15 @@ async function getNvencStatus(options = {}) {
     const stdout = probeError?.stdout || '';
     const message = probeError?.error?.message || '';
     const reasonRaw = `${stderr}\n${stdout}\n${message}`.trim();
+    telemetry.event('nvenc_probe_failed', {
+      kind: telemetry.KIND.DEGRADED,
+      severity: telemetry.SEVERITY.WARNING,
+      context: {
+        reason_class: classifyNvencFailure(reasonRaw),
+        exit_code: execErrorCodes(probeError).exit_code,
+        ms: Date.now() - now
+      }
+    });
     nvencStatusCache = {
       available: false,
       mode: 'software',
@@ -862,10 +997,22 @@ async function exportVideoWithFallback(options) {
     let totalFrames = 0;
     let processedFrames = 0;
     let decodeFallbackNotified = false;
+    const pipelineStartedAtMs = Date.now();
 
     ffmpeg.ffprobe(inputPath, async (err, metadata) => {
       if (err) {
         logger.error('Error getting video info:', err);
+        telemetry.event('export_failed', {
+          kind: telemetry.KIND.ERROR,
+          severity: telemetry.SEVERITY.ERROR,
+          context: {
+            stage: 'probe',
+            ms: Date.now() - pipelineStartedAtMs,
+            duration_s: Math.round(duration),
+            exit_code: parseFfmpegExitCode(err),
+            errno: typeof err?.code === 'string' ? err.code : undefined
+          }
+        });
         reject(err);
         return;
       }
@@ -1093,6 +1240,7 @@ async function exportVideoWithFallback(options) {
       });
 
       const runSoftwareEncode = () => {
+        const softwareStartedAtMs = Date.now();
         const softwarePreset = resolvedTuning.softwarePreset;
         const baseSoftwareCrf = effectiveQuality === 'discord'
           ? 28
@@ -1146,6 +1294,23 @@ async function exportVideoWithFallback(options) {
             logger.error('FFmpeg error:', ffmpegError.message);
             logger.error('FFmpeg stdout:', stdout);
             logger.error('FFmpeg stderr:', stderr);
+            // Terminal: software encode is the last resort, there is nothing
+            // left to fall back to.
+            telemetry.event('export_failed', {
+              kind: telemetry.KIND.ERROR,
+              severity: telemetry.SEVERITY.ERROR,
+              context: {
+                stage: 'encode',
+                encoder: 'libx264',
+                exit_code: parseFfmpegExitCode(ffmpegError),
+                ms: Date.now() - softwareStartedAtMs,
+                duration_s: Math.round(duration),
+                source_codec: sourceCodec,
+                width: sourceWidth,
+                height: sourceHeight,
+                fps: sourceFps
+              }
+            });
             reject(ffmpegError);
           })
           .save(outputPath);
@@ -1156,6 +1321,16 @@ async function exportVideoWithFallback(options) {
         usingFallback = true;
         notifyFallback();
         logger.warn(`[ffmpeg] NVENC unavailable. Using software encode. Reason: ${nvencStatus.reason}`);
+        // The user is told nothing beyond a notice; the export just takes
+        // several times longer. reason is classified, never the raw stderr.
+        telemetry.event('nvenc_runtime_fallback', {
+          kind: telemetry.KIND.DEGRADED,
+          severity: telemetry.SEVERITY.WARNING,
+          context: {
+            reason: classifyNvencFailure(nvencStatus.reason),
+            elapsed_ms: Date.now() - pipelineStartedAtMs
+          }
+        });
         reportProgress(0);
         runSoftwareEncode();
         return;
@@ -1202,6 +1377,25 @@ async function exportVideoWithFallback(options) {
           });
         }
       }
+
+      // Each cascade step is a full ffmpeg spawn that produces only a
+      // logger.warn line today, while the user just sees a slow export.
+      let cascadeReported = false;
+      const reportDecodeCascade = (finalMode) => {
+        if (cascadeReported || attemptedDecodeModes.length < 2) return;
+        cascadeReported = true;
+        telemetry.event('hwdecode_cascade', {
+          kind: telemetry.KIND.DEGRADED,
+          severity: telemetry.SEVERITY.WARNING,
+          context: {
+            modes_tried: [...attemptedDecodeModes],
+            final_mode: finalMode,
+            attempts: attemptedDecodeModes.length,
+            source_codec: sourceCodec,
+            pix_fmt: sourcePixelFormat
+          }
+        });
+      };
 
       const runNvencAttempt = (decodeModeIndex = 0) => {
         const decodeMode = decodeModes[decodeModeIndex] || 'none';
@@ -1348,12 +1542,14 @@ async function exportVideoWithFallback(options) {
 
             usingFallback = true;
             notifyFallback();
+            reportDecodeCascade('software');
             runSoftwareEncode();
           })
           .on('end', () => {
             if (decodeMode !== 'none') {
               preferredDecodeModeByCodec.set(codecPreferenceKey, decodeMode);
             }
+            reportDecodeCascade(decodeMode);
             reportProgress(100);
             resolve({
               usingFallback,
@@ -1383,12 +1579,22 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
   const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
   let volumeData = null;
+  let volumeDataRaw = null;
   try {
-    const volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
+    volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
     volumeData = JSON.parse(volumeDataRaw);
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.error('Error reading volume range data:', error);
+    }
+    // The file was there but unparseable, so the range is dropped from the
+    // export and the output gets the wrong audio with no user-visible sign.
+    if (volumeDataRaw !== null) {
+      telemetry.event('volume_range_dropped', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { file_bytes: Buffer.byteLength(volumeDataRaw, 'utf8') }
+      });
     }
   }
 
@@ -1480,6 +1686,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       audioFilters: pipeline.audioFilters
     });
     logger.info('[ffmpeg] Export benchmark:', benchmark);
+    reportExportBenchmark(benchmark);
 
     return {
       success: true,
@@ -1507,12 +1714,22 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
   const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
   let volumeData = null;
+  let volumeDataRaw = null;
   try {
-    const volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
+    volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
     volumeData = JSON.parse(volumeDataRaw);
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.error('Error reading volume range data:', error);
+    }
+    // The file was there but unparseable, so the range is dropped from the
+    // export and the output gets the wrong audio with no user-visible sign.
+    if (volumeDataRaw !== null) {
+      telemetry.event('volume_range_dropped', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { file_bytes: Buffer.byteLength(volumeDataRaw, 'utf8') }
+      });
     }
   }
 
@@ -1600,6 +1817,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       audioFilters: pipeline.audioFilters
     });
     logger.info('[ffmpeg] Export benchmark:', benchmark);
+    reportExportBenchmark(benchmark);
 
     return {
       success: true,
@@ -1626,12 +1844,22 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
   const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
   let volumeData = null;
+  let volumeDataRaw = null;
   try {
-    const volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
+    volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
     volumeData = JSON.parse(volumeDataRaw);
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.error('Error reading volume range data:', error);
+    }
+    // The file was there but unparseable, so the range is dropped from the
+    // export and the output gets the wrong audio with no user-visible sign.
+    if (volumeDataRaw !== null) {
+      telemetry.event('volume_range_dropped', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { file_bytes: Buffer.byteLength(volumeDataRaw, 'utf8') }
+      });
     }
   }
 
@@ -1705,6 +1933,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       audioFilters: pipeline.audioFilters
     });
     logger.info('[ffmpeg] Export benchmark:', benchmark);
+    reportExportBenchmark(benchmark);
 
     return {
       success: true,
@@ -1749,8 +1978,8 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
       })
     : null;
 
+  const exportStartedAt = Date.now();
   try {
-    const exportStartedAt = Date.now();
     await new Promise((resolve, reject) => {
       const command = ffmpeg(inputPath)
         .seekInput(start)
@@ -1819,6 +2048,7 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
       encoder: 'libmp3lame'
     });
     logger.info('[ffmpeg] Export benchmark:', benchmark);
+    reportExportBenchmark(benchmark);
 
     return {
       success: true,
@@ -1828,6 +2058,17 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
     };
   } catch (error) {
     logger.error('Error exporting audio:', error);
+    telemetry.event('export_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: {
+        stage: 'audio',
+        encoder: 'libmp3lame',
+        exit_code: parseFfmpegExitCode(error),
+        ms: Date.now() - exportStartedAt,
+        duration_s: Math.round(duration)
+      }
+    });
     return { success: false, error: error.message };
   }
 }
@@ -1842,6 +2083,7 @@ function copyFileToClipboard(filePath) {
   } else {
     clipboard.writeText(filePath);
   }
+  verifyClipboardWrite(filePath);
 }
 
 /**
@@ -1995,6 +2237,11 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
       logger.info(`[ffmpeg] Clip file exists: ${clipPath}`);
     } catch (accessError) {
       logger.error(`[ffmpeg] Clip file does not exist: ${clipPath}`, accessError);
+      telemetry.event('clip_open_failed', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { errno: accessError?.code }
+      });
       throw new Error(`Clip file not found: ${clipName}`);
     }
 
@@ -2022,6 +2269,7 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
     // for the format, then a second direct probe for reliable tags — ~2x the
     // ~120ms process cost on the open path.)
     let info;
+    let probeStdout = '';
     try {
       const { stdout } = await execFileAsync(ffprobePath, [
         '-v', 'error',
@@ -2030,7 +2278,8 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
         '-show_streams',
         clipPath
       ]);
-      const parsed = JSON.parse(stdout || '{}');
+      probeStdout = stdout || '';
+      const parsed = JSON.parse(probeStdout || '{}');
       const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
       info = {
         format: {
@@ -2044,6 +2293,17 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
       // Fall back to fluent-ffmpeg's probe (its stream tags are sometimes
       // filtered, but a generic track name beats failing the open).
       logger.warn(`[ffmpeg] direct ffprobe failed for ${clipName}, falling back to fluent probe: ${directErr?.error?.message || directErr.message || directErr}`);
+      // Costs a second probe spawn on the open path, and malformed JSON looks
+      // exactly like a failed spawn from the outside.
+      telemetry.event('clip_probe_fallback', {
+        kind: telemetry.KIND.DEGRADED,
+        severity: telemetry.SEVERITY.INFO,
+        context: {
+          ...execErrorCodes(directErr),
+          stdout_bytes: Buffer.byteLength(probeStdout || directErr?.stdout || '', 'utf8')
+        },
+        coalesceMs: PROBE_FALLBACK_COALESCE_MS
+      });
       info = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(clipPath, (err, res) => (err ? reject(err) : resolve(res)));
       });
@@ -2093,6 +2353,13 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
     sourceMtimeMs = sourceStat.mtimeMs;
   } catch (error) {
     logger.warn(`[ffmpeg] extractAudioTracks: could not stat source ${clipPath}: ${error.message}`);
+    // mtime 0 makes every cached track compare as fresh forever, so a
+    // re-recorded clip keeps serving the old audio.
+    telemetry.event('audio_cache_stale_forever', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { errno: error?.code }
+    });
   }
 
   const results = [];
@@ -2152,7 +2419,20 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
     ];
   };
 
-  await Promise.all(missing.map((entry) => execFileAsync(ffmpegPath, buildArgsForTrack(entry))));
+  await Promise.all(missing.map((entry) => execFileAsync(ffmpegPath, buildArgsForTrack(entry))))
+    .catch((error) => {
+      // The rejection keeps propagating exactly as before: main.js turns it
+      // into [] and the player shows zero audio tracks with no error anywhere.
+      telemetry.event('audio_track_extract_failed', {
+        kind: telemetry.KIND.SILENT_FAILURE,
+        severity: telemetry.SEVERITY.ERROR,
+        context: {
+          expected_tracks: tracks.length,
+          ...execErrorCodes(error)
+        }
+      });
+      throw error;
+    });
 
   return results;
 }

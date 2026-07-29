@@ -15,6 +15,7 @@ import OnboardingWizard from "./onboarding/OnboardingWizard";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
 import { installDebugTools } from "./shell/debugTools";
+import { reportMetric, setTelemetryRoute } from "./telemetry";
 import type { Route } from "./routes";
 
 const PIN_KEY = "clip-library:rail-pinned";
@@ -35,7 +36,15 @@ export default function App() {
   // Profile overlay (rendered over the routed view when set). Navigating via
   // the sidebar clears it (see `navigate`). Wired to deep children via AppNav.
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  // Read by `navigate` without re-creating it on every route change (its
+  // identity is a prop on the sidebar).
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  // Open rail switch, closed by the effect below once the new view has painted.
+  const switchRef = useRef<{ from: Route; to: Route; startedAt: number } | null>(null);
   const navigate = useCallback((next: Route) => {
+    const from = routeRef.current;
+    if (from !== next) switchRef.current = { from, to: next, startedAt: performance.now() };
     setProfileUserId(null);
     setRoute(next);
   }, []);
@@ -86,6 +95,31 @@ export default function App() {
   const visitedRoutes = useRef({ library: false, feed: false });
   if (route === "library") visitedRoutes.current.library = true;
   if (route === "feed") visitedRoutes.current.feed = true;
+
+  // Tag every telemetry event with the route the user was on.
+  useEffect(() => setTelemetryRoute(route), [route]);
+
+  // Time the rail switch in the field. The double rAF puts the sample after the
+  // new view has actually painted, so it covers the first-mount cost the
+  // comment above is about, not just the React commit.
+  useEffect(() => {
+    const pending = switchRef.current;
+    if (!pending || pending.to !== route) return;
+    switchRef.current = null;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        reportMetric("ui.route_switch_ms", Math.round(performance.now() - pending.startedAt), {
+          unit: "ms",
+          dims: { from: pending.from, to: pending.to },
+        });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [route]);
 
   // Warm the online data shortly after launch, off the startup path: the
   // registered-user map (grid popovers), own account, and the default feed

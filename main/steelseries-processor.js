@@ -4,6 +4,18 @@ const path = require('path');
 const { spawn } = require('child_process');
 const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
+const telemetry = require('./telemetry');
+
+// These spawns use a bare `ffprobe`/`ffmpeg` from PATH instead of the bundled
+// binaries the rest of the app uses, so on a stock machine every one of them is
+// ENOENT and the import quietly does nothing. Instrumented here, not fixed.
+function reportBinaryMissing(binary, err) {
+    telemetry.event('steelseries_binary_missing', {
+        kind: telemetry.KIND.SILENT_FAILURE,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { binary, errno: err?.code }
+    });
+}
 
 // SteelSeries import processor
 class SteelSeriesProcessor {
@@ -13,6 +25,8 @@ class SteelSeriesProcessor {
         this.metadataFolder = path.join(exportFolder, '.clip_metadata');
         this.progressCallback = progressCallback;
         this.logCallback = logCallback;
+        // Counted for the import summary event; nothing else reads these.
+        this.stats = { total: 0, failed: 0, skipped: 0 };
     }
 
     log(message) {
@@ -67,6 +81,7 @@ class SteelSeriesProcessor {
 
             ffprobe.on('error', (err) => {
                 console.error('FFprobe process error:', err);
+                reportBinaryMissing('ffprobe', err);
                 resolve(0);
             });
         });
@@ -122,6 +137,7 @@ class SteelSeriesProcessor {
 
             ffprobe.on('error', (err) => {
                 console.error('FFprobe process error:', err);
+                reportBinaryMissing('ffprobe', err);
                 resolve(null);
             });
         });
@@ -153,7 +169,10 @@ class SteelSeriesProcessor {
                 }
             });
 
-            ffprobe.on('error', reject);
+            ffprobe.on('error', (err) => {
+                reportBinaryMissing('ffprobe', err);
+                reject(err);
+            });
         });
     }
 
@@ -204,12 +223,18 @@ class SteelSeriesProcessor {
                     resolve(true);
                 } else {
                     console.error(`FFmpeg process exited with code ${code}`);
+                    telemetry.event('steelseries_import_failed', {
+                        kind: telemetry.KIND.ERROR,
+                        severity: telemetry.SEVERITY.ERROR,
+                        context: { exit_code: code, stage: 'combine_audio', audio_streams: audioStreams }
+                    });
                     resolve(false);
                 }
             });
 
             ffmpeg.on('error', (err) => {
                 console.error('FFmpeg process error:', err);
+                reportBinaryMissing('ffmpeg', err);
                 resolve(false);
             });
         });
@@ -268,12 +293,14 @@ class SteelSeriesProcessor {
         try {
             if (!await this.shouldProcessFile(inputFile)) {
                 this.log(`Skipping ${path.basename(inputFile)} (already processed)`);
+                this.stats.skipped++;
                 return;
               }
-          
+
               // Check if file is ready before processing
               if (!await this.isFileReady(inputFile)) {
                 this.log(`File ${path.basename(inputFile)} is still being written, skipping...`);
+                this.stats.skipped++;
                 return;
               }
           
@@ -286,6 +313,7 @@ class SteelSeriesProcessor {
             const metadata = await this.extractSteelSeriesMetadata(inputFile);
             if (!metadata) {
                 this.log(`No SteelSeries metadata found in ${inputFile}`);
+                this.stats.skipped++;
                 return;
             }
 
@@ -326,9 +354,19 @@ class SteelSeriesProcessor {
                 this.log('---');
             } else {
                 this.log(`Failed to process ${fileName}`);
+                this.stats.failed++;
             }
         } catch (err) {
             this.log(`Error processing ${inputFile}: ${err.message}`);
+            this.stats.failed++;
+            // this.log only reaches a renderer IPC channel, so this never made
+            // it to the log file either.
+            telemetry.event('steelseries_import_failed', {
+                kind: telemetry.KIND.ERROR,
+                severity: telemetry.SEVERITY.ERROR,
+                // No `error:` — fs messages here carry the clip's own filename.
+                context: { stage: 'process_file', errno: err?.code, error_name: err?.name }
+            });
             return false;
         }
     }
@@ -347,6 +385,7 @@ class SteelSeriesProcessor {
 
             let processed = 0;
             const total = mp4Files.length;
+            this.stats.total = total;
 
             for (const file of mp4Files) {
                 await this.processFile(path.join(this.inputFolder, file));
@@ -371,6 +410,25 @@ class SteelSeriesProcessor {
  * @returns {Promise<Object>} Result object with success status
  */
 async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, eventSender) {
+  const startedAt = Date.now();
+  let processor = null;
+
+  const reportFinished = (errored) => {
+    const stats = processor?.stats || { total: 0, failed: 0, skipped: 0 };
+    telemetry.event('steelseries_import_finished', {
+      kind: telemetry.KIND.CUSTOM,
+      severity: telemetry.SEVERITY.INFO,
+      context: {
+        files_total: stats.total,
+        files_failed: stats.failed,
+        files_skipped: stats.skipped,
+        duration_ms: Date.now() - startedAt,
+        errored
+      },
+      coalesceMs: 0
+    });
+  };
+
   try {
     const settings = await getSettings();
     const clipLocation = settings.clipLocation;
@@ -397,7 +455,7 @@ async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, event
       logger.error("Error managing global tags:", error);
     }
 
-    const processor = new SteelSeriesProcessor(
+    processor = new SteelSeriesProcessor(
       sourcePath,
       clipLocation,
       (current, total) => {
@@ -416,9 +474,11 @@ async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, event
     logActivity('import_start', { source: 'steelseries', sourcePath });
 
     await processor.processFolder();
+    reportFinished(false);
     return { success: true };
   } catch (error) {
     logger.error('SteelSeries import error:', error);
+    reportFinished(true);
     return { success: false, error: error.message };
   }
 }

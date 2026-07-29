@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Archive, ExternalLink, RefreshCw, UploadCloud } from "lucide-react";
 import { SetGroup, SetRow, StatusLine } from "../rows";
+import Toggle from "../../ui/Toggle";
+import { useSettings } from "../SettingsContext";
+import { clipdipBridge } from "./clipdip/ClipdipContext";
 import { useToast } from "../../ui/Toast";
 import { reportUpdateAvailable } from "../../shell/useUpdater";
 import logoUrl from "../../../../assets/logo.png";
+
+/** Both telemetry documents live at the repo root on the default branch. */
+const TELEMETRY_DOC_URL = "https://github.com/yuma-dev/clip-library/blob/main/TELEMETRY.md";
 
 type Tone = "info" | "progress" | "success" | "error";
 interface Status {
@@ -280,7 +286,9 @@ export default function AboutSection() {
         </SetRow>
       </SetGroup>
 
-      <SetGroup title="Diagnostics">
+      <TelemetryGroup />
+
+      <SetGroup title="Report a problem">
         <SetRow
           stacked
           title="Describe the problem"
@@ -342,5 +350,105 @@ export default function AboutSection() {
         </SetRow>
       </SetGroup>
     </>
+  );
+}
+
+// Both automatic-telemetry switches, in one place on purpose.
+//
+// ClipLib and clipdip report separately and are stored separately: ClipLib's
+// lives in settings.json (main applies it immediately in the save-settings
+// handler), clipdip's lives in its own config and is toggled over the control
+// server. A user who turns "telemetry" off in the clipdip section would
+// reasonably believe they turned all of it off, so the ClipLib switch cannot
+// live somewhere else. The clipdip section keeps its copy of the clipdip row.
+function TelemetryGroup() {
+  const { settings, set } = useSettings();
+  const toast = useToast();
+
+  const cliplibEnabled = settings.telemetry?.enabled !== false;
+  const [clipdip, setClipdip] = useState<{ enabled: boolean; configured: boolean } | null>(null);
+  const [clipdipBusy, setClipdipBusy] = useState(false);
+
+  // One read on mount. clipdip answers only while it is running; the section
+  // that polls this lives under Settings → Clipdip and is not open here.
+  useEffect(() => {
+    let cancelled = false;
+    clipdipBridge()
+      .getTelemetryStatus()
+      .then((r) => {
+        if (cancelled || !r.ok) return;
+        setClipdip({ enabled: Boolean(r.enabled), configured: Boolean(r.configured) });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleCliplib = async (on: boolean) => {
+    const ok = await set("telemetry.enabled", on);
+    if (!ok) toast.show("Failed to save setting", "error");
+  };
+
+  const toggleClipdip = async (on: boolean) => {
+    setClipdipBusy(true);
+    setClipdip((s) => (s ? { ...s, enabled: on } : s));
+    try {
+      const r = await clipdipBridge().setTelemetryEnabled(on);
+      if (!r.ok) {
+        setClipdip((s) => (s ? { ...s, enabled: !on } : s));
+        toast.show("Failed to update clipdip diagnostics", "error");
+      }
+    } catch {
+      setClipdip((s) => (s ? { ...s, enabled: !on } : s));
+      toast.show("Failed to update clipdip diagnostics", "error");
+    } finally {
+      setClipdipBusy(false);
+    }
+  };
+
+  const clipdipAvailable = Boolean(clipdip?.configured);
+
+  return (
+    <SetGroup title="Anonymous diagnostics" span2>
+      <SetRow
+        title="ClipLib"
+        description="Crashes, failures the app couldn't show you, and timing numbers, sent with random ids. Crash reports include a tail of ClipLib's log. No file names, no clip names, no tags, no account info."
+      >
+        <Toggle
+          checked={cliplibEnabled}
+          onChange={(v) => void toggleCliplib(v)}
+          aria-label="Send anonymous ClipLib diagnostics"
+        />
+      </SetRow>
+      <SetRow
+        title="Clipdip"
+        description={
+          clipdipAvailable
+            ? "Crashes, capture and encoder failures, and basic hardware info from the recorder, sent with random ids. Error reports include a tail of clipdip's log."
+            : "Available while Clipdip is running"
+        }
+        status={
+          <StatusLine tone="info">
+            Two separate switches. Turning one off leaves the other one sending.
+          </StatusLine>
+        }
+      >
+        <Toggle
+          checked={clipdip?.enabled ?? true}
+          onChange={(v) => void toggleClipdip(v)}
+          disabled={clipdipBusy || !clipdipAvailable}
+          aria-label="Send anonymous clipdip diagnostics"
+        />
+      </SetRow>
+      <SetRow
+        title="What gets sent"
+        description="The full list, what is never sent, and how long any of it is kept."
+      >
+        <button type="button" className="btn" onClick={() => openExternal(TELEMETRY_DOC_URL)}>
+          <ExternalLink size={14} /> Read TELEMETRY.md
+        </button>
+      </SetRow>
+    </SetGroup>
   );
 }

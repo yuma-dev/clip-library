@@ -135,6 +135,52 @@ export interface ClipdipControlResult {
   [key: string]: unknown;
 }
 
+// --- Telemetry wire payloads (preload -> main `telemetry-report`) -----------
+//
+// Mirrors the contract main/telemetry/index.js `registerIpc` accepts. Context
+// and dims carry numbers, booleans and enum strings only; never file names,
+// clip names, tag text, paths, search queries or account identifiers.
+
+export type TelemetryKind =
+  | "crash"
+  | "error"
+  | "silent_failure"
+  | "data_loss"
+  | "degraded"
+  | "custom";
+
+export type TelemetrySeverity = "debug" | "info" | "warning" | "error" | "fatal";
+
+/** Forced to one of these by main; anything else lands as `renderer`. */
+export type TelemetrySurface = "renderer" | "player" | "preload" | "worker";
+
+export interface TelemetryWireEvent {
+  /** snake_case, 3-64 chars, matches /^[a-z0-9_]{3,64}$/. */
+  code: string;
+  kind?: TelemetryKind;
+  severity?: TelemetrySeverity;
+  surface?: TelemetrySurface;
+  context?: Record<string, unknown>;
+  message?: string;
+  /** Grouping key; main coalesces on code + fingerprint. */
+  fingerprint?: string;
+  coalesceMs?: number;
+}
+
+export interface TelemetryWireMetric {
+  name: string;
+  value: number;
+  unit?: "ms" | "bytes" | "count" | "ratio" | "mbps";
+  /** Max three keys, enum-ish values; free strings explode cardinality. */
+  dims?: Record<string, string | number | boolean>;
+}
+
+/** Max 50 events and 100 metrics per message; extras are dropped by main. */
+export interface TelemetryReport {
+  events?: TelemetryWireEvent[];
+  metrics?: TelemetryWireMetric[];
+}
+
 type ClipsUnsubscribe = () => void;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ClipsEventCallback = (...args: any[]) => void;
@@ -318,6 +364,10 @@ export interface ClipsApi {
 
   // --- Signal to main (fire-and-forget) ---
   rendererReady(): void;
+
+  // --- Telemetry (fire-and-forget) ---
+  /** Post a renderer batch onto the `telemetry-report` channel. Never throws. */
+  telemetryReport(payload: TelemetryReport): void;
 
   // --- Events (main -> renderer); each returns an unsubscribe fn ---
   onLog(cb: ClipsEventCallback): ClipsUnsubscribe;

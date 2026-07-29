@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const telemetry = require('./telemetry');
 const { ffmpeg, ffprobeAsync } = require('./ffmpeg');
 
 // Constants
@@ -18,12 +19,26 @@ const CONCURRENT_GENERATIONS = 4;
 const THUMBNAIL_RETRY_ATTEMPTS = 3;
 const FAST_PATH_THRESHOLD = 12;
 const EPSILON = 0.001;
+const META_CORRUPT_COALESCE_MS = 600000;
 
 // Module state
 let THUMBNAIL_CACHE_DIR = null;
 const thumbnailQueue = [];
 let isProcessingQueue = false;
 let completedThumbnails = 0;
+// Count of ffmpeg children currently spawned for thumbnail generation. Nothing
+// kills them, so stopQueue can at least report how many it orphaned.
+let inFlightGenerations = 0;
+
+/**
+ * Pull the numeric exit code out of a fluent-ffmpeg error message.
+ * @param {Error} error
+ * @returns {number|undefined}
+ */
+function parseFfmpegExitCode(error) {
+  const match = String(error?.message || '').match(/exited with code (-?\d+)/i);
+  return match ? Number(match[1]) : undefined;
+}
 
 /**
  * Initialize thumbnail cache directory
@@ -31,7 +46,19 @@ let completedThumbnails = 0;
  */
 async function initThumbnailCache() {
   THUMBNAIL_CACHE_DIR = path.join(app.getPath('userData'), 'thumbnail-cache');
-  await fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true });
+  try {
+    await fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true });
+  } catch (error) {
+    // Rethrown below, which rejects createWindow(): no window is ever created
+    // and the splash sits there for 30s. Report it before it disappears.
+    telemetry.event('thumbnail_cache_init_failed', {
+      kind: telemetry.KIND.CRASH,
+      severity: telemetry.SEVERITY.FATAL,
+      context: { errno: error?.code },
+      error
+    });
+    throw error;
+  }
   logger.info(`Thumbnail cache initialized at: ${THUMBNAIL_CACHE_DIR}`);
   return THUMBNAIL_CACHE_DIR;
 }
@@ -70,11 +97,23 @@ async function saveThumbnailMetadata(thumbnailPath, metadata) {
  * @returns {object|null} Metadata object or null if not found
  */
 async function getThumbnailMetadata(thumbnailPath) {
+  let data = null;
   try {
     const metadataPath = thumbnailPath + '.meta';
-    const data = await fs.readFile(metadataPath, 'utf8');
+    data = await fs.readFile(metadataPath, 'utf8');
     return JSON.parse(data);
   } catch (error) {
+    // Read failure means the .meta is genuinely missing. A parse failure means
+    // it is corrupt, which every caller then treats as missing, so the clip
+    // re-probes on every open and never repairs itself.
+    if (data !== null) {
+      telemetry.event('thumbnail_meta_corrupt', {
+        kind: telemetry.KIND.DEGRADED,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { file_bytes: Buffer.byteLength(data, 'utf8') },
+        coalesceMs: META_CORRUPT_COALESCE_MS
+      });
+    }
     return null;
   }
 }
@@ -154,12 +193,18 @@ async function processQueue(getSettings, getTrimData) {
       await Promise.all(batch.map(async ({ clipName, event, attempts = 0 }) => {
         const clipPath = path.join(settings.clipLocation, clipName);
         const thumbnailPath = generateThumbnailPath(clipPath);
+        const startedAtMs = Date.now();
+        let stage = 'probe';
+        let clipDuration = null;
+        let counted = false;
 
         try {
           const isValid = await validateThumbnail(clipName, thumbnailPath, getTrimData);
 
           if (!isValid) {
             // Get video info first
+            inFlightGenerations++;
+            counted = true;
             const info = await new Promise((resolve, reject) => {
               ffmpeg.ffprobe(clipPath, (err, metadata) => {
                 if (err) reject(err);
@@ -169,8 +214,10 @@ async function processQueue(getSettings, getTrimData) {
 
             const trimData = await getTrimData(clipName);
             const duration = info.format.duration;
+            clipDuration = Number(duration);
             const startTime = trimData ? trimData.start : (duration > 40 ? duration / 2 : 0);
 
+            stage = 'screenshot';
             await new Promise((resolve, reject) => {
               ffmpeg(clipPath)
                 .screenshots({
@@ -183,11 +230,19 @@ async function processQueue(getSettings, getTrimData) {
                 .on('error', reject);
             });
 
+            stage = 'meta_write';
             await saveThumbnailMetadata(thumbnailPath, {
               startTime,
               duration,
               clipName,
               timestamp: Date.now()
+            });
+
+            inFlightGenerations--;
+            counted = false;
+            telemetry.metric('thumbnail_gen_ms', Date.now() - startedAtMs, {
+              unit: 'ms',
+              dims: { stage: 'queued' }
             });
           }
 
@@ -200,9 +255,23 @@ async function processQueue(getSettings, getTrimData) {
           });
 
         } catch (error) {
+          if (counted) inFlightGenerations--;
           logger.error('Error processing thumbnail for', clipName, error);
           if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
             thumbnailQueue.push({ clipName, event, attempts: attempts + 1, totalToProcess });
+          } else {
+            // Out of retries: the clip is dropped from the queue and the
+            // renderer is never told, so the card shimmers forever.
+            telemetry.event('thumbnail_generation_exhausted', {
+              kind: telemetry.KIND.SILENT_FAILURE,
+              severity: telemetry.SEVERITY.ERROR,
+              context: {
+                attempts: attempts + 1,
+                stage,
+                exit_code: parseFfmpegExitCode(error),
+                duration_s: Number.isFinite(clipDuration) ? Math.round(clipDuration) : undefined
+              }
+            });
           }
         }
       }));
@@ -293,13 +362,28 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
     // Filter out failed clips
     const validClipData = clipData.filter(Boolean);
 
+    // A clip that fell out here is never generated and never reported: no
+    // failure event reaches the renderer, the card just stays empty.
+    const droppedCount = clipData.length - validClipData.length;
+    if (droppedCount > 0) {
+      telemetry.event('thumbnail_fastpath_dropped', {
+        kind: telemetry.KIND.SILENT_FAILURE,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { count: droppedCount }
+      });
+    }
+
     // Generate all in parallel with correct timestamps
     await Promise.all(
       validClipData.map(async ({ clipName, startTime, duration }) => {
         const clipPath = path.join(settings.clipLocation, clipName);
         const thumbnailPath = generateThumbnailPath(clipPath);
+        const startedAtMs = Date.now();
+        let counted = false;
 
         try {
+          inFlightGenerations++;
+          counted = true;
           await new Promise((resolve, reject) => {
             ffmpeg(clipPath)
               .screenshots({
@@ -320,6 +404,13 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
             timestamp: Date.now()
           });
 
+          inFlightGenerations--;
+          counted = false;
+          telemetry.metric('thumbnail_gen_ms', Date.now() - startedAtMs, {
+            unit: 'ms',
+            dims: { stage: 'fastpath' }
+          });
+
           // Only send the thumbnail generated event, no progress events
           event.sender.send('thumbnail-generated', {
             clipName,
@@ -327,6 +418,7 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
           });
 
         } catch (error) {
+          if (counted) inFlightGenerations--;
           logger.error(`Error generating thumbnail for ${clipName}:`, error);
           event.sender.send('thumbnail-generation-failed', {
             clipName,
@@ -541,6 +633,15 @@ async function getThumbnailPathsBatch(clipNames, getSettings) {
  * Called during app quit
  */
 function stopQueue() {
+  // Clearing the array does not kill the ffmpeg children already spawned, so
+  // on quit they are orphaned and keep running.
+  if (inFlightGenerations > 0) {
+    telemetry.event('thumbnail_queue_orphaned', {
+      kind: telemetry.KIND.DEGRADED,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { in_flight: inFlightGenerations }
+    });
+  }
   thumbnailQueue.length = 0;
   isProcessingQueue = false;
 }

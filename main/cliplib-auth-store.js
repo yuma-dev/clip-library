@@ -2,6 +2,7 @@ const { app, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
+const telemetry = require('./telemetry');
 
 const STORE_PATH = path.join(app.getPath('userData'), 'cliplib-auth.json');
 const STORE_VERSION = 1;
@@ -25,6 +26,10 @@ function buildRecord(token) {
   }
 
   logger.warn('safeStorage encryption unavailable; storing ClipLib token with base64 fallback.');
+  telemetry.event('auth_token_plaintext_fallback', {
+    kind: telemetry.KIND.DEGRADED,
+    severity: telemetry.SEVERITY.WARNING
+  });
   return {
     version: STORE_VERSION,
     mode: 'plain',
@@ -38,9 +43,28 @@ function decodeRecord(record) {
 
   if (record.mode === 'safeStorage') {
     if (!safeStorage.isEncryptionAvailable()) {
+      // The user is reported as "not connected" with nothing telling them
+      // their stored token can no longer be read (OS keyring reset, profile
+      // copied to another machine).
+      telemetry.event('auth_token_undecryptable', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { mode: record.mode, reason: 'encryption_unavailable' }
+      });
       throw new Error('Token storage is encrypted but safeStorage is unavailable.');
     }
-    const decrypted = safeStorage.decryptString(Buffer.from(record.value, 'base64'));
+    let decrypted;
+    try {
+      decrypted = safeStorage.decryptString(Buffer.from(record.value, 'base64'));
+    } catch (error) {
+      // Same outcome, different cause: the key is there but it is not ours.
+      telemetry.event('auth_token_undecryptable', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { mode: record.mode, reason: 'decrypt_failed' }
+      });
+      throw error;
+    }
     return typeof decrypted === 'string' ? decrypted.trim() : '';
   }
 
@@ -65,6 +89,11 @@ async function getToken() {
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.error('Failed reading ClipLib auth token store:', error);
+      telemetry.event('auth_token_read_failed', {
+        kind: telemetry.KIND.SILENT_FAILURE,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { errno: error?.code }
+      });
       return ''; // transient failure — don't cache
     }
     cachedToken = '';

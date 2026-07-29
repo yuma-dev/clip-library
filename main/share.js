@@ -8,6 +8,7 @@ const { URL } = require('url');
 const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
 const authStore = require('./cliplib-auth-store');
+const telemetry = require('./telemetry');
 
 const DEFAULT_SERVER_URL = 'https://friends.cliplib.app';
 const DESKTOP_AUTH_CALLBACK_URL = 'cliplib://auth';
@@ -189,9 +190,46 @@ async function parseJsonSafe(text) {
   }
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = CONNECTION_TIMEOUT_MS) {
+// Segments we know are route names. Anything else is treated as an id and
+// masked, so a clip id, a user id or a username can never reach telemetry.
+const KNOWN_API_SEGMENTS = new Set([
+  'auth', 'me', 'token', 'tokens', 'users', 'banner', 'clips', 'comments',
+  'reactions', 'favorite', 'share', 'notifications', 'feed', 'tags', 'stats'
+]);
+
+/**
+ * Turn a request path into a low-cardinality template for telemetry:
+ * `/clips/abc123/comments?limit=20` -> `/clips/:id/comments`. The query string
+ * is dropped entirely (it carries search text).
+ */
+function normalizeApiEndpoint(requestPath) {
+  if (typeof requestPath !== 'string' || !requestPath.startsWith('/')) return 'unknown';
+  const withoutQuery = requestPath.split(/[?#]/)[0];
+  const segments = withoutQuery.split('/').filter(Boolean).slice(0, 6);
+  if (segments.length === 0) return '/';
+  return `/${segments.map((s) => (KNOWN_API_SEGMENTS.has(s.toLowerCase()) ? s.toLowerCase() : ':id')).join('/')}`;
+}
+
+function statusClassOf(status) {
+  if (!Number.isFinite(status)) return 'error';
+  if (status < 300) return '2xx';
+  if (status < 500) return '4xx';
+  return '5xx';
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = CONNECTION_TIMEOUT_MS, endpoint = null) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => {
+    // Nothing in this file retries, so a timeout is the end of the road for
+    // whatever the user was doing.
+    telemetry.event('share_api_timeout', {
+      kind: telemetry.KIND.DEGRADED,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { endpoint: endpoint || 'unknown', timeout_ms: timeoutMs },
+      fingerprint: telemetry.hash32(`timeout|${endpoint || 'unknown'}`)
+    });
+    controller.abort();
+  }, timeoutMs);
 
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
@@ -220,7 +258,8 @@ async function testConnection(getSettings, overrides = {}) {
           Authorization: `Bearer ${apiToken}`
         }
       },
-      CONNECTION_TIMEOUT_MS
+      CONNECTION_TIMEOUT_MS,
+      '/auth/me'
     );
 
     if (response.status === 200 && bodyJson && typeof bodyJson === 'object') {
@@ -340,7 +379,11 @@ async function postMultipartClip({
   metadataJson,
   onProgress,
   timeoutMs = UPLOAD_TIMEOUT_MS,
-  redirectCount = 0
+  redirectCount = 0,
+  // Optional out-param filled in for telemetry. The progress bar counts bytes
+  // written into the socket, not bytes acked, so it sits at 100% for the whole
+  // server-side ingest; requestEndAt/responseAt make that window measurable.
+  stats = null
 }) {
   const target = new URL(endpoint);
   const useHttps = target.protocol === 'https:';
@@ -409,6 +452,7 @@ async function postMultipartClip({
     reportUploadProgress(true);
 
     const req = requestFn(options, (res) => {
+      if (stats) stats.responseAt = Date.now();
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', async () => {
@@ -422,6 +466,7 @@ async function postMultipartClip({
 
           try {
             const redirectedUrl = new URL(res.headers.location, target).toString();
+            if (stats) stats.redirects = redirectCount + 1;
             const redirected = await postMultipartClip({
               endpoint: redirectedUrl,
               apiToken,
@@ -429,7 +474,8 @@ async function postMultipartClip({
               metadataJson,
               onProgress,
               timeoutMs,
-              redirectCount: redirectCount + 1
+              redirectCount: redirectCount + 1,
+              stats
             });
             resolve(redirected);
           } catch (error) {
@@ -478,6 +524,10 @@ async function postMultipartClip({
       uploadedBytes += closingPartBytes;
       reportUploadProgress(true);
       req.end();
+      if (stats) {
+        stats.bytes = uploadedBytes;
+        stats.requestEndAt = Date.now();
+      }
     });
     fileStream.pipe(req, { end: false });
   });
@@ -523,8 +573,12 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
   }
 
   let exportedPath = null;
+  let phase = 'export';
+  let exportMs = 0;
+  const uploadStats = { bytes: 0, redirects: 0, requestEndAt: 0, responseAt: 0 };
 
   try {
+    const exportStartedAt = Date.now();
     const exportProgressHandler = (exportPercent) => {
       emitShareProgress(onProgress, {
         phase: 'exporting',
@@ -543,7 +597,14 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
       { audioMix }
     );
 
+    exportMs = Date.now() - exportStartedAt;
+
     if (!exportResult?.success || !exportResult.path) {
+      telemetry.event('share_upload_failed', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { phase: 'export', ms: exportMs }
+      });
       emitShareProgress(onProgress, {
         phase: 'failed',
         percent: 0,
@@ -553,9 +614,17 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
     }
 
     exportedPath = exportResult.path;
+    phase = 'upload';
 
     const fileStats = await fsp.stat(exportedPath);
     if (fileStats.size > MAX_UPLOAD_BYTES) {
+      // Only checked after a full ffmpeg export, so the user has already paid
+      // for the whole thing by the time this fires.
+      telemetry.event('share_upload_too_large', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { bytes: fileStats.size, limit_bytes: MAX_UPLOAD_BYTES, export_ms: exportMs }
+      });
       emitShareProgress(onProgress, {
         phase: 'failed',
         percent: 0,
@@ -571,13 +640,19 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
     const metadataPayload = buildMetadataPayload(payload.metadata);
     const metadataJson = metadataPayload ? JSON.stringify(metadataPayload) : null;
 
+    const uploadStartedAt = Date.now();
     const uploadResponse = await postMultipartClip({
       endpoint: `${serverUrl}/api/clips`,
       apiToken,
       filePath: exportedPath,
       metadataJson,
-      onProgress
+      onProgress,
+      stats: uploadStats
     });
+    const uploadMs = Date.now() - uploadStartedAt;
+    const ingestMs = uploadStats.responseAt > uploadStats.requestEndAt
+      ? uploadStats.responseAt - uploadStats.requestEndAt
+      : 0;
 
     const bodyJson = await parseJsonSafe(uploadResponse.bodyText);
 
@@ -600,6 +675,19 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
         serverUrl
       });
 
+      telemetry.event('share_upload_succeeded', {
+        kind: telemetry.KIND.CUSTOM,
+        severity: telemetry.SEVERITY.INFO,
+        context: {
+          bytes: fileStats.size,
+          export_ms: exportMs,
+          upload_ms: uploadMs,
+          ingest_ms: ingestMs,
+          mbps: uploadMs > 0 ? Math.round(((fileStats.size * 8) / (uploadMs * 1000)) * 100) / 100 : 0,
+          redirects: uploadStats.redirects
+        }
+      });
+
       return {
         success: true,
         id: uploadedId,
@@ -616,6 +704,18 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
       'Failed to upload clip.'
     );
 
+    telemetry.event('share_upload_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: {
+        phase: 'upload',
+        http_status: uploadResponse.statusCode,
+        bytes: uploadStats.bytes,
+        ms: uploadMs,
+        redirects: uploadStats.redirects
+      }
+    });
+
     emitShareProgress(onProgress, {
       phase: 'failed',
       percent: 0,
@@ -630,6 +730,17 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
     };
   } catch (error) {
     logger.error('Share upload failed:', error);
+    telemetry.event('share_upload_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: {
+        phase,
+        bytes: uploadStats.bytes,
+        ms: phase === 'export' ? exportMs : undefined,
+        redirects: uploadStats.redirects,
+        errno: error?.code
+      }
+    });
     emitShareProgress(onProgress, {
       phase: 'failed',
       percent: 0,
@@ -764,7 +875,8 @@ async function fetchMentionableUsers(getSettings, overrides = {}) {
           Authorization: `Bearer ${apiToken}`
         }
       },
-      CONNECTION_TIMEOUT_MS
+      CONNECTION_TIMEOUT_MS,
+      '/users'
     );
 
     if (response.status === 200 && bodyJson && Array.isArray(bodyJson.users)) {
@@ -831,13 +943,32 @@ async function apiRequest(getSettings, request = {}) {
     options.body = JSON.stringify(request.body);
   }
 
+  // One choke point for 25+ endpoints, so this is where the feed's error rate
+  // and latency actually become visible. Never send the raw path: it carries
+  // clip ids, user ids and search text.
+  const endpoint = normalizeApiEndpoint(requestPath);
+  const startedAt = Date.now();
+
   try {
     const { response, bodyText, bodyJson } = await fetchWithTimeout(
       `${serverUrl}/api${requestPath}`,
       options,
-      CONNECTION_TIMEOUT_MS
+      CONNECTION_TIMEOUT_MS,
+      endpoint
     );
+    const ms = Date.now() - startedAt;
+    telemetry.metric('api.rtt_ms', ms, {
+      unit: 'ms',
+      dims: { endpoint, status_class: statusClassOf(response.status) }
+    });
     if (!response.ok) {
+      telemetry.event('share_api_failed', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { endpoint, method, http_status: response.status, ms },
+        fingerprint: telemetry.hash32(`${method}|${endpoint}|${response.status}`),
+        coalesceMs: 60000
+      });
       return {
         success: false,
         status: response.status,
@@ -847,9 +978,22 @@ async function apiRequest(getSettings, request = {}) {
     }
     return { success: true, status: response.status, data: bodyJson };
   } catch (error) {
-    if (error?.name === 'AbortError') {
+    const ms = Date.now() - startedAt;
+    const timedOut = error?.name === 'AbortError';
+    telemetry.metric('api.rtt_ms', ms, {
+      unit: 'ms',
+      dims: { endpoint, status_class: timedOut ? 'timeout' : 'error' }
+    });
+    if (timedOut) {
       return { success: false, error: 'ClipLib request timed out.' };
     }
+    telemetry.event('share_api_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { endpoint, method, ms, errno: error?.code },
+      fingerprint: telemetry.hash32(`${method}|${endpoint}|transport`),
+      coalesceMs: 60000
+    });
     return { success: false, error: `ClipLib request failed: ${error.message}` };
   }
 }
@@ -877,7 +1021,17 @@ function installMediaAuthHeaders(session) {
         }
         callback({ requestHeaders: details.requestHeaders });
       })
-      .catch(() => callback({ requestHeaders: details.requestHeaders }));
+      .catch((error) => {
+        // Every media request from here on goes out unauthenticated, which the
+        // user only ever sees as broken thumbnails and videos.
+        telemetry.event('media_request_unauthenticated', {
+          kind: telemetry.KIND.SILENT_FAILURE,
+          severity: telemetry.SEVERITY.ERROR,
+          context: { errno: error?.code },
+          coalesceMs: 300000
+        });
+        callback({ requestHeaders: details.requestHeaders });
+      });
   });
 }
 
