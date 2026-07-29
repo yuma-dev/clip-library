@@ -9,11 +9,36 @@
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
+const telemetry = require('./telemetry');
 const { logActivity } = require('../utils/activity-tracker');
 
 // ============================================================================
 // File Utilities
 // ============================================================================
+
+/**
+ * Fixed `kind` enum for telemetry, derived from the metadata file extension.
+ * Extension only: the file name itself carries the clip name and never leaves
+ * this process.
+ * @param {string} filePath
+ * @returns {string} trim|tags|custom_name|speed|volume|volume_range|track_state|track_prefs|gameinfo|other
+ */
+function metadataKind(filePath) {
+  const base = filePath.endsWith('.tmp') ? filePath.slice(0, -4) : filePath;
+  switch (path.extname(base).toLowerCase()) {
+    case '.trim': return 'trim';
+    case '.tags': return 'tags';
+    case '.customname': return 'custom_name';
+    case '.speed': return 'speed';
+    case '.volume': return 'volume';
+    case '.volumerange': return 'volume_range';
+    case '.trackstate': return 'track_state';
+    case '.gameinfo': return 'gameinfo';
+    // trackPreferences.json is the only .json written through this path.
+    case '.json': return 'track_prefs';
+    default: return 'other';
+  }
+}
 
 /**
  * Ensure a directory exists, creating it if necessary
@@ -38,13 +63,38 @@ async function ensureDirectoryExists(dirPath) {
  * @param {number} retries - Number of retry attempts
  */
 async function writeFileWithRetry(filePath, data, retries = 4) {
+  const startedAt = Date.now();
+  let retryErrno;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       await fs.writeFile(filePath, data, { flag: 'w' });
+      if (attempt > 0) {
+        // Antivirus pressure costing retries on every save is invisible today.
+        telemetry.event('metadata_write_retried', {
+          kind: telemetry.KIND.DEGRADED,
+          severity: telemetry.SEVERITY.INFO,
+          context: {
+            attempts: attempt + 1,
+            errno: retryErrno,
+            total_ms: Date.now() - startedAt,
+            kind: metadataKind(filePath)
+          },
+          coalesceMs: 600000
+        });
+      }
       return;
     } catch (error) {
       if (error.code === 'EPERM' || error.code === 'EACCES') {
-        if (attempt === retries - 1) throw error;
+        retryErrno = error.code;
+        if (attempt === retries - 1) {
+          telemetry.event('metadata_write_retry_exhausted', {
+            kind: telemetry.KIND.ERROR,
+            severity: telemetry.SEVERITY.ERROR,
+            context: { attempts: retries, errno: error.code, kind: metadataKind(filePath) },
+            error
+          });
+          throw error;
+        }
         // Short exponential backoff (25/50/100ms — tolerates AV holds up to
         // ~175ms like the old schedule did, without the flat 100ms sleep that
         // put a visible ~110ms floor under every metadata save).
@@ -71,6 +121,13 @@ async function writeFileAtomically(filePath, data) {
     await fs.rename(tempPath, filePath);
   } catch (error) {
     logger.error(`Error in writeFileAtomically: ${error.message}`);
+    // The fallback write is not atomic: a crash mid-write truncates the file.
+    telemetry.event('metadata_atomic_fallback', {
+      kind: telemetry.KIND.DATA_LOSS,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { errno: error.code, kind: metadataKind(filePath) },
+      error
+    });
     await writeFileWithRetry(filePath, data);
   } finally {
     try {
@@ -199,11 +256,21 @@ async function getTrimData(clipName, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const trimFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trim`);
 
+  let trimData;
   try {
-    const trimData = await fs.readFile(trimFilePath, 'utf8');
+    trimData = await fs.readFile(trimFilePath, 'utf8');
     return JSON.parse(trimData);
   } catch (error) {
     if (error.code === 'ENOENT') return null;
+    // trimData set means the read worked and the parse didn't: the user's
+    // trim points are unrecoverable.
+    if (trimData !== undefined) {
+      telemetry.event('metadata_parse_failed', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { kind: 'trim', file_bytes: Buffer.byteLength(trimData, 'utf8') }
+      });
+    }
     throw error;
   }
 }
@@ -375,13 +442,23 @@ let trackPrefsCache = null;
 
 async function getTrackPreferences(getAppPath) {
   if (trackPrefsCache) return trackPrefsCache;
+  let raw;
   try {
     const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
-    const raw = await fs.readFile(prefsPath, 'utf8');
+    raw = await fs.readFile(prefsPath, 'utf8');
     const parsed = JSON.parse(raw);
     trackPrefsCache = (parsed && typeof parsed === 'object') ? parsed : {};
   } catch (error) {
     if (error.code !== 'ENOENT') logger.error('Error reading track preferences:', error);
+    // Every track colour and hidden flag the user set is gone, and the next
+    // save writes the empty cache back over the file.
+    if (raw !== undefined) {
+      telemetry.event('metadata_parse_failed', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { kind: 'track_prefs', file_bytes: Buffer.byteLength(raw, 'utf8') }
+      });
+    }
     trackPrefsCache = {};
   }
   return trackPrefsCache;
@@ -413,8 +490,9 @@ async function getTrackState(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const filePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.trackstate`);
+  let data;
   try {
-    const data = await fs.readFile(filePath, 'utf8');
+    data = await fs.readFile(filePath, 'utf8');
     const parsed = JSON.parse(data);
     if (parsed && typeof parsed === 'object' && parsed.tracks && typeof parsed.tracks === 'object') {
       return parsed;
@@ -423,6 +501,14 @@ async function getTrackState(clipName, getSettings) {
   } catch (error) {
     if (error.code === 'ENOENT') return { tracks: {} };
     logger.error(`Error reading track state for ${clipName}:`, error);
+    // Per-track volumes/mutes fall back to defaults and the next save overwrites.
+    if (data !== undefined) {
+      telemetry.event('metadata_parse_failed', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { kind: 'track_state', file_bytes: Buffer.byteLength(data, 'utf8') }
+      });
+    }
     return { tracks: {} };
   }
 }
@@ -496,6 +582,12 @@ async function getVolumeRange(clipName, getSettings) {
     // Self-heal a corrupt file (the player used to overwrite it on the next
     // open; now that opens don't write, clean it up here instead).
     logger.error(`Corrupt volume range file for ${clipName}; removing it`);
+    // We delete the user's file to recover, so record what we destroyed.
+    telemetry.event('volume_range_self_deleted', {
+      kind: telemetry.KIND.DATA_LOSS,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { file_bytes: Buffer.byteLength(volumeData, 'utf8') }
+    });
     await fs.unlink(volumeRangeFilePath).catch(() => {});
     return null;
   }
@@ -516,14 +608,25 @@ async function getClipTags(clipName, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const tagsFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.tags`);
 
+  let tagsData;
   try {
-    const tagsData = await fs.readFile(tagsFilePath, 'utf8');
+    tagsData = await fs.readFile(tagsFilePath, 'utf8');
     return JSON.parse(tagsData);
   } catch (error) {
     if (error.code === 'ENOENT') {
       return [];
     }
     logger.error('Error reading tags:', error);
+    // Returning [] means the next save persists an empty tag list over the file.
+    // Counts only here: tag text never leaves the machine.
+    telemetry.event('tags_lost_on_parse', {
+      kind: telemetry.KIND.DATA_LOSS,
+      severity: telemetry.SEVERITY.ERROR,
+      context: {
+        file_bytes: tagsData !== undefined ? Buffer.byteLength(tagsData, 'utf8') : undefined,
+        errno: error.code
+      }
+    });
     return [];
   }
 }
@@ -563,12 +666,26 @@ async function getClipTagsBatch(clipNames, getSettings) {
 
   const entries = await mapWithConcurrency(names, 32, async (clipName) => {
     const tagsFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.tags`);
+    let tagsData;
     try {
-      const tagsData = await fs.readFile(tagsFilePath, 'utf8');
+      tagsData = await fs.readFile(tagsFilePath, 'utf8');
       const parsed = JSON.parse(tagsData);
       return [clipName, Array.isArray(parsed) ? parsed : []];
     } catch (error) {
-      if (error.code !== 'ENOENT') logger.error('Error reading tags:', error);
+      if (error.code !== 'ENOENT') {
+        logger.error('Error reading tags:', error);
+        // Same loss as the single-clip path; coalescing keeps a bad batch to
+        // one event with an occurrence count.
+        telemetry.event('tags_lost_on_parse', {
+          kind: telemetry.KIND.DATA_LOSS,
+          severity: telemetry.SEVERITY.ERROR,
+          context: {
+            file_bytes: tagsData !== undefined ? Buffer.byteLength(tagsData, 'utf8') : undefined,
+            errno: error.code,
+            batch_size: names.length
+          }
+        });
+      }
       return [clipName, []];
     }
   });
@@ -646,10 +763,13 @@ async function removeTagFromAllClips(tagToRemove, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
 
   let modifiedCount = 0;
+  let scannedCount = 0;
+  let failedCount = 0;
 
   try {
     const files = await fs.readdir(metadataFolder);
     const tagFiles = files.filter(file => file.endsWith('.tags'));
+    scannedCount = tagFiles.length;
 
     logger.info(`Checking ${tagFiles.length} .tags files for tag "${tagToRemove}"`);
 
@@ -668,11 +788,31 @@ async function removeTagFromAllClips(tagToRemove, getSettings) {
         }
       } catch (error) {
         logger.warn(`Could not process tags file ${tagFile}:`, error.message);
+        failedCount++;
       }
     }
   } catch (error) {
     logger.info('No metadata folder found or couldn\'t read it');
+    // A missing folder is normal. Anything else means we did nothing at all
+    // and still told the user it worked.
+    if (error.code !== 'ENOENT') {
+      telemetry.event('tag_migration_partial', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { scanned: 0, modified: 0, failed: 0, op: 'remove', errno: error.code },
+        error
+      });
+    }
     return { success: true, modifiedCount: 0 };
+  }
+
+  // Skipped files keep the deleted tag while the UI reports success.
+  if (failedCount > 0) {
+    telemetry.event('tag_migration_partial', {
+      kind: telemetry.KIND.DATA_LOSS,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { scanned: scannedCount, modified: modifiedCount, failed: failedCount, op: 'remove' }
+    });
   }
 
   logger.info(`Tag deletion completed: modified ${modifiedCount} files`);
@@ -690,10 +830,13 @@ async function updateTagInAllClips(oldTag, newTag, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
 
   let modifiedCount = 0;
+  let scannedCount = 0;
+  let failedCount = 0;
 
   try {
     const files = await fs.readdir(metadataFolder);
     const tagFiles = files.filter(file => file.endsWith('.tags'));
+    scannedCount = tagFiles.length;
 
     logger.info(`Checking ${tagFiles.length} .tags files for tag "${oldTag}" to update to "${newTag}"`);
 
@@ -712,11 +855,31 @@ async function updateTagInAllClips(oldTag, newTag, getSettings) {
         }
       } catch (error) {
         logger.warn(`Could not process tags file ${tagFile}:`, error.message);
+        failedCount++;
       }
     }
   } catch (error) {
     logger.info('No metadata folder found or couldn\'t read it');
+    // A missing folder is normal. Anything else means we did nothing at all
+    // and still told the user it worked.
+    if (error.code !== 'ENOENT') {
+      telemetry.event('tag_migration_partial', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: { scanned: 0, modified: 0, failed: 0, op: 'update', errno: error.code },
+        error
+      });
+    }
     return { success: true, modifiedCount: 0 };
+  }
+
+  // Skipped files keep the old tag name while the UI reports success.
+  if (failedCount > 0) {
+    telemetry.event('tag_migration_partial', {
+      kind: telemetry.KIND.DATA_LOSS,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { scanned: scannedCount, modified: modifiedCount, failed: failedCount, op: 'update' }
+    });
   }
 
   logger.info(`Tag update completed: modified ${modifiedCount} files`);
@@ -802,7 +965,16 @@ async function getGameIcon(clipName, getSettings) {
   let raw;
   try {
     raw = await fs.readFile(gameInfoPath, 'utf8');
-  } catch {
+  } catch (error) {
+    // Most clips simply have no .gameinfo; only a real read error is a signal.
+    if (error.code !== 'ENOENT') {
+      telemetry.event('gameinfo_unreadable', {
+        kind: telemetry.KIND.SILENT_FAILURE,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { count: 1, batch_size: 1, stage: 'single', errno: error.code },
+        coalesceMs: 600000
+      });
+    }
     return null;
   }
 
@@ -810,6 +982,12 @@ async function getGameIcon(clipName, getSettings) {
   try {
     parsed = JSON.parse(raw);
   } catch {
+    telemetry.event('gameinfo_unreadable', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { count: 1, batch_size: 1, stage: 'single_parse' },
+      coalesceMs: 600000
+    });
     return null;
   }
 
@@ -822,6 +1000,12 @@ async function getGameIcon(clipName, getSettings) {
       response.path = iconPath;
     } catch {
       // icon missing -> leave null
+      telemetry.event('gameinfo_unreadable', {
+        kind: telemetry.KIND.SILENT_FAILURE,
+        severity: telemetry.SEVERITY.WARNING,
+        context: { count: 1, batch_size: 1, stage: 'single_icon' },
+        coalesceMs: 600000
+      });
     }
   }
 
@@ -881,13 +1065,19 @@ async function getGameIconsBatch(clipNames, getSettings) {
     return pending;
   };
 
+  // Tallied across the batch: a broken library would otherwise emit per clip.
+  let unreadable = 0;
+  let iconsMissing = 0;
+
   const entries = await mapWithConcurrency(names, 32, async (clipName) => {
     const gameInfoPath = path.join(metadataFolder, `${metadataSafeName(clipName)}.gameinfo`);
 
     let parsed;
     try {
       parsed = JSON.parse(await fs.readFile(gameInfoPath, 'utf8'));
-    } catch {
+    } catch (error) {
+      // No .gameinfo at all is the normal case for most clips.
+      if (error.code !== 'ENOENT') unreadable += 1;
       return [clipName, null];
     }
 
@@ -895,9 +1085,24 @@ async function getGameIconsBatch(clipNames, getSettings) {
     if (parsed.icon_file) {
       const iconPath = path.join(settings.clipLocation, 'icons', parsed.icon_file);
       if (await checkIcon(iconPath)) response.path = iconPath;
+      else iconsMissing += 1;
     }
     return [clipName, response];
   });
+
+  if (unreadable > 0 || iconsMissing > 0) {
+    telemetry.event('gameinfo_unreadable', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: {
+        count: unreadable,
+        icons_missing: iconsMissing,
+        batch_size: names.length,
+        stage: 'icons'
+      },
+      coalesceMs: 600000
+    });
+  }
   return Object.fromEntries(entries);
 }
 
@@ -922,6 +1127,8 @@ async function getClipParticipants(clipNames, getSettings) {
   // id -> { at, participant, count }; `at` = newest clip mtime seen for the id.
   const people = new Map();
   const byClip = {};
+  // Tallied across the batch, same as getGameIconsBatch.
+  let unreadable = 0;
 
   await mapWithConcurrency(names, 32, async (clipName) => {
     const gameInfoPath = path.join(metadataFolder, `${metadataSafeName(clipName)}.gameinfo`);
@@ -933,7 +1140,9 @@ async function getClipParticipants(clipNames, getSettings) {
       // File mtime stands in for record time — good enough to pick the freshest
       // identity snapshot without threading each clip's createdAt through IPC.
       mtime = (await fs.stat(gameInfoPath).catch(() => null))?.mtimeMs ?? 0;
-    } catch {
+    } catch (error) {
+      // No .gameinfo at all is the normal case for most clips.
+      if (error.code !== 'ENOENT') unreadable += 1;
       return;
     }
 
@@ -941,6 +1150,7 @@ async function getClipParticipants(clipNames, getSettings) {
     try {
       discord = normalizeDiscordInfo(JSON.parse(raw).discord);
     } catch {
+      unreadable += 1;
       return;
     }
     if (!discord) return;
@@ -962,6 +1172,16 @@ async function getClipParticipants(clipNames, getSettings) {
     }
     if (ids.length > 0) byClip[clipName] = ids;
   });
+
+  if (unreadable > 0) {
+    // These clips drop out of @mention search with nothing shown to the user.
+    telemetry.event('gameinfo_unreadable', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { count: unreadable, batch_size: names.length, stage: 'participants' },
+      coalesceMs: 600000
+    });
+  }
 
   const list = [...people.values()]
     .sort((a, b) => b.count - a.count)

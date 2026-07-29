@@ -1,6 +1,6 @@
 # Privacy Policy — ClipLib
 
-**Last updated: 11 July 2026**
+**Last updated: 29 July 2026**
 
 ## 1. Who is responsible (Controller)
 
@@ -98,28 +98,71 @@ clip data is transmitted.
 
 ## 6. Diagnostics & crash telemetry — `logs.yuma-homeserver.online`
 
-To find and fix bugs, ClipLib's recorder can send **anonymous** diagnostics to a
-developer-operated server. This is designed to contain **no accounts and no personal
-identifiers**.
+To find and fix bugs, **both** parts of ClipLib can send **anonymous** diagnostics to a
+developer-operated server:
 
-- **What is sent automatically (if not disabled):**
-  - a **heartbeat** roughly every 15 minutes containing a **random per-install ID** and the
-    **app version**;
-  - **error/crash events** containing that random ID, app version, a timestamp, an error
-    code/message, and a **short compressed tail of the app log**.
-- **Note on log contents:** log tails may **incidentally** contain things like file paths or
-  a Windows username. We do not use these to identify you, but you should be aware they can
-  appear in logs.
-- **Opt-out:** you can disable diagnostics in the app's settings. If disabled, no heartbeat
-  or events are sent.
+- the **library app** (ClipLib itself), and
+- the **recorder** (**clipdip**), which runs as its own background app.
 
-**Manual, user-initiated uploads.** Two features only send data when **you** click them:
+They report **separately** and have **separate opt-out switches**, both shown together in
+**Settings → About → Anonymous diagnostics**. Turning one off does not turn the other off.
+This is designed to contain **no accounts and no personal identifiers**.
 
-- **"Generate Diagnostics Zip"** (Settings → About) — creates a bundle of recent logs,
-  settings, and system info for you to share with the developer. (Discord tokens are
-  deliberately excluded.)
-- **Session log upload** — sends your current log/console output to the diagnostics server
-  when you choose to.
+**Identifiers used.** Random UUIDs only: a per-install ID, a per-session ID, and a
+per-machine key stored in your own Windows registry (`HKCU\Software\ClipLib` /
+`HKCU\Software\Clipdip`). The machine key is **not** derived from your hardware, your
+Windows MachineGuid, or your username; deleting the registry value makes you a new machine
+to us. The library app deliberately **reuses the recorder's install ID** when one exists, so
+the two products' reports about the same machine can be matched.
+
+- **What the library app sends automatically (if not disabled):**
+  - a **heartbeat** roughly every 15 minutes: the random IDs, app version, uptime, a
+    one-time hardware profile (OS build, CPU, RAM, GPU and driver, monitor resolutions,
+    locale, time zone, and the **category** of the drive your clips are on — system, other,
+    removable or network — with its free space in GB), and a small set of your **feature
+    settings** (e.g. export preset, whether Discord Rich Presence is on) alongside a few
+    coarse measurements of the app's state (library size as a **bucket** rather than an
+    exact count, total library size in GB, number of tags, and whether hardware encoding,
+    the recorder, the file watcher and a sign-in are active). It never contains your clip
+    folder, the recorder's binary path, your API token, the sharing server URL, any tag
+    name, or any clip name.
+  - **error, crash and failure events**: a stable error code, a category, a severity, a
+    timestamp, and a small object of **numbers and fixed keywords**. Error text from the
+    main process is included after path-scrubbing; errors from the app window send no
+    message text at all, only the error type and top stack frames.
+  - **aggregated performance metrics**: counts and bucketed timing histograms (e.g. how long
+    startup or an export took). No per-clip records and no timestamps of what you did.
+  - a **daily usage rollup**: one set of counts per completed day, covering how many clips
+    you watched and for how long in total, and how many renames, trims, deletes, tag
+    changes, exports (by format and destination), shares and imports you made. It is
+    derived from the activity log ClipLib already keeps locally for the year-end recap.
+    **That log itself is never uploaded**, and the rollup carries no clip names, custom
+    names, tag text, folder paths or share ids.
+  - a **session end** notice when the app closes.
+- **What the recorder sends automatically (if not disabled):** heartbeats, hardware and
+  capture configuration, and capture/encoder/save failures. See `clipdip/TELEMETRY.md`.
+- **Note on log contents:** crash reports attach a **short compressed tail of the app log**.
+  The library app removes Windows user paths from that tail before sending, but it can still
+  **incidentally** contain clip file names, which in turn can reveal a game name and a
+  date/time. We do not use these to identify you, but you should be aware they can appear.
+  Log tails are attached only to **fatal** errors and to specific error codes while a
+  particular bug is being investigated, never to routine events.
+- **Opt-out:** Settings → About → Anonymous diagnostics, one switch per product. Turning the
+  library app's switch off takes effect immediately: no heartbeat, no events, no metrics,
+  no daily usage rollup, and anything queued locally but not yet sent is **deleted**.
+
+The full, itemised description for each product lives in `TELEMETRY.md` (library app) and
+`clipdip/TELEMETRY.md` (recorder), including the complete list of what is never sent.
+
+**Manual, user-initiated uploads.** One bundle covers **both** products: recent logs,
+settings files, your local activity log, captured console output, the recorder's logs and
+status, a crash-dump listing, system info, and the note you typed. It is far more detailed
+than the automatic telemetry above, which is why it is never sent on its own. (Discord tokens
+are deliberately excluded.) In Settings → About:
+
+- **"Save zip"** writes that bundle to a folder you choose. Nothing is transmitted.
+- **"Export and upload"** sends it to the diagnostics server. It requires you to describe
+  the problem first, so you always know an upload is happening.
 
 **Legal basis:** **legitimate interest** in keeping the software stable and secure —
 Art. 6(1)(f) — balanced by the data being anonymous and the opt-out above. Manual uploads
@@ -132,7 +175,9 @@ rely on your **consent** (Art. 6(1)(a)).
 | Recipient | Purpose | What is sent | When |
 |---|---|---|---|
 | `friends.cliplib.app` (ClipLib Sharing, operated by us) | Accounts, clip sharing, social feed | Discord identity, uploaded video + title + tags + @mentions, banner, reactions/comments | Only after you sign in / share |
-| `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Crash/bug diagnostics | Random install ID, app version, error/crash events, log tails; manual bundles | Auto (opt-out) + manual |
+| `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Crash/bug diagnostics for the **library app** | Random install/machine/session IDs, app version, hardware profile, feature settings, error events, aggregated timing metrics, log tails on fatal errors | Auto (opt-out) |
+| `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Crash/bug diagnostics for the **recorder (clipdip)** | Random install/machine/session IDs, app version, hardware and capture configuration, capture/encoder failures, log tails | Auto (separate opt-out) |
+| `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Manual problem reports | One bundle: logs, settings files, activity log, console output, recorder logs and status, crash-dump listing, system info, your note | Only when you press "Export and upload" |
 | GitHub (`github.com`) | Update check & download | Generic User-Agent only | On update check/download |
 | Discord (`discord.com`) | Login & voice-roster read | OAuth login; reads your live voice-channel membership | Only if you connect Discord |
 
@@ -145,8 +190,16 @@ Recording and video processing (ffmpeg/ffprobe) run **entirely on your device**.
 - **Local data** stays until **you** delete it (your clips, sidecars, settings, logs).
 - **Shared clips and account data** are kept while your account/shared clips exist. You can
   delete shared clips or ask us to delete your account and content — email us.
-- **Diagnostics** are kept only as long as needed to investigate stability issues, then
-  discarded.
+- **Diagnostics** are kept only as long as needed to investigate stability issues: error
+  events and their log tails **90 days**, manual bundles **30 days**, raw heartbeats
+  **7 days**. Kept **indefinitely**: the daily usage rollup, and one row per install and
+  per machine. These are pseudonymous rather than aggregate — each daily rollup is stored
+  against the random install ID and machine key described in section 6, alongside the
+  feature-settings snapshot, so a single install's day-by-day counts remain queryable.
+  They contain no name, account, path or file name, and the random IDs are the only thing
+  linking them to a machine; deleting the registry key in section 6 breaks that link going
+  forward. IP addresses are truncated to the first two octets before storage and are never
+  stored in full.
 
 ---
 

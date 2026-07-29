@@ -2,6 +2,7 @@ const { app } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('./logger');
+const telemetry = require('../main/telemetry');
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 
 // Default settings structure
@@ -29,6 +30,13 @@ const DEFAULT_SETTINGS = {
     autostart: false,
     // Dev/advanced override; empty -> resources/clipdip/clipdip.exe
     binaryPath: ''
+  },
+  // Anonymous diagnostics for the library app itself. Opt-out, mirroring
+  // clipdip's telemetry.enabled. Off means off: no heartbeat, no events, no
+  // metrics, no daily rollup, and the local queue file is deleted.
+  // See docs/telemetry-cliplib-api.md and TELEMETRY.md.
+  telemetry: {
+    enabled: true
   },
   // Highest onboarding wizard version the user has completed/dismissed.
   // 0 = never seen; the 3.0 wizard sets this to 3. Bump the constant in
@@ -124,14 +132,42 @@ async function loadSettings() {
       settings = JSON.parse(data);
     } catch (parseError) {
       // Only reset if the file is actually corrupted, not just empty
+      let backupWritten = false;
       if (data.trim()) {
         logger.error('Settings file is corrupted:', parseError);
         logger.info('Creating backup of corrupted settings file');
         const backupPath = `${SETTINGS_FILE}.backup-${Date.now()}`;
-        await fs.writeFile(backupPath, data);
+        try {
+          await fs.writeFile(backupPath, data);
+          backupWritten = true;
+        } catch (backupError) {
+          // The corrupt file is overwritten with defaults right below, so a
+          // failed backup loses it for good. This throws to the outer catch,
+          // where it is logged as a generic "unexpected error loading settings".
+          telemetry.event('settings_backup_failed', {
+            kind: telemetry.KIND.DATA_LOSS,
+            severity: telemetry.SEVERITY.ERROR,
+            context: { errno: backupError.code },
+            error: backupError
+          });
+          throw backupError;
+        }
         logger.info(`Backup created at: ${backupPath}`);
       }
       logger.warn('Restoring default settings due to parse error');
+      // Destructive: everything the user configured is gone after this save.
+      // Deliberately NOT passing parseError: V8's "Unexpected token" message
+      // quotes a ~30 char excerpt of the source around the fault, and this
+      // source is settings.json, which holds clipLocation and sharing.apiToken.
+      telemetry.event('settings_corrupt_reset', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: {
+          file_bytes: Buffer.byteLength(data, 'utf8'),
+          backup_written: backupWritten,
+          error_name: parseError && parseError.name
+        }
+      });
       await saveSettings(DEFAULT_SETTINGS);
       return DEFAULT_SETTINGS;
     }
@@ -145,7 +181,10 @@ async function loadSettings() {
     // Merge with defaults, but be more careful about what we consider "invalid"
     const mergedSettings = { ...DEFAULT_SETTINGS };
     let needsSave = false;
-    
+    // Keys the user's file carried that do not survive this merge. Names only,
+    // never values: these are our own fixed identifiers.
+    const lostKeys = [];
+
     // Only override defaults with valid values, and track if we actually need to save
     for (const [key, defaultValue] of Object.entries(DEFAULT_SETTINGS)) {
       // If the setting exists and is of the same type as the default
@@ -162,15 +201,32 @@ async function loadSettings() {
         }
       }
       // If we get here, the setting was invalid or missing
+      if (key in settings) lostKeys.push(key);
       needsSave = true;
     }
-    
+
+    // Keys the user's file has that DEFAULT_SETTINGS doesn't know about are
+    // dropped by the merge without even setting needsSave. cardGlow lives here.
+    const unknownKeys = Object.keys(settings).filter((key) => !(key in DEFAULT_SETTINGS));
+    if (lostKeys.length || unknownKeys.length) {
+      telemetry.event('settings_keys_reverted', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.WARNING,
+        context: {
+          count: lostKeys.length + unknownKeys.length,
+          keys: [...lostKeys, ...unknownKeys],
+          unknown_count: unknownKeys.length
+        },
+        coalesceMs: 3600000
+      });
+    }
+
     // Only save if we actually had to fix something
     if (needsSave) {
       logger.info('Updating settings file with merged settings');
       await saveSettings(mergedSettings);
     }
-    
+
     return mergedSettings;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -180,12 +236,21 @@ async function loadSettings() {
     }
     
     logger.error('Unexpected error loading settings:', error);
+    // The user's real settings never apply this session, and the next save
+    // writes these defaults over them.
+    telemetry.event('settings_load_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: error.code },
+      error
+    });
     // Don't reset settings on unexpected errors, just return defaults for this session
     return { ...DEFAULT_SETTINGS };
   }
 }
 
 async function saveSettings(newSettings) {
+  let payloadBytes = 0;
   try {
     // Validate before saving
     if (!newSettings || typeof newSettings !== 'object') {
@@ -195,11 +260,20 @@ async function saveSettings(newSettings) {
     // Merge with defaults to ensure completeness
     const completeSettings = { ...DEFAULT_SETTINGS, ...newSettings };
     
-    await fs.writeFile(SETTINGS_FILE, JSON.stringify(completeSettings, null, 2));
+    const payload = JSON.stringify(completeSettings, null, 2);
+    payloadBytes = Buffer.byteLength(payload, 'utf8');
+
+    await fs.writeFile(SETTINGS_FILE, payload);
     logger.info('Settings saved successfully');
     return true;
   } catch (error) {
     logger.error('Error saving settings:', error);
+    telemetry.event('settings_save_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: error.code, bytes: payloadBytes },
+      error
+    });
     throw error;
   }
 }

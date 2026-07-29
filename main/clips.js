@@ -3,25 +3,43 @@ const { app, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
+const telemetry = require('./telemetry');
 const thumbnailsModule = require('./thumbnails');
 const { logActivity } = require('../utils/activity-tracker');
 
 // Supported video extensions
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov']);
 
+// Size of the library as of the last successful getClips(). Kept so callers
+// that only need the count (telemetry) never trigger another tree walk.
+// null means "no successful scan yet this session".
+let lastClipCount = null;
+
 /**
  * Recursively walk a directory and collect video files with their relative paths.
  * Skips directories starting with '.' (like .clip_metadata) and 'icons'.
  * @param {string} dir - Current directory to scan
  * @param {string} baseDir - Root clip directory (for computing relative paths)
+ * @param {number} [depth] - Recursion depth, for telemetry only
+ * @param {object} [statFailures] - Shared stat-failure tally; only the
+ *        top-level call reports it, so one walk emits one event.
  * @returns {Promise<Array<{name: string, date: Date}>>} Array of clip entries
  */
-async function walkClips(dir, baseDir) {
+async function walkClips(dir, baseDir, depth = 0, statFailures = null) {
+  const dropped = statFailures || { count: 0, errno: undefined };
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
     logger.error(`Error reading directory ${dir}:`, error);
+    // This whole subtree just vanished from the library with no user-visible sign.
+    telemetry.event('clips_subtree_unreadable', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: error.code, depth },
+      coalesceMs: 60000,
+      error
+    });
     return [];
   }
 
@@ -31,7 +49,7 @@ async function walkClips(dir, baseDir) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name.startsWith('.') || entry.name === 'icons') return [];
-      return walkClips(fullPath, baseDir);
+      return walkClips(fullPath, baseDir, depth + 1, dropped);
     }
     if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
@@ -42,12 +60,23 @@ async function walkClips(dir, baseDir) {
           return [{ name: relativePath, date: stats.mtime }];
         } catch (error) {
           logger.error(`Error reading stats for ${fullPath}:`, error);
+          // Tallied, not reported per file: one bad drive drops thousands.
+          dropped.count += 1;
+          if (!dropped.errno) dropped.errno = error.code;
         }
       }
     }
     return [];
   });
-  return (await Promise.all(tasks)).flat();
+  const clips = (await Promise.all(tasks)).flat();
+  if (!statFailures && dropped.count > 0) {
+    telemetry.event('clip_stat_dropped', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { errno: dropped.errno, count: dropped.count }
+    });
+  }
+  return clips;
 }
 
 /**
@@ -75,6 +104,8 @@ function getLastClipsFilePath() {
  */
 async function saveCurrentClipList(getSettings) {
   const LAST_CLIPS_FILE = getLastClipsFilePath();
+  // Which step we died on, for telemetry only.
+  let stage = 'scan';
 
   try {
     const settings = await getSettings();
@@ -96,16 +127,26 @@ async function saveCurrentClipList(getSettings) {
     const tempFile = LAST_CLIPS_FILE + '.tmp';
     const jsonData = JSON.stringify(clipListData, null, 2);
 
+    stage = 'write';
     await fs.writeFile(tempFile, jsonData, 'utf8');
 
+    stage = 'verify';
     const verification = await fs.readFile(tempFile, 'utf8');
+    stage = 'parse';
     JSON.parse(verification);
 
+    stage = 'rename';
     await fs.rename(tempFile, LAST_CLIPS_FILE);
 
     logger.info(`Saved ${clipNames.length} clips for next session comparison`);
   } catch (error) {
     logger.error('Error saving current clip list:', error);
+    telemetry.event('clip_list_save_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { errno: error.code, stage },
+      error
+    });
 
     try {
       const tempFile = LAST_CLIPS_FILE + '.tmp';
@@ -133,14 +174,28 @@ let watchedClips = null;
  */
 async function loadWatchedClips() {
   if (watchedClips) return true;
+  let data = null;
   try {
-    const data = await fs.readFile(getWatchedClipsFilePath(), 'utf8');
+    data = await fs.readFile(getWatchedClipsFilePath(), 'utf8');
     const parsed = JSON.parse(data);
     watchedClips = new Set(Array.isArray(parsed.watched) ? parsed.watched : []);
     return true;
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.error('Error reading watched clips file:', error);
+      // Every clip in the library gets re-flagged as new after this.
+      telemetry.event('watched_clips_reset', {
+        kind: telemetry.KIND.DATA_LOSS,
+        severity: telemetry.SEVERITY.ERROR,
+        context: {
+          // The in-memory set is always empty here (we only get this far when
+          // it has not been loaded yet); file_bytes carries the real magnitude.
+          prior_size: watchedClips ? watchedClips.size : 0,
+          file_bytes: data == null ? 0 : Buffer.byteLength(data, 'utf8'),
+          errno: error.code
+        },
+        error
+      });
       // Unreadable/corrupt: start over rather than flagging the whole library.
       watchedClips = new Set();
       return true;
@@ -207,8 +262,17 @@ async function getNewClipsInfo(getSettings) {
         const data = await fs.readFile(getLastClipsFilePath(), 'utf8');
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed.clips)) previousClips = parsed.clips;
-      } catch {
-        // Missing/corrupt snapshot -> treat as first run below.
+      } catch (error) {
+        // Missing/corrupt snapshot -> treat as first run below. A missing file
+        // is the normal pre-migration case; anything else lost the seed.
+        if (error.code !== 'ENOENT') {
+          telemetry.event('watched_migration_failed', {
+            kind: telemetry.KIND.SILENT_FAILURE,
+            severity: telemetry.SEVERITY.WARNING,
+            context: { errno: error.code },
+            error
+          });
+        }
       }
       watchedClips = new Set(previousClips ?? currentClips);
       logger.info(
@@ -350,6 +414,8 @@ async function getClips(getSettings) {
   const clipsFolder = settings?.clipLocation;
   const metadataFolder = path.join(clipsFolder, ".clip_metadata");
 
+  const scanStartedAt = Date.now();
+
   try {
     // Dev profiler spans (no-op in production — global.__perf only exists in dev).
     const tScan = global.__perf?.now();
@@ -369,8 +435,18 @@ async function getClips(getSettings) {
     let metadataFiles = new Set();
     try {
       metadataFiles = new Set((await fs.readdir(metadataFolder)).map((f) => f.toLowerCase()));
-    } catch {
-      // Folder missing -> no metadata exists; the Set stays empty.
+    } catch (error) {
+      // Folder missing -> no metadata exists; the Set stays empty. Any other
+      // errno means the metadata is there but unreadable, so every clip in the
+      // library silently loses its custom name and trim flag.
+      if (error.code !== 'ENOENT') {
+        telemetry.event('clip_metadata_dir_unreadable', {
+          kind: telemetry.KIND.DATA_LOSS,
+          severity: telemetry.SEVERITY.ERROR,
+          context: { errno: error.code, clips: files.length },
+          error
+        });
+      }
     }
     const hasMetadata = (name) => metadataFiles.has(name.toLowerCase());
 
@@ -419,9 +495,18 @@ async function getClips(getSettings) {
 
     const clipInfos = (await Promise.all(clipInfoPromises)).filter(Boolean); // Remove null entries
     if (tMeta != null) global.__perf.span('read-clip-metadata', tMeta, global.__perf.now() - tMeta, { clips: clipInfos.length });
+    telemetry.metric('library_scan_ms', Date.now() - scanStartedAt, { unit: 'ms' });
+    lastClipCount = clipInfos.length;
     return clipInfos;
   } catch (error) {
     logger.error("Error reading directory:", error);
+    // The library renders empty, which reads to the user as "no clips".
+    telemetry.event('clips_scan_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: error.code },
+      error
+    });
     return [];
   }
 }
@@ -431,26 +516,41 @@ async function getClips(getSettings) {
  * concurrent stat strategy but counts ALL files (videos, thumbnails, metadata)
  * so the total reflects the folder's real disk footprint.
  */
-async function dirSize(dir) {
+async function dirSize(dir, failures = null) {
+  // Shared tally so one sweep reports once instead of per unreadable entry.
+  const failed = failures || { count: 0, errno: undefined };
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    failed.count += 1;
+    if (!failed.errno) failed.errno = error.code;
     return 0;
   }
   const tasks = entries.map(async (entry) => {
     const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) return dirSize(fullPath);
+    if (entry.isDirectory()) return dirSize(fullPath, failed);
     if (entry.isFile()) {
       try {
         return (await fs.stat(fullPath)).size;
-      } catch {
+      } catch (error) {
+        failed.count += 1;
+        if (!failed.errno) failed.errno = error.code;
         return 0;
       }
     }
     return 0;
   });
-  return (await Promise.all(tasks)).reduce((a, b) => a + b, 0);
+  const total = (await Promise.all(tasks)).reduce((a, b) => a + b, 0);
+  if (!failures && failed.count > 0) {
+    // Under-reported size looks like the user freed space they still use.
+    telemetry.event('folder_size_underreported', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { errno_count: failed.count, errno: failed.errno }
+    });
+  }
+  return total;
 }
 
 // Cached folder-size result so repeated renderer polls don't re-walk the tree.
@@ -479,6 +579,7 @@ async function getClipsFolderSize(getSettings) {
 
   try {
     const bytes = await dirSize(clipsFolder);
+    telemetry.metric('folder_size_ms', Date.now() - now, { unit: 'ms' });
     folderSizeCache = { location: clipsFolder, bytes, at: now };
     return { bytes };
   } catch (error) {
@@ -523,6 +624,10 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
   const maxRetries = 50; // Up to ~5 seconds total retry time
   const retryDelay = 100; // 0.1 s between attempts
 
+  // Telemetry only: which mechanism produced the last error, and its errno.
+  let via = process.platform === 'win32' ? 'trash' : 'unlink';
+  let retryErrno;
+
   for (let retry = 0; retry < maxRetries; retry++) {
     try {
       // Try deleting immediately; we'll retry quickly if the file is still busy.
@@ -530,9 +635,11 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
         try {
           if (process.platform === 'win32') {
             // Move the file to the Recycle Bin for a more native deletion behaviour
+            via = 'trash';
             await shell.trashItem(file);
           } else {
             // Fallback for non-Windows platforms (should not be hit in our use-case)
+            via = 'unlink';
             await fs.unlink(file);
           }
         } catch (e) {
@@ -544,6 +651,7 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
           // If trashing failed for another reason on Windows, fall back to a direct unlink
           if (process.platform === 'win32') {
             try {
+              via = 'unlink';
               await fs.unlink(file);
               continue;
             } catch (e2) {
@@ -561,13 +669,29 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
 
       // Log deletion activity
       logActivity('delete', { clipName });
+      if (retry > 0) {
+        // Locked files cost up to ~5s of retries today with nothing reported.
+        telemetry.event('clip_delete_retried', {
+          kind: telemetry.KIND.DEGRADED,
+          severity: telemetry.SEVERITY.INFO,
+          context: { retries_used: retry, errno: retryErrno },
+          coalesceMs: 600000
+        });
+      }
       return { success: true };
     } catch (error) {
       if ((error.code === "EBUSY" || error.code === "EPERM") && retry < maxRetries - 1) {
         // If the file is busy and we haven't reached max retries, wait and try again
+        retryErrno = error.code;
         await delay(retryDelay);
       } else {
         logger.error(`Error deleting clip ${clipName}:`, error);
+        telemetry.event('clip_delete_failed', {
+          kind: telemetry.KIND.ERROR,
+          severity: telemetry.SEVERITY.ERROR,
+          context: { errno: error.code, retries_used: retry, via },
+          error
+        });
         return { success: false, error: error.message };
       }
     }
@@ -598,6 +722,14 @@ async function revealClip(clipName, getSettings) {
   }
 }
 
+/**
+ * Clip count from the last successful getClips(), without rescanning.
+ * @returns {number|null} null when no scan has succeeded yet.
+ */
+function getLastClipCount() {
+  return lastClipCount;
+}
+
 module.exports = {
   saveCurrentClipList,
   getNewClipsInfo,
@@ -606,6 +738,7 @@ module.exports = {
   startPeriodicSave,
   stopPeriodicSave,
   getClips,
+  getLastClipCount,
   getClipsFolderSize,
   deleteClip,
   revealClip

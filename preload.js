@@ -12,8 +12,120 @@
 
 const { ipcRenderer } = require("electron");
 
-/** Build a request/response wrapper for an ipcMain.handle channel. */
-const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
+// --- Telemetry bridge -------------------------------------------------------
+//
+// Fire-and-forget onto the `telemetry-report` channel (main/telemetry does the
+// coalescing, queueing and upload). Preload owns a small batcher of its own
+// because the invoke wrapper below records a metric on EVERY IPC call, and
+// because preload emits before the renderer bundle exists. Nothing here may
+// throw into a call site.
+
+const TELEMETRY_CHANNEL = "telemetry-report";
+const TELEMETRY_FLUSH_MS = 5000;
+// main drops anything past these per message.
+const TELEMETRY_MAX_EVENTS = 50;
+const TELEMETRY_MAX_METRICS = 100;
+// Backstop between flushes; a burst that big is already a bug of its own.
+const TELEMETRY_MAX_PENDING = 500;
+
+let telemetryEvents = [];
+let telemetryMetrics = [];
+let telemetryTimer = null;
+
+const sendTelemetry = (payload) => {
+  try {
+    ipcRenderer.send(TELEMETRY_CHANNEL, payload);
+  } catch (_) {
+    /* telemetry must never break the app */
+  }
+};
+
+const flushTelemetry = () => {
+  try {
+    if (telemetryTimer) {
+      clearTimeout(telemetryTimer);
+      telemetryTimer = null;
+    }
+    if (telemetryEvents.length === 0 && telemetryMetrics.length === 0) return;
+    const events = telemetryEvents;
+    const metrics = telemetryMetrics;
+    telemetryEvents = [];
+    telemetryMetrics = [];
+    while (events.length > 0 || metrics.length > 0) {
+      sendTelemetry({
+        events: events.splice(0, TELEMETRY_MAX_EVENTS),
+        metrics: metrics.splice(0, TELEMETRY_MAX_METRICS),
+      });
+    }
+  } catch (_) {
+    /* telemetry must never break the app */
+  }
+};
+
+const scheduleTelemetryFlush = () => {
+  if (telemetryTimer) return;
+  telemetryTimer = setTimeout(flushTelemetry, TELEMETRY_FLUSH_MS);
+};
+
+const queueTelemetryEvent = (event) => {
+  if (telemetryEvents.length >= TELEMETRY_MAX_PENDING) return;
+  telemetryEvents.push(event);
+  scheduleTelemetryFlush();
+};
+
+const queueTelemetryMetric = (metric) => {
+  if (telemetryMetrics.length >= TELEMETRY_MAX_PENDING) return;
+  telemetryMetrics.push(metric);
+  scheduleTelemetryFlush();
+};
+
+/** djb2, mirroring `hash32` in main/telemetry/index.js. */
+const telemetryHash = (input) => {
+  let h = 5381;
+  const s = String(input);
+  for (let i = 0; i < s.length; i += 1) {
+    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+};
+
+try {
+  window.addEventListener("beforeunload", flushTelemetry);
+} catch (_) {
+  /* no window yet — the interval flush still covers us */
+}
+
+/**
+ * Build a request/response wrapper for an ipcMain.handle channel.
+ *
+ * Every channel is timed and every rejection is reported. The channel list is
+ * our own fixed enum, so it is safe as a metric dim. The original rejection is
+ * rethrown untouched: callers must see exactly what they saw before.
+ */
+const invoke = (channel) => (...args) => {
+  const startedAt = Date.now();
+  return ipcRenderer.invoke(channel, ...args).then(
+    (value) => {
+      queueTelemetryMetric({ name: "ipc.call_ms", value: Date.now() - startedAt, unit: "ms", dims: { channel } });
+      return value;
+    },
+    (error) => {
+      const ms = Date.now() - startedAt;
+      queueTelemetryMetric({ name: "ipc.call_ms", value: ms, unit: "ms", dims: { channel } });
+      queueTelemetryEvent({
+        code: "ipc_call_rejected",
+        kind: "silent_failure",
+        severity: "warning",
+        surface: "preload",
+        // Per-channel fingerprint, otherwise main's coalescer would hide every
+        // channel but the first one to fail in a 60s window.
+        fingerprint: telemetryHash(`ipc_call_rejected|${channel}`),
+        context: { channel, ms },
+      });
+      throw error;
+    },
+  );
+};
 
 /** Subscribe to a main->renderer event; returns an unsubscribe function. */
 const subscribe = (channel) => (callback) => {
@@ -97,10 +209,11 @@ const api = {
   // the same tick; share the in-flight promise instead of 4+ parallel IPCs.
   // No caching — once resolved, the next call hits the channel again.
   getSettings: (() => {
+    const call = invoke("get-settings");
     let inflight = null;
     return () => {
       if (!inflight) {
-        inflight = ipcRenderer.invoke("get-settings").finally(() => {
+        inflight = call().finally(() => {
           inflight = null;
         });
       }
@@ -147,7 +260,8 @@ const api = {
 
   // --- Integrated clipdip ---
   clipdip: (() => {
-    const control = (cmd, args) => ipcRenderer.invoke("clipdip-control", { cmd, args });
+    const controlInvoke = invoke("clipdip-control");
+    const control = (cmd, args) => controlInvoke({ cmd, args });
     return {
       getConfig: invoke("clipdip-get-config"),
       setConfig: invoke("clipdip-set-config"),
@@ -178,6 +292,11 @@ const api = {
 
   // --- Signal to main (fire-and-forget) ---
   rendererReady: () => ipcRenderer.send("renderer-ready"),
+
+  // --- Telemetry (fire-and-forget) ---
+  // The renderer bundle is ESM and can't reach ipcRenderer itself, so the
+  // renderer client (src/renderer/telemetry) posts its batches through here.
+  telemetryReport: (payload) => sendTelemetry(payload),
 
   // --- Events (main -> renderer); each returns an unsubscribe fn ---
   onLog: subscribe("log"),
@@ -230,11 +349,31 @@ try {
 // exposed on window; contextIsolation is off so these modules share the
 // renderer's window/document once init() is called from React. Copied under
 // player-legacy/ (only patch: `../utils/logger` -> `./logger`).
+let legacyModuleIndex = 0;
 try {
   window.legacyState = require("./player-legacy/state.js");
+  legacyModuleIndex = 1;
   window.legacyPlayer = require("./player-legacy/video-player.js");
+  legacyModuleIndex = 2;
   window.legacyVolumeRange = require("./player-legacy/volume-range-controls.js");
 } catch (err) {
   // Non-fatal: the library still works; the player just won't open.
   console.error("[preload] failed to load legacy player:", err);
+  // Which is a total feature outage that used to reach the console only. Sent
+  // straight out rather than batched: the renderer client isn't loaded yet.
+  sendTelemetry({
+    events: [
+      {
+        code: "legacy_player_load_failed",
+        kind: "crash",
+        severity: "fatal",
+        surface: "preload",
+        fingerprint: telemetryHash(`legacy_player_load_failed|${legacyModuleIndex}`),
+        context: {
+          module_index: legacyModuleIndex,
+          error_name: err && err.name ? String(err.name) : undefined,
+        },
+      },
+    ],
+  });
 }

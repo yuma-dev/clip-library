@@ -7,7 +7,12 @@ import { ConfirmProvider } from "./ui/ConfirmDialog";
 import { SettingsProvider } from "./settings/SettingsContext";
 import { initGridDensity } from "./library/gridDensity";
 import { initGlowTuner } from "./library/glowConfig";
+import { initTelemetry } from "./telemetry";
+import ErrorBoundary from "./telemetry/ErrorBoundary";
 import "./styles.css";
+
+// First, so window.onerror / unhandledrejection cover the startup path too.
+initTelemetry();
 
 initGridDensity();
 initGlowTuner();
@@ -18,12 +23,16 @@ window.clips?.onLog?.(({ type, message }: { type: string; message: string }) => 
   (typeof fn === "function" ? fn : console.log)(`[Main Process] ${message}`);
 });
 
+// ErrorBoundary sits outermost so it also catches a provider blowing up, and
+// so both root.render() call sites below get it without repeating themselves.
 const Providers = ({ children }: { children: ReactNode }) => (
-  <ToastProvider>
-    <ConfirmProvider>
-      <SettingsProvider>{children}</SettingsProvider>
-    </ConfirmProvider>
-  </ToastProvider>
+  <ErrorBoundary>
+    <ToastProvider>
+      <ConfirmProvider>
+        <SettingsProvider>{children}</SettingsProvider>
+      </ConfirmProvider>
+    </ToastProvider>
+  </ErrorBoundary>
 );
 
 // NOTE: no <React.StrictMode> — it double-mounts in dev, which breaks the

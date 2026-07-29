@@ -7,6 +7,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const logger = require('../utils/logger');
 const clipdipModule = require('./clipdip');
+const telemetry = require('./telemetry');
 
 // Written just before the silent installer runs; read back on next boot to
 // show the "Updated to vX" toast (clipdip-style post-update confirmation).
@@ -30,6 +31,11 @@ let openUpdatePageHandlerRegistered = false;
 let latestReleaseData = null;
 let latestResolvedVersion = null;
 let currentMainWindow = null;
+// Progress of the download currently in flight, so retry exhaustion can report
+// how far it actually got (downloadUpdateOnce owns the counters, the retry
+// wrapper is the one that reports).
+let lastDownloadBytes = 0;
+let lastDownloadTotalBytes = 0;
 
 function init(mainWindow) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -180,7 +186,7 @@ function isNetworkError(error) {
   );
 }
 
-function handleUpdateError(primaryError, fallbackError = null) {
+function handleUpdateError(primaryError, fallbackError = null, checkSource = 'api') {
   if (fallbackError) {
     logger.warn('Fallback update check also failed:', fallbackError.message || fallbackError);
   }
@@ -189,6 +195,17 @@ function handleUpdateError(primaryError, fallbackError = null) {
   const isRateLimited = errors.some((err) => err?.response?.status === 403 || err?.response?.status === 429);
   const hasNetworkIssue = errors.some((err) => isNetworkError(err));
   const lastError = errors[errors.length - 1];
+
+  telemetry.event('update_check_failed', {
+    kind: telemetry.KIND.ERROR,
+    severity: telemetry.SEVERITY.WARNING,
+    context: {
+      class: hasNetworkIssue ? 'network_unavailable' : (isRateLimited ? 'rate_limited' : 'unknown'),
+      http_status: errors.map((err) => err?.response?.status).filter((status) => Number.isFinite(status)).pop(),
+      check_source: checkSource,
+      errno: lastError?.code
+    }
+  });
 
   if (hasNetworkIssue) {
     logger.warn('Network unavailable, skipping update check');
@@ -248,7 +265,20 @@ function isRetryableDownloadError(error) {
   return isNetworkError(error) || error?.response?.status >= 500;
 }
 
+// Coarse bucket for update_download_failed. Enum only, never the message.
+function classifyDownloadError(error) {
+  if (isNetworkError(error)) return 'network';
+  const status = error?.response?.status;
+  if (Number.isFinite(status)) return status >= 500 ? 'server' : 'http';
+  if (/size mismatch|is empty|not found after write/i.test(error?.message || '')) return 'verify';
+  return 'other';
+}
+
 async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version = null }) {
+  const downloadStartedAt = Date.now();
+  lastDownloadBytes = 0;
+  lastDownloadTotalBytes = 0;
+
   const response = await axios({
     url,
     method: 'GET',
@@ -262,9 +292,11 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
 
   const totalLength = parseInt(response.headers['content-length'], 10) || 0;
   let downloadedLength = 0;
+  lastDownloadTotalBytes = totalLength;
 
   response.data.on('data', (chunk) => {
     downloadedLength += chunk.length;
+    lastDownloadBytes = downloadedLength;
     if (totalLength > 0) {
       const progress = Math.round((downloadedLength / totalLength) * 100);
       sendToRenderer('download-progress', progress, mainWindow);
@@ -286,16 +318,40 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
     response.data.on('error', fail);
   });
 
+  const downloadMs = Date.now() - downloadStartedAt;
+  telemetry.metric('update.download_ms', downloadMs, { unit: 'ms' });
+  // Throughput is derived server side from sum(bytes)/sum(ms). The ingest API
+  // has no 'mbps' unit, and a client-computed rate would not merge across
+  // installs anyway.
+  if (downloadedLength > 0) {
+    telemetry.metric('update.download_bytes', downloadedLength, { unit: 'bytes' });
+  }
+
   if (!fs.existsSync(tempPath)) {
+    telemetry.event('update_verify_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { check: 'missing', expected_bytes: expectedSize, actual_bytes: 0 }
+    });
     throw new Error('Downloaded file not found after write');
   }
 
   const stats = fs.statSync(tempPath);
   if (stats.size <= 0) {
+    telemetry.event('update_verify_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { check: 'empty', expected_bytes: expectedSize, actual_bytes: 0 }
+    });
     throw new Error('Downloaded file is empty');
   }
 
   if (expectedSize > 0 && stats.size !== expectedSize) {
+    telemetry.event('update_verify_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { check: 'size_mismatch', expected_bytes: expectedSize, actual_bytes: stats.size }
+    });
     throw new Error(`Downloaded file size mismatch (${stats.size} !== ${expectedSize})`);
   }
 
@@ -311,24 +367,48 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
     await clipdipModule.quit();
   } catch (error) {
     logger.warn(`Stopping clipdip before update failed: ${error.message}`);
+    telemetry.event('update_sidecar_quit_failed', {
+      kind: telemetry.KIND.DEGRADED,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: error?.code }
+    });
   }
 
   try {
     fs.writeFileSync(
       pendingUpdateMarkerPath(),
-      JSON.stringify({ version, at: Date.now() })
+      // `from` is only read back by checkPostUpdateMarker, to name the version
+      // the silent install was supposed to replace.
+      JSON.stringify({ version, at: Date.now(), from: app.getVersion() })
     );
   } catch (error) {
     logger.warn(`Could not write update marker: ${error.message}`);
+    telemetry.event('update_marker_write_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { errno: error?.code }
+    });
   }
 
   const installer = spawn(tempPath, ['/S', '--force-run'], {
     detached: true,
     stdio: 'ignore'
   });
+  // A UAC denial, an antivirus quarantine or an NSIS failure is otherwise
+  // completely invisible: we quit 500ms later either way. Report only — the
+  // quit timing below is deliberately untouched.
+  installer.on('error', (error) => {
+    telemetry.event('update_install_spawn_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.FATAL,
+      context: { errno: error?.code }
+    });
+  });
   installer.unref();
 
   logger.info(`Update downloaded (${stats.size} bytes), silent installer started`);
+
+  telemetry.sessionEnd('update');
 
   setTimeout(() => {
     app.quit();
@@ -354,11 +434,29 @@ function checkPostUpdateMarker(mainWindow) {
     /* ignore */
   }
   const version = typeof marker?.version === 'string' ? marker.version : null;
+  const fromVersion = typeof marker?.from === 'string' ? marker.from : undefined;
+  const markerAgeMs = Number.isFinite(marker?.at) ? Date.now() - marker.at : undefined;
   if (version && version === app.getVersion()) {
     logger.info(`Silent update landed: now running v${version}`);
     sendToRenderer('app-updated', { version }, mainWindow);
+    telemetry.event('update_applied', {
+      kind: telemetry.KIND.CUSTOM,
+      severity: telemetry.SEVERITY.INFO,
+      context: { from_version: fromVersion, to_version: version, marker_age_ms: markerAgeMs }
+    });
   } else if (version) {
     logger.warn(`Update marker version v${version} does not match running v${app.getVersion()} — update may not have applied`);
+    // The other half of the update funnel: the installer ran and the user was
+    // never told it did not take, so they sit on a version we cannot reach.
+    telemetry.event('update_not_applied', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      context: {
+        marker_version: version,
+        running_version: app.getVersion(),
+        marker_age_ms: markerAgeMs
+      }
+    });
   }
 }
 
@@ -378,6 +476,17 @@ async function downloadUpdateWithRetries(options) {
         await delay(800 * attempt);
         continue;
       }
+      telemetry.event('update_download_failed', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.ERROR,
+        context: {
+          attempt,
+          bytes: lastDownloadBytes,
+          total_bytes: lastDownloadTotalBytes,
+          class: classifyDownloadError(error),
+          errno: error?.code
+        }
+      });
       throw error;
     }
   }
@@ -490,7 +599,7 @@ async function checkForUpdates(mainWindow, options = {}) {
         checkSource = 'redirect_fallback';
         logger.info('Fallback release check succeeded');
       } catch (fallbackError) {
-        return handleUpdateError(primaryError, fallbackError);
+        return handleUpdateError(primaryError, fallbackError, 'redirect_fallback');
       }
     }
 

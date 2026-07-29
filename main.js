@@ -19,6 +19,22 @@ const logger = require('./utils/logger');
 const consoleBuffer = require('./utils/console-log-buffer');
 consoleBuffer.patchConsole();
 
+// Anonymous diagnostics. Required this early so the process-level handlers
+// below can report; init() lands once settings are loaded (createWindow).
+// Events recorded before init are buffered and replayed there.
+const telemetry = require('./main/telemetry');
+
+// Start of the module-load phase, mirroring the benchmark harness mark below.
+// Kept unconditionally so startup timings exist in production too.
+const moduleLoadStartedAt = Date.now();
+
+// ms since process start (perf_hooks' timeOrigin), the baseline for
+// startup.total_ms. Cheaper and more accurate than a Date.now() delta here.
+const perfNow = () => require('perf_hooks').performance.now();
+
+// Coarse startup/running split for the crash handlers below.
+let appIsReady = false;
+
 // Native crashes (Electron/Node/GPU) bypass the logger entirely; Crashpad
 // minidumps in userData\Crashpad are the only trace, so keep them locally.
 // Never uploaded; the diagnostics zip surfaces their metadata.
@@ -28,12 +44,28 @@ crashReporter.start({ uploadToServer: false });
 // reaches userData\logs. Log it first, then exit; the timeout guarantees we
 // don't hang on a broken async logger.
 process.on('uncaughtException', (error) => {
+  // Recorded first: the queue append is synchronous, so it survives the
+  // process.exit(1) below even when the logger never resolves.
+  telemetry.event('main_uncaught_exception', {
+    kind: telemetry.KIND.CRASH,
+    severity: telemetry.SEVERITY.FATAL,
+    error,
+    context: { phase: appIsReady ? 'running' : 'startup' },
+    attachLog: true,
+    coalesceMs: 0
+  });
   setTimeout(() => process.exit(1), 2000);
   Promise.resolve(logger.error('[fatal] uncaughtException in main process:', error))
     .then(() => process.exit(1), () => process.exit(1));
 });
 process.on('unhandledRejection', (reason) => {
   const error = reason instanceof Error ? reason : new Error(String(reason));
+  telemetry.event('main_unhandled_rejection', {
+    kind: telemetry.KIND.ERROR,
+    severity: telemetry.SEVERITY.ERROR,
+    error,
+    context: { phase: appIsReady ? 'running' : 'startup' }
+  });
   logger.error('[fatal] unhandledRejection in main process (continuing):', error);
 });
 
@@ -71,6 +103,48 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
   }
 }
 
+// Time and report every ipcMain.handle body. Installed once, here, before the
+// first registration below; it composes with the dev-only perf wrapper above
+// rather than replacing it (whichever installed first ends up on the inside).
+// Channel names are a fixed enum from our own code, so they are safe as a dim.
+// Arguments and return values are never recorded.
+{
+  const originalHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = function (channel, handler) {
+    const wrapped = async (event, ...args) => {
+      const startedAt = Date.now();
+      try {
+        const result = await handler(event, ...args);
+        const ms = Date.now() - startedAt;
+        telemetry.metric('ipc.handler_ms', ms, { unit: 'ms', dims: { channel } });
+        if (ms > 2000) {
+          telemetry.event('ipc_call_slow', {
+            kind: telemetry.KIND.DEGRADED,
+            severity: telemetry.SEVERITY.WARNING,
+            context: { channel, ms },
+            // Per channel, otherwise one slow channel would mute every other
+            // one for the whole ten minute window.
+            fingerprint: telemetry.hash32(channel),
+            coalesceMs: 600000
+          });
+        }
+        return result;
+      } catch (error) {
+        const ms = Date.now() - startedAt;
+        telemetry.metric('ipc.handler_ms', ms, { unit: 'ms', dims: { channel } });
+        telemetry.event('ipc_handler_threw', {
+          kind: telemetry.KIND.SILENT_FAILURE,
+          severity: telemetry.SEVERITY.ERROR,
+          error,
+          context: { channel, error_name: error?.name, errno: error?.code, ms }
+        });
+        throw error;
+      }
+    };
+    return originalHandle(channel, wrapped);
+  };
+}
+
 // Defer heavy, non-startup-critical modules (axios/electron-updater,
 // discord-rpc, archiver) to first use — together they account for a
 // large slice of the ~530ms module-load phase before the window can open.
@@ -95,6 +169,10 @@ const CLIPLIB_AUTH_SESSION_TTL_MS = 10 * 60 * 1000;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
+  telemetry.event('single_instance_lost', {
+    kind: telemetry.KIND.CUSTOM,
+    severity: telemetry.SEVERITY.INFO
+  });
   app.quit();
 }
 
@@ -252,6 +330,13 @@ function registerCliplibProtocol() {
     }
     app.setAsDefaultProtocolClient(CLIPLIB_PROTOCOL);
   } catch (error) {
+    // Login can never complete without the protocol handler, and nothing in
+    // the UI says so.
+    telemetry.event('protocol_registration_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      error
+    });
     logger.warn(`Failed to register ${CLIPLIB_PROTOCOL}:// protocol: ${error.message}`);
   }
 }
@@ -417,6 +502,16 @@ async function handleCliplibProtocolUrl(protocolUrl) {
     });
 
     if (!verify?.success) {
+      // The token itself may well be good: any transient blip on /auth/me
+      // throws it away and sends the user back to the login flow.
+      telemetry.event('auth_verify_discarded_token', {
+        kind: telemetry.KIND.ERROR,
+        severity: telemetry.SEVERITY.ERROR,
+        context: {
+          reason: !verify ? 'no_result' : (typeof verify.status === 'number' ? 'http_error' : 'request_failed'),
+          http_status: typeof verify?.status === 'number' ? verify.status : undefined
+        }
+      });
       await shareModule.clearStoredApiToken();
       queueCliplibAuthEvent({
         status: 'error',
@@ -461,9 +556,13 @@ async function repairTaskbarPins() {
   } catch {
     return; // no pin folder — nothing pinned
   }
+  let scanned = 0;
+  let repaired = 0;
+  let failed = 0;
   for (const name of entries) {
     if (!name.toLowerCase().endsWith('.lnk')) continue;
     const lnkPath = path.join(pinDir, name);
+    scanned += 1;
     try {
       const details = shell.readShortcutLink(lnkPath);
       const target = details?.target || '';
@@ -477,10 +576,21 @@ async function repairTaskbarPins() {
         iconIndex: 0,
         appUserModelId: 'com.yuma-dev.clips'
       });
+      repaired += 1;
       logger.info(`Repaired orphaned taskbar pin: ${name}`);
     } catch {
       // unreadable/foreign .lnk — skip
+      failed += 1;
     }
+  }
+  if (failed > 0) {
+    // A pin that stays orphaned launches nothing when clicked, and the user
+    // never learns why.
+    telemetry.event('taskbar_pin_repair_failed', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.WARNING,
+      context: { scanned, repaired, failed }
+    });
   }
 }
 
@@ -537,10 +647,189 @@ app.on('open-url', (event, protocolUrl) => {
   queueProtocolUrl(protocolUrl);
 });
 
+// Renderer death. The window goes white or blank and the app keeps running,
+// so without this the only trace is a user saying "it froze".
+app.on('render-process-gone', (event, webContents, details) => {
+  telemetry.event('renderer_process_gone', {
+    kind: telemetry.KIND.CRASH,
+    severity: telemetry.SEVERITY.FATAL,
+    // A one-line summary so the issue list is readable without opening the
+    // event. These lifecycle codes carry no natural error message, and without
+    // one the dashboard row is just the code name.
+    message: `renderer process gone: ${details?.reason || 'unknown'} (exit ${details?.exitCode ?? '?'})`,
+    context: {
+      reason: details?.reason,
+      exit_code: details?.exitCode,
+      uptime_s: Math.round(process.uptime())
+    }
+  });
+});
+
+// GPU / utility / pepper plugin processes. A dead GPU process is the usual
+// cause of "video plays black" reports.
+app.on('child-process-gone', (event, details) => {
+  telemetry.event('child_process_gone', {
+    kind: telemetry.KIND.CRASH,
+    severity: telemetry.SEVERITY.ERROR,
+    message: `${details?.type || 'child'} process gone: ${details?.reason || 'unknown'}${details?.serviceName ? ` (${details.serviceName})` : ''}`,
+    context: {
+      type: details?.type,
+      reason: details?.reason,
+      exit_code: details?.exitCode,
+      service_name: details?.serviceName
+    }
+  });
+});
+
+// Windows logoff/shutdown. Distinguishes an OS shutdown from a crash, which
+// otherwise both look like a session that stopped heartbeating.
+app.on('session-end', () => {
+  telemetry.sessionEnd('shutdown');
+});
+
+// clipdip's anonymous install id, resolved the same way main/clipdip.js builds
+// its data dir. Sharing the id is what joins a cliplib session to the clipdip
+// crash reports from the same machine. Returns a path that may not exist; the
+// telemetry core falls back to a local id then.
+function clipdipInstallIdPath() {
+  try {
+    const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
+    return path.join(localAppData, 'clipdip', 'data', 'install_id');
+  } catch {
+    return undefined;
+  }
+}
+
+// The heartbeat's `app` block, from settings only. Never carries clipLocation,
+// binaryPath, apiToken or serverUrl.
+function reportAppInfo() {
+  try {
+    if (!settings) return;
+    const defaults = getDefaultKeybindings() || {};
+    const bindings = settings.keybindings || {};
+    const keybindingsCustomized = Object.keys(defaults)
+      .filter((action) => bindings[action] && bindings[action] !== defaults[action])
+      .length;
+
+    telemetry.setAppInfo({
+      export_preset: settings.exportPreset,
+      export_quality: settings.exportQuality,
+      export_size_goal: settings.exportSizeGoal,
+      ui_font: settings.uiFont,
+      discord_rpc_enabled: Boolean(settings.enableDiscordRPC),
+      controller_enabled: settings.controller?.enabled !== false,
+      ambient_glow_enabled: settings.ambientGlow?.enabled !== false,
+      onboarding_version: Number(settings.onboardingVersion) || 0,
+      clipdip_enabled: Boolean(settings.clipdip?.enabled),
+      keybindings_customized: keybindingsCustomized
+    });
+  } catch (error) {
+    logger.warn(`Failed to report telemetry app info: ${error.message}`);
+  }
+}
+
+// Library size as a bucket. The raw count is a fingerprint-grade number and is
+// never sent; the bucket answers every question we actually ask of it.
+function clipCountBucket(count) {
+  if (count <= 0) return '0';
+  if (count <= 50) return '1_50';
+  if (count <= 200) return '50_200';
+  if (count <= 1000) return '200_1k';
+  if (count <= 5000) return '1k_5k';
+  if (count <= 20000) return '5k_20k';
+  return '20k_plus';
+}
+
+// The dynamic half of the `app` block: state that only exists at runtime, so
+// it cannot come from settings the way reportAppInfo's fields do. Every probe
+// is guarded on its own, because one unreachable clip folder must not cost us
+// the other five fields. A field that will not resolve is omitted rather than
+// sent as null. Never throws and is never awaited.
+async function reportDynamicAppInfo() {
+  const info = {};
+
+  try {
+    const count = clipsModule.getLastClipCount();
+    if (Number.isFinite(count)) info.clip_count_bucket = clipCountBucket(count);
+  } catch (_) { /* no successful scan yet */ }
+
+  try {
+    // 4 min TTL cache behind this, so it is a memory read on all but the
+    // first call of the session.
+    const { bytes } = await clipsModule.getClipsFolderSize(getSettings);
+    if (Number.isFinite(bytes)) info.library_bytes_gb = Math.round((bytes / 1e9) * 10) / 10;
+  } catch (_) { /* folder unreadable */ }
+
+  try {
+    const tags = await metadataModule.loadGlobalTags(app.getPath.bind(app));
+    // Count only. Tag text never leaves the machine.
+    if (Array.isArray(tags)) info.tag_count = tags.length;
+  } catch (_) { /* tags file unreadable */ }
+
+  try {
+    const nvenc = await ffmpegModule.getNvencStatus();
+    if (nvenc) info.nvenc_available = Boolean(nvenc.available);
+  } catch (_) { /* probe failed */ }
+
+  try {
+    // Boolean only. The token itself is never read into telemetry.
+    info.share_connected = Boolean(await shareModule.getStoredApiToken());
+  } catch (_) { /* auth store unreadable */ }
+
+  try {
+    info.clipdip_running = Boolean(await clipdipModule.isRunning());
+  } catch (_) { /* tasklist probe failed */ }
+
+  try {
+    info.watcher_alive = fileWatcherModule.isWatcherAlive();
+  } catch (_) { /* ignore */ }
+
+  telemetry.setAppInfo(info);
+}
+
+// Off the startup path deliberately: the first pass is late enough that the
+// library scan and the ffmpeg probe have already happened, so it reads caches
+// instead of warming them. The heartbeat only transmits `app` when a value
+// changed, so re-running it on the interval is nearly free.
+const DYNAMIC_APP_INFO_FIRST_MS = 60000;
+const DYNAMIC_APP_INFO_INTERVAL_MS = 600000;
+
+function scheduleDynamicAppInfo() {
+  try {
+    const first = setTimeout(() => { void reportDynamicAppInfo(); }, DYNAMIC_APP_INFO_FIRST_MS);
+    if (typeof first.unref === 'function') first.unref();
+    const repeat = setInterval(() => { void reportDynamicAppInfo(); }, DYNAMIC_APP_INFO_INTERVAL_MS);
+    if (typeof repeat.unref === 'function') repeat.unref();
+  } catch (error) {
+    logger.warn(`Failed to schedule dynamic telemetry app info: ${error.message}`);
+  }
+}
+
 async function createWindow() {
   if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
+  const settingsLoadStartedAt = Date.now();
   settings = await loadSettings();
+  telemetry.metric('startup.settings_load_ms', Date.now() - settingsLoadStartedAt, { unit: 'ms' });
   if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
+
+  // Telemetry knows the user's choice only once settings exist, so init runs
+  // here: still before the window, and everything recorded earlier is replayed.
+  telemetry.init({
+    userDataDir: app.getPath('userData'),
+    appVersion: app.getVersion(),
+    enabled: settings.telemetry?.enabled !== false,
+    clipdipInstallIdPath: clipdipInstallIdPath(),
+    ipcMain
+  });
+  reportAppInfo();
+  scheduleDynamicAppInfo();
+
+  // Machine block for the heartbeat. Fire and forget: nothing below waits on
+  // it. It runs here rather than in whenReady because the collector needs the
+  // clip folder (volume class + free space, never the path itself), and
+  // because collectMachine is a no-op until telemetry.init() above has run.
+  void telemetry.collectMachine({ app, screen, clipLocation: settings.clipLocation });
+
   try {
     await migrateLegacySharingTokenIfPresent();
   } catch (error) {
@@ -606,11 +895,34 @@ async function createWindow() {
   }
   Menu.setApplicationMenu(null);
 
+  let rendererDidFinishLoad = false;
+  const rendererWaitStartedAt = Date.now();
+
   // Renderer signals when clips are loaded and UI is fully ready
-  ipcMain.once('renderer-ready', () => dismissSplash());
+  ipcMain.once('renderer-ready', () => {
+    // Process start to a usable window. The only startup number a user ever
+    // notices, and until now it was measured nowhere in production.
+    telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
+    dismissSplash();
+  });
 
   // Safety fallback in case the renderer never signals ready
-  const splashFallback = setTimeout(() => dismissSplash(), 30000);
+  const splashFallback = setTimeout(() => {
+    // The fallback firing means the renderer never reported ready: the user is
+    // looking at a window that may be empty. It used to fire with no log at all.
+    if (!splashDismissed) {
+      telemetry.event('renderer_never_ready', {
+        kind: telemetry.KIND.CRASH,
+        severity: telemetry.SEVERITY.FATAL,
+        message: `renderer never reported ready after ${Math.round((Date.now() - rendererWaitStartedAt) / 1000)}s`,
+        context: {
+          ms_waited: Date.now() - rendererWaitStartedAt,
+          did_finish_load: rendererDidFinishLoad
+        }
+      });
+    }
+    dismissSplash();
+  }, 30000);
   mainWindow.on('closed', () => clearTimeout(splashFallback));
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key.toLowerCase() === 'i' && input.control && input.shift) {
@@ -618,7 +930,39 @@ async function createWindow() {
       event.preventDefault();
     }
   });
+
+  // The page itself failed to load — in packaged builds that is a blank
+  // window with no way forward. Sub-frame failures are not fatal, skip them.
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+    if (!isMainFrame) return;
+    telemetry.event('renderer_load_failed', {
+      kind: telemetry.KIND.CRASH,
+      severity: telemetry.SEVERITY.FATAL,
+      message: `renderer failed to load (error ${errorCode})`,
+      context: { error_code: errorCode, is_dev: isDev }
+    });
+  });
+
+  // Main-thread hangs. Paired with 'responsive' so the event carries how long
+  // the freeze actually lasted instead of just "it happened".
+  let unresponsiveSince = 0;
+  mainWindow.webContents.on('unresponsive', () => {
+    unresponsiveSince = Date.now();
+  });
+  mainWindow.webContents.on('responsive', () => {
+    if (!unresponsiveSince) return;
+    const msUnresponsive = Date.now() - unresponsiveSince;
+    unresponsiveSince = 0;
+    telemetry.event('renderer_unresponsive', {
+      kind: telemetry.KIND.DEGRADED,
+      severity: telemetry.SEVERITY.WARNING,
+      message: `renderer main thread froze for ${Math.round(msUnresponsive / 1000)}s`,
+      context: { ms_unresponsive: msUnresponsive }
+    });
+  });
+
   mainWindow.webContents.on('did-finish-load', () => {
+    rendererDidFinishLoad = true;
     // Trace marker: splits the window-created -> renderer-running "dark gap"
     // into page-load (Chromium + module serving) vs renderer boot.
     if (global.__perf?.now && global.__perf?.fsSpan) {
@@ -697,17 +1041,22 @@ app.whenReady().then(async () => {
     return;
   }
 
+  appIsReady = true;
+
   registerCliplibProtocol();
 
   createSplashWindow();
 
+  telemetry.metric('startup.module_load_ms', Date.now() - moduleLoadStartedAt, { unit: 'ms' });
   if (benchmarkHarness) {
     benchmarkHarness.endStartup('moduleLoad');
     benchmarkHarness.recordAppReady();
     benchmarkHarness.markStartup('windowCreation');
   }
 
+  const windowCreateStartedAt = Date.now();
   const win = await createWindow();
+  telemetry.metric('startup.window_create_ms', Date.now() - windowCreateStartedAt, { unit: 'ms' });
 
   if (benchmarkHarness) benchmarkHarness.endStartup('windowCreation');
 
@@ -780,9 +1129,19 @@ app.whenReady().then(async () => {
       .run()
       .catch((error) => logger.warn(`Storage maintenance failed: ${error.message}`));
   }, 10_000);
+}).catch((error) => {
+  // Boot never got past window creation: there is no UI to show an error in,
+  // so this was previously an unhandled rejection and nothing else.
+  telemetry.event('boot_window_create_failed', {
+    kind: telemetry.KIND.CRASH,
+    severity: telemetry.SEVERITY.FATAL,
+    error
+  });
+  logger.error('Startup failed before the window was ready:', error);
 });
 
 app.on("window-all-closed", () => {
+  telemetry.sessionEnd('window_all_closed');
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -951,19 +1310,49 @@ ipcMain.handle("get-preview-start-time", async (event, clipName) => {
 // (the player used to fire ~9 read-only IPCs per open across several waves,
 // each paying queueing latency on a busy main process).
 ipcMain.handle("get-clip-open-state", async (event, clipName) => {
-  const swallow = (promise, fallback) => promise.catch(() => fallback);
+  const startedAt = Date.now();
+  // Each fallback below is indistinguishable from a real value once it reaches
+  // the player: no trim, no tags, default volume. The slot name turns "the clip
+  // opened wrong" into "these two reads failed" without naming the clip.
+  const missing = [];
+  const swallow = (slot, promise, fallback) => {
+    const slotStartedAt = Date.now();
+    const timeSlot = () => {
+      telemetry.metric('clip_open_slot_ms', Date.now() - slotStartedAt, { unit: 'ms', dims: { slot } });
+    };
+    return promise.then(
+      (value) => {
+        timeSlot();
+        return value;
+      },
+      () => {
+        timeSlot();
+        missing.push(slot);
+        return fallback;
+      }
+    );
+  };
   const [clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences] =
     await Promise.all([
-      swallow(ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule), null),
-      swallow(metadataModule.getTrimData(clipName, getSettings), null),
-      swallow(metadataModule.getClipTags(clipName, getSettings), []),
-      swallow(thumbnailsModule.getThumbnailPath(clipName, getSettings), null),
-      swallow(metadataModule.getVolume(clipName, getSettings), 1),
-      swallow(metadataModule.getSpeed(clipName, getSettings), 1),
-      swallow(metadataModule.getVolumeRange(clipName, getSettings), null),
-      swallow(metadataModule.getTrackState(clipName, getSettings), null),
-      swallow(metadataModule.getTrackPreferences(app.getPath.bind(app)), null),
+      swallow('clip_info', ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule), null),
+      swallow('trim', metadataModule.getTrimData(clipName, getSettings), null),
+      swallow('tags', metadataModule.getClipTags(clipName, getSettings), []),
+      swallow('thumbnail', thumbnailsModule.getThumbnailPath(clipName, getSettings), null),
+      swallow('volume', metadataModule.getVolume(clipName, getSettings), 1),
+      swallow('speed', metadataModule.getSpeed(clipName, getSettings), 1),
+      swallow('volume_range', metadataModule.getVolumeRange(clipName, getSettings), null),
+      swallow('track_state', metadataModule.getTrackState(clipName, getSettings), null),
+      swallow('track_prefs', metadataModule.getTrackPreferences(app.getPath.bind(app)), null),
     ]);
+  const totalMs = Date.now() - startedAt;
+  telemetry.metric('clip_open_ms', totalMs, { unit: 'ms' });
+  if (missing.length > 0) {
+    telemetry.event('clip_open_partial', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { missing, total_ms: totalMs }
+    });
+  }
   return { clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences };
 });
 
@@ -1139,6 +1528,8 @@ ipcMain.handle("get-thumbnail-paths-batch", async (event, clipNames) => {
 });
 
 app.on('before-quit', () => {
+  telemetry.sessionEnd('quit');
+
   // Stop periodic saves
   clipsModule.stopPeriodicSave();
 
@@ -1158,6 +1549,9 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
   try {
     const updated = await updateSettings(newSettings);
     settings = updated; // Update main process settings cache
+    // The opt-out has to bite immediately, not on the next launch.
+    telemetry.setEnabled(newSettings.telemetry?.enabled !== false);
+    reportAppInfo();
     return updated;
   } catch (error) {
     logger.error('Error in save-settings handler:', error);

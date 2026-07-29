@@ -31,7 +31,22 @@ import {
   type GridDirection,
 } from "../library/gridNavigation";
 import ShareModal from "./ShareModal";
+import { fingerprint, reportEvent } from "../telemetry";
 import "./player.css";
+
+// The legacy player's four alert() paths are the loudest "something broke"
+// moments the app has. The message itself carries clip names and ffmpeg error
+// text, so only the code ships; anything unrecognised (the trim-reset success
+// notice) is not an error and is not reported.
+const ALERT_CODES: Array<[string, string]> = [
+  ["Failed to export clip", "export_failed"],
+  ["Error opening clip", "open_failed"],
+  ["Error saving trim", "trim_save_failed"],
+  ["Error resetting trim times", "trim_reset_failed"],
+];
+
+const alertCodeFor = (message: string): string | null =>
+  ALERT_CODES.find(([prefix]) => message.startsWith(prefix))?.[1] ?? null;
 
 interface VideoPlayerProps {
   clipLocation: string;
@@ -267,7 +282,21 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       // close/edit; the module gates on the enableDiscordRPC setting itself.
       updateDiscordPresenceForClip: (clip: { originalName: string; customName: string; tags?: string[] }, isPlaying: boolean) =>
         updateDiscordPresenceForClip(clip, isPlaying),
-      showCustomAlert: (msg: unknown) => window.alert(String(msg)),
+      showCustomAlert: (msg: unknown) => {
+        const text = String(msg);
+        const alertCode = alertCodeFor(text);
+        if (alertCode) {
+          reportEvent("legacy_alert_shown", {
+            kind: "error",
+            severity: "error",
+            surface: "player",
+            // Per-path fingerprint, so one noisy alert can't hide the others.
+            fingerprint: fingerprint(`legacy_alert_shown:${alertCode}`),
+            context: { alert_code: alertCode },
+          });
+        }
+        return window.alert(text);
+      },
       showCustomConfirm: (msg: unknown) => window.confirm(String(msg)),
       isBenchmarkMode: false,
       updateDiscordPresence: (details: string, state?: string | null) =>
@@ -335,6 +364,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       });
     } catch (err) {
       console.error("[VideoPlayer] legacy init failed:", err);
+      // The player stays permanently broken after this; console-only was the
+      // whole reason it never showed up in the field.
+      reportEvent("player_init_failed", { kind: "crash", severity: "error", surface: "player", error: err });
     }
 
     // Start hidden; legacy openClip() reveals it.
