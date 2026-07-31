@@ -48,6 +48,17 @@ const RECONNECT_BACKOFF: Duration = Duration::from_secs(3);
 /// Refresh the access token this long before it expires, so a poll never
 /// races an expiry.
 const REFRESH_SLACK: Duration = Duration::from_secs(6 * 3600);
+/// Backoff bounds for retrying a transient token-endpoint failure without
+/// tearing down the (still healthy) RPC session.
+const REFRESH_RETRY_MIN: Duration = Duration::from_secs(60);
+const REFRESH_RETRY_MAX: Duration = Duration::from_secs(30 * 60);
+/// "Abnormal amount of consent popups": this many AUTHORIZE prompts inside
+/// the window means something is wrong (dying tokens, decline loop) and the
+/// overlay may hint that the settings toggle stops the popups.
+const PROMPT_STORM_THRESHOLD: usize = 3;
+const PROMPT_STORM_WINDOW_SECS: i64 = 48 * 3600;
+/// Don't repeat the hint more often than this.
+const PROMPT_HINT_COOLDOWN_SECS: i64 = 7 * 24 * 3600;
 
 // ---------- public types --------------------------------------------------
 
@@ -114,6 +125,7 @@ pub struct DiscordHandle {
     roster: Arc<Mutex<Option<CallRoster>>>,
     status: Arc<Mutex<DiscordStatus>>,
     cmd_tx: Sender<Command>,
+    config_dir: PathBuf,
 }
 
 impl DiscordHandle {
@@ -140,6 +152,33 @@ impl DiscordHandle {
     pub fn shutdown(&self) {
         let _ = self.cmd_tx.send(Command::Shutdown);
     }
+
+    /// True when an abnormal number of consent popups fired recently and
+    /// the "you can turn this off in settings" hint hasn't been shown for a
+    /// while. The app polls this and shows the overlay hint.
+    pub fn prompt_hint_due(&self) -> bool {
+        let log = oauth::PromptLog::load(&self.config_dir);
+        let now = oauth::now_unix();
+        let recent = log
+            .prompt_times
+            .iter()
+            .filter(|t| now - **t <= PROMPT_STORM_WINDOW_SECS)
+            .count();
+        if recent < PROMPT_STORM_THRESHOLD {
+            return false;
+        }
+        match log.hint_shown_at {
+            Some(t) if now - t < PROMPT_HINT_COOLDOWN_SECS => false,
+            _ => true,
+        }
+    }
+
+    /// Persist that the popup-storm hint was shown, starting its cooldown.
+    pub fn mark_prompt_hint_shown(&self) {
+        let mut log = oauth::PromptLog::load(&self.config_dir);
+        log.hint_shown_at = Some(oauth::now_unix());
+        let _ = log.save(&self.config_dir);
+    }
 }
 
 /// Spawn the background manager. Always returns a usable handle; if no
@@ -164,16 +203,18 @@ pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
             roster,
             status,
             cmd_tx,
+            config_dir,
         };
     };
 
     let mgr = Manager {
-        config_dir,
+        config_dir: config_dir.clone(),
         client_secret: secret,
         roster: Arc::clone(&roster),
         status: Arc::clone(&status),
         cmd_rx,
         nonce: AtomicU64::new(0),
+        auto_authorize,
         want_authorize: AtomicBool::new(auto_authorize),
         reset: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
@@ -187,6 +228,7 @@ pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
         roster,
         status,
         cmd_tx,
+        config_dir,
     }
 }
 
@@ -224,6 +266,9 @@ struct Manager {
     status: Arc<Mutex<DiscordStatus>>,
     cmd_rx: Receiver<Command>,
     nonce: AtomicU64,
+    /// Config's `discord.enabled` at spawn time: whether an unauthenticated
+    /// state may prompt on its own (also re-armed when a token dies).
+    auto_authorize: bool,
     want_authorize: AtomicBool,
     reset: AtomicBool,
     shutdown: AtomicBool,
@@ -315,22 +360,41 @@ impl Manager {
     /// disconnect/reset is requested, or the manager shuts down.
     fn serve(&self, conn: &Connection, mut expires_at: Instant) -> anyhow::Result<()> {
         let mut next_poll = Instant::now();
+        // Transient token-endpoint failures back off on their own schedule
+        // instead of tearing down a healthy pipe — the current access token
+        // stays valid for up to REFRESH_SLACK anyway.
+        let mut next_refresh_attempt = Instant::now();
+        let mut refresh_backoff = REFRESH_RETRY_MIN;
         loop {
             self.drain_commands();
             if self.stopped() || self.reset.swap(false, Ordering::Relaxed) {
                 return Ok(());
             }
 
-            if Instant::now() + REFRESH_SLACK >= expires_at {
+            if Instant::now() + REFRESH_SLACK >= expires_at && Instant::now() >= next_refresh_attempt {
                 match self.reauth(conn) {
-                    Ok(exp) => expires_at = exp,
+                    Ok(exp) => {
+                        expires_at = exp;
+                        refresh_backoff = REFRESH_RETRY_MIN;
+                    }
                     Err(TokenError::InvalidGrant) => {
-                        // Token dead — drop to needs-auth by ending the
-                        // session; the next loop finds no token and idles.
+                        // Token dead — end the session. With auto-authorize
+                        // on, re-arm the prompt so the next loop asks again
+                        // instead of silently going dark.
                         TokenStore::clear(&self.config_dir);
+                        self.rearm_auto_authorize();
                         return Ok(());
                     }
-                    Err(TokenError::Transient(e)) => return Err(e),
+                    Err(TokenError::Transient(e)) => {
+                        if Instant::now() >= expires_at {
+                            // Actually expired and unrefreshable — the
+                            // session can't continue.
+                            return Err(e);
+                        }
+                        warn!("discord: token refresh failed ({e:#}) — retrying in {refresh_backoff:?}");
+                        next_refresh_attempt = Instant::now() + refresh_backoff;
+                        refresh_backoff = (refresh_backoff * 2).min(REFRESH_RETRY_MAX);
+                    }
                 }
             }
 
@@ -374,24 +438,76 @@ impl Manager {
         }
     }
 
-    /// Refresh the stored token and AUTHENTICATE. On invalid-grant, clears
-    /// the token and errors so `run` falls back to needs-authorization.
+    /// AUTHENTICATE using stored credentials. Prefers the cached access
+    /// token — a reconnect (Discord restart, pipe drop, PC reboot) then
+    /// never touches the token endpoint, so the refresh token isn't rotated
+    /// and can't be stranded by a crash mid-rotation. Falls back to a
+    /// refresh when the cached token is missing, near expiry, or rejected.
+    /// On invalid-grant (both refresh tokens dead), clears the store,
+    /// re-arms the auto prompt, and errors so `run` re-asks.
     fn auth_with_token(&self, conn: &Connection) -> anyhow::Result<Instant> {
-        let rt = TokenStore::load(&self.config_dir)
-            .refresh_token
-            .ok_or_else(|| anyhow::anyhow!("no refresh token"))?;
-        info!("discord: refreshing stored token");
-        match oauth::refresh(CLIENT_ID, &self.client_secret, &rt) {
-            Ok(tok) => {
-                self.persist_refresh(&tok);
-                self.finish_auth(conn, &tok)
+        let store = TokenStore::load(&self.config_dir);
+        if let (Some(at), Some(exp)) = (store.access_token.clone(), store.expires_at) {
+            let remaining = exp - oauth::now_unix();
+            if remaining > REFRESH_SLACK.as_secs() as i64 {
+                match self.authenticate(conn, &at) {
+                    Ok(data) => {
+                        self.mark_connected(&data, "cached");
+                        return Ok(Instant::now() + Duration::from_secs(remaining as u64));
+                    }
+                    // Rejected by Discord (revoked server-side while still
+                    // unexpired) — fall through to a real refresh.
+                    Err(ReqError::Rpc(d)) => {
+                        warn!("discord: cached access token rejected ({d}) — refreshing")
+                    }
+                    Err(ReqError::Closed) => anyhow::bail!("pipe closed during AUTHENTICATE"),
+                    Err(ReqError::Timeout) => anyhow::bail!("AUTHENTICATE timed out"),
+                }
             }
+        }
+        info!("discord: refreshing stored token");
+        match self.refresh_tokens() {
+            Ok(tok) => self.finish_auth(conn, &tok),
             Err(TokenError::InvalidGrant) => {
                 warn!("discord: stored token invalid — re-authorization needed");
                 TokenStore::clear(&self.config_dir);
+                self.rearm_auto_authorize();
                 anyhow::bail!("stored token invalid")
             }
             Err(TokenError::Transient(e)) => Err(e),
+        }
+    }
+
+    /// Refresh with rotation-loss protection: try the current refresh
+    /// token, and on invalid-grant fall back once to the previous one
+    /// (Discord keeps it valid until its successor is used, so this
+    /// recovers a rotation whose response never reached disk). The new
+    /// pair is persisted BEFORE the tokens are used for anything.
+    fn refresh_tokens(&self) -> Result<TokenResponse, TokenError> {
+        let store = TokenStore::load(&self.config_dir);
+        let Some(rt) = store.refresh_token.clone() else {
+            return Err(TokenError::InvalidGrant);
+        };
+        match oauth::refresh(CLIENT_ID, &self.client_secret, &rt) {
+            Ok(tok) => {
+                self.commit_tokens(Some(&rt), &tok);
+                Ok(tok)
+            }
+            Err(TokenError::InvalidGrant) => {
+                let Some(prev) = store.prev_refresh_token.clone() else {
+                    return Err(TokenError::InvalidGrant);
+                };
+                warn!("discord: refresh token rejected — retrying with the previous one");
+                match oauth::refresh(CLIENT_ID, &self.client_secret, &prev) {
+                    Ok(tok) => {
+                        self.commit_tokens(Some(&prev), &tok);
+                        info!("discord: previous refresh token rescued the grant");
+                        Ok(tok)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -400,11 +516,14 @@ impl Manager {
     /// promptly after the handshake — that's the whole fix.
     fn authorize_and_auth(&self, conn: &Connection) -> anyhow::Result<Instant> {
         info!("discord: sending AUTHORIZE — approve the popup in Discord");
+        // Log the popup so the app can spot an abnormal prompt rate and
+        // hint at the settings toggle.
+        oauth::PromptLog::record(&self.config_dir);
         let code = self.authorize(conn)?;
         info!("discord: authorization code received — exchanging for token");
         match oauth::exchange_code(CLIENT_ID, &self.client_secret, &code, REDIRECT_URI) {
             Ok(tok) => {
-                self.persist_refresh(&tok);
+                self.commit_tokens(None, &tok);
                 self.finish_auth(conn, &tok)
             }
             Err(e) => {
@@ -417,35 +536,42 @@ impl Manager {
         }
     }
 
-    /// `AUTHENTICATE` with an access token, set Connected status, and return
-    /// the token's expiry instant.
-    fn finish_auth(&self, conn: &Connection, tok: &TokenResponse) -> anyhow::Result<Instant> {
-        let data = match self.request(
+    /// Raw `AUTHENTICATE` round-trip with an access token.
+    fn authenticate(&self, conn: &Connection, access_token: &str) -> Result<Value, ReqError> {
+        self.request(
             conn,
             "AUTHENTICATE",
-            json!({ "access_token": tok.access_token }),
+            json!({ "access_token": access_token }),
             Duration::from_secs(10),
-        ) {
+        )
+    }
+
+    /// Set Connected status from an AUTHENTICATE response.
+    fn mark_connected(&self, data: &Value, scope: &str) {
+        let user = data
+            .get("user")
+            .map(user_tag)
+            .unwrap_or_else(|| "unknown".to_string());
+        info!(%user, %scope, "discord: authenticated");
+        self.set_status(DiscordStatus::Connected { user });
+    }
+
+    /// `AUTHENTICATE` with a fresh token pair, set Connected status, and
+    /// return the token's expiry instant.
+    fn finish_auth(&self, conn: &Connection, tok: &TokenResponse) -> anyhow::Result<Instant> {
+        let data = match self.authenticate(conn, &tok.access_token) {
             Ok(d) => d,
             Err(ReqError::Closed) => anyhow::bail!("pipe closed during AUTHENTICATE"),
             Err(ReqError::Timeout) => anyhow::bail!("AUTHENTICATE timed out"),
             Err(ReqError::Rpc(d)) => anyhow::bail!("AUTHENTICATE rejected: {d}"),
         };
-        let user = data
-            .get("user")
-            .map(user_tag)
-            .unwrap_or_else(|| "unknown".to_string());
-        info!(%user, scope = %tok.scope, "discord: authenticated");
-        self.set_status(DiscordStatus::Connected { user });
+        self.mark_connected(&data, &tok.scope);
         Ok(Instant::now() + Duration::from_secs(tok.expires_in.max(60) as u64))
     }
 
     /// Refresh + re-authenticate mid-session to extend the connection.
     fn reauth(&self, conn: &Connection) -> Result<Instant, TokenError> {
-        let store = TokenStore::load(&self.config_dir);
-        let rt = store.refresh_token.ok_or(TokenError::InvalidGrant)?;
-        let tok = oauth::refresh(CLIENT_ID, &self.client_secret, &rt)?;
-        self.persist_refresh(&tok);
+        let tok = self.refresh_tokens()?;
         self.finish_auth(conn, &tok)
             .map_err(TokenError::Transient)
     }
@@ -546,14 +672,32 @@ impl Manager {
 
     // ----- small helpers --------------------------------------------------
 
-    fn persist_refresh(&self, tok: &TokenResponse) {
-        if let Some(rt) = &tok.refresh_token {
-            let store = TokenStore {
-                refresh_token: Some(rt.clone()),
-            };
-            if let Err(e) = store.save(&self.config_dir) {
-                warn!("discord: failed to persist refresh token: {e:#}");
-            }
+    /// Persist a token response atomically, BEFORE the tokens are used for
+    /// anything. `used_refresh` is the refresh token that produced this
+    /// response (None for a fresh code exchange); it's kept as the fallback
+    /// slot since Discord honors it until its successor is used.
+    fn commit_tokens(&self, used_refresh: Option<&str>, tok: &TokenResponse) {
+        let store = TokenStore {
+            refresh_token: tok
+                .refresh_token
+                .clone()
+                .or_else(|| used_refresh.map(str::to_string)),
+            access_token: Some(tok.access_token.clone()),
+            expires_at: Some(oauth::now_unix() + tok.expires_in.max(60)),
+            prev_refresh_token: used_refresh.map(str::to_string),
+        };
+        if let Err(e) = store.save(&self.config_dir) {
+            warn!("discord: failed to persist tokens: {e:#}");
+        }
+    }
+
+    /// A previously working grant died. When the feature is enabled, arm
+    /// the prompt again so the next loop asks the user — same behavior as
+    /// an unauthenticated start. The prompt log keeps a runaway loop
+    /// visible (the app shows the settings-toggle hint).
+    fn rearm_auto_authorize(&self) {
+        if self.auto_authorize {
+            self.want_authorize.store(true, Ordering::Relaxed);
         }
     }
 

@@ -4,12 +4,15 @@
 //! commands (reading the voice channel) we additionally need an access
 //! token whose scopes include `rpc` + `rpc.voice.read`. That token is
 //! obtained once via the `AUTHORIZE` popup (a `code` we exchange here for a
-//! token), then refreshed silently forever. Only the refresh token is
-//! persisted — access tokens are short-lived (7 days) and always
-//! re-minted at startup.
+//! token), then refreshed silently forever. The whole token pair is
+//! persisted: the access token (valid ~7 days) so reconnects can
+//! AUTHENTICATE without touching the token endpoint at all, and the
+//! refresh token plus its predecessor so a rotation lost mid-flight
+//! (crash, dropped response) can be recovered instead of stranding the
+//! install in re-authorization.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -38,12 +41,31 @@ pub struct TokenResponse {
     pub scope: String,
 }
 
-/// Persisted between runs. Only the refresh token needs to survive — it's
-/// the one durable credential; everything else is derived from it at
-/// startup.
+/// Wall-clock now as unix seconds. Instants don't survive restarts, so
+/// everything persisted uses this.
+pub fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Persisted between runs. The access token + expiry let a reconnect (or a
+/// PC restart) AUTHENTICATE without hitting the token endpoint, so the
+/// refresh token is only rotated near expiry. `prev_refresh_token` is the
+/// last refresh token that was used successfully — Discord keeps it valid
+/// until its successor is used, so it recovers a rotation whose response
+/// never made it to disk.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TokenStore {
     pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    /// Unix-seconds expiry of `access_token`.
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub prev_refresh_token: Option<String>,
 }
 
 impl TokenStore {
@@ -70,6 +92,51 @@ impl TokenStore {
 
     pub fn clear(config_dir: &Path) {
         let _ = std::fs::remove_file(Self::path(config_dir));
+    }
+}
+
+/// Rolling log of consent-popup (AUTHORIZE) firings, plus when the "you
+/// can turn this off" overlay hint was last shown. Kept in its own file so
+/// hint bookkeeping (written from the app's UI side) can never race a
+/// token-rotation write to the token store.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PromptLog {
+    /// Unix-seconds timestamps of consent popups, pruned to the last week.
+    #[serde(default)]
+    pub prompt_times: Vec<i64>,
+    #[serde(default)]
+    pub hint_shown_at: Option<i64>,
+}
+
+impl PromptLog {
+    fn path(config_dir: &Path) -> PathBuf {
+        config_dir.join("discord_prompts.json")
+    }
+
+    pub fn load(config_dir: &Path) -> Self {
+        match std::fs::read_to_string(Self::path(config_dir)) {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
+    pub fn save(&self, config_dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(config_dir).ok();
+        let body = serde_json::to_string_pretty(self)?;
+        let path = Self::path(config_dir);
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, body).with_context(|| format!("write {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("rename into {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Record one consent popup, pruning entries older than a week.
+    pub fn record(config_dir: &Path) {
+        let mut log = Self::load(config_dir);
+        let now = now_unix();
+        log.prompt_times.retain(|t| now - *t <= 7 * 24 * 3600);
+        log.prompt_times.push(now);
+        let _ = log.save(config_dir);
     }
 }
 
@@ -132,12 +199,17 @@ fn post_token(form: &[(&str, &str)]) -> Result<TokenResponse, TokenError> {
         Ok(r) => r
             .into_json::<TokenResponse>()
             .map_err(|e| TokenError::Transient(anyhow!("parse token response: {e}"))),
-        // 4xx: read the body to classify. `invalid_grant` is the one we
-        // must treat as "re-authorize"; other 400s are also unrecoverable
-        // as-is but re-auth is the safe recovery for all of them.
+        // Only a 400 whose JSON error field is exactly `invalid_grant`
+        // means the grant is dead. Anything else — invalid_client (build
+        // problem), 429 (rate limit), 5xx, or an error message that merely
+        // mentions the string — must NOT be treated as "re-authorize":
+        // clearing the store for those throws away a working grant.
         Err(ureq::Error::Status(code, r)) => {
             let body = r.into_string().unwrap_or_default();
-            if body.contains("invalid_grant") {
+            let error_code = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string));
+            if code == 400 && error_code.as_deref() == Some("invalid_grant") {
                 Err(TokenError::InvalidGrant)
             } else {
                 Err(TokenError::Transient(anyhow!(
