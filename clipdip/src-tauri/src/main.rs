@@ -178,6 +178,14 @@ struct AppState {
     /// True while a silent hotkey-triggered install is running — blocks
     /// double-triggers and Escape-dismiss mid-install.
     update_installing: Arc<std::sync::atomic::AtomicBool>,
+    /// Stash for the current rich hint card, same mount-race pattern as
+    /// the other pendings. Also the "is a hint on screen" source for the
+    /// rename-hotkey dismiss gate.
+    pending_hint: Arc<Mutex<Option<HintPayload>>>,
+    /// True while a hint card is on screen. Gates the rename hotkey's
+    /// dismiss behavior, exactly like `update_toast_active` gates the
+    /// update toast's.
+    hint_active: Arc<std::sync::atomic::AtomicBool>,
     /// Stash for transient notice toasts ("Recording started"), same
     /// late-mount race as the two fields above.
     pending_notice: Arc<Mutex<Option<NoticePayload>>>,
@@ -254,6 +262,29 @@ struct ClipSavingPayload {
 #[derive(Clone, Serialize)]
 struct NoticePayload {
     message: String,
+    corner: String,
+    /// Auto-dismiss override in milliseconds; 0 keeps the overlay's
+    /// default short duration.
+    duration_ms: u32,
+}
+
+/// Rich hint card ("psst, something is worth knowing"). The overlay owns
+/// the look: `kind` picks a predefined accent + white filled icon
+/// ("info" | "tip" | "education" | "warning" | "success" | "discord",
+/// unknown kinds fall back to "info"). Shown via [`show_hint`], never
+/// directly.
+#[derive(Clone, Serialize)]
+struct HintPayload {
+    kind: String,
+    /// One line, ~40 chars max.
+    title: String,
+    /// Optional body line. Tiny markup: `**text**` renders an accent
+    /// span, `[[Ctrl+F10]]` renders hotkey chips. Empty = title only.
+    sub: String,
+    /// Auto-dismiss in ms; 0 = overlay default (8 s), floored at 5 s.
+    duration_ms: u32,
+    /// The rename hotkey, rendered as the card's dismiss chips.
+    dismiss_hotkey: String,
     corner: String,
 }
 
@@ -448,8 +479,12 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
         *state.pending_saved.lock().unwrap() = None;
         *state.pending_notice.lock().unwrap() = None;
         *state.pending_update.lock().unwrap() = None;
+        *state.pending_hint.lock().unwrap() = None;
         state
             .update_toast_active
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        state
+            .hint_active
             .store(false, std::sync::atomic::Ordering::SeqCst);
         *state.active_clip.lock().unwrap() = None;
     }
@@ -469,7 +504,8 @@ fn tear_down_overlay(app: &AppHandle, err: String) {
 struct NotificationRecord {
     /// Unix epoch milliseconds when the notification was shown.
     at_ms: u64,
-    /// `"health"`, `"clip"`, `"recording"`, `"notice"`, or `"error"`.
+    /// `"health"`, `"clip"`, `"recording"`, `"notice"`, `"hint"`, or
+    /// `"error"`.
     kind: String,
     title: String,
     #[serde(default)]
@@ -748,8 +784,12 @@ fn dismiss_notification(app: AppHandle, state: State<'_, AppState>) -> Result<()
     *state.pending_saved.lock().unwrap() = None;
     *state.pending_notice.lock().unwrap() = None;
     *state.pending_update.lock().unwrap() = None;
+    *state.pending_hint.lock().unwrap() = None;
     state
         .update_toast_active
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .hint_active
         .store(false, std::sync::atomic::Ordering::SeqCst);
     // While a manual recording runs, the overlay window stays alive to
     // keep the red recording dot on screen — the card has already slid
@@ -776,6 +816,7 @@ struct PendingState {
     saved: Option<ClipSavedPayload>,
     notice: Option<NoticePayload>,
     update: Option<UpdatePayload>,
+    hint: Option<HintPayload>,
     recording: bool,
 }
 
@@ -796,6 +837,7 @@ fn overlay_get_pending(state: State<'_, AppState>) -> PendingState {
         saved: state.pending_saved.lock().unwrap().clone(),
         notice: state.pending_notice.lock().unwrap().clone(),
         update: state.pending_update.lock().unwrap().clone(),
+        hint: state.pending_hint.lock().unwrap().clone(),
         recording: *state.recording_active.lock().unwrap(),
     }
 }
@@ -868,6 +910,7 @@ async fn test_overlay(
             let notice = NoticePayload {
                 message: "Recording started".into(),
                 corner: corner.clone(),
+                duration_ms: 0,
             };
             *state.pending_notice.lock().unwrap() = Some(notice.clone());
             *state.pending_saving.lock().unwrap() = None;
@@ -875,6 +918,22 @@ async fn test_overlay(
             if let Some(overlay) = ensure_overlay_window(&app, &corner) {
                 let _ = overlay.emit("overlay-notice", notice);
             }
+        }
+        // "hint" previews the discord kind; "hint:<kind>" (e.g.
+        // "hint:warning") previews any other.
+        s if s == "hint" || s.starts_with("hint:") => {
+            let kind = s.strip_prefix("hint:").unwrap_or("discord");
+            *state.pending_saving.lock().unwrap() = None;
+            *state.pending_saved.lock().unwrap() = None;
+            *state.pending_notice.lock().unwrap() = None;
+            show_hint(
+                &app,
+                kind,
+                "Discord keeps asking to connect",
+                "Turn off **voice capture** in settings to stop it",
+                "Preview hint (test_overlay).",
+                10_000,
+            );
         }
         "update" | "updated" => {
             let payload = UpdatePayload {
@@ -1608,6 +1667,7 @@ fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
     let notice = NoticePayload {
         message: title.to_string(),
         corner: corner.to_string(),
+        duration_ms: 0,
     };
     if let Some(state) = app.try_state::<AppState>() {
         *state.pending_notice.lock().unwrap() = Some(notice.clone());
@@ -1615,6 +1675,108 @@ fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
     if let Some(overlay) = ensure_overlay_window(app, corner) {
         let _ = overlay.emit("overlay-notice", notice);
     }
+}
+
+/// Show a rich hint card on the in-game overlay, plus a native toast and
+/// a notification-history entry (Focus Assist eats toasts during
+/// fullscreen play; history is the durable trail for both). This is THE
+/// reusable entry point for hints — pick a `kind` (accent + white icon,
+/// see [`HintPayload`]), a title, an optional `sub` markup line for the
+/// card, a fuller `toast_body` for the native toast, and a duration.
+///
+/// Hints never interrupt: while a save flow, notice, or update toast is
+/// on screen the card is skipped this run (the toast still goes out) and
+/// the function returns false — hint triggers are recurring by contract,
+/// so a skipped card comes back on its own. The rename hotkey dismisses
+/// the card (gated in `LoopEvent::Rename` via `hint_active`).
+fn show_hint(
+    app: &AppHandle,
+    kind: &str,
+    title: &str,
+    sub: &str,
+    toast_body: &str,
+    duration_ms: u32,
+) -> bool {
+    use std::sync::atomic::Ordering;
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return false;
+    };
+    let Ok(cfg) = clipdip_core::config::Config::load_or_default(&state.config_path) else {
+        return false;
+    };
+    let busy = state.pending_saving.lock().unwrap().is_some()
+        || state.pending_saved.lock().unwrap().is_some()
+        || state.pending_notice.lock().unwrap().is_some()
+        || state.update_toast_active.load(Ordering::SeqCst);
+    if busy {
+        info!("hint '{kind}' skipped — another overlay card is on screen");
+        return false;
+    }
+
+    // Toast + history only when the hint is actually delivered, so a
+    // caller retrying after a skip can't spam the action center.
+    record_notification("hint", title, toast_body);
+    notify_native(app, title, toast_body);
+    if !cfg.notifications.enabled {
+        // Overlay cards are opted out — the toast + history entry above
+        // still count as delivered.
+        return true;
+    }
+
+    let corner = corner_slug(&cfg.notifications.corner);
+    let payload = HintPayload {
+        kind: kind.to_string(),
+        title: title.to_string(),
+        sub: sub.to_string(),
+        duration_ms,
+        dismiss_hotkey: cfg.hotkey.rename_clip.clone(),
+        corner: corner.clone(),
+    };
+    *state.pending_hint.lock().unwrap() = Some(payload.clone());
+    state.hint_active.store(true, Ordering::SeqCst);
+    if let Some(overlay) = ensure_overlay_window(app, &corner) {
+        let _ = overlay.emit("overlay-hint", payload);
+    }
+    true
+}
+
+/// Watch for Discord consent-popup storms. The RPC manager re-prompts on
+/// its own while the feature is enabled but unauthenticated; normally that
+/// is one popup ever. When tokens keep dying (or the user keeps declining)
+/// the prompts repeat — after an abnormal number in a short window, show a
+/// one-off hint that the settings toggle stops them. The threshold and
+/// cooldown live in the discord crate next to the prompt log.
+fn spawn_discord_prompt_watch(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(120));
+        let Some(state) = app.try_state::<AppState>() else {
+            continue;
+        };
+        if !state.discord.prompt_hint_due() {
+            continue;
+        }
+        let Ok(cfg) = clipdip_core::config::Config::load_or_default(&state.config_path) else {
+            continue;
+        };
+        // Toggle already off means no more popups — nothing to hint at.
+        if !cfg.discord.enabled {
+            continue;
+        }
+        let shown = show_hint(
+            &app,
+            "discord",
+            "Discord keeps asking to connect",
+            "Turn off **voice capture** in settings to stop it",
+            "You can turn off voice call capture in settings if you don't want these popups.",
+            10_000,
+        );
+        // Start the cooldown only once the card actually made it on
+        // screen; a skip (another card was up) retries next tick.
+        if shown {
+            state.discord.mark_prompt_hint_shown();
+        }
+    });
 }
 
 /// Background watchdog that turns silent capture degradation into an instant,
@@ -2146,6 +2308,7 @@ fn run_capture_loop(
                                     let notice = NoticePayload {
                                         message: "Recording started".into(),
                                         corner: corner.clone(),
+                                        duration_ms: 0,
                                     };
                                     if let Some(state) = app.try_state::<AppState>() {
                                         *state.pending_notice.lock().unwrap() =
@@ -2518,12 +2681,18 @@ fn run_capture_loop(
                     }
                 } else if let Some(state) = app.try_state::<AppState>() {
                     // No clip on screen — the rename hotkey doubles as
-                    // "update now" while the update toast is showing.
+                    // "update now" while the update toast is showing, and
+                    // as "dismiss" while a hint card is showing.
                     use std::sync::atomic::Ordering;
                     let no_save_toast = state.pending_saving.lock().unwrap().is_none()
                         && state.pending_saved.lock().unwrap().is_none();
                     if no_save_toast && state.update_toast_active.load(Ordering::SeqCst) {
                         start_silent_update(app.clone());
+                    } else if no_save_toast && state.hint_active.swap(false, Ordering::SeqCst) {
+                        *state.pending_hint.lock().unwrap() = None;
+                        if let Some(overlay) = app.get_webview_window("overlay") {
+                            let _ = overlay.emit("hint-dismiss", ());
+                        }
                     }
                 }
             }
@@ -3294,6 +3463,8 @@ fn main() {
             pending_saving: Arc::new(Mutex::new(None)),
             pending_saved: Arc::new(Mutex::new(None)),
             pending_notice: Arc::new(Mutex::new(None)),
+            pending_hint: Arc::new(Mutex::new(None)),
+            hint_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending_update: Arc::new(Mutex::new(None)),
             update_toast_shown: Arc::new(Mutex::new(None)),
             update_toast_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3369,6 +3540,10 @@ fn main() {
 
             // Poll GitHub Releases for updates every 30 seconds.
             spawn_update_checker(app.handle().clone());
+
+            // Hint at the settings toggle if Discord consent popups are
+            // firing abnormally often.
+            spawn_discord_prompt_watch(app.handle().clone());
 
             // A silent hotkey update leaves a marker with the target
             // version — if we're now running that version, the update

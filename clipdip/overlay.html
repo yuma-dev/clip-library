@@ -473,6 +473,101 @@
       text-shadow: 0 0 0.6vh rgba(244, 63, 94, 0.6);
     }
 
+    /* --- Rich hint cards ---------------------------------------
+       A fourth card family (sibling of save / notice / update):
+       predefined kinds, each bundling an accent + a built-in white
+       filled icon. Same shell and two-row height as the save card.
+       Kind accents drive comet, glow, drain, and .em highlights
+       via three custom properties. */
+    .card.hint.info     { --acc: #f59e0b; --acc-soft: rgba(245,158,11,0.14); --acc-bright: #fef3c7; }
+    .card.hint.tip      { --acc: #38bdf8; --acc-soft: rgba(56,189,248,0.14); --acc-bright: #e0f2fe; }
+    .card.hint.education{ --acc: #8b5cf6; --acc-soft: rgba(139,92,246,0.14); --acc-bright: #f3e8ff; }
+    .card.hint.warning  { --acc: #f43f5e; --acc-soft: rgba(244,63,94,0.14);  --acc-bright: #ffe4e6; }
+    .card.hint.success  { --acc: #34d399; --acc-soft: rgba(52,211,153,0.14); --acc-bright: #d1fae5; }
+    .card.hint.discord  { --acc: #5865F2; --acc-soft: rgba(88,101,242,0.16); --acc-bright: #e0e3ff; }
+    /* No logo column — the icon lives inline in the title row, so
+       the left padding matches the right. */
+    .card.hint { padding-left: 1.8vh; }
+    .card.hint .logo-wrap { display: none; }
+    /* Hint comet: same construction, slower lap (a hint idles, it
+       doesn't work), accent-tinted via color-mix. */
+    .card.hint::before {
+      opacity: 1;
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, var(--acc-soft) 75%,
+        color-mix(in srgb, var(--acc) 55%, transparent) 90%,
+        var(--acc-bright) 98%, transparent 100%);
+      animation: spinang 3.2s linear infinite;
+    }
+    .card.hint .glowwrap { opacity: 0.6; }
+    .card.hint .glowwrap i {
+      background: conic-gradient(from var(--ang, 0deg),
+        transparent 0% 62%, color-mix(in srgb, var(--acc) 25%, transparent) 78%,
+        color-mix(in srgb, var(--acc) 60%, transparent) 90%,
+        color-mix(in srgb, var(--acc-bright) 90%, transparent) 98%, transparent 100%);
+      animation: spinang 3.2s linear infinite;
+    }
+    .card.hint {
+      box-shadow:
+        0 18px 40px -16px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(255, 255, 255, 0.05),
+        0 0 2.8vh -0.6vh color-mix(in srgb, var(--acc) 30%, transparent);
+    }
+    .card.hint .drain i {
+      background: linear-gradient(90deg, var(--acc), var(--acc-bright));
+    }
+    /* Built-in icon: always white, always filled, no glow. The tiny
+       top nudge optically centers the glyph against the title's cap
+       height (flex centers against the full font box, which sits
+       the icon a hair too high). */
+    .hint-icon {
+      display: none;
+      width: 1.55vh; height: 1.55vh;
+      flex-shrink: 0;
+      align-items: center; justify-content: center;
+      margin-top: 0.18vh;
+    }
+    .hint-icon svg { width: 100%; height: 100%; display: block; }
+    .hint-icon svg path { fill: #fff; }
+    .card.hint .hint-icon { display: inline-flex; }
+    /* Sub row: body line with inline .kbd chips and .em accent
+       spans, then the dimmer dismiss tail. */
+    .hint-sub {
+      display: none;
+      font: 500 1.25vh/1 inherit;
+      color: rgba(255, 255, 255, 0.5);
+      align-items: center;
+      gap: 0.4vh;
+      white-space: nowrap;
+      height: 1.7vh;
+      pointer-events: none;
+    }
+    .card.hint .hint-sub { display: flex; }
+    .hint-sub .em {
+      color: var(--acc-bright);
+      text-shadow: 0 0 0.6vh color-mix(in srgb, var(--acc) 60%, transparent);
+      font-weight: 600;
+    }
+    .hint-dismiss {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35vh;
+      margin-left: 0.5vh;
+      color: rgba(255, 255, 255, 0.3);
+    }
+    .hint-dismiss::before {
+      content: "·";
+      margin-right: 0.45vh;
+      color: rgba(255, 255, 255, 0.22);
+    }
+    .hint-dismiss .kbd {
+      height: 1.5vh; min-width: 1.7vh;
+      font-size: 1.05vh;
+      color: rgba(255,255,255,0.5);
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.08);
+    }
+
     /* Visibility per phase. Each phase reveals exactly one of:
        title alone (saving), hint OR input (saved, depending on
        focus), or rename-display (renamed). */
@@ -494,6 +589,11 @@
     .card.update   .rename-display,
     .card.update   .hint-row       { display: none; }
     .card.update   .update-sub     { display: flex; }
+    /* Hint phase: icon + title + sub, no rename machinery. */
+    .card.hint     .hint,
+    .card.hint     .rename-input,
+    .card.hint     .rename-display,
+    .card.hint     .hint-row       { display: none; }
     /* Installed confirmation is title-only. */
     .card.update.installed  .update-sub { display: none; }
     .card.focused  .hint           { display: none; }
@@ -513,6 +613,7 @@
       </div>
       <div class="body">
         <div class="title-row">
+          <span class="hint-icon" id="hint-icon"></span>
           <span class="title" id="title">Saving clip…</span>
         </div>
         <div class="hint-row" id="hint-row">
@@ -543,6 +644,7 @@
           <div class="underline"></div>
         </div>
         <div class="update-sub" id="update-sub"></div>
+        <div class="hint-sub" id="hint-sub"></div>
       </div>
       <span class="ember e1"></span>
       <span class="ember e2"></span>
@@ -567,6 +669,79 @@
           document.getElementById("anchor").className = "anchor " + c;
         }
       } catch (_) { /* ignored */ }
+
+      // --- Rich hint building blocks ------------------------------------
+      // Predefined kinds: accent (CSS class, see .card.hint.*) + built-in
+      // white filled icon, inlined so the overlay stays zero-network.
+      // Semantic set from Material Icons (filled, Apache 2.0); brand
+      // marks from Simple Icons (CC0). Unknown kind falls back to "info"
+      // so an older overlay never renders a broken card. Defined up here
+      // (before the Tauri check) so the demo mode below can reuse them.
+      const HINT_ICONS = {
+        info: '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>',
+        tip: '<svg viewBox="0 0 24 24"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></svg>',
+        education: '<svg viewBox="0 0 24 24"><path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3 1 9l11 6 9-4.91V17h2V9L12 3z"/></svg>',
+        warning: '<svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>',
+        success: '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>',
+        discord: '<svg viewBox="0 0 127 96"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg>',
+      };
+      const HINT_KIND_CLASSES = Object.keys(HINT_ICONS);
+      const HINT_DEFAULT_MS = 8000;
+      const HINT_MIN_MS = 5000;
+
+      // Append hotkey chips ("Ctrl+F10" → [Ctrl] + [F10]) to a node.
+      const appendChips = (parent, hotkey) => {
+        String(hotkey).split("+").forEach((key, i) => {
+          if (i > 0) {
+            const plus = document.createElement("span");
+            plus.style.opacity = ".5";
+            plus.textContent = "+";
+            parent.appendChild(plus);
+          }
+          const kbd = document.createElement("span");
+          kbd.className = "kbd";
+          kbd.textContent = key.trim();
+          parent.appendChild(kbd);
+        });
+      };
+      // Render the sub line's tiny markup: **text** → accent .em span,
+      // [[Ctrl+F10]] → kbd chips. Everything else is plain text (built
+      // with text nodes — payload content never touches innerHTML).
+      const renderHintSub = (parent, markup) => {
+        const parts = String(markup).split(/(\*\*[^*]+\*\*|\[\[[^\]]+\]\])/);
+        for (const part of parts) {
+          if (!part) continue;
+          if (part.startsWith("**") && part.endsWith("**")) {
+            const em = document.createElement("span");
+            em.className = "em";
+            em.textContent = part.slice(2, -2);
+            parent.appendChild(em);
+          } else if (part.startsWith("[[") && part.endsWith("]]")) {
+            appendChips(parent, part.slice(2, -2));
+          } else {
+            parent.appendChild(document.createTextNode(part));
+          }
+        }
+      };
+      // Fill the hint DOM (icon, title, sub + dismiss tail) and return
+      // the resolved kind. Shared by the live path and the demo mode.
+      const renderHint = (p) => {
+        const kind = HINT_ICONS[p.kind] ? p.kind : "info";
+        document.getElementById("hint-icon").innerHTML = HINT_ICONS[kind];
+        const sub = document.getElementById("hint-sub");
+        sub.replaceChildren();
+        if (p.sub) renderHintSub(sub, p.sub);
+        if (p.dismiss_hotkey) {
+          const tail = document.createElement("span");
+          tail.className = "hint-dismiss";
+          appendChips(tail, p.dismiss_hotkey);
+          const word = document.createElement("span");
+          word.textContent = "dismiss";
+          tail.appendChild(word);
+          sub.appendChild(tail);
+        }
+        return kind;
+      };
 
       const T = window.__TAURI_INTERNALS__;
       if (!T) {
@@ -600,6 +775,24 @@
           } else if (demo === "updating") {
             mk(sub, "Downloading v1.0.1, ClipDip restarts itself");
           }
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => card.classList.add("entered")));
+        }
+        // overlay.html?demo=hint (discord kind) or ?demo=hint:<kind>
+        // (e.g. hint:warning) previews the rich hint card.
+        if (demo === "hint" || (demo && demo.startsWith("hint:"))) {
+          const card = document.getElementById("card");
+          card.classList.remove("saving");
+          const kind = renderHint({
+            kind: demo.startsWith("hint:") ? demo.slice(5) : "discord",
+            sub: "Turn off **voice capture** in settings to stop it",
+            dismiss_hotkey: "Ctrl+F10",
+          });
+          card.classList.add("hint", kind);
+          document.getElementById("title").textContent = "Discord keeps asking to connect";
+          const drain = document.getElementById("drain");
+          drain.style.setProperty("--drain-ms", "10000ms");
+          drain.classList.add("on");
           requestAnimationFrame(() =>
             requestAnimationFrame(() => card.classList.add("entered")));
         }
@@ -689,6 +882,8 @@
         phase: "saving",          // "saving" | "saved" | "renamed" | "notice" | "update"
         kind: "clip",             // "clip" | "recording" — words the titles
         noticeMessage: "",
+        noticeDurationMs: 0,      // 0 = default short notice duration
+        hint: null,               // active HintPayload (phase "hint")
         path: null,
         autoDismissSecs: 0,
         corner: "bottom_right",
@@ -781,24 +976,42 @@
         }
       };
 
+      // --- Rich hints ---------------------------------------------------
+      // (Icon map + sub-markup helpers live near the top of the script
+      // so the no-Tauri demo mode can use them too.)
+      const showHint = (p) => {
+        clearSavingTimeout();
+        cancelDeferredSaved();
+        setFocused(false);
+        setCorner(p.corner);
+        state.hint = p;
+        const kind = renderHint(p);
+        setPhase("hint");
+        card.classList.add(kind);
+        showCard();
+        scheduleDismiss();
+      };
+
       const setPhase = (p) => {
         state.phase = p;
         if (p === "saving") savingShownAt = performance.now();
         // Effect classes from a previous phase must not leak into the
         // next one (e.g. a new clip-saving while the flash is mid-burn).
         card.classList.remove("saving", "saved", "renamed", "notice", "update",
-          "installing", "installed", "flash", "glow", "saved-pop");
+          "installing", "installed", "flash", "glow", "saved-pop", "hint",
+          ...HINT_KIND_CLASSES);
         sheen.classList.remove("on");
         clearDrain();
         card.classList.add(p);
         const rec = state.kind === "recording";
         titleEl.textContent =
           p === "notice"  ? state.noticeMessage :
+          p === "hint"    ? (state.hint && state.hint.title) || "" :
           p === "update"  ? "New version ready" :
           p === "saving"  ? (rec ? "Saving recording…" : "Saving clip…") :
           p === "renamed" ? "Renamed!" :
                             (rec ? "Recording saved" : "Clip saved");
-        if (p === "update") swapTitle();
+        if (p === "update" || p === "hint") swapTitle();
         if (p === "saved") {
           // The payoff: comet does two fast laps and burns out, glow
           // flash, sheen sweep, squash-pop, sparkles off the logo.
@@ -936,7 +1149,17 @@
           dismissTimer = setTimeout(dismiss, state.autoDismissSecs * 1000);
           armDrain(state.autoDismissSecs * 1000);
         } else if (state.phase === "notice") {
-          dismissTimer = setTimeout(dismiss, 2500);
+          // Longer notices override the default.
+          const ms = state.noticeDurationMs > 0 ? state.noticeDurationMs : 2500;
+          dismissTimer = setTimeout(dismiss, ms);
+          if (state.noticeDurationMs > 0) armDrain(ms);
+        } else if (state.phase === "hint") {
+          // Hints always announce their own lifetime via the drain bar,
+          // and always have more words than a notice — floor at 5s.
+          const ms = Math.max(HINT_MIN_MS,
+            (state.hint && state.hint.duration_ms) || HINT_DEFAULT_MS);
+          dismissTimer = setTimeout(dismiss, ms);
+          armDrain(ms);
         } else if (state.phase === "update") {
           if (state.updateMode === "available") {
             // Long enough to read and reach the hotkey mid-game; Escape
@@ -1010,6 +1233,7 @@
             // mounted — show it and auto-dismiss.
             setCorner(p.notice.corner);
             state.noticeMessage = p.notice.message || "";
+            state.noticeDurationMs = p.notice.duration_ms || 0;
             setPhase("notice");
             scheduleDismiss();
           }
@@ -1017,6 +1241,11 @@
             // The update toast fired before we mounted (the common case —
             // the checker creates this very window, then emits).
             showUpdate(p.update);
+          }
+          if (p.hint && !saving && !saved && !p.notice && !p.update) {
+            // A hint fired before we mounted (the common case — show_hint
+            // creates this very window, then emits).
+            showHint(p.hint);
           }
           setRecording(p.recording);
         })
@@ -1061,9 +1290,17 @@
         setFocused(false);
         setCorner(p.corner);
         state.noticeMessage = p.message || "";
+        state.noticeDurationMs = p.duration_ms || 0;
         setPhase("notice");
         showCard();
         scheduleDismiss();
+      });
+
+      listen("overlay-hint", (ev) => showHint(ev.payload || {}));
+      // The rename hotkey doubles as hint-dismiss while a hint is up;
+      // the backend gates that and just tells us to slide out.
+      listen("hint-dismiss", () => {
+        if (state.phase === "hint") dismiss();
       });
 
       listen("update-available", (ev) => {

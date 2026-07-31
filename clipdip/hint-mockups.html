@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ClipDip — Rich Hint Design</title>
+<style>
+  /* ============================================================
+     MOCKUP PAGE CHROME (not part of the design)
+     ============================================================ */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #0b0b0e;
+    color: #e7e7ea;
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 4vh 5vw 8vh;
+  }
+  h1 { font: 700 3vh/1.2 inherit; letter-spacing: -0.01em; margin: 0 0 0.6vh; }
+  h1 small { font: 500 1.6vh/1 inherit; color: rgba(255,255,255,0.4); display: block; margin-top: 0.8vh; }
+  h2 { font: 700 2vh/1.2 inherit; margin: 6vh 0 1.4vh; color: rgba(255,255,255,0.92); }
+  p.note { font: 400 1.5vh/1.55 inherit; color: rgba(255,255,255,0.55); max-width: 78ch; margin: 0.4vh 0 2vh; }
+  .stage {
+    position: relative;
+    border-radius: 1.2vh;
+    padding: 5vh 4vh;
+    margin: 1.5vh 0 1vh;
+    background:
+      radial-gradient(120% 140% at 20% 0%, rgba(88, 68, 140, 0.25), transparent 55%),
+      radial-gradient(100% 120% at 85% 100%, rgba(140, 45, 70, 0.18), transparent 60%),
+      linear-gradient(180deg, #17171c, #101014);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 4vh;
+  }
+  .spec {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2vh;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .spec { grid-template-columns: 1fr; } }
+  pre {
+    margin: 0;
+    padding: 1.6vh 1.8vh;
+    border-radius: 0.9vh;
+    background: #131317;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+    color: #c9c9d4;
+    font: 400 1.35vh/1.6 "Cascadia Mono", "Consolas", ui-monospace, monospace;
+    overflow-x: auto;
+  }
+  pre .k { color: #c084fc; }
+  pre .s { color: #fbbf24; }
+  pre .c { color: rgba(255,255,255,0.35); }
+  table { border-collapse: collapse; font: 400 1.45vh/1.5 inherit; width: 100%; max-width: 900px; }
+  th, td { text-align: left; padding: 0.9vh 1.6vh; border-bottom: 1px solid rgba(255,255,255,0.07); vertical-align: top; }
+  th { color: rgba(255,255,255,0.45); font-weight: 600; font-size: 1.3vh; text-transform: uppercase; letter-spacing: 0.06em; }
+  td:first-child { white-space: nowrap; font-family: "Cascadia Mono", "Consolas", ui-monospace, monospace; color: #c084fc; font-size: 1.35vh; }
+  .label {
+    font: 600 1.3vh/1 inherit;
+    color: rgba(255,255,255,0.45);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 1.2vh;
+  }
+  .variant { display: flex; flex-direction: column; }
+
+  /* ============================================================
+     THE DESIGN — everything below mirrors overlay.html verbatim
+     where it can, and defines the new .card.hint pieces.
+     ============================================================ */
+  @property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  @keyframes spinang { to { --ang: 360deg; } }
+
+  .card {
+    display: inline-flex;
+    align-items: center;
+    gap: 1.4vh;
+    padding: 1.1vh 1.8vh;
+    border-radius: 0.85vh;
+    background: rgb(28, 28, 32);
+    box-shadow:
+      0 18px 40px -16px rgba(0, 0, 0, 0.7),
+      0 0 0 1px rgba(255, 255, 255, 0.05);
+    user-select: none;
+    position: relative;
+    color: #fff;
+  }
+
+  /* --- Predefined hint kinds ---------------------------------
+     A kind = accent colors + a built-in white icon. The backend
+     sends only `kind: "warning"`; the overlay owns the look.
+     Accent drives comet, glow, drain, .em spans, icon glow.
+       --acc        main accent
+       --acc-soft   translucent comet-tail start
+       --acc-bright comet head / highlight text                  */
+  .card.hint.info     { --acc: #f59e0b; --acc-soft: rgba(245,158,11,0.14); --acc-bright: #fef3c7; }
+  .card.hint.tip      { --acc: #38bdf8; --acc-soft: rgba(56,189,248,0.14); --acc-bright: #e0f2fe; }
+  .card.hint.education{ --acc: #8b5cf6; --acc-soft: rgba(139,92,246,0.14); --acc-bright: #f3e8ff; }
+  .card.hint.warning  { --acc: #f43f5e; --acc-soft: rgba(244,63,94,0.14);  --acc-bright: #ffe4e6; }
+  .card.hint.success  { --acc: #34d399; --acc-soft: rgba(52,211,153,0.14); --acc-bright: #d1fae5; }
+  .card.hint.discord  { --acc: #5865F2; --acc-soft: rgba(88,101,242,0.16); --acc-bright: #e0e3ff; }
+
+  /* Hint comet: same construction as the save/notice/update comets,
+     but slower (3.2s) — a hint idles, it doesn't work. */
+  .card.hint::before {
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: 0.85vh;
+    padding: 1.2px;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 62%, var(--acc-soft) 75%,
+      color-mix(in srgb, var(--acc) 55%, transparent) 90%,
+      var(--acc-bright) 98%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 1;
+    animation: spinang 3.2s linear infinite;
+    pointer-events: none;
+  }
+  .glowwrap {
+    position: absolute; inset: -2.3vh;
+    filter: blur(1.4vh);
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: -1;
+  }
+  .glowwrap i {
+    position: absolute; inset: 1.7vh;
+    border-radius: 1.4vh;
+    padding: 0.95vh;
+    background: conic-gradient(from var(--ang, 0deg),
+      transparent 0% 62%, color-mix(in srgb, var(--acc) 25%, transparent) 78%,
+      color-mix(in srgb, var(--acc) 60%, transparent) 90%,
+      color-mix(in srgb, var(--acc-bright) 90%, transparent) 98%, transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: spinang 3.2s linear infinite;
+  }
+  .card.hint {
+    box-shadow:
+      0 18px 40px -16px rgba(0, 0, 0, 0.7),
+      0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 0 2.8vh -0.6vh color-mix(in srgb, var(--acc) 30%, transparent);
+  }
+
+  /* --- Text stack --------------------------------------------
+     Two rows, exactly like the clip-saved card:
+       title row — built-in white icon (1.55vh) + title (700 1.85vh)
+       sub row   — body text (500 1.25vh @ 50%) with inline .kbd
+                   chips and .em accent spans, then a dimmer
+                   "· [Ctrl][F10] dismiss" tail                  */
+  .body { display: flex; flex-direction: column; gap: 0.4vh; min-width: 17vh; }
+  .title-row { display: flex; align-items: center; gap: 0.7vh; }
+  /* Icons are ALWAYS white, ALWAYS filled, no glow. Semantic set
+     from Material Icons (filled style); brand marks (Discord)
+     from Simple Icons. Everything normalizes to a white fill.
+     The tiny top nudge optically centers the glyph against the
+     title's cap height (flex centers against the full font box,
+     which sits the icon a hair too high). */
+  .icon {
+    width: 1.55vh; height: 1.55vh;
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 0.18vh;
+  }
+  .icon svg { width: 100%; height: 100%; display: block; }
+  .icon svg path { fill: #fff; }
+  .title {
+    font: 700 1.85vh/1 inherit;
+    color: rgba(255, 255, 255, 0.96);
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+  }
+  .sub {
+    font: 500 1.25vh/1 inherit;
+    color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 0.4vh;
+    white-space: nowrap;
+    height: 1.7vh;
+  }
+  .sub .em {
+    color: var(--acc-bright);
+    text-shadow: 0 0 0.6vh color-mix(in srgb, var(--acc) 60%, transparent);
+    font-weight: 600;
+  }
+  /* Dismiss tail: rides at the end of the sub row, one notch
+     dimmer, separated by a middot — no third row, no extra
+     height over the clip-saved card. */
+  .dismiss {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35vh;
+    margin-left: 0.5vh;
+    color: rgba(255, 255, 255, 0.3);
+  }
+  .dismiss::before {
+    content: "·";
+    margin-right: 0.45vh;
+    color: rgba(255, 255, 255, 0.22);
+  }
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.85vh;
+    height: 1.65vh;
+    padding: 0 0.4vh;
+    border-radius: 0.35vh;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font: 500 1.2vh/1 "Cascadia Mono", "Consolas", "Segoe UI Mono", ui-monospace, monospace;
+  }
+  .dismiss .kbd {
+    height: 1.5vh; min-width: 1.7vh;
+    font-size: 1.05vh;
+    color: rgba(255,255,255,0.5);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  /* Drain bar: identical to the clip card's, tinted by accent.
+     Always on for hints — the card announces its own lifetime. */
+  .drain {
+    position: absolute; left: 0.95vh; right: 0.95vh; bottom: 0.3vh;
+    height: 0.22vh; border-radius: 0.2vh;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .drain i {
+    position: absolute; inset: 0;
+    border-radius: 0.2vh;
+    transform-origin: left;
+    background: linear-gradient(90deg, var(--acc), var(--acc-bright));
+    animation: draink var(--drain-ms, 10000ms) linear infinite;
+  }
+  @keyframes draink { to { transform: scaleX(0); } }
+</style>
+</head>
+<body>
+
+<h1>Rich hint cards
+  <small>A fourth overlay card family — sibling of the clip-saved, notice, and update toasts. Same shell, same two-row height, predefined kinds with built-in white icons.</small>
+</h1>
+
+<p class="note">
+Everything is the clip-saved card's shell: same background, radius, shadow, entrance
+(luxein slide + settle), comet border with blurred glow twin, and bottom drain bar.
+A hint is picked by <strong>kind</strong> — each kind bundles an accent and a built-in
+<strong>white filled icon</strong> (Material Icons filled style, inlined so the overlay stays
+zero-network at cold start; brand marks like Discord's come from Simple Icons). The backend never chooses colors or art,
+it just says <code>kind: "warning"</code>.
+</p>
+
+<h2>1 — The six predefined kinds</h2>
+<p class="note">Icons are always white and unglowed; the accent only drives the card's comet, drain, and highlight colors.</p>
+<div class="stage">
+
+  <div class="variant">
+    <div class="label">kind: discord (brand) · 10s</div>
+    <div class="card hint discord">
+      <div class="glowwrap"><i></i></div>
+      <div class="body">
+        <div class="title-row">
+          <span class="icon"><svg class="brand" viewBox="0 0 127 96" xmlns="http://www.w3.org/2000/svg"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg></span>
+          <span class="title">Discord keeps asking to connect</span>
+        </div>
+        <div class="sub">Turn off <span class="em">voice capture</span> in settings
+          <span class="dismiss"><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span>dismiss</span></span>
+        </div>
+      </div>
+      <div class="drain" style="--drain-ms: 10000ms"><i></i></div>
+    </div>
+  </div>
+
+  <div class="variant">
+    <div class="label">kind: warning · material warning</div>
+    <div class="card hint warning">
+      <div class="glowwrap"><i></i></div>
+      <div class="body">
+        <div class="title-row">
+          <span class="icon"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg></span>
+          <span class="title">Mic track is silent</span>
+        </div>
+        <div class="sub">Check <span class="em">input device</span> in audio settings
+          <span class="dismiss"><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span>dismiss</span></span>
+        </div>
+      </div>
+      <div class="drain" style="--drain-ms: 8000ms"><i></i></div>
+    </div>
+  </div>
+
+  <div class="variant">
+    <div class="label">kind: info · material info</div>
+    <div class="card hint info">
+      <div class="glowwrap"><i></i></div>
+      <div class="body">
+        <div class="title-row">
+          <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></span>
+          <span class="title">Clips folder is getting full</span>
+        </div>
+        <div class="sub"><span class="em">142 GB</span> used · oldest clips are 8 months old
+          <span class="dismiss"><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span>dismiss</span></span>
+        </div>
+      </div>
+      <div class="drain" style="--drain-ms: 8000ms"><i></i></div>
+    </div>
+  </div>
+
+  <div class="variant">
+    <div class="label">kind: tip · material lightbulb</div>
+    <div class="card hint tip">
+      <div class="glowwrap"><i></i></div>
+      <div class="body">
+        <div class="title-row">
+          <span class="icon"><svg viewBox="0 0 24 24"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></svg></span>
+          <span class="title">You can rename clips in-game</span>
+        </div>
+        <div class="sub">Hit <span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span> right after a save
+          <span class="dismiss"><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span>dismiss</span></span>
+        </div>
+      </div>
+      <div class="drain" style="--drain-ms: 8000ms"><i></i></div>
+    </div>
+  </div>
+
+  <div class="variant">
+    <div class="label">kind: education · material school</div>
+    <div class="card hint education">
+      <div class="glowwrap"><i></i></div>
+      <div class="body">
+        <div class="title-row">
+          <span class="icon"><svg viewBox="0 0 24 24"><path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3 1 9l11 6 9-4.91V17h2V9L12 3z"/></svg></span>
+          <span class="title">Replay buffer explained</span>
+        </div>
+        <div class="sub">ClipDip always records the last <span class="em">60 s</span> and saving keeps it
+          <span class="dismiss"><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span>dismiss</span></span>
+        </div>
+      </div>
+      <div class="drain" style="--drain-ms: 8000ms"><i></i></div>
+    </div>
+  </div>
+
+  <div class="variant">
+    <div class="label">kind: success · material check-circle</div>
+    <div class="card hint success">
+      <div class="glowwrap"><i></i></div>
+      <div class="body">
+        <div class="title-row">
+          <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg></span>
+          <span class="title">Discord connected</span>
+        </div>
+        <div class="sub">Call rosters are now saved with every clip
+          <span class="dismiss"><span class="kbd">Ctrl</span><span style="opacity:.5">+</span><span class="kbd">F10</span><span>dismiss</span></span>
+        </div>
+      </div>
+      <div class="drain" style="--drain-ms: 6000ms"><i></i></div>
+    </div>
+  </div>
+
+</div>
+
+<h2>2 — Kind reference</h2>
+<table>
+  <tr><th>kind</th><th>accent</th><th>icon (always white)</th><th>use for</th></tr>
+  <tr><td>info</td><td>amber #f59e0b</td><td>material <code>info</code></td><td>Neutral state worth knowing: storage filling up, settings drift</td></tr>
+  <tr><td>tip</td><td>sky #38bdf8</td><td>material <code>lightbulb</code></td><td>Feature discovery, "did you know", hotkey reminders</td></tr>
+  <tr><td>education</td><td>violet #8b5cf6</td><td>material <code>school</code></td><td>Onboarding follow-ups, explaining how a system works</td></tr>
+  <tr><td>warning</td><td>rose #f43f5e</td><td>material <code>warning</code></td><td>Something degraded but not broken: silent mic, missing device</td></tr>
+  <tr><td>success</td><td>emerald #34d399</td><td>material <code>check_circle</code></td><td>A background thing completed / recovered: integration connected</td></tr>
+  <tr><td>discord</td><td>blurple #5865F2</td><td>Simple Icons <code>discord</code></td><td>Anything about the Discord integration (popup storm, not running)</td></tr>
+</table>
+<p class="note">Icon sources: <strong>Material Icons</strong> filled style (Apache 2.0) for the semantic set, <strong>Simple Icons</strong> (CC0) for brand marks. Both are inlined as raw SVG paths in overlay.html: no font, no CDN, no network at cold start. Every path normalizes to <code>fill: #fff</code>, one rule covers the whole set. Adding a kind = 1 accent line + 1 inlined icon + 1 table row here.</p>
+
+<h2>3 — Payload schema</h2>
+<div class="spec">
+<pre>
+<span class="c">// Rust — src-tauri, sibling of NoticePayload/UpdatePayload</span>
+<span class="k">struct</span> HintPayload {
+    kind: String,           <span class="c">// "info" | "tip" | "education" |</span>
+                            <span class="c">// "warning" | "success" | "discord"</span>
+                            <span class="c">// picks accent + icon, overlay-owned</span>
+    title: String,          <span class="c">// required, one line, ~40 chars max</span>
+    sub: Option&lt;String&gt;,    <span class="c">// body line; [[Ctrl+F10]] renders kbd</span>
+                            <span class="c">// chips, **text** renders an .em span</span>
+    duration_ms: u32,       <span class="c">// 0 = default 8000</span>
+    dismiss_hotkey: String, <span class="c">// cfg.hotkey.rename_clip, e.g. "Ctrl+F10"</span>
+    corner: String,         <span class="c">// same corner slug as every toast</span>
+    id: String,             <span class="c">// stable id ("discord_popups") so a</span>
+                            <span class="c">// hint never double-stacks + history</span>
+}
+</pre>
+<pre>
+<span class="c">// Example — the Discord popup hint:</span>
+{
+  <span class="s">"kind"</span>: <span class="s">"discord"</span>,
+  <span class="s">"title"</span>: <span class="s">"Discord keeps asking to connect"</span>,
+  <span class="s">"sub"</span>: <span class="s">"Turn off **voice capture** in settings"</span>,
+  <span class="s">"duration_ms"</span>: 10000,
+  <span class="s">"dismiss_hotkey"</span>: <span class="s">"Ctrl+F10"</span>,
+  <span class="s">"corner"</span>: <span class="s">"bottom_right"</span>,
+  <span class="s">"id"</span>: <span class="s">"discord_popups"</span>
+}
+
+<span class="c">// Unknown kind → falls back to "info" so an</span>
+<span class="c">// older overlay never renders a broken card.</span>
+</pre>
+</div>
+
+<h2>4 — Behavior spec</h2>
+<table>
+  <tr><th>aspect</th><th>behavior</th></tr>
+  <tr><td>height</td><td>Never taller than the clip-saved card: title row + sub row, same paddings, same gaps. The dismiss tail lives inside the sub row.</td></tr>
+  <tr><td>entrance/exit</td><td>Reuses luxein / luxeout exactly — hints are corner-anchored like every other card.</td></tr>
+  <tr><td>comet</td><td>Always on, 3.2s lap (slower than saving's 1.4s: a hint idles, it doesn't work). Glow twin synced, opacity 0.6.</td></tr>
+  <tr><td>drain bar</td><td>Always armed with the hint's full duration — the card announces its own lifetime, accent-tinted.</td></tr>
+  <tr><td>dismiss</td><td>The <strong>rename hotkey</strong> dismisses (the one chord users already know from the save card, and it's global — reachable in fullscreen games where Escape belongs to the game). Escape also works when the overlay has focus. Backend gates the hotkey exactly like update_toast_active: it acts as dismiss only while a hint is on screen, otherwise it renames as usual.</td></tr>
+  <tr><td>duration</td><td>Default 8s; payload can override (Discord hint uses 10s). Never shorter than 5s — a hint always has more words than "Recording started".</td></tr>
+  <tr><td>priority</td><td>Hints never interrupt: a save flow, recording notice, or update toast on screen defers the hint (pending slot, shown when the card frees up, same pattern as pending_notice). A newer hint replaces an older one.</td></tr>
+  <tr><td>history</td><td>Every hint lands in notification history as kind "hint" with title + sub, so Focus-Assist casualties can be read later.</td></tr>
+  <tr><td>frequency</td><td>Hints are rare by contract: each id has its own trigger + cooldown persisted backend-side (the Discord hint: 3 popups / 48h, 7-day cooldown).</td></tr>
+</table>
+
+<h2>5 — Card anatomy</h2>
+<pre>
+ ┌────────────────────────────────────────────────────────┐ ← comet border + blurred glow twin (accent)
+ │  ⌾ Title, 700 1.85vh, white 96%                        │   icon: 1.55vh, ALWAYS white, no glow
+ │  Sub 1.25vh 50% with [kbd] + .em · [Ctrl][F10] dismiss │   dismiss tail: 30% white, inside the sub row
+ │ ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂ ← drain bar, accent     │
+ └────────────────────────────────────────────────────────┘
+   shell = clip-saved card: rgb(28,28,32), 0.85vh radius,
+   same shadow stack, luxein/luxeout, corner anchor
+   kind = accent + icon, defined once in overlay.html
+</pre>
+
+</body>
+</html>
