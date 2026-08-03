@@ -2065,8 +2065,23 @@ async function exportClipFromContextMenu(clip) {
 }
 
 /**
+ * Close the half-open player and tell the user the file itself is the problem.
+ * Used when the clip probe came back empty: the old path let the open run on
+ * and surfaced a null-property error the user could do nothing with.
+ */
+function abortOpenUnreadable(originalName, customName) {
+  elements.playerOverlay.style.display = "none";
+  elements.fullscreenPlayer.style.display = "none";
+  document.body.classList.remove('player-open');
+  if (window.uiBlur) window.uiBlur.disable();
+  if (callbacks.isBenchmarkMode || !callbacks.showCustomAlert) return;
+  const name = customName || originalName;
+  callbacks.showCustomAlert(`Error opening clip: "${name}" could not be read, it may be corrupted or still recording.`);
+}
+
+/**
  * Open a clip for playback
- * 
+ *
  * @param {string} originalName - The original name of the clip
  * @param {string} customName - The custom name of the clip
  */
@@ -2229,10 +2244,21 @@ async function openClip(originalName, customName) {
       mark('fetchedClipData');
     } catch (error) {
       logger.error(`[${originalName}] Error loading clip data:`, error);
+      abortOpenUnreadable(originalName, customName);
       return;
     }
   }
   mark('getClipData');
+
+  // The cached (hover-preloaded) path can carry a null clipInfo too: main
+  // swallows a failed probe and returns null rather than rejecting. Without
+  // this the open ran on and blew up later with a "cannot read properties of
+  // null" alert, which told the user nothing.
+  if (!clipInfo || !clipInfo.format) {
+    logger.error(`[${originalName}] No clip info available, aborting open`);
+    abortOpenUnreadable(originalName, customName);
+    return;
+  }
 
   // Multi-track clips: kick off track extraction NOW so the one-time ffmpeg
   // stream-copy (~200-350ms on first open of a clip) overlaps the video

@@ -46,6 +46,17 @@ const DEFAULT_SETTINGS = {
   iconGreyscale: false,
   // Whether to show new clips indicators (green lines and group styling)
   showNewClipsIndicators: true,
+  // Card hover glow. Mirrors CARD_GLOW_DEFAULTS in
+  // src/renderer/library/glowConfig.ts — the renderer writes this key, so it
+  // has to exist here too (unknown keys are preserved now, but a known key
+  // also gets type validation and shows up in a fresh settings.json).
+  cardGlow: {
+    enabled: true,
+    opacity: 0.6,
+    blur: 45,
+    saturate: 1.6,
+    brightness: 1.0
+  },
   // Ambient glow settings (YouTube-style background glow behind video player)
   ambientGlow: {
     enabled: true,
@@ -181,9 +192,10 @@ async function loadSettings() {
     // Merge with defaults, but be more careful about what we consider "invalid"
     const mergedSettings = { ...DEFAULT_SETTINGS };
     let needsSave = false;
-    // Keys the user's file carried that do not survive this merge. Names only,
-    // never values: these are our own fixed identifiers.
-    const lostKeys = [];
+    // Keys the user's file carried that were reverted to a default because the
+    // stored value had the wrong type. Names only, never values: these are our
+    // own fixed identifiers.
+    const revertedKeys = [];
 
     // Only override defaults with valid values, and track if we actually need to save
     for (const [key, defaultValue] of Object.entries(DEFAULT_SETTINGS)) {
@@ -201,21 +213,33 @@ async function loadSettings() {
         }
       }
       // If we get here, the setting was invalid or missing
-      if (key in settings) lostKeys.push(key);
+      if (key in settings) revertedKeys.push(key);
       needsSave = true;
     }
 
-    // Keys the user's file has that DEFAULT_SETTINGS doesn't know about are
-    // dropped by the merge without even setting needsSave. cardGlow lives here.
+    // Keys the user's file has that DEFAULT_SETTINGS doesn't know about used to
+    // be dropped here (cardGlow, written by the renderer, reset on every
+    // launch). They are carried through untouched now, so a key the renderer
+    // adds ahead of main can never be lost again. Preserving costs nothing on
+    // disk — the value is already in the file — so needsSave stays as is and
+    // launches don't rewrite settings.json.
     const unknownKeys = Object.keys(settings).filter((key) => !(key in DEFAULT_SETTINGS));
-    if (lostKeys.length || unknownKeys.length) {
+    for (const key of unknownKeys) {
+      mergedSettings[key] = settings[key];
+    }
+    if (unknownKeys.length) {
+      logger.info(`Preserved ${unknownKeys.length} unknown settings key(s): ${unknownKeys.join(', ')}`);
+    }
+
+    if (revertedKeys.length) {
       telemetry.event('settings_keys_reverted', {
         kind: telemetry.KIND.DATA_LOSS,
         severity: telemetry.SEVERITY.WARNING,
         context: {
-          count: lostKeys.length + unknownKeys.length,
-          keys: [...lostKeys, ...unknownKeys],
-          unknown_count: unknownKeys.length
+          count: revertedKeys.length,
+          keys: revertedKeys,
+          // Informational: keys that would have been lost before the fix.
+          preserved_unknown: unknownKeys.length
         },
         coalesceMs: 3600000
       });

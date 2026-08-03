@@ -260,8 +260,14 @@ async function processQueue(getSettings, getTrimData) {
           if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
             thumbnailQueue.push({ clipName, event, attempts: attempts + 1, totalToProcess });
           } else {
-            // Out of retries: the clip is dropped from the queue and the
-            // renderer is never told, so the card shimmers forever.
+            // Out of retries. Tell the renderer so the card gets an explicit
+            // "no thumbnail" state instead of shimmering forever.
+            try {
+              event.sender.send('thumbnail-generation-failed', {
+                clipName,
+                error: error.message
+              });
+            } catch (_) { /* window gone */ }
             telemetry.event('thumbnail_generation_exhausted', {
               kind: telemetry.KIND.SILENT_FAILURE,
               severity: telemetry.SEVERITY.ERROR,
@@ -306,6 +312,8 @@ async function processQueue(getSettings, getTrimData) {
 async function handleInitialThumbnails(clipNames, event, getSettings, getTrimData) {
   const settings = await getSettings();
   const initialClips = clipNames.slice(0, FAST_PATH_THRESHOLD);
+  // Clips the fast path could not probe; the caller retries them on the queue.
+  let droppedClips = [];
 
   // Quick parallel check for existence
   const missingThumbnails = await Promise.all(
@@ -362,14 +370,20 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
     // Filter out failed clips
     const validClipData = clipData.filter(Boolean);
 
-    // A clip that fell out here is never generated and never reported: no
-    // failure event reaches the renderer, the card just stays empty.
-    const droppedCount = clipData.length - validClipData.length;
-    if (droppedCount > 0) {
+    // Clips that fell out here used to be dropped for good: never generated,
+    // never reported, card stays empty. They are handed back to the caller now
+    // and go through the normal queue, which retries and reports.
+    // clipData keeps the order of clipsNeedingGeneration, so the index pairs.
+    droppedClips = clipsNeedingGeneration.filter((_, i) => !clipData[i]);
+    if (droppedClips.length > 0) {
       telemetry.event('thumbnail_fastpath_dropped', {
         kind: telemetry.KIND.SILENT_FAILURE,
         severity: telemetry.SEVERITY.WARNING,
-        context: { count: droppedCount }
+        context: {
+          count: droppedClips.length,
+          // File names only, no paths, capped so the context stays small.
+          clips: droppedClips.slice(0, 10).map((name) => path.basename(name))
+        }
       });
     }
 
@@ -431,7 +445,10 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
 
   return {
     processed: clipsNeedingGeneration.length,
-    processedClips: new Set(clipsNeedingGeneration)
+    // Dropped clips are not "processed" — they must not be filtered out of the
+    // queue pass below.
+    processedClips: new Set(clipsNeedingGeneration.filter((name) => !droppedClips.includes(name))),
+    droppedClips
   };
 }
 
@@ -448,12 +465,15 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
 
   try {
     // Handle initial clips first (silently)
-    const { processed, processedClips } = await handleInitialThumbnails(clipNames, event, getSettings, getTrimData);
+    const { processed, processedClips, droppedClips } = await handleInitialThumbnails(clipNames, event, getSettings, getTrimData);
+    const fastPathDropped = Array.isArray(droppedClips) ? droppedClips : [];
 
     // Process remaining clips if any
     if (clipNames.length > FAST_PATH_THRESHOLD) {
       const remainingClips = clipNames.slice(FAST_PATH_THRESHOLD).filter(clipName => !processedClips.has(clipName));
-      let clipsNeedingGeneration = [];
+      // Fast-path failures go on the queue, which retries and, when it gives
+      // up, tells the renderer instead of leaving an empty card.
+      let clipsNeedingGeneration = [...fastPathDropped];
 
       // Validate remaining clips
       for (const clipName of remainingClips) {
@@ -489,6 +509,18 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
         }
       }
       // Note: No else clause here - we don't send completion for no-op cases
+    } else if (fastPathDropped.length > 0) {
+      // Small library: no queue pass runs below, so start one just for the
+      // clips the fast path could not handle.
+      event.sender.send('thumbnail-validation-start', { total: fastPathDropped.length });
+      thumbnailQueue.push(...fastPathDropped.map(clipName => ({
+        clipName,
+        event,
+        totalToProcess: fastPathDropped.length
+      })));
+      if (!isProcessingQueue) {
+        processQueue(getSettings, getTrimData);
+      }
     } else if (processed > 0) {
       // Only send completion if we actually processed initial clips
       event.sender.send('thumbnail-generation-complete');
