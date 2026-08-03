@@ -113,6 +113,9 @@ pub struct Pipeline {
     ring: Arc<PacketRing>,
     audio_meta: Vec<AudioMeta>,
     audio_handles: Vec<AudioCapture>,
+    /// Pinned audio sources that aren't recording, for the app layer to
+    /// tell the user about. Empty on every run after the first that hit it.
+    audio_notices: Vec<AudioNotice>,
     stop: Arc<AtomicBool>,
     video_thread: Option<JoinHandle<Result<()>>>,
     /// Spawned only when `clipdip_profile::enabled()` was true at `start`.
@@ -213,7 +216,7 @@ impl Pipeline {
         // on a single, gap-free timebase across a stall.
         let media_clock = Arc::new(MediaClock::new());
 
-        let (audio_meta, audio_handles) =
+        let (audio_meta, audio_handles, audio_notices) =
             start_audio(&cfg, Arc::clone(&ring), Arc::clone(&media_clock));
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -252,6 +255,7 @@ impl Pipeline {
             ring,
             audio_meta,
             audio_handles,
+            audio_notices,
             stop,
             video_thread: Some(video_thread),
             reporter_thread,
@@ -281,6 +285,13 @@ impl Pipeline {
 
     pub fn config(&self) -> &Config {
         &self.cfg
+    }
+
+    /// Pinned audio sources that failed to start or no longer exist. The
+    /// app layer turns these into a toast; already deduped to once per
+    /// source kind per process, so a pipeline restart won't repeat them.
+    pub fn audio_notices(&self) -> &[AudioNotice] {
+        &self.audio_notices
     }
 
     /// Shared handle to the packet ring, for live occupancy stats
@@ -511,11 +522,36 @@ impl Drop for Pipeline {
     }
 }
 
+/// A pinned audio source that isn't recording, for the app layer to turn
+/// into a toast. This crate has no notification system of its own, so it
+/// just reports the fact and lets the caller word it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioNotice {
+    /// The user's saved microphone is missing or wouldn't start.
+    MissingMicrophone,
+    /// Same, for the saved system-audio (loopback) device.
+    MissingSystemAudio,
+}
+
+/// One notice per source kind per process run. The pipeline restarts on
+/// every settings change and after capture failures; the user only needs to
+/// hear about a missing device once.
+fn audio_notice_once(kind: AudioKind) -> Option<AudioNotice> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static MIC_TOLD: AtomicBool = AtomicBool::new(false);
+    static SYS_TOLD: AtomicBool = AtomicBool::new(false);
+    let (told, notice) = match kind {
+        AudioKind::Microphone => (&MIC_TOLD, AudioNotice::MissingMicrophone),
+        AudioKind::SystemLoopback => (&SYS_TOLD, AudioNotice::MissingSystemAudio),
+    };
+    (!told.swap(true, Ordering::SeqCst)).then_some(notice)
+}
+
 fn start_audio(
     cfg: &Config,
     ring: Arc<PacketRing>,
     clock: Arc<MediaClock>,
-) -> (Vec<AudioMeta>, Vec<AudioCapture>) {
+) -> (Vec<AudioMeta>, Vec<AudioCapture>, Vec<AudioNotice>) {
     // One-shot enumeration so we can stamp each track with its device's
     // friendly name (used as the MP4 track title). Falls back to an empty
     // list on failure — capture still works, titles just lose the device
@@ -527,6 +563,7 @@ fn start_audio(
 
     let mut meta = Vec::new();
     let mut handles = Vec::new();
+    let mut notices = Vec::new();
     for (idx, source) in cfg.audio.sources.iter().enumerate() {
         let stream_id = (idx + 1) as u8; // 0 reserved for video
         let label = source.label();
@@ -543,7 +580,8 @@ fn start_audio(
         // A pinned device id that no longer enumerates = "your saved mic is
         // gone". Silent today (the source may still start on it, or fail
         // below) — report the mismatch itself, without names or ids.
-        if device_id.is_some() && resolved_name.is_none() && !devices.is_empty() {
+        let pinned_missing = device_id.is_some() && resolved_name.is_none() && !devices.is_empty();
+        if pinned_missing {
             if let clipdip_diagnostics::Gate::Send { .. } =
                 clipdip_diagnostics::gate("audio_pinned_device_missing", Duration::from_secs(900))
             {
@@ -564,6 +602,7 @@ fn start_audio(
                 );
             }
         }
+        let pinned = device_id.is_some();
         let friendly_name = resolved_name.unwrap_or_else(|| fallback_friendly_name(kind));
         match AudioCapture::start(kind, stream_id, device_id, Arc::clone(&ring), Arc::clone(&clock))
         {
@@ -587,14 +626,27 @@ fn start_audio(
                     format!("audio source failed to start ({})", extract_hresult(&format!("{e:#}"))),
                     Some(serde_json::json!({
                         "audio_kind": format!("{kind:?}"),
-                        "pinned": source.device_id().is_some(),
+                        "pinned": pinned,
                         "hresult": extract_hresult(&format!("{e:#}")),
                     })),
                 );
+                // The user's pinned device is simply not recording. We do NOT
+                // substitute the default endpoint (recording the wrong mic is
+                // worse than recording none) and we don't touch the saved
+                // config, so this needs to be said out loud.
+                if pinned {
+                    notices.extend(audio_notice_once(kind));
+                }
             }
         }
+        // A pinned id that no longer enumerates is the same story from the
+        // other direction: the device is gone. Worth saying even when the
+        // start above somehow succeeded on a stale id.
+        if pinned_missing {
+            notices.extend(audio_notice_once(kind));
+        }
     }
-    (meta, handles)
+    (meta, handles, notices)
 }
 
 /// Pull the first `0x8....` HRESULT-looking token out of an error chain, so

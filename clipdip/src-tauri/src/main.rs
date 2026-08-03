@@ -930,7 +930,7 @@ async fn test_overlay(
                 &app,
                 kind,
                 "Discord keeps asking to connect",
-                "Turn off **voice capture** in settings to stop it",
+                "Turn off **voice capture** in settings, or ask on our Discord for a whitelist invite",
                 "Preview hint (test_overlay).",
                 10_000,
             );
@@ -1677,6 +1677,30 @@ fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
     }
 }
 
+/// Tell the user about a pinned audio device that isn't recording. The
+/// pipeline deliberately does not substitute another device (recording the
+/// wrong mic is worse than recording none) and does not rewrite the saved
+/// setting, so without this the track is just silently missing. Already
+/// deduped to once per source kind per run by the pipeline.
+fn notify_audio_notices(app: &AppHandle, corner: &str, pipeline: &clipdip_core::Pipeline) {
+    use clipdip_core::pipeline::AudioNotice;
+    for notice in pipeline.audio_notices() {
+        let (title, body) = match notice {
+            AudioNotice::MissingMicrophone => (
+                "Microphone not found",
+                "Your saved microphone wasn't found. Clips will have no mic audio until you \
+                 pick one in settings.",
+            ),
+            AudioNotice::MissingSystemAudio => (
+                "System audio device not found",
+                "Your saved system audio device wasn't found. Clips will have no game sound \
+                 until you pick one in settings.",
+            ),
+        };
+        notify_health(app, corner, title, body);
+    }
+}
+
 /// Show a rich hint card on the in-game overlay, plus a native toast and
 /// a notification-history entry (Focus Assist eats toasts during
 /// fullscreen play; history is the durable trail for both). This is THE
@@ -1767,8 +1791,8 @@ fn spawn_discord_prompt_watch(app: AppHandle) {
             &app,
             "discord",
             "Discord keeps asking to connect",
-            "Turn off **voice capture** in settings to stop it",
-            "You can turn off voice call capture in settings if you don't want these popups.",
+            "Turn off **voice capture** in settings, or ask on our Discord for a whitelist invite",
+            "Turn off voice capture in settings to stop the popups, or ask on our Discord for a whitelist invite.",
             10_000,
         );
         // Start the cooldown only once the card actually made it on
@@ -1777,6 +1801,48 @@ fn spawn_discord_prompt_watch(app: AppHandle) {
             state.discord.mark_prompt_hint_shown();
         }
     });
+}
+
+/// How long a wedge restart stays on the record for the storm guard.
+const WEDGE_RESTART_WINDOW_SECS: u64 = 30 * 60;
+/// Wedge restarts inside that window before auto-restart gives up. The
+/// third one is the one we refuse.
+const WEDGE_RESTART_MAX: usize = 3;
+
+/// Small JSON file next to the config holding unix timestamps of recent
+/// wedge restarts. It has to live on disk: the thing it guards against is
+/// `app.restart()`, which wipes every in-process counter.
+fn wedge_restart_log_path() -> Option<PathBuf> {
+    clipdip_core::config::Config::path()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("wedge-restarts.json")))
+}
+
+/// Append "now" to the wedge-restart log, dropping entries older than the
+/// window, and return how many restarts that makes inside the window
+/// (including this one). Any IO failure degrades to "1" so a broken file
+/// can never block a legitimate recovery restart.
+fn record_wedge_restart() -> usize {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let Some(path) = wedge_restart_log_path() else {
+        return 1;
+    };
+    let mut stamps: Vec<u64> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<u64>>(&s).ok())
+        .unwrap_or_default();
+    stamps.retain(|t| *t <= now && now - *t < WEDGE_RESTART_WINDOW_SECS);
+    stamps.push(now);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    if let Ok(body) = serde_json::to_string(&stamps) {
+        let _ = std::fs::write(&path, body);
+    }
+    stamps.len()
 }
 
 /// Background watchdog that turns silent capture degradation into an instant,
@@ -1886,6 +1952,18 @@ fn health_loop(
     // Only auto-restart once capture has actually worked this session, so a
     // wedge that somehow happens at startup can't cause a restart loop.
     let mut seen_healthy = false;
+    // Latched once the cross-run storm guard has said "no more restarts".
+    // Heartbeats and alerts keep running; only the restart is off.
+    let mut wedge_giveup = false;
+    // After a frame-gap episode recovers the ring is empty and refills in
+    // real time. Suppress the buffer-low branch until it has had a full
+    // window (plus a margin) to fill, or one stall double-alerts.
+    let mut refill_grace_until: u64 = 0;
+    // Whether the current degraded episode is a frame gap (vs. a short ring).
+    let mut degraded_gap = false;
+    // Poll index of the last gap recovery, so a low-buffer alert that still
+    // fires afterwards can name the refill as its cause.
+    let mut last_gap_recovery: Option<u64> = None;
     let mut since_poll = Duration::ZERO;
     let tick = Duration::from_millis(250); // short slices so stop is prompt
 
@@ -1977,8 +2055,40 @@ fn health_loop(
             if idle < STALL_IDLE_100NS {
                 seen_healthy = true;
             }
-            if seen_healthy && idle > WEDGE_RESTART_100NS {
+            if seen_healthy && idle > WEDGE_RESTART_100NS && !wedge_giveup {
                 let stuck_in = capture_phase::name(phase.load(Ordering::Relaxed));
+                // Cross-run storm guard: the restart itself wipes memory, so
+                // the count lives in a file. Three wedge restarts in half an
+                // hour means restarting isn't fixing anything (and each one
+                // re-pops the Discord consent dialog), so stop and tell the
+                // user instead.
+                let recent = record_wedge_restart();
+                if recent >= WEDGE_RESTART_MAX {
+                    wedge_giveup = true;
+                    error!(
+                        restarts = recent,
+                        stuck_in, "capture wedged repeatedly, giving up on auto-restart"
+                    );
+                    clipdip_diagnostics::report_capture_failure(
+                        "capture_wedge_giveup",
+                        format!(
+                            "capture wedged {recent} times in 30 minutes, auto-restart stopped"
+                        ),
+                        serde_json::json!({
+                            "restarts": recent,
+                            "idle_secs": idle as f64 / 1e7,
+                            "stuck_in": stuck_in,
+                        }),
+                    );
+                    notify_health(
+                        &app,
+                        &corner,
+                        "Capture keeps freezing",
+                        "Restarting Clipdip isn't helping. Restart your PC or check your \
+                         graphics drivers.",
+                    );
+                    continue;
+                }
                 error!(
                     idle_secs = idle as f64 / 1e7,
                     stuck_in,
@@ -1990,6 +2100,7 @@ fn health_loop(
                     serde_json::json!({
                         "idle_secs": idle as f64 / 1e7,
                         "stuck_in": stuck_in,
+                        "restarts_in_window": recent,
                     }),
                 );
                 notify_health(
@@ -2006,7 +2117,10 @@ fn health_loop(
                 app.restart();
             }
         }
-        let issue: Option<(String, String)> = if live == 0 {
+        // Third field is the cause slug: it tags the telemetry event and
+        // tells the recovery branch whether frames were missing (a gap
+        // episode leaves the ring to refill) or the ring was just short.
+        let issue: Option<(String, String, &'static str)> = if live == 0 {
             // No frame produced yet. Normal for the first seconds after
             // start — but persisting means capture never came up at all,
             // which used to be a silent-forever state (no liveness ⇒ no
@@ -2018,6 +2132,7 @@ fn health_loop(
                         "No frames have been captured since capture started \
                          ({polls}s ago). Check the monitor / capture settings."
                     ),
+                    "never_started",
                 ))
             } else {
                 None
@@ -2033,10 +2148,16 @@ fn health_loop(
                          the screen until capture resumes.",
                         idle as f64 / 1e7
                     ),
+                    "no_frames",
                 ))
-            } else if polls as i64 > replay_seconds as i64 + 5 && span < underfull_floor {
+            } else if polls as i64 > replay_seconds as i64 + 5
+                && polls > refill_grace_until
+                && span < underfull_floor
+            {
                 // Only judge "low" once the buffer has had a full window to
-                // fill, so normal startup doesn't trip it.
+                // fill, so normal startup doesn't trip it. Likewise
+                // after a gap episode, where the ring restarts from empty
+                // and would otherwise double-alert on one stall.
                 //
                 // Classify the cause. A recent byte-budget eviction of
                 // time-fresh footage means the window is truncated by the
@@ -2086,6 +2207,15 @@ fn health_loop(
                             span as f64 / 1e7,
                             replay_seconds
                         ),
+                        // The grace above covers the normal refill; if it
+                        // still reads low right after one, say so.
+                        if last_gap_recovery
+                            .is_some_and(|p| polls - p <= (replay_seconds as u64 + 5) * 2)
+                        {
+                            "refill_after_gap"
+                        } else {
+                            "buffer_low"
+                        },
                     ))
                 }
             } else {
@@ -2094,17 +2224,18 @@ fn health_loop(
         };
 
         match (issue, degraded) {
-            (Some((title, body)), false) => {
+            (Some((title, body, cause)), false) => {
                 bad += 1;
                 good = 0;
                 if bad >= 2 {
                     degraded = true;
+                    degraded_gap = matches!(cause, "no_frames" | "never_started");
                     warn!("health: degraded — {body}");
                     clipdip_diagnostics::report_capture_failure_with(
                         "capture_degraded",
                         clipdip_diagnostics::Severity::Warning,
                         body.clone(),
-                        serde_json::json!({ "title": title }),
+                        serde_json::json!({ "title": title, "cause": cause }),
                     );
                     notify_health(&app, &corner, &title, &body);
                 }
@@ -2115,6 +2246,15 @@ fn health_loop(
                 if good >= 3 {
                     degraded = false;
                     info!("health: capture recovered");
+                    // Frames were missing, so the ring is refilling in real
+                    // time. Hold the buffer-low branch off for one full
+                    // window plus a margin: without this a single stall
+                    // alerts twice ("no new frames", then "buffer low").
+                    if degraded_gap {
+                        refill_grace_until = polls + replay_seconds as u64 + 5;
+                        last_gap_recovery = Some(polls);
+                    }
+                    degraded_gap = false;
                     // The refill claim must be honest: a gap-degraded ring
                     // that runs into the byte budget while refilling routes
                     // to the (quiet) memory path above, which lands here —
@@ -2234,6 +2374,7 @@ fn run_capture_loop(
     let mut pipeline = match clipdip_core::Pipeline::start(cfg) {
         Ok(p) => {
             info!("pipeline started");
+            notify_audio_notices(&app, &notif_corner, &p);
             push_app_info_when_ready(p.session_info_handle(), cfg_for_app_block);
             *ring_handle.lock().unwrap() = Some(p.ring());
             *pipeline_running.lock().unwrap() = true;
@@ -2782,6 +2923,7 @@ fn run_capture_loop(
                 pipeline = match clipdip_core::Pipeline::start(cfg) {
                     Ok(p) => {
                         info!("pipeline restarted");
+                        notify_audio_notices(&app, &notif_corner, &p);
                         *ring_handle.lock().unwrap() = Some(p.ring());
                         *pipeline_running.lock().unwrap() = true;
                         clear_pipeline_error(&app);
