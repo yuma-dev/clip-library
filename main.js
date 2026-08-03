@@ -109,6 +109,27 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
 // Channel names are a fixed enum from our own code, so they are safe as a dim.
 // Arguments and return values are never recorded.
 {
+  // Channels whose duration is user think time or a network transfer, not the
+  // app being slow: native dialogs the user has to answer, the OAuth round trip
+  // through the browser, uploads/downloads, and export jobs that run as long as
+  // the encode takes. They still report ipc.handler_ms, they just never fire
+  // the slow-call event.
+  const SLOW_EVENT_EXEMPT = new Set([
+    'open-save-dialog',
+    'open-folder-dialog',
+    'open-folder-dialog-steelseries',
+    'show-diagnostics-save-dialog',
+    'share-upload-banner',
+    'start-cliplib-auth',
+    'start-update',
+    'upload-session-logs',
+    'upload-diagnostics-bundle',
+    'share-clip',
+    'import-steelseries-clips',
+    'export-video',
+    'export-trimmed-video',
+    'export-audio'
+  ]);
   const originalHandle = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = function (channel, handler) {
     const wrapped = async (event, ...args) => {
@@ -117,7 +138,7 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
         const result = await handler(event, ...args);
         const ms = Date.now() - startedAt;
         telemetry.metric('ipc.handler_ms', ms, { unit: 'ms', dims: { channel } });
-        if (ms > 2000) {
+        if (ms > 2000 && !SLOW_EVENT_EXEMPT.has(channel)) {
           telemetry.event('ipc_call_slow', {
             kind: telemetry.KIND.DEGRADED,
             severity: telemetry.SEVERITY.WARNING,
@@ -1315,6 +1336,9 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
   // the player: no trim, no tags, default volume. The slot name turns "the clip
   // opened wrong" into "these two reads failed" without naming the clip.
   const missing = [];
+  // Why the probe failed, for the clip_open_partial context. The clip name is
+  // stripped out (it is user content) and telemetry scrubs paths on top.
+  let probeError;
   const swallow = (slot, promise, fallback) => {
     const slotStartedAt = Date.now();
     const timeSlot = () => {
@@ -1325,9 +1349,15 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
         timeSlot();
         return value;
       },
-      () => {
+      (error) => {
         timeSlot();
         missing.push(slot);
+        if (slot === 'clip_info') {
+          logger.error(`get-clip-open-state: clip info probe failed for ${clipName} (code ${error?.code ?? 'n/a'}):`, error);
+          probeError = String(error?.message || error || 'unknown')
+            .split(clipName).join('<clip>')
+            .slice(0, 120);
+        }
         return fallback;
       }
     );
@@ -1350,7 +1380,7 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
     telemetry.event('clip_open_partial', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.ERROR,
-      context: { missing, total_ms: totalMs }
+      context: { missing, total_ms: totalMs, probe_error: probeError }
     });
   }
   return { clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences };
