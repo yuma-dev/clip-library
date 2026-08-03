@@ -54,8 +54,10 @@ const REFRESH_RETRY_MIN: Duration = Duration::from_secs(60);
 const REFRESH_RETRY_MAX: Duration = Duration::from_secs(30 * 60);
 /// "Abnormal amount of consent popups": this many AUTHORIZE prompts inside
 /// the window means something is wrong (dying tokens, decline loop) and the
-/// overlay may hint that the settings toggle stops the popups.
-const PROMPT_STORM_THRESHOLD: usize = 3;
+/// overlay may hint that the settings toggle stops the popups. Auto-authorize
+/// records one prompt per launch while unauthenticated, so the threshold has
+/// to sit above a normal couple-of-days launch count.
+const PROMPT_STORM_THRESHOLD: usize = 5;
 const PROMPT_STORM_WINDOW_SECS: i64 = 48 * 3600;
 /// Don't repeat the hint more often than this.
 const PROMPT_HINT_COOLDOWN_SECS: i64 = 7 * 24 * 3600;
@@ -207,6 +209,10 @@ pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
         };
     };
 
+    // A persisted invalid_scope rejection (account not on the tester
+    // allowlist) makes auto-prompting pointless — stay quiet until the user
+    // clicks Connect or the app updates.
+    let auth_blocked = oauth::AuthBlock::load(&config_dir).is_some();
     let mgr = Manager {
         config_dir: config_dir.clone(),
         client_secret: secret,
@@ -215,7 +221,7 @@ pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
         cmd_rx,
         nonce: AtomicU64::new(0),
         auto_authorize,
-        want_authorize: AtomicBool::new(auto_authorize),
+        want_authorize: AtomicBool::new(auto_authorize && !auth_blocked),
         reset: AtomicBool::new(false),
         shutdown: AtomicBool::new(false),
     };
@@ -290,7 +296,12 @@ impl Manager {
             // Connect, then open a fresh pipe and AUTHORIZE within milliseconds
             // of the handshake (see `session`).
             if !has_token && !self.want_authorize.load(Ordering::Relaxed) {
-                self.set_status(DiscordStatus::NeedsAuthorization);
+                match oauth::AuthBlock::load(&self.config_dir) {
+                    Some(block) => self.set_status(DiscordStatus::Error {
+                        message: block.reason,
+                    }),
+                    None => self.set_status(DiscordStatus::NeedsAuthorization),
+                }
                 self.idle_until_authorize();
                 continue;
             }
@@ -516,10 +527,43 @@ impl Manager {
     /// promptly after the handshake — that's the whole fix.
     fn authorize_and_auth(&self, conn: &Connection) -> anyhow::Result<Instant> {
         info!("discord: sending AUTHORIZE — approve the popup in Discord");
-        // Log the popup so the app can spot an abnormal prompt rate and
-        // hint at the settings toggle.
-        oauth::PromptLog::record(&self.config_dir);
-        let code = self.authorize(conn)?;
+        // Log the popup so the app can spot an abnormal prompt rate and hint
+        // at the settings toggle. Recorded on the AUTHORIZE *outcome*, not the
+        // send: approve, decline and timeout all had a dialog on screen, but a
+        // closed pipe means it likely never rendered (Discord quit, or this
+        // process was a doomed update-restart twin) and must not count.
+        let code = match self.authorize(conn) {
+            Ok(code) => {
+                oauth::PromptLog::record(&self.config_dir);
+                code
+            }
+            Err(e) => {
+                if !matches!(e, ReqError::Closed) {
+                    oauth::PromptLog::record(&self.config_dir);
+                }
+                match e {
+                    ReqError::Rpc(d) => {
+                        // invalid_scope is not a user decline — the account
+                        // isn't allowlisted for the rpc scope, so every
+                        // future AUTHORIZE this build would fail the same
+                        // way. Persist that and stop auto-prompting.
+                        if d.to_string().contains("invalid_scope") {
+                            let reason = "Discord only lets invited accounts connect right now, \
+                                and this account isn't invited yet. Turn off voice capture in \
+                                settings, or ask on our Discord for a whitelist invite. \
+                                Automatic prompts are paused; use Connect to retry.";
+                            warn!("discord: {reason}");
+                            oauth::AuthBlock::save(&self.config_dir, reason);
+                        }
+                        anyhow::bail!("AUTHORIZE rejected: {d}")
+                    }
+                    ReqError::Closed => anyhow::bail!("pipe closed during AUTHORIZE"),
+                    ReqError::Timeout => {
+                        anyhow::bail!("AUTHORIZE timed out (no user response)")
+                    }
+                }
+            }
+        };
         info!("discord: authorization code received — exchanging for token");
         match oauth::exchange_code(CLIENT_ID, &self.client_secret, &code, REDIRECT_URI) {
             Ok(tok) => {
@@ -577,22 +621,18 @@ impl Manager {
     }
 
     /// Send `AUTHORIZE` and return the resulting `code`. Long timeout — the
-    /// user has to click the consent popup.
-    fn authorize(&self, conn: &Connection) -> anyhow::Result<String> {
+    /// user has to click the consent popup. Returns the raw [`ReqError`] so
+    /// the caller can tell a closed pipe from a decline or timeout.
+    fn authorize(&self, conn: &Connection) -> Result<String, ReqError> {
         let args = json!({
             "client_id": CLIENT_ID,
             "scopes": ["rpc", "rpc.voice.read"],
         });
-        match self.request(conn, "AUTHORIZE", args, Duration::from_secs(130)) {
-            Ok(data) => data
-                .get("code")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(|| anyhow::anyhow!("AUTHORIZE returned no code")),
-            Err(ReqError::Rpc(d)) => anyhow::bail!("AUTHORIZE rejected: {d}"),
-            Err(ReqError::Closed) => anyhow::bail!("pipe closed during AUTHORIZE"),
-            Err(ReqError::Timeout) => anyhow::bail!("AUTHORIZE timed out (no user response)"),
-        }
+        let data = self.request(conn, "AUTHORIZE", args, Duration::from_secs(130))?;
+        data.get("code")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| ReqError::Rpc(json!("AUTHORIZE returned no code")))
     }
 
     /// Query the current voice channel and update the shared roster.
@@ -696,7 +736,7 @@ impl Manager {
     /// an unauthenticated start. The prompt log keeps a runaway loop
     /// visible (the app shows the settings-toggle hint).
     fn rearm_auto_authorize(&self) {
-        if self.auto_authorize {
+        if self.auto_authorize && oauth::AuthBlock::load(&self.config_dir).is_none() {
             self.want_authorize.store(true, Ordering::Relaxed);
         }
     }
@@ -704,7 +744,13 @@ impl Manager {
     fn drain_commands(&self) {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
-                Command::Authorize => self.want_authorize.store(true, Ordering::Relaxed),
+                Command::Authorize => {
+                    // An explicit Connect always gets a fresh attempt, even
+                    // after an invalid_scope block (the user may just have
+                    // been added to the allowlist).
+                    oauth::AuthBlock::clear(&self.config_dir);
+                    self.want_authorize.store(true, Ordering::Relaxed);
+                }
                 Command::Disconnect => {
                     TokenStore::clear(&self.config_dir);
                     *self.roster.lock() = None;
@@ -717,14 +763,19 @@ impl Manager {
         }
     }
 
-    /// Sleep before reconnecting, but wake early if the user acts.
+    /// Sleep before reconnecting, but wake early if the user acts. Only a
+    /// Connect that arrives DURING the wait cuts it short — an authorize flag
+    /// that was already armed on entry (auto-authorize with Discord closed)
+    /// must still serve the full backoff, or the connect loop spins at 200ms
+    /// for as long as Discord isn't running.
     fn sleep_backoff(&self) {
+        let armed_on_entry = self.want_authorize.load(Ordering::Relaxed);
         let mut waited = Duration::ZERO;
         while waited < RECONNECT_BACKOFF && !self.stopped() {
             std::thread::sleep(Duration::from_millis(200));
             waited += Duration::from_millis(200);
             self.drain_commands();
-            if self.want_authorize.load(Ordering::Relaxed) {
+            if !armed_on_entry && self.want_authorize.load(Ordering::Relaxed) {
                 break;
             }
         }

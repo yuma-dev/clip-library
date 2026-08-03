@@ -130,13 +130,69 @@ impl PromptLog {
         Ok(())
     }
 
-    /// Record one consent popup, pruning entries older than a week.
+    /// Record one consent popup, pruning entries older than a week. A record
+    /// within a minute of the previous one collapses into it: an update
+    /// restart can double-start the process and both halves AUTHORIZE, which
+    /// is one popup to the user, not two.
     pub fn record(config_dir: &Path) {
         let mut log = Self::load(config_dir);
         let now = now_unix();
         log.prompt_times.retain(|t| now - *t <= 7 * 24 * 3600);
+        if log.prompt_times.iter().max().is_some_and(|t| now - *t < 60) {
+            return;
+        }
         log.prompt_times.push(now);
         let _ = log.save(config_dir);
+    }
+}
+
+/// Persisted marker that AUTHORIZE is pointless right now: Discord rejected
+/// the requested scopes (`invalid_scope`), which for this app means the
+/// account isn't on the App Testers allowlist (the `rpc` scope is gated).
+/// While present, auto-authorize stays quiet instead of popping a doomed
+/// consent dialog on every launch. Cleared by a manual Connect, and ignored
+/// once the app version changes — an update (or Discord-side approval)
+/// deserves one fresh attempt.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct AuthBlock {
+    pub reason: String,
+    #[serde(default)]
+    pub at: i64,
+    #[serde(default)]
+    pub app_version: String,
+}
+
+impl AuthBlock {
+    fn path(config_dir: &Path) -> PathBuf {
+        config_dir.join("discord_auth_block.json")
+    }
+
+    /// The block currently in force, if any. A block written by a different
+    /// app version is stale and reads as absent (and is removed).
+    pub fn load(config_dir: &Path) -> Option<Self> {
+        let s = std::fs::read_to_string(Self::path(config_dir)).ok()?;
+        let block: Self = serde_json::from_str(&s).ok()?;
+        if block.app_version != env!("CARGO_PKG_VERSION") {
+            Self::clear(config_dir);
+            return None;
+        }
+        Some(block)
+    }
+
+    pub fn save(config_dir: &Path, reason: &str) {
+        let block = Self {
+            reason: reason.to_string(),
+            at: now_unix(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        std::fs::create_dir_all(config_dir).ok();
+        if let Ok(body) = serde_json::to_string_pretty(&block) {
+            let _ = std::fs::write(Self::path(config_dir), body);
+        }
+    }
+
+    pub fn clear(config_dir: &Path) {
+        let _ = std::fs::remove_file(Self::path(config_dir));
     }
 }
 
