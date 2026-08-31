@@ -4087,6 +4087,56 @@ body.ui-blur-exit .app-body {
 .audio-source-spacer {
   flex: 1;
 }
+.audio-source-fallback .audio-source-remove {
+  margin-left: 0;
+}
+.audio-source-fallback-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 36px;
+}
+.audio-source-add-fallback {
+  font-size: 11px;
+}
+.audio-source-fallback-hint {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+/* Live "this source isn't recording what you picked" banner. */
+.audio-live-warn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 2px 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #e3c06b 45%, transparent);
+  background: color-mix(in srgb, #e3c06b 10%, transparent);
+  color: #e3c06b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.audio-live-warn > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.audio-live-warn-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--color-text);
+}
+.audio-live-warn-line strong {
+  color: #e3c06b;
+  font-weight: 600;
+}
+.audio-live-warn-fix {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 2px 8px;
+}
 
 /* Discord connection status text. */
 .clipdip-conn {

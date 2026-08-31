@@ -541,13 +541,18 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             sources: vec![
-                AudioSource::SystemLoopback { device_id: None },
-                AudioSource::Microphone { device_id: None },
+                AudioSource::SystemLoopback { device_id: None, fallbacks: Vec::new() },
+                AudioSource::Microphone { device_id: None, fallbacks: Vec::new() },
             ],
             include_mix: true,
         }
     }
 }
+
+/// Sentinel accepted in [`AudioSource`] `fallbacks` entries: use the system
+/// default endpoint for the source's flow. (WASAPI ids always look like
+/// `{0.0.X.00000000}.{guid}`, so the bare word can't collide.)
+pub const DEFAULT_DEVICE_SENTINEL: &str = "default";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -555,15 +560,25 @@ pub enum AudioSource {
     /// WASAPI loopback on a render endpoint. `device_id = None` (or
     /// missing) uses the system default render device; `Some(id)` pins a
     /// specific one (use `clipdip --list-audio-devices` to find IDs).
+    ///
+    /// `fallbacks` is an ordered list of device ids tried when the entry
+    /// above it doesn't start: primary first, then `fallbacks[0]`, then
+    /// `fallbacks[1]`, … The literal `"default"` means the system default
+    /// endpoint. Empty (the default) keeps the strict behavior: a pinned
+    /// device that's missing records nothing rather than something else.
     SystemLoopback {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fallbacks: Vec<String>,
     },
     /// WASAPI capture from a microphone / line-in endpoint. Same
-    /// `device_id = None` convention as above.
+    /// `device_id = None` / `fallbacks` conventions as above.
     Microphone {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fallbacks: Vec<String>,
     },
     /// Per-process loopback (Windows 10 build 20348+). Not yet wired in;
     /// reserving the variant for forward-compatibility of the config file.
@@ -576,12 +591,12 @@ impl AudioSource {
     /// sources of the same kind don't collide in the WAV filename.
     pub fn label(&self) -> String {
         match self {
-            AudioSource::SystemLoopback { device_id: None } => "loopback".into(),
-            AudioSource::SystemLoopback { device_id: Some(id) } => {
+            AudioSource::SystemLoopback { device_id: None, .. } => "loopback".into(),
+            AudioSource::SystemLoopback { device_id: Some(id), .. } => {
                 format!("loopback-{}", short_id(id))
             }
-            AudioSource::Microphone { device_id: None } => "mic".into(),
-            AudioSource::Microphone { device_id: Some(id) } => {
+            AudioSource::Microphone { device_id: None, .. } => "mic".into(),
+            AudioSource::Microphone { device_id: Some(id), .. } => {
                 format!("mic-{}", short_id(id))
             }
             AudioSource::ProcessLoopback { process_name } => {
@@ -593,9 +608,19 @@ impl AudioSource {
     /// Convenience accessor for the pinned device ID, if any.
     pub fn device_id(&self) -> Option<&str> {
         match self {
-            AudioSource::SystemLoopback { device_id }
-            | AudioSource::Microphone { device_id } => device_id.as_deref(),
+            AudioSource::SystemLoopback { device_id, .. }
+            | AudioSource::Microphone { device_id, .. } => device_id.as_deref(),
             AudioSource::ProcessLoopback { .. } => None,
+        }
+    }
+
+    /// Ordered fallback device ids tried after the primary; entries may be
+    /// [`DEFAULT_DEVICE_SENTINEL`]. Empty for `ProcessLoopback`.
+    pub fn fallbacks(&self) -> &[String] {
+        match self {
+            AudioSource::SystemLoopback { fallbacks, .. }
+            | AudioSource::Microphone { fallbacks, .. } => fallbacks,
+            AudioSource::ProcessLoopback { .. } => &[],
         }
     }
 }
@@ -856,6 +881,35 @@ mod tests {
     fn defaults_to_two_audio_sources() {
         let cfg = Config::default();
         assert_eq!(cfg.audio.sources.len(), 2);
+    }
+
+    #[test]
+    fn audio_fallbacks_parse_and_round_trip() {
+        // Old configs (no fallbacks key) parse to an empty chain; a chain
+        // with the "default" sentinel survives a serialize/parse cycle.
+        let cfg: Config = toml::from_str(
+            r#"
+            [[audio.sources]]
+            kind = "system_loopback"
+            device_id = "{0.0.0.00000000}.{aaaa}"
+            fallbacks = ["{0.0.0.00000000}.{bbbb}", "default"]
+
+            [[audio.sources]]
+            kind = "microphone"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.audio.sources[0].fallbacks(),
+            &["{0.0.0.00000000}.{bbbb}".to_string(), DEFAULT_DEVICE_SENTINEL.to_string()]
+        );
+        assert!(cfg.audio.sources[1].fallbacks().is_empty());
+
+        let out = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&out).unwrap();
+        assert_eq!(back.audio.sources[0].fallbacks().len(), 2);
+        // Empty chains stay off disk entirely.
+        assert!(!out.contains("fallbacks = []"));
     }
 
     #[test]

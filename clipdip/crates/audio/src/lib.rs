@@ -20,10 +20,11 @@ use std::time::Duration;
 use tracing::{debug, trace, warn};
 use windows::core::GUID;
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice,
-    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    eCapture, eConsole, eRender, EDataFlow, ERole, IAudioCaptureClient, IAudioClient, IMMDevice,
+    IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, DEVICE_STATE, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE,
 };
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::System::Com::STGM_READ;
@@ -65,11 +66,25 @@ impl WaveFormat {
     }
 }
 
+/// Facts about a successfully opened capture stream, reported once by the
+/// capture thread right after `IAudioClient::Start`.
+#[derive(Clone, Debug)]
+pub struct StreamInfo {
+    pub format: WaveFormat,
+    /// WASAPI id of the endpoint that was actually opened. For a
+    /// `device_id = None` (system default) source this resolves which
+    /// concrete device "default" meant at start time — a device-change
+    /// watcher compares it against the current default to notice that a
+    /// running stream is now pointed at yesterday's endpoint.
+    pub device_id: String,
+}
+
 /// A running audio capture thread. Drop or call [`Self::stop`] to end.
 pub struct AudioCapture {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<Result<()>>>,
     format: WaveFormat,
+    device_id_in_use: String,
     kind: AudioKind,
 }
 
@@ -89,7 +104,7 @@ impl AudioCapture {
     ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
-        let (fmt_tx, fmt_rx) = bounded::<Result<WaveFormat>>(1);
+        let (fmt_tx, fmt_rx) = bounded::<Result<StreamInfo>>(1);
 
         let label = match kind {
             AudioKind::SystemLoopback => "audio-loopback",
@@ -110,14 +125,15 @@ impl AudioCapture {
             })
             .context("spawn audio capture thread")?;
 
-        let format = fmt_rx
+        let info = fmt_rx
             .recv()
             .context("audio capture thread exited before reporting format")??;
 
         Ok(Self {
             stop,
             thread: Some(thread),
-            format,
+            format: info.format,
+            device_id_in_use: info.device_id,
             kind,
         })
     }
@@ -128,6 +144,19 @@ impl AudioCapture {
 
     pub fn kind(&self) -> AudioKind {
         self.kind
+    }
+
+    /// WASAPI id of the endpoint this capture actually opened (the concrete
+    /// device behind "system default" for unpinned sources).
+    pub fn device_id_in_use(&self) -> &str {
+        &self.device_id_in_use
+    }
+
+    /// True once the capture thread has exited — a mid-session death (the
+    /// device was unplugged, the driver reset). The thread's error is only
+    /// consumable at join; this is the cheap liveness probe for watchers.
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().map_or(true, |t| t.is_finished())
     }
 
     /// Signal the thread to exit and wait for it. Errors from the thread
@@ -155,13 +184,20 @@ impl AudioCapture {
                     if let clipdip_diagnostics::Gate::Send { suppressed } =
                         clipdip_diagnostics::gate(code, std::time::Duration::from_secs(60))
                     {
+                        // The kind is part of the message on purpose: the
+                        // server groups issues by message template, and a
+                        // dead mic and dead system loopback are different
+                        // problems that must not share one issue.
                         clipdip_diagnostics::report_error_with(
                             code,
                             clipdip_diagnostics::Severity::Warning,
                             if device_lost {
-                                "audio device invalidated mid-session (unplugged or format changed)"
+                                format!(
+                                    "audio device invalidated mid-session ({:?}, unplugged or format changed)",
+                                    self.kind
+                                )
                             } else {
-                                "audio capture thread exited with an error"
+                                format!("audio capture thread exited with an error ({:?})", self.kind)
                             },
                             Some(serde_json::json!({
                                 "audio_kind": format!("{:?}", self.kind),
@@ -191,7 +227,7 @@ fn run_capture(
     ring: Arc<PacketRing>,
     clock: Arc<MediaClock>,
     stop: Arc<AtomicBool>,
-    fmt_tx: &Sender<Result<WaveFormat>>,
+    fmt_tx: &Sender<Result<StreamInfo>>,
 ) -> Result<()> {
     // SAFETY: we're a fresh thread; COM must be initialized on it.
     unsafe {
@@ -280,8 +316,13 @@ fn run_capture(
         client: client.clone(),
     };
 
-    // Successful init — tell the caller the format so it can size sidecars.
-    let _ = fmt_tx.try_send(Ok(fmt));
+    // Successful init — tell the caller the format (to size sidecars) and
+    // which endpoint was actually opened (to track default-device drift).
+    let opened_id = unsafe { read_device_id(&device) }.unwrap_or_default();
+    let _ = fmt_tx.try_send(Ok(StreamInfo {
+        format: fmt,
+        device_id: opened_id,
+    }));
 
     debug!(
         ?kind,
@@ -552,6 +593,147 @@ unsafe fn read_device_id(dev: &IMMDevice) -> Result<String> {
     // PWSTR returned by GetId is allocated by COM — free it.
     unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(pwstr.as_ptr() as *const _)) };
     Ok(s)
+}
+
+// ---- device change notifications ----------------------------------------
+
+/// Something changed in the endpoint topology. Deliberately coarse: the
+/// consumer re-enumerates and re-evaluates whatever it cares about, so the
+/// variants only exist for logging.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceChange {
+    Added,
+    Removed,
+    StateChanged,
+    DefaultChanged,
+}
+
+#[windows::core::implement(IMMNotificationClient)]
+struct NotificationClient {
+    tx: Sender<DeviceChange>,
+}
+
+impl IMMNotificationClient_Impl for NotificationClient_Impl {
+    fn OnDeviceStateChanged(
+        &self,
+        _device_id: &windows::core::PCWSTR,
+        _new_state: DEVICE_STATE,
+    ) -> windows::core::Result<()> {
+        let _ = self.tx.try_send(DeviceChange::StateChanged);
+        Ok(())
+    }
+
+    fn OnDeviceAdded(&self, _device_id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        let _ = self.tx.try_send(DeviceChange::Added);
+        Ok(())
+    }
+
+    fn OnDeviceRemoved(&self, _device_id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        let _ = self.tx.try_send(DeviceChange::Removed);
+        Ok(())
+    }
+
+    fn OnDefaultDeviceChanged(
+        &self,
+        _flow: EDataFlow,
+        role: ERole,
+        _default_id: &windows::core::PCWSTR,
+    ) -> windows::core::Result<()> {
+        // Fires once per role (console / multimedia / communications) on
+        // every switch; we capture on the console role, so one is enough.
+        if role == eConsole {
+            let _ = self.tx.try_send(DeviceChange::DefaultChanged);
+        }
+        Ok(())
+    }
+
+    fn OnPropertyValueChanged(
+        &self,
+        _device_id: &windows::core::PCWSTR,
+        _key: &PROPERTYKEY,
+    ) -> windows::core::Result<()> {
+        // Property churn (volume, names) is frequent and irrelevant here.
+        Ok(())
+    }
+}
+
+/// Watches WASAPI endpoint arrivals/removals/state flips and default-device
+/// switches. Events land on the returned channel (bounded; drops when the
+/// consumer lags, which is fine — they carry no payload). Dropping the
+/// watcher unregisters and stops the thread.
+pub struct DeviceWatcher {
+    stop_tx: Sender<()>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl DeviceWatcher {
+    pub fn start() -> Result<(Self, crossbeam_channel::Receiver<DeviceChange>)> {
+        let (tx, rx) = bounded::<DeviceChange>(64);
+        let (stop_tx, stop_rx) = bounded::<()>(1);
+        let (ready_tx, ready_rx) = bounded::<Result<()>>(1);
+
+        let thread = std::thread::Builder::new()
+            .name("audio-device-watch".into())
+            .spawn(move || {
+                // COM must stay initialized on the registering thread for
+                // as long as the registration lives.
+                let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+                if hr.is_err() {
+                    let _ = ready_tx.try_send(Err(anyhow!("CoInitializeEx: 0x{:08x}", hr.0)));
+                    return;
+                }
+                let _com_guard = ComUninitGuard;
+
+                let enumerator: IMMDeviceEnumerator =
+                    match unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) } {
+                        Ok(e) => e,
+                        Err(e) => {
+                            let _ = ready_tx
+                                .try_send(Err(anyhow!("CoCreateInstance(MMDeviceEnumerator): {e}")));
+                            return;
+                        }
+                    };
+                let client: IMMNotificationClient = NotificationClient { tx }.into();
+                if let Err(e) =
+                    unsafe { enumerator.RegisterEndpointNotificationCallback(&client) }
+                {
+                    let _ = ready_tx.try_send(Err(anyhow!(
+                        "RegisterEndpointNotificationCallback: {e}"
+                    )));
+                    return;
+                }
+                let _ = ready_tx.try_send(Ok(()));
+
+                // Callbacks arrive on MMDevice's own threads; this thread
+                // just anchors the COM apartment until stop.
+                let _ = stop_rx.recv();
+                unsafe {
+                    let _ = enumerator.UnregisterEndpointNotificationCallback(&client);
+                }
+            })
+            .context("spawn audio device watch thread")?;
+
+        ready_rx
+            .recv()
+            .context("audio device watch thread exited before registering")??;
+
+        Ok((
+            Self {
+                stop_tx,
+                thread: Some(thread),
+            },
+            rx,
+        ))
+    }
+}
+
+impl Drop for DeviceWatcher {
+    fn drop(&mut self) {
+        let _ = self.stop_tx.try_send(());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
 }
 
 unsafe fn read_friendly_name(dev: &IMMDevice) -> Result<String> {

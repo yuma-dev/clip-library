@@ -38,6 +38,7 @@ ctrlc = "3"
 # Windows bindings — pin a single version across the workspace so COM
 # interfaces from different crates are ABI-compatible.
 windows = { version = "0.58", features = [
+    "implement",
     "Foundation",
     "Graphics",
     "Graphics_Capture",

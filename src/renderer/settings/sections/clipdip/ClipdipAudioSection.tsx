@@ -1,17 +1,22 @@
 import { useEffect } from "react";
-import { AlertTriangle, Cpu, Mic, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { AlertTriangle, Cpu, ListPlus, Mic, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { SetGroup, SetRow } from "../../rows";
 import Toggle from "../../../ui/Toggle";
 import Select from "../../../ui/Select";
-import { useClipdip, type AudioDeviceInfo } from "./ClipdipContext";
+import { useClipdip, type AudioDeviceInfo, type AudioSourceStatus } from "./ClipdipContext";
 
 type AudioSourceKind = "system_loopback" | "microphone" | "process_loopback";
 interface AudioSource {
   kind: AudioSourceKind;
   device_id?: string;
+  /** Ordered device ids tried when the entry above doesn't start; the
+   *  literal "default" means the system default endpoint. */
+  fallbacks?: string[];
 }
 
 const DEFAULT_DEVICE_VALUE = "__default__";
+/** Sentinel the engine accepts inside `fallbacks` for "system default". */
+const FALLBACK_DEFAULT = "default";
 const DEFAULT_SOURCES: AudioSource[] = [{ kind: "system_loopback" }, { kind: "microphone" }];
 
 function kindIcon(k: AudioSourceKind) {
@@ -20,14 +25,18 @@ function kindIcon(k: AudioSourceKind) {
   return Volume2;
 }
 
-function deviceOptionsFor(kind: AudioSourceKind, devices: AudioDeviceInfo[]) {
+function kindWords(k: AudioSourceStatus["kind"]) {
+  return k === "microphone" ? "Microphone" : "System output";
+}
+
+function deviceOptionsFor(kind: AudioSourceKind, devices: AudioDeviceInfo[], defaultValue: string) {
   if (kind === "process_loopback") return [];
   const flow = kind === "microphone" ? "Capture" : "Render";
   const filtered = devices.filter((d) => d.flow === flow);
   const def = filtered.find((d) => d.is_default);
   return [
     {
-      value: DEFAULT_DEVICE_VALUE,
+      value: defaultValue,
       label: "System default",
       hint: def ? `Currently: ${def.friendly_name}` : "Follows Windows default",
     },
@@ -39,8 +48,21 @@ function deviceOptionsFor(kind: AudioSourceKind, devices: AudioDeviceInfo[]) {
   ];
 }
 
+/** Append a "(disconnected device)" entry when `value` is a device id that
+ *  isn't currently connected, so the select shows the truth instead of a
+ *  raw id. */
+function withStaleOption(
+  opts: { value: string; label: string; hint?: string }[],
+  value: string | undefined,
+  stale: boolean,
+) {
+  if (!stale || !value) return opts;
+  return [...opts, { value, label: "(disconnected device)", hint: value }];
+}
+
 export default function ClipdipAudioSection() {
-  const { config, patch, devices, devicesLoading, ensureDevices, refreshDevices } = useClipdip();
+  const { config, patch, devices, devicesLoading, ensureDevices, refreshDevices, live, running } =
+    useClipdip();
 
   // Device list: lazy fetch on mount, re-scan when the window regains focus.
   useEffect(() => {
@@ -61,11 +83,61 @@ export default function ClipdipAudioSection() {
   const remove = (idx: number) => setSources(sources.filter((_, i) => i !== idx));
   const add = (kind: AudioSourceKind) => setSources([...sources, { kind }]);
 
+  const setFallback = (idx: number, fbIdx: number, value: string) => {
+    const fbs = [...(sources[idx].fallbacks ?? [])];
+    fbs[fbIdx] = value;
+    update(idx, { fallbacks: fbs });
+  };
+  const addFallback = (idx: number) =>
+    update(idx, { fallbacks: [...(sources[idx].fallbacks ?? []), FALLBACK_DEFAULT] });
+  const removeFallback = (idx: number, fbIdx: number) => {
+    const fbs = (sources[idx].fallbacks ?? []).filter((_, i) => i !== fbIdx);
+    update(idx, { fallbacks: fbs.length ? fbs : undefined });
+  };
+
   const mixDisabled = sources.length < 2;
+
+  // Live engine truth: sources that aren't recording what the user asked
+  // for. Only meaningful while the pipeline is up.
+  const degraded = running
+    ? (live?.audio_sources ?? []).filter((s) => s.missing || s.on_fallback)
+    : [];
 
   return (
     <>
       <SetGroup title="Sources" span2>
+        {degraded.length > 0 ? (
+          <div className="audio-live-warn" role="alert">
+            <AlertTriangle size={14} />
+            <div className="audio-live-warn-lines">
+              {degraded.map((s) => (
+                <div key={`${s.index}-${s.kind}`} className="audio-live-warn-line">
+                  {s.missing ? (
+                    <>
+                      <strong>{kindWords(s.kind)}</strong> is not recording — {s.wanted} isn&apos;t
+                      available. Clips have no {s.kind === "microphone" ? "mic" : "game"} audio
+                      right now.
+                    </>
+                  ) : (
+                    <>
+                      <strong>{kindWords(s.kind)}</strong> is recording {s.using} instead of{" "}
+                      {s.wanted}.
+                    </>
+                  )}
+                  {s.missing && sources[s.index] ? (
+                    <button
+                      type="button"
+                      className="btn audio-live-warn-fix"
+                      onClick={() => update(s.index, { device_id: undefined })}
+                    >
+                      Use system default
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <SetRow
           title="Recorded tracks"
           description="Sources record simultaneously, each on its own track"
@@ -74,10 +146,11 @@ export default function ClipdipAudioSection() {
           <div className="audio-sources">
             {sources.map((src, i) => {
               const KindIcon = kindIcon(src.kind);
-              const devOpts = deviceOptionsFor(src.kind, devices);
+              const devOpts = deviceOptionsFor(src.kind, devices, DEFAULT_DEVICE_VALUE);
               const knownDevice = devices.find((d) => d.id === src.device_id);
               const stale =
                 src.kind !== "process_loopback" && Boolean(src.device_id) && !knownDevice && !devicesLoading;
+              const fallbacks = src.fallbacks ?? [];
               return (
                 <div key={i} className="audio-source">
                   <div className="audio-source-main">
@@ -87,7 +160,9 @@ export default function ClipdipAudioSection() {
                     <Select
                       value={src.kind}
                       disabled={loading}
-                      onChange={(kind) => update(i, { kind: kind as AudioSourceKind, device_id: undefined })}
+                      onChange={(kind) =>
+                        update(i, { kind: kind as AudioSourceKind, device_id: undefined, fallbacks: undefined })
+                      }
                       options={[
                         { value: "system_loopback", label: "System output", hint: "Game audio, music, calls" },
                         { value: "microphone", label: "Microphone", hint: "Your voice" },
@@ -108,26 +183,79 @@ export default function ClipdipAudioSection() {
                     </button>
                   </div>
                   {src.kind !== "process_loopback" ? (
-                    <div className="audio-source-device">
-                      <span className="audio-source-device-label">Device</span>
-                      <Select
-                        value={src.device_id ?? DEFAULT_DEVICE_VALUE}
-                        disabled={loading}
-                        onChange={(v) => update(i, { device_id: v === DEFAULT_DEVICE_VALUE ? undefined : v })}
-                        options={
-                          stale
-                            ? [...devOpts, { value: src.device_id!, label: "(disconnected device)", hint: src.device_id }]
-                            : devOpts
-                        }
-                        width={280}
-                        aria-label={`Source ${i + 1} device`}
-                      />
-                      {stale ? (
-                        <span className="audio-source-warn" title="Device not currently connected">
-                          <AlertTriangle size={12} />
+                    <>
+                      <div className="audio-source-device">
+                        <span className="audio-source-device-label">
+                          {fallbacks.length > 0 ? "1." : "Device"}
                         </span>
-                      ) : null}
-                    </div>
+                        <Select
+                          value={src.device_id ?? DEFAULT_DEVICE_VALUE}
+                          disabled={loading}
+                          onChange={(v) => update(i, { device_id: v === DEFAULT_DEVICE_VALUE ? undefined : v })}
+                          options={withStaleOption(devOpts, src.device_id, stale)}
+                          width={280}
+                          aria-label={`Source ${i + 1} device`}
+                        />
+                        {stale ? (
+                          <span className="audio-source-warn" title="Device not currently connected">
+                            <AlertTriangle size={12} />
+                          </span>
+                        ) : null}
+                      </div>
+                      {fallbacks.map((fb, fbIdx) => {
+                        const fbStale =
+                          fb !== FALLBACK_DEFAULT &&
+                          !devices.some((d) => d.id === fb) &&
+                          !devicesLoading;
+                        return (
+                          <div key={fbIdx} className="audio-source-device audio-source-fallback">
+                            <span className="audio-source-device-label">{fbIdx + 2}.</span>
+                            <Select
+                              value={fb}
+                              disabled={loading}
+                              onChange={(v) => setFallback(i, fbIdx, v)}
+                              options={withStaleOption(
+                                deviceOptionsFor(src.kind, devices, FALLBACK_DEFAULT),
+                                fb,
+                                fbStale,
+                              )}
+                              width={280}
+                              aria-label={`Source ${i + 1} fallback ${fbIdx + 1}`}
+                            />
+                            {fbStale ? (
+                              <span className="audio-source-warn" title="Device not currently connected">
+                                <AlertTriangle size={12} />
+                              </span>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="audio-source-remove"
+                              title="Remove fallback"
+                              disabled={loading}
+                              onClick={() => removeFallback(i, fbIdx)}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                      <div className="audio-source-fallback-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost audio-source-add-fallback"
+                          disabled={loading}
+                          title="Tried in order when the device above isn't available"
+                          onClick={() => addFallback(i)}
+                        >
+                          <ListPlus size={12} /> Add fallback
+                        </button>
+                        {fallbacks.length === 0 ? (
+                          <span className="audio-source-fallback-hint">
+                            Without a fallback, a missing device records silence
+                          </span>
+                        ) : null}
+                      </div>
+                    </>
                   ) : (
                     <div className="audio-source-note">Targets the focused game window. No device pick needed.</div>
                   )}

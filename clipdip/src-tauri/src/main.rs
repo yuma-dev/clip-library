@@ -151,6 +151,11 @@ struct AppState {
     /// Path of the clip whose notification is currently on-screen (if any).
     active_clip: Arc<Mutex<Option<String>>>,
     pipeline_running: Arc<Mutex<bool>>,
+    /// JSON snapshot of the audio sources' states (see `audio_states_json`),
+    /// refreshed on every pipeline (re)start and device re-evaluation.
+    /// Served in the control server's `status` payload so ClipLib's audio
+    /// settings can render a "your device isn't recording" banner.
+    audio_status: Arc<Mutex<serde_json::Value>>,
     /// Latest `clip-saving` payload, stashed here for the overlay to fetch
     /// on mount via `overlay_get_pending`. Events emitted before a webview
     /// is mounted are dropped silently — the overlay is now lazily
@@ -1507,6 +1512,11 @@ enum LoopEvent {
     /// the capture loop so a persistently-broken capture can't restart
     /// the pipeline in a tight loop.
     RestartAfterFailure,
+    /// WASAPI endpoint topology changed (device plugged/unplugged/enabled,
+    /// or the Windows default switched). Sent (debounced) by the audio
+    /// device watcher; the loop re-evaluates the sources and restarts the
+    /// pipeline only when that would actually improve one.
+    AudioDevicesChanged,
     /// Re-register the global hotkey listener with freshly-loaded config.
     /// Sent by the `reload_hotkeys` command when the user edits a hotkey,
     /// so the change applies without restarting the pipeline (or the app).
@@ -1677,28 +1687,216 @@ fn notify_health(app: &AppHandle, corner: &str, title: &str, body: &str) {
     }
 }
 
-/// Tell the user about a pinned audio device that isn't recording. The
-/// pipeline deliberately does not substitute another device (recording the
-/// wrong mic is worse than recording none) and does not rewrite the saved
-/// setting, so without this the track is just silently missing. Already
-/// deduped to once per source kind per run by the pipeline.
-fn notify_audio_notices(app: &AppHandle, corner: &str, pipeline: &clipdip_core::Pipeline) {
-    use clipdip_core::pipeline::AudioNotice;
-    for notice in pipeline.audio_notices() {
-        let (title, body) = match notice {
-            AudioNotice::MissingMicrophone => (
-                "Microphone not found",
-                "Your saved microphone wasn't found. Clips will have no mic audio until you \
-                 pick one in settings.",
-            ),
-            AudioNotice::MissingSystemAudio => (
-                "System audio device not found",
-                "Your saved system audio device wasn't found. Clips will have no game sound \
-                 until you pick one in settings.",
-            ),
-        };
-        notify_health(app, corner, title, body);
+/// Human wording for one audio source kind: ("what it is", "what's lost").
+fn audio_kind_words(kind: clipdip_audio::AudioKind) -> (&'static str, &'static str) {
+    match kind {
+        clipdip_audio::AudioKind::SystemLoopback => ("System audio", "game sound"),
+        clipdip_audio::AudioKind::Microphone => ("Microphone", "mic audio"),
     }
+}
+
+/// Tell the user when an audio source's situation *changes*: it stopped
+/// recording, it moved onto a fallback device, or it came back to the
+/// user's first choice. Diffing against the previous pipeline's states
+/// (matched by source index + kind) keeps settings-change and wedge
+/// restarts from re-toasting an unchanged situation.
+fn notify_audio_state_changes(
+    app: &AppHandle,
+    corner: &str,
+    prev: Option<&[clipdip_core::pipeline::AudioSourceState]>,
+    cur: &[clipdip_core::pipeline::AudioSourceState],
+) {
+    for st in cur {
+        let old = prev.and_then(|p| p.iter().find(|o| o.index == st.index && o.kind == st.kind));
+        let (what, lost) = audio_kind_words(st.kind);
+        if st.silent() {
+            if !old.is_some_and(|o| o.silent()) {
+                notify_health(
+                    app,
+                    corner,
+                    &format!("{what} not recording"),
+                    &format!(
+                        "{} isn't available and no fallback device worked. Clips will have \
+                         no {lost} until it returns or you pick another device in settings.",
+                        st.wanted_label
+                    ),
+                );
+            }
+        } else if st.on_fallback() {
+            if !old.is_some_and(|o| o.rank == st.rank && o.using_id == st.using_id) {
+                notify_health(
+                    app,
+                    corner,
+                    &format!("{what}: using fallback device"),
+                    &format!(
+                        "{} isn't available — recording {} instead.",
+                        st.wanted_label,
+                        st.using_label.as_deref().unwrap_or("another device")
+                    ),
+                );
+            }
+        } else if let Some(old) = old {
+            if old.silent() || old.on_fallback() {
+                notify_health(
+                    app,
+                    corner,
+                    &format!("{what} restored"),
+                    &format!(
+                        "Recording {} again.",
+                        st.using_label.as_deref().unwrap_or(&st.wanted_label)
+                    ),
+                );
+                clipdip_diagnostics::report_custom(
+                    "audio_source_recovered",
+                    clipdip_diagnostics::Severity::Info,
+                    format!("audio source recovered to its primary device ({:?})", st.kind),
+                    Some(serde_json::json!({
+                        "audio_kind": format!("{:?}", st.kind),
+                        "was_silent": old.silent(),
+                    })),
+                );
+            }
+        }
+    }
+}
+
+/// JSON snapshot of the audio source states for the control-server status
+/// payload (ClipLib's settings UI renders a repair banner from this).
+fn audio_states_json(states: &[clipdip_core::pipeline::AudioSourceState]) -> serde_json::Value {
+    serde_json::Value::Array(
+        states
+            .iter()
+            .map(|st| {
+                serde_json::json!({
+                    "index": st.index,
+                    "kind": match st.kind {
+                        clipdip_audio::AudioKind::SystemLoopback => "system_loopback",
+                        clipdip_audio::AudioKind::Microphone => "microphone",
+                    },
+                    "wanted": st.wanted_label,
+                    "using": st.using_label,
+                    "on_fallback": st.on_fallback(),
+                    "missing": st.silent(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn set_audio_status(app: &AppHandle, states: &[clipdip_core::pipeline::AudioSourceState]) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.audio_status.lock().unwrap() = audio_states_json(states);
+    }
+}
+
+fn clear_audio_status(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.audio_status.lock().unwrap() = serde_json::Value::Array(Vec::new());
+    }
+}
+
+/// Would restarting the pipeline improve any audio source right now?
+/// Returns a log-worthy reason, or None. Called on (debounced) WASAPI
+/// endpoint changes: a restart is warranted when a strictly better
+/// candidate in some source's chain is now present, when a dead source
+/// could start on anything, or when an unpinned source's stream is still
+/// on yesterday's default endpoint.
+fn audio_restart_reason(states: &[clipdip_core::pipeline::AudioSourceState]) -> Option<String> {
+    let devices = match clipdip_audio::list_devices() {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("device re-evaluation skipped, list_devices failed: {e:#}");
+            return None;
+        }
+    };
+    for st in states {
+        let flow = match st.kind {
+            clipdip_audio::AudioKind::SystemLoopback => clipdip_audio::DeviceFlow::Render,
+            clipdip_audio::AudioKind::Microphone => clipdip_audio::DeviceFlow::Capture,
+        };
+        let default_id = devices
+            .iter()
+            .find(|d| d.flow == flow && d.is_default)
+            .map(|d| d.id.clone());
+        // Same chain the pipeline builds: primary, then fallbacks, deduped.
+        let mut candidates: Vec<Option<String>> = vec![st.primary_id.clone()];
+        for fb in &st.fallback_ids {
+            let cand = if fb == clipdip_core::config::DEFAULT_DEVICE_SENTINEL {
+                None
+            } else {
+                Some(fb.clone())
+            };
+            if !candidates.contains(&cand) {
+                candidates.push(cand);
+            }
+        }
+        let available = |cand: &Option<String>| match cand {
+            None => default_id.is_some(),
+            Some(id) => devices.iter().any(|d| d.flow == flow && d.id == *id),
+        };
+        // Anything strictly better than what's running (everything, when
+        // nothing is running) that is present now justifies a restart.
+        let limit = st.rank.unwrap_or(usize::MAX);
+        for (rank, cand) in candidates.iter().enumerate() {
+            if rank >= limit {
+                break;
+            }
+            if available(cand) {
+                return Some(if st.silent() {
+                    format!("a {:?} device is available again", st.kind)
+                } else {
+                    format!("a higher-priority {:?} device is available", st.kind)
+                });
+            }
+        }
+        // Default drift: a source running on "system default" (primary or
+        // fallback) keeps recording the endpoint that WAS default when it
+        // started — a WASAPI stream doesn't follow the Windows default
+        // switch on its own.
+        if st.rank.is_some_and(|r| candidates.get(r).is_some_and(|c| c.is_none())) {
+            if let (Some(def), Some(used)) = (default_id.as_deref(), st.using_id.as_deref()) {
+                if def != used {
+                    return Some(format!("default {:?} endpoint changed", st.kind));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Forward (debounced) WASAPI endpoint-change notifications into the
+/// capture loop. One physical event — a Bluetooth headset connecting —
+/// produces a burst of add/state-change callbacks; coalescing here means
+/// the loop re-evaluates once, after the dust settles.
+fn spawn_audio_device_watcher(loop_tx: crossbeam_channel::Sender<LoopEvent>) {
+    std::thread::spawn(move || {
+        let (watcher, rx) = match clipdip_audio::DeviceWatcher::start() {
+            Ok(x) => x,
+            Err(e) => {
+                warn!("audio device watcher unavailable: {e:#}");
+                return;
+            }
+        };
+        let _keep = watcher;
+        while let Ok(first) = rx.recv() {
+            let mut last = first;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                match rx.recv_timeout(deadline - now) {
+                    Ok(ev) => last = ev,
+                    Err(_) => break,
+                }
+            }
+            debug!(?last, "audio endpoints changed — asking capture loop to re-evaluate");
+            if loop_tx.send(LoopEvent::AudioDevicesChanged).is_err() {
+                return;
+            }
+        }
+    });
 }
 
 /// Show a rich hint card on the in-game overlay, plus a native toast and
@@ -2367,6 +2565,20 @@ fn run_capture_loop(
     // must not put the pipeline in a restart loop.
     let mut auto_restarts: Vec<std::time::Instant> = Vec::new();
 
+    // Same idea for audio-driven restarts: a flapping Bluetooth headset
+    // (connect/disconnect cycling) must not clear the replay buffer over
+    // and over. Separate from `auto_restarts` — audio restarts are healthy
+    // behavior, not capture failures.
+    let mut audio_restarts: Vec<std::time::Instant> = Vec::new();
+
+    // Audio states of the current pipeline as last told to the user, so
+    // restarts only toast actual changes. None while no pipeline runs.
+    let mut last_audio_states: Option<Vec<clipdip_core::pipeline::AudioSourceState>> = None;
+
+    // A device change that arrived mid-recording is re-evaluated once the
+    // recording ends (restarting would kill the recording).
+    let mut audio_restart_deferred = false;
+
     // Start the pipeline after hotkeys are live. On failure we emit the error
     // and keep the event loop running so hotkeys remain registered.
     let mut monitor: Option<HealthMonitor> = None;
@@ -2374,7 +2586,10 @@ fn run_capture_loop(
     let mut pipeline = match clipdip_core::Pipeline::start(cfg) {
         Ok(p) => {
             info!("pipeline started");
-            notify_audio_notices(&app, &notif_corner, &p);
+            let states = p.audio_states();
+            notify_audio_state_changes(&app, &notif_corner, None, &states);
+            set_audio_status(&app, &states);
+            last_audio_states = Some(states);
             push_app_info_when_ready(p.session_info_handle(), cfg_for_app_block);
             *ring_handle.lock().unwrap() = Some(p.ring());
             *pipeline_running.lock().unwrap() = true;
@@ -2851,8 +3066,43 @@ fn run_capture_loop(
                     }
                 }
             }
-            LoopEvent::Restart | LoopEvent::RestartAfterFailure => {
-                if matches!(event, LoopEvent::RestartAfterFailure) {
+            LoopEvent::Restart | LoopEvent::RestartAfterFailure | LoopEvent::AudioDevicesChanged => {
+                if matches!(event, LoopEvent::AudioDevicesChanged) {
+                    // Restart only when it would actually improve an audio
+                    // source; endpoint churn is otherwise none of our
+                    // business (a restart clears the replay buffer).
+                    let Some(p) = pipeline.as_ref() else { continue };
+                    if p.is_recording() {
+                        audio_restart_deferred = true;
+                        continue;
+                    }
+                    let states = p.audio_states();
+                    let Some(reason) = audio_restart_reason(&states) else {
+                        // No restart, but the states may still have changed
+                        // (a device died mid-session with no fallback left):
+                        // tell the user and keep the status snapshot honest.
+                        notify_audio_state_changes(
+                            &app,
+                            &notif_corner,
+                            last_audio_states.as_deref(),
+                            &states,
+                        );
+                        set_audio_status(&app, &states);
+                        last_audio_states = Some(states);
+                        continue;
+                    };
+                    // Storm guard for a flapping device (a Bluetooth headset
+                    // cycling): at most 4 audio-driven restarts per 10 min.
+                    let now = std::time::Instant::now();
+                    audio_restarts
+                        .retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(600));
+                    if audio_restarts.len() >= 4 {
+                        warn!("audio device flapping — skipping restart ({reason})");
+                        continue;
+                    }
+                    audio_restarts.push(now);
+                    info!("restarting pipeline: {reason}");
+                } else if matches!(event, LoopEvent::RestartAfterFailure) {
                     // Storm guard: three failure-restarts inside 10 minutes
                     // means capture is persistently broken — stop cycling,
                     // tell the user, and wait for a manual restart (or a
@@ -2887,6 +3137,8 @@ fn run_capture_loop(
                         if let Some(p) = pipeline.take() {
                             let _ = p.stop();
                         }
+                        clear_audio_status(&app);
+                        last_audio_states = None;
                         let _ = app.emit("pipeline-status", serde_json::json!({"running": false}));
                         continue;
                     }
@@ -2923,7 +3175,15 @@ fn run_capture_loop(
                 pipeline = match clipdip_core::Pipeline::start(cfg) {
                     Ok(p) => {
                         info!("pipeline restarted");
-                        notify_audio_notices(&app, &notif_corner, &p);
+                        let states = p.audio_states();
+                        notify_audio_state_changes(
+                            &app,
+                            &notif_corner,
+                            last_audio_states.as_deref(),
+                            &states,
+                        );
+                        set_audio_status(&app, &states);
+                        last_audio_states = Some(states);
                         *ring_handle.lock().unwrap() = Some(p.ring());
                         *pipeline_running.lock().unwrap() = true;
                         clear_pipeline_error(&app);
@@ -2950,6 +3210,8 @@ fn run_capture_loop(
                     Err(e) => {
                         error!("pipeline restart: {e:#}");
                         report_pipeline_error(&app, format!("{e:#}"));
+                        clear_audio_status(&app);
+                        last_audio_states = None;
                         None
                     }
                 };
@@ -2968,6 +3230,14 @@ fn run_capture_loop(
                 drop(listener.take());
                 listener = spawn_hotkey_listener(&cfg, &ev_tx, &app);
             }
+        }
+
+        // A device change that arrived mid-recording parks here until the
+        // recording ends (its save flow runs through this loop, so the very
+        // next iteration re-evaluates).
+        if audio_restart_deferred && pipeline.as_ref().is_some_and(|p| !p.is_recording()) {
+            audio_restart_deferred = false;
+            let _ = ev_tx.send(LoopEvent::AudioDevicesChanged);
         }
     }
     // Stop the health monitor (and its thread) before tearing down hotkeys.
@@ -3310,6 +3580,7 @@ fn run_control_command(
             "pipeline_error": state.pipeline_error.lock().unwrap().clone(),
             "buffer_stats": get_buffer_stats(state.clone()),
             "discord": state.discord.status(),
+            "audio_sources": state.audio_status.lock().unwrap().clone(),
             "version": env!("CARGO_PKG_VERSION"),
         })),
         "get_pipeline_running" => Ok(serde_json::json!({
@@ -3602,6 +3873,7 @@ fn main() {
             config_path: config_path.clone(),
             active_clip: active_clip.clone(),
             pipeline_running: pipeline_running.clone(),
+            audio_status: Arc::new(Mutex::new(serde_json::Value::Array(Vec::new()))),
             pending_saving: Arc::new(Mutex::new(None)),
             pending_saved: Arc::new(Mutex::new(None)),
             pending_notice: Arc::new(Mutex::new(None)),
@@ -3741,6 +4013,11 @@ fn main() {
             std::thread::spawn(move || {
                 run_capture_loop(handle, config_path, active, running, ring, tx, loop_rx)
             });
+
+            // React to audio devices coming and going: a reconnected
+            // headset or a default-output switch re-points the affected
+            // sources instead of leaving silent tracks until the next boot.
+            spawn_audio_device_watcher(loop_tx.clone());
 
             // Control surface for ClipLib's settings UI (TCP JSON-lines on
             // localhost; port + token published via control.json).
