@@ -68,11 +68,21 @@ export interface NotificationRecord {
   body: string;
 }
 
+export interface AudioSourceStatus {
+  index: number;
+  kind: "system_loopback" | "microphone";
+  wanted: string;
+  using: string | null;
+  on_fallback: boolean;
+  missing: boolean;
+}
+
 export interface LiveStatus {
   pipeline_running?: boolean;
   pipeline_error?: string | null;
   buffer_stats?: BufferStats;
   discord?: DiscordStatus;
+  audio_sources?: AudioSourceStatus[];
   version?: string;
 }
 

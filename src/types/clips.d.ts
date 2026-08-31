@@ -21,10 +21,12 @@ export type ClipdipRecordingQuality =
   | { mode: "match_clips" }
   | { mode: "constant_qp"; qp: number };
 
-/** Kind-tagged audio source entry (audio.sources[]). */
+/** Kind-tagged audio source entry (audio.sources[]). `fallbacks` is an
+ *  ordered list of device ids tried when the entry above doesn't start;
+ *  the literal "default" means the system default endpoint. */
 export type ClipdipAudioSource =
-  | { kind: "system_loopback"; device_id?: string }
-  | { kind: "microphone"; device_id?: string }
+  | { kind: "system_loopback"; device_id?: string; fallbacks?: string[] }
+  | { kind: "microphone"; device_id?: string; fallbacks?: string[] }
   | { kind: "process_loopback"; process_name?: string };
 
 export interface ClipdipConfig {
@@ -125,7 +127,24 @@ export interface LiveStatus {
     buffered_secs: number;
   };
   discord: DiscordStatus;
+  /** Per-source audio state (control `status` -> audio_sources): what the
+   *  config wants vs what is actually recording. Empty while the pipeline
+   *  is down. */
+  audio_sources?: ClipdipAudioSourceStatus[];
   version: string;
+}
+
+/** One audio source's live state, for the settings repair banner. */
+export interface ClipdipAudioSourceStatus {
+  index: number;
+  kind: "system_loopback" | "microphone";
+  /** Display name of the configured primary device ("System default", a
+   *  friendly name, or "(disconnected device)"). */
+  wanted: string;
+  /** Friendly name of the device actually recording; null = silent. */
+  using: string | null;
+  on_fallback: boolean;
+  missing: boolean;
 }
 
 /** Generic control-server response; `not_running` when clipdip is down. */
