@@ -1,33 +1,113 @@
 /**
- * File watcher module - handles chokidar setup for new clips.
+ * File watcher module - detects new clips landing in the clip folder.
  *
- * Watches the clip folder and notifies the caller when new clips are added.
+ * One native recursive watch on the clip folder (fs.watch with `recursive`,
+ * backed by ReadDirectoryChangesW on Windows). This replaced chokidar, which
+ * registered a separate fs.watch per file: on a 2,800-clip library that was
+ * about 7 seconds of synchronous native work on the main thread at every
+ * launch, during which the browser thread could not bring up the window.
+ *
+ * A new file is announced only once it has stopped growing (write-finish
+ * detection), the way chokidar's awaitWriteFinish did.
  */
 
-// Imports
-const chokidar = require('chokidar');
+const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 
-// Constants
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
-// A watcher that never reaches 'ready' looks exactly like a watcher over an
-// empty folder: no events, no errors, no new clips ever detected.
-const READY_TIMEOUT_MS = 60000;
+// A clip counts as finished once its size has not changed for this long.
+const STABILITY_MS = 2000;
+const POLL_MS = 250;
+// A file that keeps changing this long is still announced (a very long
+// recording being remuxed in place is not a new clip).
+const MAX_WAIT_MS = 10 * 60 * 1000;
 
-// Module state
 let watcher = null;
-let readyTimer = null;
-// `watcher` alone cannot answer "is new clip detection still working": the
-// error handler deliberately leaves the instance in place, so a dead watcher
-// would still read as one. This flag tracks liveness explicitly.
 let watcherAlive = false;
+let currentLocation = '';
+let onNewClipCallback = null;
+// filePath -> { size, stableSince, since, timer }
+const pending = new Map();
+// Announced files, so a burst of change events after the announcement (or a
+// rename/change pair for the same create) does not announce twice.
+const announced = new Set();
 
-function clearReadyTimer() {
-  if (!readyTimer) return;
-  clearTimeout(readyTimer);
-  readyTimer = null;
+function isHidden(relative) {
+  return relative.split('/').some((part) => part.startsWith('.'));
+}
+
+function clearPending() {
+  for (const entry of pending.values()) clearTimeout(entry.timer);
+  pending.clear();
+  announced.clear();
+}
+
+function announce(filePath) {
+  announced.add(filePath);
+  const fileName = path.relative(currentLocation, filePath).replace(/\\/g, '/');
+  if (typeof onNewClipCallback === 'function') onNewClipCallback(fileName, filePath);
+}
+
+function poll(filePath) {
+  const entry = pending.get(filePath);
+  if (!entry) return;
+  fs.stat(filePath, (error, stats) => {
+    if (!pending.has(filePath)) return;
+    if (error || !stats.isFile()) {
+      // Deleted or replaced before it settled: not a new clip.
+      pending.delete(filePath);
+      return;
+    }
+    const now = Date.now();
+    if (stats.size !== entry.size) {
+      entry.size = stats.size;
+      entry.stableSince = now;
+    }
+    if (now - entry.stableSince >= STABILITY_MS || now - entry.since >= MAX_WAIT_MS) {
+      pending.delete(filePath);
+      announce(filePath);
+      return;
+    }
+    entry.timer = setTimeout(() => poll(filePath), POLL_MS);
+  });
+}
+
+function track(filePath) {
+  if (announced.has(filePath)) return;
+  const existing = pending.get(filePath);
+  if (existing) {
+    // Still being written: the poller keeps watching its size.
+    return;
+  }
+  const now = Date.now();
+  const entry = { size: -1, stableSince: now, since: now, timer: null };
+  pending.set(filePath, entry);
+  entry.timer = setTimeout(() => poll(filePath), POLL_MS);
+}
+
+function onFsEvent(eventType, filename) {
+  if (!filename) return;
+  const relative = String(filename).replace(/\\/g, '/');
+  if (isHidden(relative)) return;
+  if (!VIDEO_EXTENSIONS.has(path.extname(relative).toLowerCase())) return;
+  const filePath = path.join(currentLocation, String(filename));
+  if (eventType === 'rename') {
+    // Create, move-in, or delete. A delete drops any pending entry; a create
+    // starts tracking. The stat in poll() tells the two apart.
+    if (announced.has(filePath)) {
+      fs.stat(filePath, (error) => {
+        if (error) announced.delete(filePath);
+      });
+      return;
+    }
+    track(filePath);
+  } else if (pending.has(filePath)) {
+    // Bytes still arriving for a tracked file: nothing to do, the poller
+    // notices the growing size. Untracked change events (an existing clip
+    // rewritten in place) are not new clips.
+  }
 }
 
 /**
@@ -35,7 +115,7 @@ function clearReadyTimer() {
  * @param {string} clipLocation - Base clip folder path.
  * @param {object} options - Optional callbacks.
  * @param {Function} options.onNewClip - Called with (fileName, filePath) on new clip.
- * @returns {object|null} Chokidar watcher instance or null if not started.
+ * @returns {object|null} Watcher instance or null if not started.
  */
 function setupFileWatcher(clipLocation, { onNewClip } = {}) {
   if (!clipLocation) {
@@ -47,42 +127,24 @@ function setupFileWatcher(clipLocation, { onNewClip } = {}) {
     return null;
   }
 
-  if (watcher) {
-    watcher.close().catch((error) => {
-      logger.warn('Error closing existing file watcher:', error);
-      telemetry.event('watcher_close_failed', {
-        kind: telemetry.KIND.DEGRADED,
-        severity: telemetry.SEVERITY.WARNING,
-        context: { errno: error?.code }
-      });
-    });
-  }
-
-  clearReadyTimer();
+  stopFileWatcher();
   const setupAtMs = Date.now();
+  currentLocation = clipLocation;
+  onNewClipCallback = onNewClip;
 
-  watcher = chokidar.watch(clipLocation, {
-    ignored: /(^|[\/\\])\../, // ignore dotfiles
-    persistent: true,
-    ignoreInitial: true, // Don't fire events for existing files
-    awaitWriteFinish: {
-      stabilityThreshold: 2000,
-      pollInterval: 100
-    }
-  });
+  try {
+    watcher = fs.watch(clipLocation, { persistent: true, recursive: true }, onFsEvent);
+  } catch (error) {
+    logger.error('File watcher failed to start:', error);
+    watcherAlive = false;
+    telemetry.event('watcher_error', {
+      kind: telemetry.KIND.SILENT_FAILURE,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: error?.code, ms_since_setup: 0 }
+    });
+    return null;
+  }
   watcherAlive = true;
-
-  watcher.on('add', (filePath) => {
-    const ext = path.extname(filePath).toLowerCase();
-    if (!VIDEO_EXTENSIONS.has(ext)) {
-      return;
-    }
-
-    const fileName = path.relative(clipLocation, filePath).replace(/\\/g, '/');
-    if (typeof onNewClip === 'function') {
-      onNewClip(fileName, filePath);
-    }
-  });
 
   watcher.on('error', (error) => {
     logger.error('File watcher error:', error);
@@ -99,21 +161,8 @@ function setupFileWatcher(clipLocation, { onNewClip } = {}) {
     });
   });
 
-  watcher.on('ready', () => {
-    clearReadyTimer();
-    telemetry.metric('watcher_ready_ms', Date.now() - setupAtMs, { unit: 'ms' });
-  });
-
-  readyTimer = setTimeout(() => {
-    readyTimer = null;
-    telemetry.event('watcher_never_ready', {
-      kind: telemetry.KIND.DEGRADED,
-      severity: telemetry.SEVERITY.WARNING,
-      context: { ms: READY_TIMEOUT_MS }
-    });
-  }, READY_TIMEOUT_MS);
-  if (typeof readyTimer.unref === 'function') readyTimer.unref();
-
+  // One directory handle, ready as soon as it is opened.
+  telemetry.metric('watcher_ready_ms', Date.now() - setupAtMs, { unit: 'ms' });
   logger.info(`File watcher set up for: ${clipLocation}`);
   return watcher;
 }
@@ -122,19 +171,18 @@ function setupFileWatcher(clipLocation, { onNewClip } = {}) {
  * Stop and clear the file watcher.
  */
 function stopFileWatcher() {
-  if (!watcher) {
-    return;
-  }
-
-  clearReadyTimer();
-  watcher.close().catch((error) => {
+  clearPending();
+  if (!watcher) return;
+  try {
+    watcher.close();
+  } catch (error) {
     logger.warn('Error closing file watcher:', error);
     telemetry.event('watcher_close_failed', {
       kind: telemetry.KIND.DEGRADED,
       severity: telemetry.SEVERITY.WARNING,
       context: { errno: error?.code }
     });
-  });
+  }
   watcher = null;
   watcherAlive = false;
 }
