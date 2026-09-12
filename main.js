@@ -365,7 +365,10 @@ const queuedProtocolUrls = [];
 const queuedCliplibAuthEvents = [];
 
 // Getter for cached settings (used by modules instead of loadSettings which reads from disk)
-const getSettings = async () => settings;
+// Settings load in parallel with the first window; anything that asks
+// before they land waits for that load instead of seeing undefined.
+let settingsLoading = null;
+const getSettings = async () => settings ?? (await settingsLoading);
 
 function registerCliplibProtocol() {
   try {
@@ -853,30 +856,28 @@ function scheduleDynamicAppInfo() {
 }
 
 async function createWindow() {
+  // The window needs nothing from settings, and its renderer process takes a
+  // few hundred ms to come up: start it first and load settings meanwhile.
   if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
   const settingsLoadStartedAt = Date.now();
-  settings = await loadSettings();
-  bootTrace.mark('settings_loaded');
-  telemetry.metric('startup.settings_load_ms', Date.now() - settingsLoadStartedAt, { unit: 'ms' });
-  if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
-
-  // Telemetry knows the user's choice only once settings exist, so init runs
-  // here: still before the window, and everything recorded earlier is replayed.
-  telemetry.init({
-    userDataDir: app.getPath('userData'),
-    appVersion: app.getVersion(),
-    enabled: settings.telemetry?.enabled !== false,
-    clipdipInstallIdPath: clipdipInstallIdPath(),
-    ipcMain
+  settingsLoading = loadSettings().then((loaded) => {
+    settings = loaded;
+    bootTrace.mark('settings_loaded');
+    telemetry.metric('startup.settings_load_ms', Date.now() - settingsLoadStartedAt, { unit: 'ms' });
+    if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
+    return loaded;
   });
-  reportAppInfo();
-  scheduleDynamicAppInfo();
 
-  // Nothing else runs before the window exists: every await here delayed the
-  // first paint. Discord RPC starts after the renderer loads (below).
+  // Discord RPC starts after the renderer loads (below).
+  // Sized to the work area before it is ever shown: the window always opens
+  // maximized, and the renderer lays the library out once at its final width
+  // instead of once at 1024x768 and again on maximize.
+  const workArea = screen.getPrimaryDisplay().workArea;
   mainWindow = new BrowserWindow({
-    width: 1024,
-    height: 768,
+    x: workArea.x,
+    y: workArea.y,
+    width: workArea.width,
+    height: workArea.height,
     titleBarStyle: "hidden",
     backgroundColor: '#050608',
     autoHideMenuBar: true,
@@ -918,6 +919,19 @@ async function createWindow() {
   }
   Menu.setApplicationMenu(null);
 
+  await settingsLoading;
+  // Telemetry knows the user's choice only once settings exist, so init runs
+  // here; everything recorded earlier is replayed.
+  telemetry.init({
+    userDataDir: app.getPath('userData'),
+    appVersion: app.getVersion(),
+    enabled: settings.telemetry?.enabled !== false,
+    clipdipInstallIdPath: clipdipInstallIdPath(),
+    ipcMain
+  });
+  reportAppInfo();
+  scheduleDynamicAppInfo();
+
   // Cheap async setup that must exist before the renderer asks for
   // thumbnails or a new clip lands; the renderer is still loading.
   migrateLegacySharingTokenIfPresent().catch((error) => {
@@ -946,13 +960,11 @@ async function createWindow() {
     revealMainWindow();
   });
 
-  // With a warm snapshot the renderer reports ready a few hundred ms after
-  // its first paint. Without one (first launch, cleared storage) it waits for
-  // the full folder scan, so show the window with its in-app loading state
-  // rather than nothing.
-  mainWindow.once('ready-to-show', () => {
-    setTimeout(revealMainWindow, 1000);
-  });
+  // With a warm snapshot the first paint already contains the library grid
+  // (the first React commit runs inside the module script). Without one
+  // (first launch, cleared storage) it is the in-app loading state, which
+  // beats showing nothing while the folder scan runs.
+  mainWindow.once('ready-to-show', revealMainWindow);
 
   // Safety fallback in case the renderer never signals ready
   const splashFallback = setTimeout(() => {

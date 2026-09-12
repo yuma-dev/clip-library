@@ -19,7 +19,9 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, colla
   // group identity is stabilized by ClipGrid, so `group.clips` changing means
   // membership really changed.
   const expanded = !useDeferredValue(collapsed);
-  const shown = useStreamedSlice(group.clips, expanded);
+  // A small first commit: the window is revealed only after it has painted,
+  // and the rest of the group streams in on the following frames.
+  const shown = useStreamedSlice(group.clips, expanded, { initial: 12, perFrame: 80 });
 
   return (
     <section className="clip-group">

@@ -217,7 +217,7 @@ function ClipGrid({
   // it appears in, so mounting all ~25 groups at once is still a ~600-card
   // commit (the 700ms first frame in the 2026-07-08 startup trace). A few
   // groups fill the viewport; the rest stream in below the fold.
-  const shownGroups = useStreamedSlice(groups, true, { initial: 4, perFrame: 3 }) ?? groups;
+  const shownGroups = useStreamedSlice(groups, true, { initial: 2, perFrame: 3 }) ?? groups;
 
   // Display-ordered clip names across expanded groups — the source of truth
   // for shift-click ranges (kept in a ref so selectionApi stays stable and
