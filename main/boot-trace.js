@@ -99,7 +99,9 @@ function init({ ipcMain, userData }) {
   if (contentTraceWanted) {
     const { contentTracing } = require('electron');
     contentTracing.startRecording({
-      included_categories: ['*', 'disabled-by-default-devtools.timeline', 'disabled-by-default-v8.compile'],
+      // Lean set: enough for a DevTools-style view of the renderer main thread
+      // (parse, compile, evaluate, layout, paint) without slowing the app down.
+      included_categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink.user_timing', 'v8.execute', 'loading', 'disabled-by-default-v8.compile'],
       recording_mode: 'record-until-full',
     }).then(() => { mark('content_trace_started'); }).catch(() => {});
     contentTraceTimer = setTimeout(stopContentTrace, 25000);
