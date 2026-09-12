@@ -12,6 +12,27 @@
 
 const { ipcRenderer } = require("electron");
 
+// Boot timeline for benchmark/cold-start.js (CLIPLIB_BOOT_TRACE=1 only).
+const bootTrace = (() => {
+  try {
+    if (process.env.CLIPLIB_BOOT_TRACE !== "1") return null;
+    const mark = (name, t) => {
+      try {
+        ipcRenderer.send("boot-trace-mark", {
+          name,
+          t: typeof t === "number" ? t : performance.timeOrigin + performance.now(),
+        });
+      } catch (_) {
+        /* tracing must never break the app */
+      }
+    };
+    mark("preload_start");
+    return { mark };
+  } catch (_) {
+    return null;
+  }
+})();
+
 // --- Telemetry bridge -------------------------------------------------------
 //
 // Fire-and-forget onto the `telemetry-report` channel (main/telemetry does the
@@ -325,6 +346,7 @@ const api = {
 
 // contextIsolation is OFF, so a direct assignment is visible to the renderer.
 window.clips = api;
+if (bootTrace) window.__bootTrace = bootTrace;
 
 // Bridge for the performance profiler (src/renderer/perf) — ONLY when launched
 // via `npm run dev:trace` (which sets CLIPS_PERF_STARTUP=1, inherited by this
@@ -377,3 +399,5 @@ try {
     ],
   });
 }
+
+if (bootTrace) bootTrace.mark("preload_done");

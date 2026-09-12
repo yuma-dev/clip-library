@@ -1,3 +1,5 @@
+// First line on purpose: records process start for the cold-start harness.
+const bootTrace = require('./main/boot-trace');
 if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen, crashReporter } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
@@ -10,7 +12,11 @@ app.setAppUserModelId('com.yuma-dev.clips');
   const path = require('path');
   const fs = require('fs');
   const legacyUserData = path.join(app.getPath('appData'), 'Clips');
-  if (fs.existsSync(legacyUserData)) {
+  if (process.env.CLIPLIB_PROFILE_DIR) {
+    // Benchmark harness (benchmark/cold-start.js): an isolated profile so
+    // runs never touch the real one.
+    app.setPath('userData', path.resolve(process.env.CLIPLIB_PROFILE_DIR));
+  } else if (fs.existsSync(legacyUserData)) {
     app.setPath('userData', legacyUserData);
   }
 }
@@ -311,6 +317,7 @@ function dismissSplash() {
       mainWindow.maximize();
       mainWindow.show();
       mainWindow.focus();
+      bootTrace.mark('window_visible');
     }
   };
 
@@ -830,6 +837,7 @@ async function createWindow() {
   if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
   const settingsLoadStartedAt = Date.now();
   settings = await loadSettings();
+  bootTrace.mark('settings_loaded');
   telemetry.metric('startup.settings_load_ms', Date.now() - settingsLoadStartedAt, { unit: 'ms' });
   if (benchmarkHarness) benchmarkHarness.endStartup('settingsLoad');
 
@@ -902,6 +910,7 @@ async function createWindow() {
     },
   });
 
+  bootTrace.mark('window_constructed');
   rendererConsoleCapture.attach(mainWindow.webContents);
 
   // Renderer rewrite: the React renderer draws its own titlebar strip; native
@@ -921,6 +930,7 @@ async function createWindow() {
 
   // Renderer signals when clips are loaded and UI is fully ready
   ipcMain.once('renderer-ready', () => {
+    bootTrace.mark('renderer_ready');
     // Process start to a usable window. The only startup number a user ever
     // notices, and until now it was measured nowhere in production.
     telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
@@ -1057,12 +1067,15 @@ async function checkForUpdatesInBackground(mainWindow) {
   }
 }
 
+bootTrace.mark('modules_loaded');
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) {
     return;
   }
 
   appIsReady = true;
+  bootTrace.mark('app_ready');
+  bootTrace.init({ ipcMain, userData: app.getPath('userData') });
 
   registerCliplibProtocol();
 
@@ -1234,7 +1247,9 @@ ipcMain.handle('clipdip-control', (event, payload) =>
   clipdipModule.control(payload?.cmd, payload?.args));
 
 ipcMain.handle("get-clips", async () => {
-  return await clipsModule.getClips(getSettings);
+  const clips = await clipsModule.getClips(getSettings);
+  bootTrace.mark('get_clips_resolved');
+  return clips;
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -1568,6 +1583,7 @@ app.on('before-quit', () => {
 
   // Save current clip list for next session comparison
   clipsModule.saveCurrentClipList(getSettings);
+  bootTrace.flush();
 });
 
 ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTime) => {

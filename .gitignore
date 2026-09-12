@@ -39,3 +39,7 @@ agents/
 docs/
 RENDERER-REWRITE-PLAN.md
 main/ingest-key.generated.json
+
+# Cold-start benchmark: seeded profiles and per-run results
+benchmark/profiles/
+benchmark/results/
