@@ -2,8 +2,8 @@
 // persist across the rewrite). Stacks match legacy UI_FONT_STACKS, except the
 // default "modern_ui" now leads with the bundled Inter Variable so existing
 // installs keep the new renderer's design font unless they explicitly picked
-// something else. Webfonts load from Google Fonts (index.html), falling back
-// down each stack when offline.
+// something else. Webfonts load from Google Fonts on demand (see
+// ensureWebfonts), falling back down each stack when offline.
 
 export const UI_FONT_DEFAULT = "modern_ui";
 
@@ -42,9 +42,27 @@ export function fontStack(key: string | undefined): string {
   return (UI_FONTS.find((f) => f.key === key) ?? UI_FONTS[0]).stack;
 }
 
+// Fonts whose first choice is bundled (Inter Variable) or a system font. Every
+// other key leads with a Google Fonts family.
+const LOCAL_FONT_KEYS = new Set(["modern_ui", "segoe_ui", "inter"]);
+const WEBFONTS_HREF =
+  "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Figtree:wght@400;500;600&family=Geist:wght@400;500;600&family=Manrope:wght@400;500;600&family=Outfit:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600&family=Public+Sans:wght@400;500;600&family=Roboto:wght@400;500&family=Space+Grotesk:wght@400;500;600&family=Work+Sans:wght@400;500;600&display=swap";
+let webfontsRequested = false;
+
+/** Load the optional webfont families once, the first time one is selected. */
+export function ensureWebfonts(): void {
+  if (webfontsRequested) return;
+  webfontsRequested = true;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = WEBFONTS_HREF;
+  document.head.appendChild(link);
+}
+
 /** Apply the selected font app-wide (legacy applyUiFontSetting equivalent). */
 export function applyUiFont(key: string | undefined): string {
   const normalized = UI_FONTS.some((f) => f.key === key) ? (key as string) : UI_FONT_DEFAULT;
+  if (!LOCAL_FONT_KEYS.has(normalized)) ensureWebfonts();
   document.documentElement.style.setProperty("--app-font-family", fontStack(normalized));
   return normalized;
 }
