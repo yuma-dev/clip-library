@@ -1,6 +1,5 @@
 // First line on purpose: records process start for the cold-start harness.
 const bootTrace = require('./main/boot-trace');
-if (require("electron-squirrel-startup")) return;
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen, crashReporter } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 
@@ -184,10 +183,13 @@ const isDev = !app.isPackaged;
 const path = require("path");
 const fs = require("fs").promises;
 const { loadSettings, saveSettings, updateSettings, getDefaultKeybindings, getClipLocation, setClipLocation } = require("./utils/settings-manager");
-const steelSeriesModule = require('./main/steelseries-processor');
+// Modules that nothing needs before the library is on screen load on first
+// use (the Proxy defers the require); each one costs tens of ms at boot and
+// the browser thread cannot serve the renderer while it loads.
+const steelSeriesModule = lazyModule('./main/steelseries-processor');
 const { logActivity } = require('./utils/activity-tracker');
 const diagnosticsModule = lazyModule('./diagnostics/collector');
-const logUploader = require('./main/log-uploader');
+const logUploader = lazyModule('./main/log-uploader');
 const shareModule = require('./main/share');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const IDLE_TIMEOUT = 5 * 60 * 1000;
@@ -203,15 +205,15 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
-// FFmpeg module
-const ffmpegModule = require('./main/ffmpeg');
-const { ffmpeg, ffprobeAsync, generateScreenshot } = ffmpegModule;
+// FFmpeg module (fluent-ffmpeg and the binary paths; first needed for
+// thumbnails, well after the window is up)
+const ffmpegModule = lazyModule('./main/ffmpeg');
 
 // Thumbnails module
-const thumbnailsModule = require('./main/thumbnails');
+const thumbnailsModule = lazyModule('./main/thumbnails');
 
 // Metadata module
-const metadataModule = require('./main/metadata');
+const metadataModule = lazyModule('./main/metadata');
 
 // File watcher module
 const fileWatcherModule = require('./main/file-watcher');
@@ -226,13 +228,13 @@ const discordWidgetModule = lazyModule('./main/discord-widget');
 const rendererConsoleCapture = require('./main/renderer-console-capture');
 
 // Clips module
-const clipsModule = require('./main/clips');
+const clipsModule = lazyModule('./main/clips');
 
 // Dialogs Module - handles all Electron dialog interactions
-const dialogsModule = require('./main/dialogs');
+const dialogsModule = lazyModule('./main/dialogs');
 
 // Integrated clipdip (clipdip binary): process lifecycle + TOML config bridge
-const clipdipModule = require('./main/clipdip');
+const clipdipModule = lazyModule('./main/clipdip');
 
 // FFmpeg verification (and the NVENC probe it chains) runs from
 // runDeferredServices() once the library is on screen; see there.
@@ -281,6 +283,33 @@ function scheduleDeferredServices() {
 }
 
 async function runDeferredServices() {
+  const win = mainWindow;
+  if (win && !win.isDestroyed()) {
+    updaterModule.init(win);
+    // "Updated to vX" toast after a silent update landed.
+    try {
+      updaterModule.checkPostUpdateMarker(win);
+    } catch (error) {
+      logger.warn(`Post-update marker check failed: ${error.message}`);
+    }
+    if (settings.enableDiscordRPC && !isBenchmarkMode) {
+      discordModule.initDiscordRPC(getSettings);
+    }
+    if (!isBenchmarkMode) {
+      // Owner-only profile widget pusher; inert unless its token file exists
+      // in userData (see main/discord-widget.js).
+      discordWidgetModule.init(getSettings);
+    }
+    if (isBenchmarkMode) {
+      logger.info('[Benchmark] Skipping update check in benchmark mode');
+    } else {
+      setTimeout(() => {
+        logger.info('Starting update check after delay');
+        checkForUpdatesInBackground(win);
+      }, 1500);
+    }
+  }
+
   ffmpegModule.initFFmpeg().catch((err) => {
     logger.error('FFmpeg initialization failed:', err);
   });
@@ -992,12 +1021,6 @@ async function createWindow() {
     processQueuedProtocolUrls().catch((error) => {
       logger.error('Failed processing protocol queue after renderer load:', error);
     });
-    // "Updated to vX" toast after a silent update landed.
-    try {
-      updaterModule.checkPostUpdateMarker(mainWindow);
-    } catch (error) {
-      logger.warn(`Post-update marker check failed: ${error.message}`);
-    }
   });
   
   if (isDev) {
@@ -1088,28 +1111,9 @@ app.whenReady().then(async () => {
   // renderer has loaded so their requires never sit on the startup path.
   win.webContents.once('did-finish-load', () => {
     logger.info('Renderer did-finish-load event fired');
-
-    updaterModule.init(win);
-    if (settings.enableDiscordRPC && !isBenchmarkMode) {
-      discordModule.initDiscordRPC(getSettings);
-    }
-    if (!isBenchmarkMode) {
-      // Owner-only profile widget pusher; inert unless its token file exists
-      // in userData (see main/discord-widget.js).
-      discordWidgetModule.init(getSettings);
-    }
-
-    // Skip update check in benchmark mode
-    if (isBenchmarkMode) {
-      logger.info('[Benchmark] Skipping update check in benchmark mode');
-      return;
-    }
-
-    // Add a small delay to ensure the renderer's IPC listeners are set up
-    setTimeout(() => {
-      logger.info('Starting update check after delay');
-      checkForUpdatesInBackground(win);
-    }, 1500);
+    // Updater (axios, semver), Discord RPC and the profile widget used to
+    // start here, which is while the renderer is booting and waiting on this
+    // thread for its first IPC replies. They run from runDeferredServices().
   });
   
   // Start periodic saves to prevent data loss
