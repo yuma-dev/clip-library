@@ -262,49 +262,8 @@ ipcMain.handle('get-export-acceleration-status', async () => {
 let idleTimer;
 
 let mainWindow;
-let splashWindow;
-let splashDismissed = false;
+let mainWindowRevealed = false;
 let settings;
-
-function createSplashWindow() {
-  const primary = screen.getPrimaryDisplay();
-  const { bounds } = primary;
-  const width = 480;
-  const height = 360;
-  const x = Math.round(bounds.x + (bounds.width - width) / 2);
-  const y = Math.round(bounds.y + (bounds.height - height) / 2);
-
-  splashWindow = new BrowserWindow({
-    width,
-    height,
-    x,
-    y,
-    show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    hasShadow: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    focusable: false,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true
-    }
-  });
-
-  splashWindow.setIgnoreMouseEvents(true);
-  splashWindow.loadFile('splash.html');
-
-  splashWindow.once('ready-to-show', () => {
-    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
-  });
-
-  splashWindow.on('closed', () => {
-    splashWindow = undefined;
-  });
-}
 
 // Side work that is not needed to show the library: it spawns processes
 // (ffmpeg, PowerShell, tasklist, clipdip) or blocks on COM, and on the
@@ -355,38 +314,21 @@ async function runDeferredServices() {
   });
 }
 
-function dismissSplash() {
-  if (splashDismissed) return;
-  splashDismissed = true;
+// The window is created hidden and shown once, as soon as the renderer has
+// painted the library (or shortly after its first paint, whichever comes
+// first). There used to be a separate splash window here: its own renderer
+// process competed with the main window's, and its dismiss animation added a
+// fixed 300 ms between "library painted" and "library visible".
+function revealMainWindow() {
+  if (mainWindowRevealed) return;
+  mainWindowRevealed = true;
   scheduleDeferredServices();
-
-  const reveal = () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.maximize();
-      mainWindow.show();
-      mainWindow.focus();
-      bootTrace.mark('window_visible');
-    }
-  };
-
-  const splash = splashWindow;
-  if (!splash || splash.isDestroyed()) {
-    reveal();
-    return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.maximize();
+    mainWindow.show();
+    mainWindow.focus();
+    bootTrace.mark('window_visible');
   }
-
-  splash.webContents
-    .executeJavaScript("document.body.classList.add('dismiss')")
-    .catch(() => undefined);
-
-  setTimeout(() => {
-    if (!splash.isDestroyed()) {
-      splash.once('closed', reveal);
-      splash.close();
-    } else {
-      reveal();
-    }
-  }, 300);
 }
 let pendingCliplibAuthSession = null;
 let isProcessingProtocolQueue = false;
@@ -972,14 +914,22 @@ async function createWindow() {
     // Process start to a usable window. The only startup number a user ever
     // notices, and until now it was measured nowhere in production.
     telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
-    dismissSplash();
+    revealMainWindow();
+  });
+
+  // With a warm snapshot the renderer reports ready a few hundred ms after
+  // its first paint. Without one (first launch, cleared storage) it waits for
+  // the full folder scan, so show the window with its in-app loading state
+  // rather than nothing.
+  mainWindow.once('ready-to-show', () => {
+    setTimeout(revealMainWindow, 1000);
   });
 
   // Safety fallback in case the renderer never signals ready
   const splashFallback = setTimeout(() => {
     // The fallback firing means the renderer never reported ready: the user is
     // looking at a window that may be empty. It used to fire with no log at all.
-    if (!splashDismissed) {
+    if (!mainWindowRevealed) {
       telemetry.event('renderer_never_ready', {
         kind: telemetry.KIND.CRASH,
         severity: telemetry.SEVERITY.FATAL,
@@ -990,7 +940,7 @@ async function createWindow() {
         }
       });
     }
-    dismissSplash();
+    revealMainWindow();
   }, 30000);
   mainWindow.on('closed', () => clearTimeout(splashFallback));
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -1116,8 +1066,6 @@ app.whenReady().then(async () => {
   bootTrace.init({ ipcMain, userData: app.getPath('userData') });
 
   registerCliplibProtocol();
-
-  createSplashWindow();
 
   telemetry.metric('startup.module_load_ms', Date.now() - moduleLoadStartedAt, { unit: 'ms' });
   if (benchmarkHarness) {
