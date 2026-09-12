@@ -10,6 +10,9 @@ import { initGlowTuner } from "./library/glowConfig";
 import { initTelemetry } from "./telemetry";
 import ErrorBoundary from "./telemetry/ErrorBoundary";
 import "./styles.css";
+import { initBootMarks } from "./perf/bootMarks";
+
+initBootMarks();
 
 // First, so window.onerror / unhandledrejection cover the startup path too.
 initTelemetry();

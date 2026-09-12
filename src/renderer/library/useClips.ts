@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocalClip } from "./types";
+import { bootMark } from "../perf/bootMarks";
 
 // Last session's library snapshot — lets the grid paint instantly on launch
 // while the real scan runs, instead of showing a loading screen for ~1s.
@@ -78,7 +79,10 @@ export interface UseClips {
  */
 export function useClips(): UseClips {
   const cacheRef = useRef<ClipsCache | null | undefined>(undefined);
-  if (cacheRef.current === undefined) cacheRef.current = readClipsCache();
+  if (cacheRef.current === undefined) {
+    cacheRef.current = readClipsCache();
+    bootMark(cacheRef.current ? "snapshot_hit" : "snapshot_miss");
+  }
   const cached = cacheRef.current;
 
   const [clips, setClips] = useState<LocalClip[]>(() => cached?.clips ?? []);
@@ -100,6 +104,7 @@ export function useClips(): UseClips {
         window.clips.getNewClipsInfo().catch(() => ({ newClips: [] })),
       ]);
       if (cancelled) return;
+      bootMark("get_clips_returned");
 
       // Clips added since the last session — used to highlight them on load.
       const newSet = new Set<string>(Array.isArray(newInfo?.newClips) ? newInfo.newClips : []);
@@ -140,6 +145,7 @@ export function useClips(): UseClips {
         });
       });
       setLoading(false);
+      requestAnimationFrame(() => bootMark("fresh_list_committed"));
 
       // Live: a clip file lands while the app is running. Fetch its info, mark
       // it new, prepend it (dedup), then fill in its thumbnail + tags.
@@ -185,6 +191,7 @@ export function useClips(): UseClips {
       if (cancelled) return;
       const tmap = new Map<string, string | null>(Object.entries(batch));
       setThumbnails(new Map(tmap));
+      requestAnimationFrame(() => bootMark("thumb_paths_applied"));
 
       unsubs.push(
         window.clips.onThumbnailGenerated((payload: { clipName?: string; thumbnailPath?: string }) => {
@@ -255,6 +262,8 @@ export function useClips(): UseClips {
           }),
         );
       }
+
+      requestAnimationFrame(() => bootMark("tags_loaded"));
 
       // Snapshot for the next launch's instant first paint. "New" flags are
       // session-relative, so they're stripped. Never cache an empty library —
