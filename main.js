@@ -234,10 +234,8 @@ const dialogsModule = require('./main/dialogs');
 // Integrated clipdip (clipdip binary): process lifecycle + TOML config bridge
 const clipdipModule = require('./main/clipdip');
 
-// FFmpeg is initialized in the module, verify on startup
-ffmpegModule.initFFmpeg().catch(err => {
-  logger.error('FFmpeg initialization failed:', err);
-});
+// FFmpeg verification (and the NVENC probe it chains) runs from
+// runDeferredServices() once the library is on screen; see there.
 
 function sendLog(window, type, message) {
   if (window && !window.isDestroyed()) {
@@ -308,9 +306,59 @@ function createSplashWindow() {
   });
 }
 
+// Side work that is not needed to show the library: it spawns processes
+// (ffmpeg, PowerShell, tasklist, clipdip) or blocks on COM, and on the
+// startup path it competed with the renderer and GPU process for the first
+// seconds of every launch. Runs once, shortly after the library is visible.
+let deferredServicesScheduled = false;
+function scheduleDeferredServices() {
+  if (deferredServicesScheduled) return;
+  deferredServicesScheduled = true;
+  setTimeout(() => {
+    runDeferredServices().catch((error) => {
+      logger.warn(`Deferred startup services failed: ${error.message}`);
+    });
+  }, 1500);
+}
+
+async function runDeferredServices() {
+  ffmpegModule.initFFmpeg().catch((err) => {
+    logger.error('FFmpeg initialization failed:', err);
+  });
+
+  // Machine block for the heartbeat. The collector needs the clip folder
+  // (volume class + free space, never the path itself) and is a no-op until
+  // telemetry.init() has run, which it has by now.
+  void telemetry.collectMachine({ app, screen, clipLocation: settings.clipLocation });
+
+  // Bring the integrated clipdip up. Opt-out: the first launch where the
+  // user never chose (no clipdip.enabled key) auto-enables it — supported
+  // hardware only; a failed start records enabled=false so it never loops.
+  // Later launches just start it if it's enabled but not running.
+  clipdipModule.init(getSettings);
+  clipdipModule
+    .autoEnableIfUnconfigured(async (value) => {
+      settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
+      await saveSettings(settings);
+    })
+    .then((autoEnabled) => {
+      if (!autoEnabled) clipdipModule.ensureStartedIfEnabled();
+    })
+    .catch((error) => logger.warn(`Clipdip bootstrap failed: ${error.message}`));
+
+  // The Clips → ClipLib rebrand renamed the exe, which orphans taskbar pins
+  // (their .lnk targets the old Clips.exe path). Retarget any pin whose
+  // Clips.exe target no longer exists to the running exe. Idempotent; cheap
+  // no-op when there's nothing to repair.
+  repairTaskbarPins().catch((error) => {
+    logger.warn(`Taskbar pin repair failed: ${error.message}`);
+  });
+}
+
 function dismissSplash() {
   if (splashDismissed) return;
   splashDismissed = true;
+  scheduleDeferredServices();
 
   const reveal = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -853,34 +901,8 @@ async function createWindow() {
   reportAppInfo();
   scheduleDynamicAppInfo();
 
-  // Machine block for the heartbeat. Fire and forget: nothing below waits on
-  // it. It runs here rather than in whenReady because the collector needs the
-  // clip folder (volume class + free space, never the path itself), and
-  // because collectMachine is a no-op until telemetry.init() above has run.
-  void telemetry.collectMachine({ app, screen, clipLocation: settings.clipLocation });
-
-  try {
-    await migrateLegacySharingTokenIfPresent();
-  } catch (error) {
-    logger.warn(`Legacy sharing token migration failed: ${error.message}`);
-  }
-
-  // Initialize thumbnail cache
-  await thumbnailsModule.initThumbnailCache();
-
-  if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
-  fileWatcherModule.setupFileWatcher(settings.clipLocation, {
-    onNewClip: (fileName) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('new-clip-added', fileName);
-      }
-    }
-  });
-  if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
-
-  // Discord RPC starts after the renderer loads (below) — its require would
-  // otherwise block window creation, defeating the lazy module load.
-
+  // Nothing else runs before the window exists: every await here delayed the
+  // first paint. Discord RPC starts after the renderer loads (below).
   mainWindow = new BrowserWindow({
     width: 1024,
     height: 768,
@@ -924,6 +946,22 @@ async function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "renderer-dist", "index.html"));
   }
   Menu.setApplicationMenu(null);
+
+  // Cheap async setup that must exist before the renderer asks for
+  // thumbnails or a new clip lands; the renderer is still loading.
+  migrateLegacySharingTokenIfPresent().catch((error) => {
+    logger.warn(`Legacy sharing token migration failed: ${error.message}`);
+  });
+  await thumbnailsModule.initThumbnailCache();
+  if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
+  fileWatcherModule.setupFileWatcher(settings.clipLocation, {
+    onNewClip: (fileName) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('new-clip-added', fileName);
+      }
+    }
+  });
+  if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
 
   let rendererDidFinishLoad = false;
   const rendererWaitStartedAt = Date.now();
@@ -1129,29 +1167,8 @@ app.whenReady().then(async () => {
   // Start periodic saves to prevent data loss
   clipsModule.startPeriodicSave(getSettings);
 
-  // Bring the integrated clipdip up. Opt-out: the first launch where the
-  // user never chose (no clipdip.enabled key) auto-enables it — supported
-  // hardware only; a failed start records enabled=false so it never loops.
-  // Later launches just start it if it's enabled but not running.
-  clipdipModule.init(getSettings);
-  clipdipModule
-    .autoEnableIfUnconfigured(async (value) => {
-      settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
-      await saveSettings(settings);
-    })
-    .then((autoEnabled) => {
-      if (!autoEnabled) clipdipModule.ensureStartedIfEnabled();
-    })
-    .catch((error) => logger.warn(`Clipdip bootstrap failed: ${error.message}`));
-
-  // The Clips → ClipLib rebrand renamed the exe, which orphans taskbar pins
-  // (their .lnk targets the old Clips.exe path). Retarget any pin whose
-  // Clips.exe target no longer exists to the running exe. Idempotent; cheap
-  // no-op when there's nothing to repair.
-  repairTaskbarPins().catch((error) => {
-    logger.warn(`Taskbar pin repair failed: ${error.message}`);
-  });
-
+  // clipdip bootstrap, ffmpeg verification and taskbar pin repair run from
+  // runDeferredServices() once the library is visible.
   processQueuedProtocolUrls().catch((error) => {
     logger.error('Failed processing startup protocol queue:', error);
   });
