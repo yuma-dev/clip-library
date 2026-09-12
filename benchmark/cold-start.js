@@ -17,6 +17,7 @@
 // --benchmark-mode (also set CLIPS_BENCHMARK=1: no updater, no discord),
 // --trace (also record a Chromium content trace; analyze with benchmark/analyze-trace.js),
 // --cpu (also record a V8 CPU profile of the main process; analyze with benchmark/analyze-cpuprofile.js),
+// --settle MS (keep the app alive that long after the last mark, e.g. to let deferred services log),
 // --app-args "--flag --other" (extra Chromium/Electron switches for the app).
 
 const { spawn, execFileSync } = require('node:child_process');
@@ -40,7 +41,7 @@ const PHASES = [
 const DONE_MARKS = ['grid_first_thumb', 'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded'];
 
 function parseArgs(argv) {
-  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, appArgs: [], makeProfile: false, benchmarkMode: false };
+  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, appArgs: [], makeProfile: false, benchmarkMode: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -53,6 +54,7 @@ function parseArgs(argv) {
     else if (a === '--reuse') out.reuse = true;
     else if (a === '--trace') out.trace = true;
     else if (a === '--cpu') out.cpu = true;
+    else if (a === '--settle') out.settle = Number(next());
     else if (a === '--app-args') out.appArgs = next().split(/s+/).filter(Boolean);
     else if (a === '--cold-fs') out.coldFs = true;
     else if (a === '--make-profile') out.makeProfile = true;
@@ -64,7 +66,16 @@ function parseArgs(argv) {
 }
 
 function rmrf(p) {
-  fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelayMs: 100 });
+  // A just-killed app can hold handles for a moment; keep trying.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelayMs: 100 });
+      return;
+    } catch (error) {
+      if (attempt >= 20) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
 }
 
 function makeProfile() {
@@ -140,6 +151,7 @@ async function runOnce(opts, index, exe) {
     trace = readTrace(traceFile) || trace;
     if (trace && DONE_MARKS.every((m) => trace.marks[m] !== undefined) && (!opts.trace || fs.existsSync(chromiumTrace)) && (!opts.cpu || fs.existsSync(cpuProfile))) {
       if (opts.trace || opts.cpu) await sleep(1500);
+      if (opts.settle) await sleep(opts.settle);
       break;
     }
     if (child.exitCode !== null) break;
