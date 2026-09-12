@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "./settings/SettingsContext";
 import Titlebar from "./shell/Titlebar";
 import Sidebar from "./shell/Sidebar";
 import LibraryView from "./views/LibraryView";
-import SettingsView from "./views/SettingsView";
-import FeedPage from "./feed/FeedPage";
 import FeedPlayer from "./feed/FeedPlayer";
-import ProfilePage from "./feed/ProfilePage";
 import { AppNavContext, type AppNav } from "./shell/appNav";
 import { useToast } from "./ui/Toast";
 import { useProfile } from "./shell/useProfile";
 import VideoPlayer from "./player/VideoPlayer";
-import OnboardingWizard from "./onboarding/OnboardingWizard";
+import OnboardingGate from "./onboarding/OnboardingGate";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
 import { installDebugTools } from "./shell/debugTools";
 import { reportMetric, setTelemetryRoute } from "./telemetry";
 import type { Route } from "./routes";
+
+// Surfaces that are not on screen at launch load as their own chunks, so the
+// boot bundle is the library and its shell only.
+const SettingsView = lazy(() => import("./views/SettingsView"));
+const FeedPage = lazy(() => import("./feed/FeedPage"));
+const ProfilePage = lazy(() => import("./feed/ProfilePage"));
 
 const PIN_KEY = "clip-library:rail-pinned";
 const DYNAMIC_KEY = "clip-library:rail-dynamic";
@@ -250,7 +253,11 @@ export default function App() {
               profile doesn't remount the feed/library — remounting re-ran the
               feed's fetch + mounted every card in one commit (855ms freeze on
               profile-back in the 2026-07-08 trace). */}
-          {profileUserId ? <ProfilePage userId={profileUserId} /> : null}
+          {profileUserId ? (
+            <Suspense fallback={null}>
+              <ProfilePage userId={profileUserId} />
+            </Suspense>
+          ) : null}
           <div className={`route-host${profileUserId || route !== "library" ? " hidden" : ""}`}>
             {visitedRoutes.current.library ? (
               <LibraryView
@@ -265,11 +272,17 @@ export default function App() {
             ) : null}
           </div>
           <div className={`route-host${profileUserId || route !== "feed" ? " hidden" : ""}`}>
-            {visitedRoutes.current.feed ? <FeedPage /> : null}
+            {visitedRoutes.current.feed ? (
+              <Suspense fallback={null}>
+                <FeedPage />
+              </Suspense>
+            ) : null}
           </div>
           <div className={`route-host${profileUserId || route !== "settings" ? " hidden" : ""}`}>
             {route === "settings" ? (
-              <SettingsView lib={lib} filter={filter} intent={settingsIntent} />
+              <Suspense fallback={null}>
+                <SettingsView lib={lib} filter={filter} intent={settingsIntent} />
+              </Suspense>
             ) : null}
           </div>
         </main>
@@ -287,9 +300,9 @@ export default function App() {
       {/* Feed player mounts once app-wide so any grid (feed route, profile
           overlay) can open remote clips through the feedPlayerBus. */}
       <FeedPlayer />
-      {/* One-time 3.0 intro + ClipDip setup. Self-gating on
-          settings.onboardingVersion; re-openable via __showOnboarding(). */}
-      <OnboardingWizard />
+      {/* One-time 3.0 intro + ClipDip setup. The gate loads the wizard chunk
+          only when it has to open; re-openable via __showOnboarding(). */}
+      <OnboardingGate />
     </div>
     </AppNavContext.Provider>
   );

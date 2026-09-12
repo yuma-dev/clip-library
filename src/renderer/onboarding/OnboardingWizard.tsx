@@ -39,7 +39,8 @@ import pillsUrl from "../../../assets/onboarding/user-pills-showcase.png";
  *   __showOnboarding()   — open the wizard now
  *   __resetOnboarding()  — clear the seen-flag (shows again on next launch)
  */
-export const ONBOARDING_VERSION = 3;
+export { ONBOARDING_VERSION } from "./version";
+import { ONBOARDING_VERSION } from "./version";
 
 type StepId = "welcome" | "clipdip" | "audio" | "hotkeys" | "discord" | "done";
 
