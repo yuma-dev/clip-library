@@ -61,6 +61,22 @@ verified with a screen pixel probe and screenshots. Two things fixed it:
 A brand screen with a hand-over animation was tried and rejected: the
 animation was choppy and it added nothing to responsiveness.
 
+## The native launcher
+
+ at the install root is a 470 KB Rust program
+(), not Electron. It draws the splash (logo and sweep
+bar, per-pixel alpha, no frame) within a few tens of milliseconds of the
+click, starts  (the Electron binary, )
+with the same arguments, and fades out once the app's window is visible and
+opaque (it polls the app's top-level windows: visible, not cloaked, layered
+alpha at full). If the app is already running, the spawned instance hands
+over to it and exits, so the splash disappears again at once. Shortcuts are
+retargeted to the launcher by ; taskbar pins from older
+installs already point at . Deep links () are
+registered by Electron and open the app directly, without the splash.
+The harness launches through the launcher, the way a user does, and the
+Electron first line still lands at ~165 ms after the click.
+
 ## Things that were tested and did not matter
 
 Windows Defender, Windhawk, asar size, proxy auto-detection, the GPU

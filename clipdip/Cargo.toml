@@ -12,6 +12,7 @@ members = [
     "crates/discord",
     "crates/diagnostics",
     "src-tauri",
+    "crates/launcher",
 ]
 
 [workspace.package]

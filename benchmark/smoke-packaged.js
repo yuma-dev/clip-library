@@ -19,7 +19,8 @@ const opt = (name, dflt) => {
 };
 
 async function main() {
-  const exe = path.resolve(opt('--exe', path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe')));
+  // Playwright drives the Electron binary directly (ClipLib.exe is the native launcher).
+  const exe = path.resolve(opt('--exe', path.join(root, 'dist', 'win-unpacked', 'ClipLib App.exe')));
   const template = path.join(root, 'benchmark', 'profiles', 'warm-template');
   const profile = opt('--profile', path.join(os.tmpdir(), 'cliplib-bench', 'smoke-profile'));
   fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelayMs: 200 });

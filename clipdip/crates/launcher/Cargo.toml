@@ -1,0 +1,27 @@
+[package]
+name = "cliplib-launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Native splash launcher for ClipLib: shows the logo instantly, starts the Electron app, fades out once its window is on screen"
+
+[[bin]]
+name = "cliplib-launcher"
+path = "src/main.rs"
+
+[dependencies]
+png = "0.17"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource = "0.1"

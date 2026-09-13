@@ -702,11 +702,15 @@ async function repairTaskbarPins() {
       const target = details?.target || '';
       if (!target.toLowerCase().endsWith('\\clips.exe')) continue;
       if (fss.existsSync(target)) continue; // still valid — leave it alone
+      // Prefer the native launcher next to the app (instant splash); the
+      // Electron binary itself is the fallback.
+      const launcher = path.join(path.dirname(process.execPath), 'ClipLib.exe');
+      const newTarget = fss.existsSync(launcher) ? launcher : process.execPath;
       shell.writeShortcutLink(lnkPath, 'replace', {
         ...details,
-        target: process.execPath,
+        target: newTarget,
         cwd: path.dirname(process.execPath),
-        icon: process.execPath,
+        icon: newTarget,
         iconIndex: 0,
         appUserModelId: 'com.yuma-dev.clips'
       });
