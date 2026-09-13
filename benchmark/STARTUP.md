@@ -82,6 +82,9 @@ app executable it expects already exists in the old install (renaming it to
 "ClipLib App.exe" in an earlier attempt removed the pins). Deep links
 (`cliplib://`) are registered by Electron and open the app directly, without
 the splash.
+`node benchmark/verify-update-shortcuts.js --old <3.3.0 installer> --new <new installer>`
+replays the update on this machine and checks that the pin and both
+shortcuts survive and end up on the launcher (it touches the real install).
 The harness launches through the launcher, the way a user does, and the
 Electron first line still lands at ~165 ms after the click.
 
