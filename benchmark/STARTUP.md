@@ -13,6 +13,10 @@ the September 2026 cold-start work; numbers are from the reference machine
 | Fresh folder scan reconciled | 10.8 s | 1.4 s |
 | Tags loaded, cold cache (first launch after install) | 8 s | 2.4 s |
 | asar | 160 MB | 75 MB |
+| Visual feedback after the click (native launcher splash) | 10.6 s | ~0.05 s |
+| Cold open of a 5-track clip, click to playable | 3.55 s | 0.27 s after hover warm |
+| CPU at rest with the cursor on a tag | 127% core + 45% GPU | 14% + 19% |
+| Worst frame when clearing the search | 315 ms | 43 ms |
 
 ## Where the time went, in the order it was found
 
