@@ -346,7 +346,19 @@ const api = {
 
 // contextIsolation is OFF, so a direct assignment is visible to the renderer.
 window.clips = api;
+// Benchmark-only: CLIPLIB_LITE_CSS=1 strips the expensive paint effects so
+// the cost of the first visible frame can be attributed.
+try {
+  if (process.env.CLIPLIB_LITE_CSS === '1') {
+    document.addEventListener('DOMContentLoaded', () => {
+      const style = document.createElement('style');
+      style.textContent = '* { filter: none !important; backdrop-filter: none !important; box-shadow: none !important; text-shadow: none !important; mask: none !important; -webkit-mask: none !important; }';
+      document.head.appendChild(style);
+    });
+  }
+} catch (_) { /* benchmark only */ }
 if (bootTrace) window.__bootTrace = bootTrace;
+if (process.env.CLIPLIB_NO_CV === '1') window.__noCv = true;
 
 // Bridge for the performance profiler (src/renderer/perf) — ONLY when launched
 // via `npm run dev:trace` (which sets CLIPS_PERF_STARTUP=1, inherited by this

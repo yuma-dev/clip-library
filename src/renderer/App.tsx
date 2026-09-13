@@ -13,6 +13,7 @@ import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
 import { installDebugTools } from "./shell/debugTools";
 import { reportMetric, setTelemetryRoute } from "./telemetry";
+import { bootMark } from "./perf/bootMarks";
 import type { Route } from "./routes";
 
 // Surfaces that are not on screen at launch load as their own chunks, so the
@@ -213,12 +214,33 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [isTemporary, clearFocus]);
 
-  // Dismiss the splash once the first clip load resolves.
+  // Tell main the library is painted with its thumbnails decoded. Main then
+  // waits for the compositor to actually produce a frame of it before it
+  // reveals the window (a frame with undecoded thumbnails still needs
+  // hundreds of ms of GPU work, and Windows shows white meanwhile).
   useEffect(() => {
-    if (!lib.loading && !readySent.current) {
-      readySent.current = true;
-      window.clips?.rendererReady();
-    }
+    if (lib.loading || readySent.current) return;
+    readySent.current = true;
+    let cancelled = false;
+    (async () => {
+      bootMark('reveal_gate_start');
+      // img.decode() only settles on a rendering opportunity, which a hidden
+      // document rarely gets; poll the loaded state instead, briefly.
+      const loaded = () => {
+        const imgs = [...document.querySelectorAll<HTMLImageElement>('.clip-item img')].slice(0, 24);
+        const real = imgs.filter((img) => img.src.includes('thumbnail-cache'));
+        return real.length === 0 || real.every((img) => img.complete && img.naturalWidth > 0);
+      };
+      const deadline = performance.now() + 250;
+      while (!cancelled && !loaded() && performance.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      bootMark('reveal_gate_decoded');
+      if (!cancelled) window.clips?.rendererReady();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [lib.loading]);
 
   // Debug hooks: window.loadingScreenTest + Ctrl/Cmd+Shift+L, and the F6 egg.

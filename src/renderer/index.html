@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ClipLib</title>
+    <!-- Inline so the very first document paint is already the app colour:
+         the window is revealed on that paint, and a stylesheet-less first
+         frame would otherwise be white. Keep in sync with --color-bg-primary. -->
+    <style>
+      html,
+      body {
+        background: #050608;
+      }
+    </style>
     <!-- Optional webfonts for the App Font setting are injected on demand by
          settings/fonts.ts; a stylesheet here would block first paint on a
          network round trip the default (bundled Inter) never needs. -->

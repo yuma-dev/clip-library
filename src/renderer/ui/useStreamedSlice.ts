@@ -45,21 +45,37 @@ export function useStreamedSlice<T>(
 
   useEffect(() => {
     if (!expanded || visible >= items.length) return;
-    // rAF paces streaming to the display, but Chromium suspends rAF for
-    // hidden/occluded windows — the timeout fallback keeps the stream
-    // draining so the grid is complete when the user comes back.
     let advanced = false;
+    let raf = 0;
+    let timer = 0;
     const advance = () => {
       if (advanced) return;
       advanced = true;
       setVisible((v) => Math.min(v + perFrame, items.length));
     };
-    const raf = requestAnimationFrame(advance);
-    const timer = window.setTimeout(advance, 64);
+    // rAF paces streaming to the display; the timeout fallback covers an
+    // occluded window, where Chromium suspends rAF.
+    const schedule = () => {
+      raf = requestAnimationFrame(advance);
+      timer = window.setTimeout(advance, 64);
+    };
+    // A hidden document (the window not shown yet, or minimized) gets no
+    // frame the user can see. Mounting cards there only makes the first
+    // visible frame late: at launch the renderer was still busy streaming
+    // when the window appeared, and Windows showed white until it caught
+    // up. Wait for visibility instead.
+    const onVisibility = () => {
+      if (document.hidden) return;
+      document.removeEventListener('visibilitychange', onVisibility);
+      schedule();
+    };
+    if (document.hidden) document.addEventListener('visibilitychange', onVisibility);
+    else schedule();
     return () => {
       advanced = true;
       cancelAnimationFrame(raf);
       window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [expanded, visible, items.length, perFrame]);
 
