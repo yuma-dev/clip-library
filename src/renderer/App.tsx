@@ -244,6 +244,18 @@ export default function App() {
     };
   }, [lib.loading]);
 
+  // The lazy route chunks are local files; fetch them once the library is up
+  // so the first visit to Settings or Feed never shows an empty pane.
+  useEffect(() => {
+    if (lib.loading) return;
+    const timer = window.setTimeout(() => {
+      void import("./views/SettingsView");
+      void import("./feed/FeedPage");
+      void import("./feed/ProfilePage");
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [lib.loading]);
+
   // Debug hooks: window.loadingScreenTest + Ctrl/Cmd+Shift+L, and the F6 egg.
   useEffect(() => installDebugTools(), []);
 

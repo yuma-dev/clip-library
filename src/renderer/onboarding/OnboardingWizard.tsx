@@ -51,9 +51,9 @@ type StepId = "welcome" | "clipdip" | "audio" | "hotkeys" | "discord" | "done";
 
 let externalShow: (() => void) | null = null;
 
-export default function OnboardingWizard() {
+export default function OnboardingWizard({ openOnMount = false }: { openOnMount?: boolean } = {}) {
   const { settings, ready, set } = useSettings();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(openOnMount);
   const autoShown = useRef(false);
 
   // First-run gate: open once when settings arrive and the flag is behind.

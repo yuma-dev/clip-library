@@ -12,12 +12,15 @@ import { useEffect, useState } from "react";
 // every group streamed back at once, a single frame mounted ~2,000 cards
 // (a 315 ms frame). The budget is shared per frame timestamp: the first
 // lists to run in a frame get their share, the rest wait a frame.
-const FRAME_BUDGET = 48;
+const FRAME_BUDGET = 64;
 let budgetFrame = -1;
 let budgetLeft = 0;
 function takeBudget(frameTs: number, wanted: number): number {
-  if (frameTs !== budgetFrame) {
-    budgetFrame = frameTs;
+  // Callbacks of one frame share a timestamp; timer-driven ones (occluded
+  // window) do not, so quantize to ~8 ms slots for the budget to hold there.
+  const slot = Math.floor(frameTs / 8);
+  if (slot !== budgetFrame) {
+    budgetFrame = slot;
     budgetLeft = FRAME_BUDGET;
   }
   const granted = Math.min(wanted, budgetLeft);

@@ -20,14 +20,12 @@ const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
 // A clip counts as finished once its size has not changed for this long.
 const STABILITY_MS = 2000;
 const POLL_MS = 250;
-// A file that keeps changing this long is still announced (a very long
-// recording being remuxed in place is not a new clip).
-const MAX_WAIT_MS = 10 * 60 * 1000;
 
 let watcher = null;
 let watcherAlive = false;
 let currentLocation = '';
 let onNewClipCallback = null;
+let onOverflowCallback = null;
 // filePath -> { size, stableSince, since, timer }
 const pending = new Map();
 // Announced files, so a burst of change events after the announcement (or a
@@ -65,7 +63,9 @@ function poll(filePath) {
       entry.size = stats.size;
       entry.stableSince = now;
     }
-    if (now - entry.stableSince >= STABILITY_MS || now - entry.since >= MAX_WAIT_MS) {
+    // A file that keeps growing (a recording written straight into the
+    // library) is announced only once it stops, however long that takes.
+    if (now - entry.stableSince >= STABILITY_MS) {
       pending.delete(filePath);
       announce(filePath);
       return;
@@ -87,12 +87,42 @@ function track(filePath) {
   entry.timer = setTimeout(() => poll(filePath), POLL_MS);
 }
 
+// A directory moved or renamed into the library arrives as one rename event
+// for the directory; the clips inside get no events of their own. Walk it.
+function trackDirectory(dirPath) {
+  fs.readdir(dirPath, { withFileTypes: true }, (error, entries) => {
+    if (error) return;
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== 'icons') trackDirectory(full);
+      } else if (entry.isFile() && VIDEO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        track(full);
+      }
+    }
+  });
+}
+
 function onFsEvent(eventType, filename) {
-  if (!filename) return;
+  if (!filename) {
+    // ReadDirectoryChangesW buffer overflow: events were dropped. Let the
+    // owner rescan rather than miss a clip until the next launch.
+    if (typeof onOverflowCallback === 'function') {
+      Promise.resolve().then(onOverflowCallback).catch((error) => logger.warn(`Watcher rescan failed: ${error.message}`));
+    }
+    return;
+  }
   const relative = String(filename).replace(/\\/g, '/');
   if (isHidden(relative)) return;
-  if (!VIDEO_EXTENSIONS.has(path.extname(relative).toLowerCase())) return;
   const filePath = path.join(currentLocation, String(filename));
+  if (!VIDEO_EXTENSIONS.has(path.extname(relative).toLowerCase())) {
+    if (eventType !== 'rename' || relative.split('/').includes('icons')) return;
+    fs.stat(filePath, (error, stats) => {
+      if (!error && stats.isDirectory()) trackDirectory(filePath);
+    });
+    return;
+  }
   if (eventType === 'rename') {
     // Create, move-in, or delete. A delete drops any pending entry; a create
     // starts tracking. The stat in poll() tells the two apart.
@@ -115,9 +145,10 @@ function onFsEvent(eventType, filename) {
  * @param {string} clipLocation - Base clip folder path.
  * @param {object} options - Optional callbacks.
  * @param {Function} options.onNewClip - Called with (fileName, filePath) on new clip.
+ * @param {Function} [options.onOverflow] - Called when events were lost; should rescan.
  * @returns {object|null} Watcher instance or null if not started.
  */
-function setupFileWatcher(clipLocation, { onNewClip } = {}) {
+function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
   if (!clipLocation) {
     logger.warn('No clip location provided for file watcher');
     telemetry.event('watcher_not_started', {
@@ -131,6 +162,7 @@ function setupFileWatcher(clipLocation, { onNewClip } = {}) {
   const setupAtMs = Date.now();
   currentLocation = clipLocation;
   onNewClipCallback = onNewClip;
+  onOverflowCallback = onOverflow;
 
   try {
     watcher = fs.watch(clipLocation, { persistent: true, recursive: true }, onFsEvent);
