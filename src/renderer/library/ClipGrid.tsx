@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupClips, type ClipGroupData } from "./grouping";
 import ClipGroup from "./ClipGroup";
 import { ObserveContext, type ObserveFn } from "./visibility";
+import { isBootHeld } from "../boot/bootHold";
 import { ClipGlow } from "./ClipGlow";
 import { LibraryHover } from "./hoverController";
 import { HoverContext } from "./hoverContext";
@@ -68,6 +69,11 @@ function ClipGrid({
     if (!observerRef.current) {
       observerRef.current = new IntersectionObserver(
         (entries) => {
+          // While the boot reveal moves the whole body, cards cross the root's
+          // edges every frame; toggling them repainted tiles mid-animation
+          // (111 raster batches in the launch trace). The layout is the same
+          // before and after the intro, so these entries carry nothing new.
+          if (isBootHeld()) return;
           for (const entry of entries) {
             (entry.target as HTMLElement).classList.toggle("cv-offscreen", !entry.isIntersecting);
           }

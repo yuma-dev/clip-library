@@ -10,5 +10,8 @@
     "fresh_list_committed": 2000,
     "tags_loaded": 4000
   },
-  "asar_bytes": 100000000
+  "asar_bytes": 100000000,
+  "_reveal": "Boot reveal animation (src/renderer/boot): median count of frames over 25 ms in its first 1.2 s. Reference machine: renderer 0 to 1, compositor 1 to 4 at 165 Hz.",
+  "reveal_renderer_over_25ms": 3,
+  "reveal_compositor_over_25ms": 6
 }

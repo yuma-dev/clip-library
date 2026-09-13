@@ -12,10 +12,10 @@
 
 const { ipcRenderer } = require("electron");
 
-// Boot timeline for benchmark/cold-start.js (CLIPLIB_BOOT_TRACE=1 only).
+// Boot timeline for benchmark/cold-start.js (CLIPLIB_BOOT_TRACE=1, 2 or 3).
 const bootTrace = (() => {
   try {
-    if (process.env.CLIPLIB_BOOT_TRACE !== "1") return null;
+    if (!["1", "2", "3"].includes(process.env.CLIPLIB_BOOT_TRACE)) return null;
     const mark = (name, t) => {
       try {
         ipcRenderer.send("boot-trace-mark", {
@@ -343,6 +343,12 @@ const api = {
   onUpdateDownloadComplete: subscribe("update-download-complete"),
   onShareUploadProgress: subscribe("share-upload-progress"),
   onDiagnosticsProgress: subscribe("diagnostics-progress"),
+
+  // --- Boot reveal (src/renderer/boot/bootReveal.ts) ---
+  getBootLogoRect: invoke("get-boot-logo-rect"),
+  onBootReveal: subscribe("boot-reveal"),
+  bootRevealArmed: () => ipcRenderer.send("boot-reveal-armed"),
+  bootRevealFrames: (stats) => ipcRenderer.send("boot-reveal-frames", stats),
 };
 
 // contextIsolation is OFF, so a direct assignment is visible to the renderer.

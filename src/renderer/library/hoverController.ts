@@ -1,4 +1,5 @@
 import type { ClipGlow } from "./ClipGlow";
+import { isBootHeld } from "../boot/bootHold";
 import type { LocalClip } from "./types";
 
 // Node's path.join via the (nodeIntegration) global require — matches how the
@@ -58,6 +59,10 @@ export class LibraryHover {
   }
 
   enter(cardEl: HTMLElement, clip: LocalClip): void {
+    // No preview or clip warm-up while the boot reveal plays: the cursor often
+    // sits on the grid when the window appears, and the first <video> costs
+    // the GPU process a decoder plus an encoder-capability probe mid-intro.
+    if (isBootHeld()) return;
     this.glow.show(cardEl);
     this.cleanupPreview();
 

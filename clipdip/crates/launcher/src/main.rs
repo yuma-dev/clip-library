@@ -1,8 +1,10 @@
 //! ClipLib launcher: `ClipLib Launcher.exe`, what shortcuts and taskbar pins
-//! point at. It draws the splash (logo and sweep bar, per-pixel alpha, no
-//! window frame) within a few tens of milliseconds of the click, starts the
-//! Electron app (`ClipLib.exe` next to it) with the same arguments, and fades out
-//! as soon as the app's window is visible and opaque. Electron itself needs
+//! point at. It draws the splash (logo with a breathing halo and a sweep bar,
+//! per-pixel alpha, no window frame) within a few tens of milliseconds of the
+//! click, starts the Electron app (`ClipLib.exe` next to it) with the same
+//! arguments plus `--splash-logo=x,y,w,h` (where the logo sits, in physical
+//! screen pixels, so the app can take it over in place), and fades out as
+//! soon as the app's window is visible and opaque. Electron itself needs
 //! about 1.5 s to put the library on screen; this covers that wait with
 //! immediate feedback and costs the app nothing (no extra renderer process).
 //!
@@ -51,8 +53,13 @@ const BAR_H: i32 = 2;
 const GAP: i32 = 28;
 
 const FADE_IN: Duration = Duration::from_millis(260);
-const FADE_OUT: Duration = Duration::from_millis(220);
+// Short: the app draws the same logo at the same spot the moment it is opaque
+// and animates from there, so the launcher only has to get out of the way.
+const FADE_OUT: Duration = Duration::from_millis(120);
 const SWEEP_PERIOD: Duration = Duration::from_millis(1800);
+// Accent halo behind the logo, breathing with the same period as the sweep.
+const HALO_RADIUS: i32 = 87;
+const HALO_PERIOD: Duration = Duration::from_millis(1800);
 // Give up covering for the app after this long; it will show up by itself.
 // Longer than the app's own 30 s never-ready fallback, so the splash never
 // leaves a gap before that fallback reveals the window.
@@ -268,24 +275,63 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-fn main() {
-    // Start the app first: the splash only covers its startup and must never
-    // delay it. Arguments (deep links, flags) pass straight through.
-    let Some(app) = app_exe_path() else { return };
-    let child: Option<Child> = Command::new(&app).args(env::args_os().skip(1)).spawn().ok();
-    let Some(mut child) = child else { return };
-    let pid = child.id();
+/// Halo colour and alpha at normalised distance `d` from the centre (0 at the
+/// centre, 1 at the radius): accent core fading to a deeper purple, then out.
+fn halo_at(d: f32) -> Option<(u8, u8, u8, f32)> {
+    if d < 0.4 {
+        let t = d / 0.4;
+        let mix = |a: f32, b: f32| a + (b - a) * t;
+        Some((mix(199.0, 142.0) as u8, mix(116.0, 50.0) as u8, mix(224.0, 155.0) as u8, mix(0.35, 0.12)))
+    } else if d < 0.7 {
+        Some((142, 50, 155, 0.12 * (1.0 - (d - 0.4) / 0.3)))
+    } else {
+        None
+    }
+}
 
+fn main() {
+    // The app starts first: the splash only covers its startup and must never
+    // delay it. Only the window geometry is computed before the spawn (a few
+    // microseconds) because the app needs to know where the logo will be.
+    let Some(app) = app_exe_path() else { return };
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        let _ = SetCurrentProcessExplicitAppUserModelID(w!("com.yuma-dev.clips"));
     }
     let scale = unsafe { GetDpiForSystem() } as f32 / 96.0;
     let px = |v: i32| (v as f32 * scale).round() as i32;
     let (width, height) = (px(WIN_W), px(WIN_H));
+    let mut work = RECT::default();
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut work as *mut RECT as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    let x = work.left + (work.right - work.left - width) / 2;
+    let y = work.top + (work.bottom - work.top - height) / 2;
+    // The logo is square (title.png is 1024 x 1024); the layout below assumes so.
+    let logo_w = px(LOGO_W);
+    let logo_y = (height - (logo_w + px(GAP) + px(BAR_H))) / 2;
+    let logo_x = (width - logo_w) / 2;
+    let splash_logo = format!("--splash-logo={},{},{},{}", x + logo_x, y + logo_y, logo_w, logo_w);
+
+    // Arguments (deep links, flags) pass straight through.
+    let child: Option<Child> = Command::new(&app)
+        .args(env::args_os().skip(1))
+        .arg(&splash_logo)
+        .spawn()
+        .ok();
+    let Some(mut child) = child else { return };
+    let pid = child.id();
+
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(w!("com.yuma-dev.clips"));
+    }
 
     let logo = decode_logo().map(|src| {
-        let w = px(LOGO_W) as usize;
+        let w = logo_w as usize;
         let h = (w * src.height / src.width.max(1)).max(1);
         downscale(&src, w, h)
     });
@@ -305,15 +351,6 @@ fn main() {
         if RegisterClassW(&class) == 0 {
             return;
         }
-        let mut work = RECT::default();
-        let _ = SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some(&mut work as *mut RECT as *mut core::ffi::c_void),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        );
-        let x = work.left + (work.right - work.left - width) / 2;
-        let y = work.top + (work.bottom - work.top - height) / 2;
         let hwnd = match CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             w!("ClipLibLauncherSplash"),
@@ -333,12 +370,9 @@ fn main() {
         };
         let Some(mut canvas) = Canvas::new(width, height) else { return };
 
-        let logo_y = if let Some(l) = &logo {
-            (height - (l.height as i32 + px(GAP) + px(BAR_H))) / 2
-        } else {
-            height / 2
-        };
-        let bar_y = logo_y + logo.as_ref().map(|l| l.height as i32).unwrap_or(0) + px(GAP);
+        let bar_y = logo_y + logo_w + px(GAP);
+        let halo_r = px(HALO_RADIUS) as f32;
+        let (halo_cx, halo_cy) = ((logo_x + logo_w / 2) as f32, (logo_y + logo_w / 2) as f32);
         let bar_x = (width - px(BAR_W)) / 2;
         let bar_w = px(BAR_W);
         let bar_h = px(BAR_H).max(1);
@@ -359,10 +393,28 @@ fn main() {
                 }
             }
 
-            // Frame: logo plus the sweep bar.
+            // Frame: breathing halo, logo, sweep bar.
             canvas.clear();
+            {
+                let phase = (now.duration_since(started).as_secs_f32() / HALO_PERIOD.as_secs_f32()).fract();
+                let breath = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+                let r = halo_r * (0.85 + 0.20 * breath);
+                let strength = 0.6 + 0.4 * breath;
+                let reach = (r * 0.7).ceil() as i32;
+                let (cx, cy) = (halo_cx.round() as i32, halo_cy.round() as i32);
+                for yy in (cy - reach).max(0)..(cy + reach).min(height) {
+                    for xx in (cx - reach).max(0)..(cx + reach).min(width) {
+                        let dx = xx as f32 - halo_cx;
+                        let dy = yy as f32 - halo_cy;
+                        let d = (dx * dx + dy * dy).sqrt() / r;
+                        if let Some((cr, cg, cb, a)) = halo_at(d) {
+                            canvas.blend(xx, yy, cr, cg, cb, (a * strength * 255.0) as u8);
+                        }
+                    }
+                }
+            }
             if let Some(l) = &logo {
-                canvas.draw_image(l, (width - l.width as i32) / 2, logo_y);
+                canvas.draw_image(l, logo_x, logo_y);
             }
             let t = (now.duration_since(started).as_secs_f32() / SWEEP_PERIOD.as_secs_f32()).fract();
             // Sweep across in the first 72% of the period, then rest (as the CSS did).

@@ -14,6 +14,7 @@ import { useLibraryFilter } from "./library/useLibraryFilter";
 import { installDebugTools } from "./shell/debugTools";
 import { reportMetric, setTelemetryRoute } from "./telemetry";
 import { bootMark } from "./perf/bootMarks";
+import { installBootReveal, prepareBootReveal } from "./boot/bootReveal";
 import type { Route } from "./routes";
 
 // Surfaces that are not on screen at launch load as their own chunks, so the
@@ -237,7 +238,24 @@ export default function App() {
         await new Promise((r) => setTimeout(r, 15));
       }
       bootMark('reveal_gate_decoded');
-      if (!cancelled) window.clips?.rendererReady();
+      // Streaming mounts the grid a chunk per frame; wait (briefly) until it
+      // has filled the first viewport so the reveal shows a complete screen.
+      const scroller = document.querySelector<HTMLElement>('.clip-scroll');
+      const filled = () => !scroller || scroller.scrollHeight >= scroller.clientHeight + 120;
+      // (A timer, not requestAnimationFrame: in a window that has never been
+      // shown, rAF only fires when the compositor produces a frame.)
+      const fillDeadline = performance.now() + 250;
+      while (!cancelled && !filled() && performance.now() < fillDeadline) {
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      if (cancelled) return;
+      bootMark('reveal_gate_filled');
+      // Quiet the main thread for the reveal and promote the cards the
+      // animation will move, before the compositor frames the grid, so their
+      // textures exist when the animation starts.
+      await prepareBootReveal();
+      if (cancelled) return;
+      window.clips?.rendererReady();
     })();
     return () => {
       cancelled = true;
@@ -258,6 +276,7 @@ export default function App() {
 
   // Debug hooks: window.loadingScreenTest + Ctrl/Cmd+Shift+L, and the F6 egg.
   useEffect(() => installDebugTools(), []);
+  useEffect(() => installBootReveal(), []);
 
   return (
     <AppNavContext.Provider value={appNav}>

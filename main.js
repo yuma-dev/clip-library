@@ -284,7 +284,7 @@ function scheduleDeferredServices() {
     runDeferredServices().catch((error) => {
       logger.warn(`Deferred startup services failed: ${error.message}`);
     });
-  }, 1500);
+  }, 2500);
 }
 
 async function runDeferredServices() {
@@ -378,6 +378,8 @@ let framesSincePaint = 0;
 // whatever path the reveal took (a fallback clears screencastActive first).
 let screencastActive = false;
 let frameWatchAttached = false;
+// Boot-trace only: compositor frame timestamps during the reveal animation.
+let revealFrameLog = null;
 // Set by renderer-ready: the grid and its visible thumbnails are committed.
 let firstPaintSeen = false;
 
@@ -395,6 +397,7 @@ function startFrameWatch(win) {
   dbg.on('message', (_event, method, params) => {
     if (method !== 'Page.screencastFrame') return;
     dbg.sendCommand('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
+    if (revealFrameLog) revealFrameLog.push(Number(params.metadata?.timestamp) * 1000 || Date.now());
     if (!firstPaintSeen) return;
     framesSincePaint += 1;
     if (framesSincePaint <= 3) bootTrace.mark(`frame_${framesSincePaint}`);
@@ -425,6 +428,10 @@ function maybeReveal() {
 function revealMainWindow() {
   if (mainWindowRevealed) return;
   mainWindowRevealed = true;
+  // Only a reveal the compositor confirmed gets the animation: on the timer
+  // fallback the GPU is still busy with the first frame and would drop the
+  // animation's frames too.
+  const framed = screencastActive && framesSincePaint >= 2;
   scheduleDeferredServices();
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setOpacity(0);
@@ -434,12 +441,32 @@ function revealMainWindow() {
   bootTrace.mark('window_visible');
   telemetry.metric('startup.window_visible_ms', Math.round(perfNow()), { unit: 'ms' });
   let opaque = false;
-  const makeOpaque = () => {
-    if (opaque || mainWindow.isDestroyed()) return;
-    opaque = true;
+  const opaqueNow = () => {
+    if (mainWindow.isDestroyed()) return;
     mainWindow.setOpacity(1);
     bootTrace.mark('window_opaque');
-    stopFrameWatch();
+    if (bootTrace.enabled && frameWatchAttached) watchRevealFrames();
+    else stopFrameWatch();
+  };
+  // The renderer puts the library into the animation's first frame (cards
+  // turned away, the launcher's logo drawn in its place) and reports back once
+  // the compositor has that frame; only then is the window made opaque, so the
+  // hand-over from the launcher is seamless. A short cap keeps a slow renderer
+  // from delaying the reveal.
+  const makeOpaque = (secondFrameSeen) => {
+    if (opaque || mainWindow.isDestroyed()) return;
+    opaque = true;
+    const animate = framed && secondFrameSeen === true;
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      ipcMain.removeListener('boot-reveal-armed', go);
+      opaqueNow();
+    };
+    ipcMain.once('boot-reveal-armed', go);
+    mainWindow.webContents.send('boot-reveal', { animate, logo: animate ? splashLogoInContent() : null });
+    setTimeout(go, animate ? 250 : 120);
   };
   const dbg = mainWindow.webContents.debugger;
   if (frameWatchAttached && dbg.isAttached()) {
@@ -447,15 +474,46 @@ function revealMainWindow() {
     const onFrame = (_event, method) => {
       if (method !== 'Page.screencastFrame') return;
       frames += 1;
+      if (frames <= 2) bootTrace.mark(`shown_frame_${frames}`);
       if (frames >= 2) {
         dbg.removeListener('message', onFrame);
-        makeOpaque();
+        makeOpaque(true);
       }
     };
     dbg.on('message', onFrame);
   }
-  setTimeout(makeOpaque, 150);
+  // The window is at opacity 0 meanwhile (the launcher's splash still covers
+  // it), so waiting a little longer for the two frames costs nothing visible.
+  setTimeout(() => makeOpaque(false), 400);
 }
+
+// Boot-trace only: keep the tiny screencast running through the reveal
+// animation and record when the compositor produced each frame, so the bench
+// can tell whether the animation actually ran at the display's rate.
+function watchRevealFrames() {
+  revealFrameLog = [];
+  setTimeout(() => {
+    const times = revealFrameLog || [];
+    revealFrameLog = null;
+    stopFrameWatch();
+    const deltas = [];
+    for (let i = 1; i < times.length; i++) deltas.push(Math.round(times[i] - times[i - 1]));
+    const sorted = [...deltas].sort((a, b) => a - b);
+    const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)] : null;
+    bootTrace.note('reveal_compositor', { frames: times.length, p95_ms: p95, max_ms: sorted.length ? sorted[sorted.length - 1] : null, over_25ms: deltas.filter((d) => d > 25).length });
+  }, 1400);
+}
+
+// The renderer's own view of the reveal animation (requestAnimationFrame
+// deltas over its first 1.2 s). Logged always; on the boot trace as a note.
+ipcMain.on('boot-reveal-frames', (_event, stats) => {
+  if (!stats || typeof stats !== 'object') return;
+  const { animated, frames, p95, max, over25 } = stats;
+  if (!animated) return;
+  logger.info(`Reveal animation: ${frames} frames, p95 ${p95} ms, max ${max} ms, ${over25} over 25 ms`);
+  bootTrace.note('reveal_raf', { frames, p95_ms: p95, max_ms: max, over_25ms: over25 });
+  telemetry.metric('startup.reveal_frames_over_25ms', Number(over25) || 0, { unit: 'count' });
+});
 
 let pendingCliplibAuthSession = null;
 let isProcessingProtocolQueue = false;
@@ -789,6 +847,33 @@ app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 const initialProtocolUrl = extractCliplibProtocolUrl(process.argv);
+
+// The native launcher passes where it drew its logo (physical screen pixels)
+// so the renderer can take the logo over in place when the window is revealed.
+const splashLogoRect = (() => {
+  const arg = process.argv.find((a) => a.startsWith('--splash-logo='));
+  if (!arg) return null;
+  const n = arg.slice('--splash-logo='.length).split(',').map(Number);
+  return n.length === 4 && n.every(Number.isFinite) ? { x: n[0], y: n[1], w: n[2], h: n[3] } : null;
+})();
+
+ipcMain.handle('get-boot-logo-rect', () => splashLogoInContent());
+
+/** The launcher's logo rect in CSS pixels of the main window's content area. */
+function splashLogoInContent() {
+  if (!splashLogoRect || !mainWindow || mainWindow.isDestroyed()) return null;
+  try {
+    const bounds = mainWindow.getContentBounds();
+    const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
+    const scale = display.scaleFactor || 1;
+    const tl = typeof screen.screenToDipPoint === 'function'
+      ? screen.screenToDipPoint({ x: splashLogoRect.x, y: splashLogoRect.y })
+      : { x: splashLogoRect.x / scale, y: splashLogoRect.y / scale };
+    return { x: tl.x - bounds.x, y: tl.y - bounds.y, w: splashLogoRect.w / scale, h: splashLogoRect.h / scale };
+  } catch (_) {
+    return null;
+  }
+}
 if (initialProtocolUrl) {
   queuedProtocolUrls.push(initialProtocolUrl);
 }

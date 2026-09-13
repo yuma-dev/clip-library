@@ -10,9 +10,19 @@ import { initGlowTuner } from "./library/glowConfig";
 import { initTelemetry } from "./telemetry";
 import ErrorBoundary from "./telemetry/ErrorBoundary";
 import "./styles.css";
-import { initBootMarks } from "./perf/bootMarks";
+import { bootMark, initBootMarks } from "./perf/bootMarks";
 
 initBootMarks();
+
+// The emoji face is a 45 MB file loaded on the first emoji glyph. Left to
+// itself that happened during the boot reveal animation, with its ~80 ms
+// decode on the main thread mid-flip; asking for it now moves the decode into
+// the quiet second before the window is shown.
+try {
+  void document.fonts.load('1em "Apple Color Emoji"').then(() => bootMark("emoji_font_loaded"));
+} catch {
+  /* font loading API unavailable: the face still loads on first use */
+}
 
 // First, so window.onerror / unhandledrejection cover the startup path too.
 initTelemetry();

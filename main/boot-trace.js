@@ -29,6 +29,9 @@ let contentTraceTimer = null;
 const firstLineAt = Date.now();
 const uptimeMsAtFirstLine = Math.round(process.uptime() * 1000);
 const marks = {};
+// Free-form facts about the boot (frame statistics and the like), written
+// next to the marks.
+const notes = {};
 let outFile = null;
 let writeTimer = null;
 
@@ -42,6 +45,7 @@ function write() {
     uptimeMsAtFirstLine,
     processStartAt: firstLineAt - uptimeMsAtFirstLine,
     marks,
+    notes,
   });
   try {
     fs.writeFileSync(`${outFile}.tmp`, data);
@@ -70,6 +74,13 @@ function mark(name, at) {
     clearTimeout(contentTraceTimer);
     contentTraceTimer = setTimeout(stopContentTrace, 4000);
   }
+}
+
+/** Record a non-timing fact (an object) under `name`; last call wins. */
+function note(name, value) {
+  if (!enabled) return;
+  notes[name] = value;
+  scheduleWrite();
 }
 
 function stopCpuProfile() {
@@ -131,4 +142,4 @@ function flush() {
 
 mark('main_first_line', firstLineAt);
 
-module.exports = { enabled, mark, init, flush };
+module.exports = { enabled, mark, note, init, flush };
