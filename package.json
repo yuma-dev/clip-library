@@ -85,11 +85,10 @@
       "deleteAppDataOnUninstall": false,
       "include": "build/installer.nsh"
     },
-    "executableName": "ClipLib App",
     "extraFiles": [
       {
-        "from": "vendor/launcher/ClipLib.exe",
-        "to": "ClipLib.exe"
+        "from": "vendor/launcher/ClipLib Launcher.exe",
+        "to": "ClipLib Launcher.exe"
       }
     ]
   },

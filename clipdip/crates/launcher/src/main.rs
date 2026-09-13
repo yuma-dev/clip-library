@@ -1,7 +1,7 @@
-//! ClipLib launcher: the `ClipLib.exe` that shortcuts and taskbar pins point
-//! at. It draws the splash (logo and sweep bar, per-pixel alpha, no window
-//! frame) within a few tens of milliseconds of the click, starts the Electron
-//! app (`ClipLib App.exe` next to it) with the same arguments, and fades out
+//! ClipLib launcher: `ClipLib Launcher.exe`, what shortcuts and taskbar pins
+//! point at. It draws the splash (logo and sweep bar, per-pixel alpha, no
+//! window frame) within a few tens of milliseconds of the click, starts the
+//! Electron app (`ClipLib.exe` next to it) with the same arguments, and fades out
 //! as soon as the app's window is visible and opaque. Electron itself needs
 //! about 1.5 s to put the library on screen; this covers that wait with
 //! immediate feedback and costs the app nothing (no extra renderer process).
@@ -39,7 +39,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-const APP_EXE: &str = "ClipLib App.exe";
+const APP_EXE: &str = "ClipLib.exe";
 const LOGO_PNG: &[u8] = include_bytes!("../../../../assets/title.png");
 
 // Logical layout, matching the old in-app splash.

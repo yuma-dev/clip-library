@@ -1,4 +1,4 @@
-// Stops app instances running from dist/win-unpacked (benchmark and smoke
+// Stops app and launcher instances running from dist/win-unpacked (benchmark and smoke
 // launches) so electron-builder can replace the files. Never touches an
 // installed ClipLib.
 import { execFileSync } from "node:child_process";
