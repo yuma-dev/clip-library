@@ -54,7 +54,9 @@ const FADE_IN: Duration = Duration::from_millis(260);
 const FADE_OUT: Duration = Duration::from_millis(220);
 const SWEEP_PERIOD: Duration = Duration::from_millis(1800);
 // Give up covering for the app after this long; it will show up by itself.
-const MAX_WAIT: Duration = Duration::from_secs(25);
+// Longer than the app's own 30 s never-ready fallback, so the splash never
+// leaves a gap before that fallback reveals the window.
+const MAX_WAIT: Duration = Duration::from_secs(35);
 
 struct Rgba {
     width: usize,

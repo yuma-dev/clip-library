@@ -2,7 +2,8 @@ import { GroupReset, SetGroup, SetRow } from "../rows";
 import Toggle from "../../ui/Toggle";
 import Select from "../../ui/Select";
 import { useSettings } from "../SettingsContext";
-import { UI_FONTS, UI_FONT_DEFAULT, fontStack } from "../fonts";
+import { useEffect } from "react";
+import { UI_FONTS, UI_FONT_DEFAULT, ensureWebfonts, fontStack } from "../fonts";
 
 // Example game icon for the greyscale preview (real icon from the library's
 // icon cache).
@@ -48,6 +49,11 @@ function MockCard({
 
 export default function AppearanceSection() {
   const { settings, set } = useSettings();
+  // The picker previews every family in its own face; the webfonts load on
+  // demand (not at app start), so request them when this section is open.
+  useEffect(() => {
+    ensureWebfonts();
+  }, []);
   const grey = Boolean(settings.iconGreyscale);
   const indicators = settings.showNewClipsIndicators !== false;
 

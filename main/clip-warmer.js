@@ -32,6 +32,11 @@ function pause(ms = PAUSE_ON_OPEN_MS) {
   pausedUntil = Math.max(pausedUntil, Date.now() + ms);
 }
 
+/** Lift a long pause early (an export finished). */
+function resume() {
+  pausedUntil = 0;
+}
+
 /** Queue one clip; `priority` puts it at the front (hover). */
 function warm(clipName, priority = false) {
   if (typeof clipName !== 'string' || !clipName || done.has(clipName) || inFlight.has(clipName)) return;
@@ -92,4 +97,4 @@ async function drain() {
   }
 }
 
-module.exports = { init, warm, warmMany, forget, pause };
+module.exports = { init, warm, warmMany, forget, pause, resume };

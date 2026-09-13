@@ -328,7 +328,6 @@ async function runDeferredServices() {
   // user never chose (no clipdip.enabled key) auto-enables it — supported
   // hardware only; a failed start records enabled=false so it never loops.
   // Later launches just start it if it's enabled but not running.
-  clipdipModule.init(getSettings);
   clipdipModule
     .autoEnableIfUnconfigured(async (value) => {
       settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
@@ -374,7 +373,11 @@ async function runDeferredServices() {
 // is a white or empty window, not a faster app.
 const REVEAL_FALLBACK_MS = 1500;
 let framesSincePaint = 0;
+// screencastActive: the reveal still waits for compositor frames.
+// frameWatchAttached: the DevTools session is attached and must be torn down
+// whatever path the reveal took (a fallback clears screencastActive first).
 let screencastActive = false;
+let frameWatchAttached = false;
 // Set by renderer-ready: the grid and its visible thumbnails are committed.
 let firstPaintSeen = false;
 
@@ -388,6 +391,7 @@ function startFrameWatch(win) {
     return;
   }
   screencastActive = true;
+  frameWatchAttached = true;
   dbg.on('message', (_event, method, params) => {
     if (method !== 'Page.screencastFrame') return;
     dbg.sendCommand('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
@@ -404,8 +408,9 @@ function startFrameWatch(win) {
 }
 
 function stopFrameWatch() {
-  if (!screencastActive || !mainWindow || mainWindow.isDestroyed()) return;
   screencastActive = false;
+  if (!frameWatchAttached || !mainWindow || mainWindow.isDestroyed()) return;
+  frameWatchAttached = false;
   const dbg = mainWindow.webContents.debugger;
   dbg.sendCommand('Page.stopScreencast').catch(() => {}).then(() => {
     try { dbg.detach(); } catch (_) { /* already detached */ }
@@ -437,7 +442,7 @@ function revealMainWindow() {
     stopFrameWatch();
   };
   const dbg = mainWindow.webContents.debugger;
-  if (screencastActive && dbg.isAttached()) {
+  if (frameWatchAttached && dbg.isAttached()) {
     let frames = 0;
     const onFrame = (_event, method) => {
       if (method !== 'Page.screencastFrame') return;
@@ -463,6 +468,9 @@ const queuedCliplibAuthEvents = [];
 let settingsLoading = null;
 const getSettings = async () => settings ?? (await settingsLoading);
 clipWarmer.init(getSettings);
+// Wires the settings getter only (no process work): a cliplib://settings/clipdip
+// deep link can ask for clipdip status before the deferred services run.
+clipdipModule.init(getSettings);
 
 function registerCliplibProtocol() {
   try {
@@ -492,6 +500,9 @@ function extractCliplibProtocolUrl(args = []) {
 
 function focusMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  // Still booting: the reveal will show it (maximized, opaque) in a moment;
+  // showing it now would flash an unpainted window and then an opacity blink.
+  if (!mainWindowRevealed) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
@@ -1008,6 +1019,8 @@ async function createWindow() {
   });
 
   bootTrace.mark('window_constructed');
+  const windowCreatedAt = Date.now();
+  let rendererDidFinishLoad = false;
   rendererConsoleCapture.attach(mainWindow.webContents);
 
   // Renderer rewrite: the React renderer draws its own titlebar strip; native
@@ -1022,7 +1035,34 @@ async function createWindow() {
   }
   Menu.setApplicationMenu(null);
 
-  await settingsLoading;
+  // Safety fallback in case the renderer never signals ready. Armed before
+  // any await below: if one of them throws, the window must still appear.
+  const splashFallback = setTimeout(() => {
+    // The fallback firing means the renderer never reported ready: the user is
+    // looking at a window that may be empty. It used to fire with no log at all.
+    if (!mainWindowRevealed) {
+      telemetry.event('renderer_never_ready', {
+        kind: telemetry.KIND.CRASH,
+        severity: telemetry.SEVERITY.FATAL,
+        message: `renderer never reported ready after ${Math.round((Date.now() - windowCreatedAt) / 1000)}s`,
+        context: {
+          ms_waited: Date.now() - windowCreatedAt,
+          did_finish_load: rendererDidFinishLoad
+        }
+      });
+    }
+    revealMainWindow();
+  }, 30000);
+  mainWindow.on('closed', () => clearTimeout(splashFallback));
+
+  try {
+    await settingsLoading;
+  } catch (error) {
+    // loadSettings falls back to defaults internally; a throw here means even
+    // that failed. The window is up and must not be orphaned by a rejection.
+    logger.error('Settings failed to load; continuing with defaults:', error);
+    settings = settings || {};
+  }
   // Telemetry knows the user's choice only once settings exist, so init runs
   // here; everything recorded earlier is replayed.
   telemetry.init({
@@ -1040,19 +1080,33 @@ async function createWindow() {
   migrateLegacySharingTokenIfPresent().catch((error) => {
     logger.warn(`Legacy sharing token migration failed: ${error.message}`);
   });
-  await thumbnailsModule.initThumbnailCache();
+  try {
+    await thumbnailsModule.initThumbnailCache();
+  } catch (error) {
+    logger.error('Thumbnail cache init failed; thumbnails will be regenerated on demand:', error);
+  }
   if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
   fileWatcherModule.setupFileWatcher(settings.clipLocation, {
     onNewClip: (fileName) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('new-clip-added', fileName);
       }
+    },
+    // The single recursive watch has one change buffer; when it overflows,
+    // events were lost. Walk the library and announce anything not yet known.
+    onOverflow: async () => {
+      const known = new Set(lastClipNames);
+      const clips = await clipsModule.getClips(getSettings);
+      const names = Array.isArray(clips) ? clips.map((c) => c.originalName) : [];
+      lastClipNames = names;
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      for (const name of names) {
+        if (!known.has(name)) mainWindow.webContents.send('new-clip-added', name);
+      }
     }
   });
   if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
 
-  let rendererDidFinishLoad = false;
-  const rendererWaitStartedAt = Date.now();
 
   // Renderer signals when clips are loaded and UI is fully ready
   // The renderer reports when the library grid is painted with its visible
@@ -1085,24 +1139,6 @@ async function createWindow() {
   });
   startFrameWatch(mainWindow);
 
-  // Safety fallback in case the renderer never signals ready
-  const splashFallback = setTimeout(() => {
-    // The fallback firing means the renderer never reported ready: the user is
-    // looking at a window that may be empty. It used to fire with no log at all.
-    if (!mainWindowRevealed) {
-      telemetry.event('renderer_never_ready', {
-        kind: telemetry.KIND.CRASH,
-        severity: telemetry.SEVERITY.FATAL,
-        message: `renderer never reported ready after ${Math.round((Date.now() - rendererWaitStartedAt) / 1000)}s`,
-        context: {
-          ms_waited: Date.now() - rendererWaitStartedAt,
-          did_finish_load: rendererDidFinishLoad
-        }
-      });
-    }
-    revealMainWindow();
-  }, 30000);
-  mainWindow.on('closed', () => clearTimeout(splashFallback));
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key.toLowerCase() === 'i' && input.control && input.shift) {
       mainWindow.webContents.toggleDevTools();
@@ -1781,19 +1817,29 @@ function buildExportProgressCallbacks(event) {
   };
 }
 
-ipcMain.handle("export-video", async (event, clipName, start, end, volume, speed, savePath, audioMix) => {
+// Exports own the CPU and the disk while they run; the clip warmer waits.
+async function withoutWarmer(work) {
+  clipWarmer.pause(60 * 60 * 1000);
+  try {
+    return await work();
+  } finally {
+    clipWarmer.resume();
+  }
+}
+
+ipcMain.handle("export-video", (event, clipName, start, end, volume, speed, savePath, audioMix) => withoutWarmer(() => {
   const callbacks = buildExportProgressCallbacks(event);
   return ffmpegModule.exportVideo(clipName, start, end, volume, speed, savePath, getSettings, callbacks, { audioMix });
-});
+}));
 
-ipcMain.handle("export-trimmed-video", async (event, clipName, start, end, volume, speed, audioMix) => {
+ipcMain.handle("export-trimmed-video", (event, clipName, start, end, volume, speed, audioMix) => withoutWarmer(() => {
   const callbacks = buildExportProgressCallbacks(event);
   return ffmpegModule.exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, callbacks, { audioMix });
-});
+}));
 
-ipcMain.handle("export-audio", async (event, clipName, start, end, volume, speed, savePath, audioMix) => {
-  return ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, getSettings, { audioMix });
-});
+ipcMain.handle("export-audio", (event, clipName, start, end, volume, speed, savePath, audioMix) => withoutWarmer(() =>
+  ffmpegModule.exportAudio(clipName, start, end, volume, speed, savePath, getSettings, { audioMix })
+));
 
 ipcMain.handle('get-tag-preferences', async () => {
   return metadataModule.getTagPreferences(app.getPath.bind(app));

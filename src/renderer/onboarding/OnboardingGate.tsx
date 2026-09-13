@@ -13,6 +13,8 @@ const OnboardingWizard = lazy(() => import("./OnboardingWizard"));
 export default function OnboardingGate() {
   const { settings, ready, set } = useSettings();
   const [mounted, setMounted] = useState(false);
+  // __showOnboarding() before the wizard chunk loaded: open it as soon as it mounts.
+  const [openOnMount, setOpenOnMount] = useState(false);
 
   useEffect(() => {
     if (mounted || !ready) return;
@@ -23,6 +25,7 @@ export default function OnboardingGate() {
     if (mounted) return;
     const w = window as unknown as Record<string, unknown>;
     w.__showOnboarding = () => {
+      setOpenOnMount(true);
       setMounted(true);
       return "onboarding: loading";
     };
@@ -35,7 +38,7 @@ export default function OnboardingGate() {
   if (!mounted) return null;
   return (
     <Suspense fallback={null}>
-      <OnboardingWizard />
+      <OnboardingWizard openOnMount={openOnMount} />
     </Suspense>
   );
 }

@@ -18,8 +18,13 @@
 ; expects already exists in the old install. Taskbar pins are retargeted by
 ; the app itself on launch (repairTaskbarPins in main.js).
 !macro customInstall
-  IfFileExists "$DESKTOP\ClipLib.lnk" 0 +2
+  ; A recreated .lnk loses the AppUserModelID electron-builder stamped on it;
+  ; without it a pin made from the shortcut does not group with the running
+  ; window (two taskbar buttons). Stamp it again after each CreateShortCut.
+  IfFileExists "$DESKTOP\ClipLib.lnk" 0 +3
     CreateShortCut "$DESKTOP\ClipLib.lnk" "$INSTDIR\ClipLib Launcher.exe" "" "$INSTDIR\ClipLib Launcher.exe" 0
-  IfFileExists "$SMPROGRAMS\ClipLib.lnk" 0 +2
+    WinShell::SetLnkAUMI "$DESKTOP\ClipLib.lnk" "${APP_ID}"
+  IfFileExists "$SMPROGRAMS\ClipLib.lnk" 0 +3
     CreateShortCut "$SMPROGRAMS\ClipLib.lnk" "$INSTDIR\ClipLib Launcher.exe" "" "$INSTDIR\ClipLib Launcher.exe" 0
+    WinShell::SetLnkAUMI "$SMPROGRAMS\ClipLib.lnk" "${APP_ID}"
 !macroend

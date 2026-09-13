@@ -209,12 +209,16 @@ export function useClips(): UseClips {
       );
       unsubs.push(
         window.clips.onThumbnailProgress((payload: { current?: number; total?: number }) => {
+          progressSeen = true;
           if (payload?.total != null && payload?.current != null) {
             setGeneratingCount(Math.max(0, payload.total - payload.current));
           }
         }),
       );
-      unsubs.push(window.clips.onThumbnailGenerationComplete(() => setGeneratingCount(0)));
+      // Once any progress or completion event has arrived, the count is owned
+      // by those events; the generation call's return value is then stale.
+      let progressSeen = false;
+      unsubs.push(window.clips.onThumbnailGenerationComplete(() => { progressSeen = true; setGeneratingCount(0); }));
       // Main revalidates thumbnails on startup/location change; seed the
       // pending count so the indicator appears before the first progress tick.
       unsubs.push(
@@ -272,7 +276,7 @@ export function useClips(): UseClips {
 
       if (generation) {
         const res = await generation;
-        if (!cancelled && res?.needsGeneration) setGeneratingCount((n) => Math.max(n, res.needsGeneration ?? 0));
+        if (!cancelled && !progressSeen && res?.needsGeneration) setGeneratingCount(res.needsGeneration);
       }
 
       // Snapshot for the next launch's instant first paint. "New" flags are
