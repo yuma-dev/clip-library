@@ -178,6 +178,7 @@ const api = {
   getPreviewStartTime: invoke("get-preview-start-time"),
   // One-round-trip bundle of everything the player reads on clip open.
   getClipOpenState: invoke("get-clip-open-state"),
+  warmClipOpen: invoke("warm-clip-open"),
   getTrim: invoke("get-trim"),
   saveTrim: invoke("save-trim"),
   deleteTrim: invoke("delete-trim"),

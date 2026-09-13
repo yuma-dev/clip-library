@@ -63,19 +63,30 @@ animation was choppy and it added nothing to responsiveness.
 
 ## The native launcher
 
- at the install root is a 470 KB Rust program
-(), not Electron. It draws the splash (logo and sweep
+`ClipLib.exe` at the install root is a 470 KB Rust program
+(`clipdip/crates/launcher`), not Electron. It draws the splash (logo and sweep
 bar, per-pixel alpha, no frame) within a few tens of milliseconds of the
-click, starts  (the Electron binary, )
+click, starts `ClipLib App.exe` (the Electron binary, `build.executableName`)
 with the same arguments, and fades out once the app's window is visible and
 opaque (it polls the app's top-level windows: visible, not cloaked, layered
 alpha at full). If the app is already running, the spawned instance hands
 over to it and exits, so the splash disappears again at once. Shortcuts are
-retargeted to the launcher by ; taskbar pins from older
-installs already point at . Deep links () are
+retargeted to the launcher by `build/installer.nsh`; taskbar pins from older
+installs already point at `ClipLib.exe`. Deep links (`cliplib://`) are
 registered by Electron and open the app directly, without the splash.
 The harness launches through the launcher, the way a user does, and the
 Electron first line still lands at ~165 ms after the click.
+
+## Opening a clip
+
+A cold open pays an ffprobe (~250 ms) and, for multi-track clips, a one-time
+audio track extraction; both are cached on disk. `main/clip-warmer.js` does
+that work ahead of the click: the newest 12 clips a few seconds after the
+library is on screen, and any hovered card right away, one clip at a time
+and paused while a clip is being opened. Measured with
+`node benchmark/smoke-packaged.js --card 40 --reset-cache [--hover-wait 3500]`:
+a cold open of a 5-track clip took 3.55 s from click to playable; after the
+hover warm it takes 0.27 s.
 
 ## Things that were tested and did not matter
 

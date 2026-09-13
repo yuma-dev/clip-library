@@ -20,7 +20,7 @@
     "vendor:clipdip": "node scripts/vendor-clipdip.mjs",
     "release": "node scripts/release.mjs",
     "release:preview": "node scripts/release-preview.mjs",
-    "bench:build": "vite build && node scripts/vendor-launcher.mjs && electron-builder --win --dir",
+    "bench:build": "node scripts/kill-dist-app.mjs && vite build && node scripts/vendor-launcher.mjs && electron-builder --win --dir",
     "bench:startup": "npm run bench:build && node benchmark/cold-start.js --label check --runs 5 --reuse --assert",
     "benchmark": "node benchmark/runner.js",
     "benchmark:verbose": "node benchmark/runner.js --verbose",

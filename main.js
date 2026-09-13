@@ -218,6 +218,11 @@ const metadataModule = lazyModule('./main/metadata');
 // File watcher module
 const fileWatcherModule = require('./main/file-watcher');
 
+// Warms the slow, cacheable part of opening a clip ahead of the click.
+const clipWarmer = require('./main/clip-warmer');
+// Library order (newest first) from the last get-clips, for the warmer.
+let lastClipNames = [];
+
 // Discord RPC module (lazy — discord-rpc is heavy and not needed to open the window)
 const discordModule = lazyModule('./main/discord');
 
@@ -341,6 +346,10 @@ async function runDeferredServices() {
   repairTaskbarPins().catch((error) => {
     logger.warn(`Taskbar pin repair failed: ${error.message}`);
   });
+
+  // Newest clips are the likeliest first opens; warm them once the other
+  // deferred work has had its moment.
+  setTimeout(() => clipWarmer.warmMany(lastClipNames, 12), 3000);
 }
 
 // The window is created hidden and shown once, as soon as the renderer has
@@ -453,6 +462,7 @@ const queuedCliplibAuthEvents = [];
 // before they land waits for that load instead of seeing undefined.
 let settingsLoading = null;
 const getSettings = async () => settings ?? (await settingsLoading);
+clipWarmer.init(getSettings);
 
 function registerCliplibProtocol() {
   try {
@@ -1334,6 +1344,7 @@ ipcMain.handle('clipdip-control', (event, payload) =>
 ipcMain.handle("get-clips", async () => {
   const clips = await clipsModule.getClips(getSettings);
   bootTrace.mark('get_clips_resolved');
+  lastClipNames = Array.isArray(clips) ? clips.map((c) => c.originalName) : [];
   return clips;
 });
 
@@ -1378,6 +1389,7 @@ ipcMain.handle("extract-audio-tracks", async (event, clipName) => {
 
 ipcMain.handle("reset-clip-cache", async (event, clipName) => {
   try {
+    clipWarmer.forget(clipName);
     return await ffmpegModule.resetClipCache(clipName, getSettings, thumbnailsModule);
   } catch (error) {
     logger.error(`Error resetting cache for ${clipName}:`, error);
@@ -1430,8 +1442,13 @@ ipcMain.handle("get-preview-start-time", async (event, clipName) => {
 // Everything the player needs to open a clip, gathered in one round trip
 // (the player used to fire ~9 read-only IPCs per open across several waves,
 // each paying queueing latency on a busy main process).
+ipcMain.handle("warm-clip-open", (_event, clipName) => {
+  clipWarmer.warm(clipName, true);
+});
+
 ipcMain.handle("get-clip-open-state", async (event, clipName) => {
   const startedAt = Date.now();
+  clipWarmer.pause();
   // Each fallback below is indistinguishable from a real value once it reaches
   // the player: no trim, no tags, default volume. The slot name turns "the clip
   // opened wrong" into "these two reads failed" without naming the clip.
