@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// Cold-start benchmark against the PACKAGED app (dist/win-unpacked).
+// Cold-start benchmark against the PACKAGED app (dist/win-unpacked), launched
+// the way a user launches it: through the native splash launcher ClipLib.exe.
 //
 // Each run launches ClipLib.exe with an isolated, pre-seeded profile
 // (CLIPLIB_PROFILE_DIR) and CLIPLIB_BOOT_TRACE=1, then watches the
@@ -174,12 +175,22 @@ async function runOnce(opts, index, exe) {
       if (opts.settle) await sleep(opts.settle);
       break;
     }
-    if (child.exitCode !== null) break;
+    // The launcher exits at handoff; only stop early once the app itself is gone.
+    if (child.exitCode !== null) {
+      const appPid = trace?.pid;
+      let appAlive = false;
+      if (appPid) { try { process.kill(appPid, 0); appAlive = true; } catch { /* gone */ } }
+      if (!appAlive) break;
+    }
   }
-  try {
-    execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  } catch {
-    /* already gone */
+  // ClipLib.exe is the native launcher and exits once the app is on screen;
+  // the app's own pid is in the trace it wrote.
+  for (const pid of new Set([trace?.pid, child.pid].filter(Boolean))) {
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {
+      /* already gone */
+    }
   }
   await sleep(300);
   if (opts.trace && fs.existsSync(chromiumTrace)) {
