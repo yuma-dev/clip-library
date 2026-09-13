@@ -22,7 +22,9 @@
 // --settle MS (keep the app alive that long after the last mark, e.g. to let deferred services log),
 // --pixel-probe (sample three screen points during launch and report white/dark/content runs),
 // --env KEY=VAL (extra environment for the app, repeatable),
-// --app-args "--flag --other" (extra Chromium/Electron switches for the app).
+// --app-args "--flag --other" (extra Chromium/Electron switches for the app),
+// --park-cursor (move the mouse to the right screen edge before each launch, so a
+//   card under the cursor never starts a hover preview during the reveal).
 
 const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -40,13 +42,13 @@ const PHASES = [
   'first_paint', 'first_contentful_paint', 'grid_first_card', 'grid_first_thumb',
   'window_visible', 'renderer_ready', 'get_clips_resolved', 'get_clips_returned',
   'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded',
-  'reveal_gate_start', 'reveal_gate_decoded', 'ready_to_show', 'frame_1', 'frame_2', 'window_opaque',
+  'emoji_font_loaded', 'reveal_gate_start', 'reveal_gate_decoded', 'reveal_gate_filled', 'ready_to_show', 'frame_1', 'frame_2', 'shown_frame_1', 'shown_frame_2', 'window_opaque', 'reveal_anim_start', 'reveal_anim_done',
 ];
 // The run is over once all of these exist (or the timeout hits).
 const DONE_MARKS = ['window_visible', 'grid_first_thumb', 'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded'];
 
 function parseArgs(argv) {
-  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, pixelProbe: false, assert: false, extraEnv: {}, appArgs: [], makeProfile: false, benchmarkMode: false };
+  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, pixelProbe: false, parkCursor: false, assert: false, extraEnv: {}, appArgs: [], makeProfile: false, benchmarkMode: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -61,9 +63,10 @@ function parseArgs(argv) {
     else if (a === '--cpu') out.cpu = true;
     else if (a === '--settle') out.settle = Number(next());
     else if (a === '--pixel-probe') out.pixelProbe = true;
+    else if (a === '--park-cursor') out.parkCursor = true;
     else if (a === '--assert') out.assert = true;
     else if (a === '--env') { const [k, ...v] = next().split('='); out.extraEnv[k] = v.join('='); }
-    else if (a === '--app-args') out.appArgs = next().split(/s+/).filter(Boolean);
+    else if (a === '--app-args') out.appArgs = next().split(/\s+/).filter(Boolean);
     else if (a === '--cold-fs') out.coldFs = true;
     else if (a === '--make-profile') out.makeProfile = true;
     else if (a === '--benchmark-mode') out.benchmarkMode = true;
@@ -163,6 +166,11 @@ async function runOnce(opts, index, exe) {
     probe.stdout.on('data', (d) => { probeOut += d; });
     await new Promise((r) => { const check = () => (probeOut.includes('epoch,') ? r() : setTimeout(check, 20)); check(); });
   }
+  if (opts.parkCursor) {
+    try {
+      execFileSync('powershell', ['-NoProfile', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(($b.Width - 2), [int]($b.Height / 2))']);
+    } catch { /* cursor stays where it is */ }
+  }
   const spawnAt = Date.now();
   const child = spawn(exe, opts.appArgs, { env, stdio: 'ignore', windowsHide: false });
   let trace = null;
@@ -171,6 +179,17 @@ async function runOnce(opts, index, exe) {
     await sleep(50);
     trace = readTrace(traceFile) || trace;
     if (trace && DONE_MARKS.every((m) => trace.marks[m] !== undefined) && (!opts.trace || fs.existsSync(chromiumTrace)) && (!opts.cpu || fs.existsSync(cpuProfile))) {
+      // The reveal animation and its frame statistics land up to ~1.5 s after
+      // the window is opaque; wait for them (bounded) so they reach the trace.
+      const animDeadline = Date.now() + 2500;
+      while (Date.now() < animDeadline) {
+        trace = readTrace(traceFile) || trace;
+        const notes = trace?.notes || {};
+        // Both notes exist only on a run that animated; a plain reveal has
+        // neither, so that case waits out the deadline.
+        if (trace.marks.window_opaque !== undefined && notes.reveal_raf && notes.reveal_compositor) break;
+        await sleep(50);
+      }
       if (opts.trace || opts.cpu) await sleep(1500);
       if (opts.settle) await sleep(opts.settle);
       break;
@@ -228,7 +247,8 @@ async function runOnce(opts, index, exe) {
     for (const [name, at] of Object.entries(trace.marks)) rel[name] = Math.round(at - spawnAt);
     rel.process_start = Math.round(trace.processStartAt - spawnAt);
   }
-  return { label: opts.label, profile: opts.profile, coldFs: opts.coldFs, run: index, spawnAt, complete: Boolean(trace) && DONE_MARKS.every((m) => rel[m] !== undefined), marks: rel };
+  const notes = trace?.notes || {};
+  return { label: opts.label, profile: opts.profile, coldFs: opts.coldFs, run: index, spawnAt, complete: Boolean(trace) && DONE_MARKS.every((m) => rel[m] !== undefined), marks: rel, notes };
 }
 
 function percentile(values, p) {
@@ -287,6 +307,10 @@ async function main() {
     fs.appendFileSync(path.join(resultsDir, `${opts.label}.jsonl`), `${JSON.stringify(result)}\n`);
     const m = result.marks;
     console.log(`run ${i}: window ${m.window_visible ?? '-'}  first_thumb ${m.grid_first_thumb ?? '-'}  fresh_list ${m.fresh_list_committed ?? '-'}  tags ${m.tags_loaded ?? '-'}${result.complete ? '' : '  (incomplete)'}`);
+    const fr = (n) => (n ? `${n.frames} frames, p95 ${n.p95_ms} ms, max ${n.max_ms} ms, ${n.over_25ms} over 25 ms` : 'not animated');
+    if (result.notes.reveal_raf || result.notes.reveal_compositor) {
+      console.log(`        reveal renderer: ${fr(result.notes.reveal_raf)}  |  compositor: ${fr(result.notes.reveal_compositor)}`);
+    }
     if (appCopy) rmrf(appCopy);
   }
   printTable(results);
@@ -307,6 +331,17 @@ async function main() {
     if (asarBytes && thresholds.asar_bytes && asarBytes > thresholds.asar_bytes) {
       failed += 1;
       console.log(`FAIL  asar ${asarBytes} bytes (limit ${thresholds.asar_bytes})`);
+    }
+    // Reveal animation guard: median frames over 25 ms in its first 1.2 s,
+    // renderer (requestAnimationFrame) and compositor (screencast), from the
+    // boot-trace notes; only runs that animated count.
+    for (const [key, note] of [['reveal_renderer_over_25ms', 'reveal_raf'], ['reveal_compositor_over_25ms', 'reveal_compositor']]) {
+      if (thresholds[key] === undefined) continue;
+      const values = pool.map((r) => r.notes?.[note]?.over_25ms).filter((v) => typeof v === 'number');
+      const median = percentile(values, 50);
+      const ok = values.length > 0 && median <= thresholds[key];
+      if (!ok) failed += 1;
+      console.log(`${ok ? 'PASS' : 'FAIL'}  ${key} median ${median ?? '-'} (limit ${thresholds[key]}, ${values.length} animated runs)`);
     }
     if (failed) process.exitCode = 1;
   }

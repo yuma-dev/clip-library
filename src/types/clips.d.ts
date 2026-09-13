@@ -386,6 +386,13 @@ export interface ClipsApi {
 
   // --- Signal to main (fire-and-forget) ---
   rendererReady(): void;
+  /** Where the launcher drew its logo, in CSS px of the content area (null without the launcher). */
+  getBootLogoRect(): Promise<{ x: number; y: number; w: number; h: number } | null>;
+  /** Main is about to make the window opaque; set up the reveal animation. */
+  onBootReveal(cb: (payload: BootRevealPayload) => void): () => void;
+  /** The animation's first frame is composited; main may make the window opaque. */
+  bootRevealArmed(): void;
+  bootRevealFrames(stats: BootRevealFrames): void;
 
   // --- Telemetry (fire-and-forget) ---
   /** Post a renderer batch onto the `telemetry-report` channel. Never throws. */
@@ -444,3 +451,17 @@ declare global {
 }
 
 export {};
+
+export interface BootRevealPayload {
+  animate: boolean;
+  /** The launcher's logo, in CSS px of the window's content area, when it drew one. */
+  logo: { x: number; y: number; w: number; h: number } | null;
+}
+
+export interface BootRevealFrames {
+  animated: boolean;
+  frames: number;
+  p95: number;
+  max: number;
+  over25: number;
+}

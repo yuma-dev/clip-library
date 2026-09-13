@@ -4614,3 +4614,83 @@ body.ui-blur-exit .app-body {
 }
 
 
+
+/* ---------- Boot reveal (src/renderer/boot/bootReveal.ts) ----------
+   The camera flies through the launcher's logo: the logo twin grows past the
+   viewport and fades while the whole library body dollies in from 1.5x to
+   rest around the same point and a vignette lifts. Four composited layers
+   (body, cover, vignette, hero),
+   transform and opacity only: no thumbnail or card glow repaints, and the
+   library is clickable throughout (the overlay ignores pointer events).
+   Every layer exists before the reveal (the .boot-pre promotion and the
+   overlay's static base state); the .run and .boot-dolly classes only start
+   the animations. A will-change layer keeps the raster scale it was created
+   with, so the 14x logo and the 1.5x body are the GPU upscaling textures
+   rasterised at rest, never a re-raster mid-flight. */
+.boot-pre {
+  will-change: transform, opacity;
+}
+/* No hover while the intro plays: the cursor often sits on the grid when the
+   window appears, and a card's hover style repaints its tile inside the
+   moving body. Any pointer press still ends the intro (bootHold). */
+.app-body.boot-pre {
+  pointer-events: none;
+}
+.app-shell.boot-clip {
+  overflow: hidden;
+}
+/* A 3D push, not scale(): for a scale() animation the compositor rasters
+   the layer at the animation's largest scale (1.5x of the whole library:
+   a 32 MB texture and every thumbnail decoded again, measured as 200 to 380 ms
+   stalls). A perspective push has no computable maximum scale, so the layer
+   keeps its 1x raster and the GPU upscales it. 1200 / (1200 - 400) = 1.5x. */
+.app-body.boot-dolly {
+  animation: boot-dolly 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 40ms both;
+}
+@keyframes boot-dolly {
+  from { transform: perspective(1200px) translateZ(400px); }
+  to { transform: perspective(1200px) translateZ(0); }
+}
+/* The body's opacity ride is a solid cover fading out instead, so the body
+   never needs an offscreen surface of its own. */
+#boot-reveal .boot-cover {
+  position: absolute;
+  inset: 0;
+  background: #050608;
+  will-change: opacity;
+}
+#boot-reveal .boot-cover.run {
+  animation: boot-fade-out 380ms ease-out 40ms both;
+}
+#boot-reveal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  overflow: hidden;
+}
+#boot-reveal .boot-hero {
+  position: absolute;
+  will-change: transform, opacity;
+}
+#boot-reveal .boot-hero.run {
+  animation: boot-through 520ms cubic-bezier(0.6, 0, 0.9, 0.4) 20ms both;
+}
+@keyframes boot-through {
+  0% { transform: scale(1); opacity: 1; }
+  70% { opacity: 0.5; }
+  100% { transform: scale(14); opacity: 0; }
+}
+#boot-reveal .boot-vignette {
+  position: absolute;
+  inset: 0;
+  will-change: opacity;
+  background: radial-gradient(ellipse at var(--boot-ox, 50%) var(--boot-oy, 45%), transparent 35%, #050608 100%);
+}
+#boot-reveal .boot-vignette.run {
+  animation: boot-fade-out 900ms ease 200ms both;
+}
+@keyframes boot-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

@@ -29,7 +29,7 @@ the September 2026 cold-start work; numbers are from the reference machine
    probe (two spawns), a PowerShell CIM query for telemetry, clipdip's
    `tasklist`, and taskbar pin repair (a synchronous COM loop, 300 ms) all
    ran before or during the first paint and competed with the renderer and
-   GPU process. They run from `runDeferredServices()` 1.5 s after the reveal.
+   GPU process. They run from `runDeferredServices()` 2.5 s after the reveal.
 3. **The splash window.** A second renderer process plus a fixed 300 ms
    dismiss timer. Removed.
 4. **Module load and the asar.** `electron-squirrel-startup` (dead for an NSIS
@@ -131,6 +131,59 @@ Facts worth knowing: in a hidden Electron window `document.hidden` is false
 and `requestAnimationFrame` runs, so visibility gating in the renderer does
 nothing at launch; `img.decode()` only settles on a rendering opportunity.
 
+## The reveal animation
+
+The launcher's logo is taken over in place and the library arrives behind it
+(`src/renderer/boot/bootReveal.ts`, `main.js` `revealMainWindow`): the logo
+twin grows past the viewport and fades while the whole library body pushes
+in from 1.5x to rest around it and a vignette lifts; about a second. The
+launcher passes where it drew the logo (`--splash-logo=x,y,w,h`, physical
+pixels), main converts that to content CSS pixels, and the launcher's
+fade-out is 120 ms so the twin takes over almost at once.
+
+Getting it to hold its frames took a series of measured fixes, each visible
+in `benchmark/analyze-reveal.js` (frame-level view of a `--trace` run:
+renderer main-thread tasks and the compositor's PipelineReporter frames):
+
+- The main thread was mounting the rest of the grid at 64 cards a frame
+  (80 to 100 ms each) right through the reveal, dropping half the frames and
+  delaying the opaque window by 300 ms. `src/renderer/boot/bootHold.ts` holds
+  the streaming from just before renderer-ready (once the first viewport is
+  full) and the whole-grid commits (fresh list, thumbnail paths, tag batches)
+  while the animation plays; any input releases it at once. The IPCs still
+  run during the hold, only their commits wait.
+- Layers created at the first animated frame were rastered in that frame
+  (67 ms). Everything the animation moves now exists before the reveal: the
+  body is promoted and the overlay mounted while the window is still at OS
+  opacity 0, so the pre-reveal compositor frames raster them.
+- `scale()` on the body made the compositor raster it at the animation's
+  maximum scale (1.5x of the whole library, every thumbnail decoded again:
+  200 to 380 ms stalls). A `perspective()` push has no computable maximum
+  scale, so the layer keeps its 1x raster and the GPU upscales it. The
+  body's opacity ride is a solid cover fading out, so the body needs no
+  offscreen surface.
+- The IntersectionObserver that toggles offscreen cards fired every frame as
+  the moving body carried cards across the root's edges, repainting tiles
+  (111 raster batches in one run). It ignores entries during the hold.
+- A hover preview started mid-intro when the cursor sat on the grid (it
+  does after a desktop-shortcut launch): a GPU video decoder plus a 422 ms
+  encoder-capability probe in the GPU process. Hover is off on the body
+  during the intro.
+- The 45 MB emoji face was requested by the first emoji glyph and decoded
+  (about 80 ms on the main thread) mid-animation; `main.tsx` asks for it at
+  script start so that lands in the quiet second before the window shows.
+- Step easing on the mockup's own gate animation ended at progress
+  0.9999999 and never fired; the real hand-over uses frames and timers.
+
+Result on the reference machine (165 Hz): presented-frame gaps median one
+vsync, p95 12 ms, at most one or two frames over 25 ms, all inside the first
+150 ms while the launcher still fades over a solid cover. The bench prints
+the renderer and compositor frame notes per run and `--assert` guards them
+(`reveal_*_over_25ms` in `benchmark/startup-thresholds.json`). Cost: the
+window turns opaque about 300 ms later than the plain reveal (two frames after
+show, then the renderer arms the first frame), covered by the launcher, and
+the fresh list and tags commit about 1.3 s later than they otherwise would.
+
 ## Tooling
 
 - `npm run bench:build` builds the renderer and packages `dist/win-unpacked`
@@ -146,7 +199,14 @@ nothing at launch; `img.decode()` only settles on a rendering opportunity.
   samples the screen so white or empty frames show up as data; `--trace`
   records a Chromium content trace (`benchmark/analyze-trace.js`); `--cpu` a
   main-process CPU profile (`benchmark/analyze-cpuprofile.js`);
-  `--profile cold-cache` drops the snapshot and caches.
+  `--profile cold-cache` drops the snapshot and caches; `--park-cursor` moves
+  the mouse to the screen edge before each launch so a card under it never
+  starts a hover preview.
+- `node benchmark/analyze-reveal.js <chromium-trace.json>` is the frame-level
+  view of the reveal animation from a `--trace` run with
+  `CLIPLIB_TRACE_CATEGORIES=benchmark,viz,gpu,cc,devtools.timeline,...`:
+  long renderer main-thread tasks, dropped and presented compositor frames,
+  `--around MS` for every thread in a stall.
 - `npm run bench:startup` builds, runs 5 launches and checks medians against
   `benchmark/startup-thresholds.json`.
 - `node benchmark/smoke-packaged.js` opens a clip, the settings route and

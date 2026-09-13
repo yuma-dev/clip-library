@@ -6,6 +6,7 @@
 // unbounded work.
 
 import { useEffect, useState } from "react";
+import { isStreamingHeld, onBootRelease } from "../boot/bootHold";
 
 // Cards mounted per animation frame across ALL streaming lists. Each list
 // used to take its full perFrame on its own, so when a filter cleared and
@@ -82,7 +83,15 @@ export function useStreamedSlice<T>(
     };
     // rAF paces streaming to the display; the timeout fallback covers an
     // occluded window, where Chromium suspends rAF.
+    let offRelease = () => {};
     const schedule = () => {
+      // The boot reveal holds streaming for about a second (src/renderer/boot):
+      // the cards this would mount are below the fold, and the main thread
+      // must be quiet for the reveal animation to keep its frames.
+      if (isStreamingHeld()) {
+        offRelease = onBootRelease(schedule);
+        return;
+      }
       raf = requestAnimationFrame(advance);
       timer = window.setTimeout(() => advance(performance.now()), 64);
     };
@@ -100,6 +109,7 @@ export function useStreamedSlice<T>(
     else schedule();
     return () => {
       advanced = true;
+      offRelease();
       cancelAnimationFrame(raf);
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);

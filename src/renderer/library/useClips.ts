@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocalClip } from "./types";
 import { bootMark } from "../perf/bootMarks";
+import { whenCommitsAllowed } from "../boot/bootHold";
 
 // Last session's library snapshot — lets the grid paint instantly on launch
 // while the real scan runs, instead of showing a loading screen for ~1s.
@@ -108,6 +109,10 @@ export function useClips(): UseClips {
       const knownNames = (Array.isArray(raw) ? raw : []).map((c) => String(c.originalName ?? ""));
       const newInfo = await window.clips.getNewClipsInfo(knownNames).catch(() => ({ newClips: [] }));
       if (cancelled) return;
+      // While the boot reveal animation plays, a commit that touches every
+      // card would cost its frames; the list waits for it (about a second).
+      await whenCommitsAllowed();
+      if (cancelled) return;
 
       // Clips added since the last session — used to highlight them on load.
       const newSet = new Set<string>(Array.isArray(newInfo?.newClips) ? newInfo.newClips : []);
@@ -193,6 +198,22 @@ export function useClips(): UseClips {
         .catch(() => ({}))) as Record<string, string | null>;
       if (cancelled) return;
       const tmap = new Map<string, string | null>(Object.entries(batch));
+
+      // --- Tags: batched IPC (500 names per call), fetched now so the round
+      // trips overlap the reveal hold; applied per batch further down. ---
+      const TAG_BATCH = 500;
+      const tagBatches: Promise<Record<string, string[]>>[] = [];
+      for (let i = 0; i < list.length; i += TAG_BATCH) {
+        const slice = list.slice(i, i + TAG_BATCH);
+        tagBatches.push(
+          window.clips
+            .getClipTagsBatch(slice.map((c) => c.originalName))
+            .catch(() => ({})) as Promise<Record<string, string[]>>,
+        );
+      }
+
+      await whenCommitsAllowed();
+      if (cancelled) return;
       setThumbnails(new Map(tmap));
       requestAnimationFrame(() => bootMark("thumb_paths_applied"));
 
@@ -242,19 +263,18 @@ export function useClips(): UseClips {
             } | null>)
           : null;
 
-      // --- Tags: batched IPC (500 names per call), fill in per batch. ---
+      // --- Tags: fill in per batch (fetched above). ---
       // One round trip per 500 clips instead of one per clip; clips whose tags
       // stay empty keep their object identity so memoized cards skip re-render.
       const allTags: Record<string, string[]> = {};
-      const TAG_BATCH = 500;
       const sameTags = (a: string[], b: string[]) =>
         a.length === b.length && a.every((t, i) => t === b[i]);
       for (let i = 0; i < list.length && !cancelled; i += TAG_BATCH) {
         const slice = list.slice(i, i + TAG_BATCH);
         const sliceNames = new Set(slice.map((c) => c.originalName));
-        const byName = (await window.clips
-          .getClipTagsBatch(slice.map((c) => c.originalName))
-          .catch(() => ({}))) as Record<string, string[]>;
+        const byName = await tagBatches[i / TAG_BATCH];
+        if (cancelled) return;
+        await whenCommitsAllowed();
         if (cancelled) return;
         // The batch returns an entry for every requested name ([] when
         // tagless); an empty object means the IPC failed — keep current tags.

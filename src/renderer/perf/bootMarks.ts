@@ -12,7 +12,15 @@ declare global {
 }
 
 export function bootMark(name: string, t?: number): void {
-  window.__bootTrace?.mark(name, t);
+  if (!window.__bootTrace) return;
+  window.__bootTrace.mark(name, t);
+  // Also a user-timing mark, so a Chromium trace of the launch carries the
+  // same names (benchmark/analyze-trace.js aligns its windows on them).
+  try {
+    performance.mark(name);
+  } catch {
+    /* not critical */
+  }
 }
 
 export function initBootMarks(): void {
