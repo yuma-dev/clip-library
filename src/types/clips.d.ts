@@ -209,7 +209,8 @@ export interface ClipsApi {
   // --- Clips ---
   getClips(): Promise<any[]>;
   getNewClipInfo(fileName: string): Promise<any>;
-  getNewClipsInfo(): Promise<{ newClips: string[]; totalNewCount?: number }>;
+  /** Pass the names from getClips to spare main a second library walk. */
+  getNewClipsInfo(knownNames?: string[]): Promise<{ newClips: string[]; totalNewCount?: number }>;
   /** Total disk usage (bytes) of the configured clip folder. Cached ~4 min in main. */
   getClipsFolderSize(): Promise<{ bytes: number }>;
   markClipsWatched(clipNames: string[]): Promise<void>;

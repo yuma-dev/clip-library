@@ -11,6 +11,7 @@
 //   node benchmark/cold-start.js --label baseline      7 warm runs, median/p90 table, results appended as JSONL
 //   node benchmark/cold-start.js --profile cold-cache  no localStorage snapshot, no thumbnail cache
 //   node benchmark/cold-start.js --cold-fs             copy the app to a fresh folder per run (defeats the OS file cache)
+//   npm run bench:startup                              build + 5 runs + regression check against benchmark/startup-thresholds.json
 //
 // Flags: --runs N (7), --exe PATH, --timeout MS (60000), --keep (leave scratch
 // profiles), --reuse (seed once, keep the same profile for every run),
@@ -38,13 +39,13 @@ const PHASES = [
   'first_paint', 'first_contentful_paint', 'grid_first_card', 'grid_first_thumb',
   'window_visible', 'renderer_ready', 'get_clips_resolved', 'get_clips_returned',
   'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded',
-  'reveal_gate_start', 'reveal_gate_decoded', 'ready_to_show', 'gpu_ready', 'frame_after_ready', 'window_opaque', 'frame_2', 'frame_3', 'frame_4', 'doc_hidden_true', 'doc_hidden_false', 'vis_visible', 'io_all_offscreen', 'io_some_offscreen', 'io_all_onscreen',
+  'reveal_gate_start', 'reveal_gate_decoded', 'ready_to_show', 'frame_1', 'frame_2', 'window_opaque',
 ];
 // The run is over once all of these exist (or the timeout hits).
 const DONE_MARKS = ['window_visible', 'grid_first_thumb', 'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded'];
 
 function parseArgs(argv) {
-  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, pixelProbe: false, extraEnv: {}, appArgs: [], makeProfile: false, benchmarkMode: false };
+  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, pixelProbe: false, assert: false, extraEnv: {}, appArgs: [], makeProfile: false, benchmarkMode: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -59,6 +60,7 @@ function parseArgs(argv) {
     else if (a === '--cpu') out.cpu = true;
     else if (a === '--settle') out.settle = Number(next());
     else if (a === '--pixel-probe') out.pixelProbe = true;
+    else if (a === '--assert') out.assert = true;
     else if (a === '--env') { const [k, ...v] = next().split('='); out.extraEnv[k] = v.join('='); }
     else if (a === '--app-args') out.appArgs = next().split(/s+/).filter(Boolean);
     else if (a === '--cold-fs') out.coldFs = true;
@@ -277,6 +279,25 @@ async function main() {
   }
   printTable(results);
   console.log(`\nlabel ${opts.label}  profile ${opts.profile}  sha ${sha}  asar ${asarBytes ? `${(asarBytes / 1048576).toFixed(1)} MB` : '-'}`);
+  if (opts.assert) {
+    // Regression guard: medians (first run dropped) against benchmark/startup-thresholds.json.
+    const thresholds = JSON.parse(fs.readFileSync(path.join(root, 'benchmark', 'startup-thresholds.json'), 'utf8'));
+    const limits = thresholds[opts.profile] || {};
+    const pool = results.length >= 3 ? results.slice(1) : results;
+    let failed = 0;
+    for (const [phase, max] of Object.entries(limits)) {
+      const values = pool.map((r) => r.marks[phase]).filter((v) => typeof v === 'number');
+      const median = percentile(values, 50);
+      const ok = median !== null && median <= max;
+      if (!ok) failed += 1;
+      console.log(`${ok ? 'PASS' : 'FAIL'}  ${phase} median ${median ?? '-'} ms (limit ${max})`);
+    }
+    if (asarBytes && thresholds.asar_bytes && asarBytes > thresholds.asar_bytes) {
+      failed += 1;
+      console.log(`FAIL  asar ${asarBytes} bytes (limit ${thresholds.asar_bytes})`);
+    }
+    if (failed) process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

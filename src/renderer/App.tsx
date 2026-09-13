@@ -214,10 +214,11 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [isTemporary, clearFocus]);
 
-  // Tell main the library is painted with its thumbnails decoded. Main then
-  // waits for the compositor to actually produce a frame of it before it
-  // reveals the window (a frame with undecoded thumbnails still needs
-  // hundreds of ms of GPU work, and Windows shows white meanwhile).
+  // Once the library grid is committed and its visible thumbnails have
+  // loaded, tell main: it reveals the window after the compositor has
+  // framed this state (a frame with undecoded thumbnails still needs
+  // hundreds of ms of GPU work, and Windows would show white meanwhile).
+  // Without a snapshot this fires when the folder scan lands.
   useEffect(() => {
     if (lib.loading || readySent.current) return;
     readySent.current = true;

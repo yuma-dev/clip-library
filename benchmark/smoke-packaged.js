@@ -51,7 +51,13 @@ async function main() {
     );
     check('thumbnails decoded', true);
 
-    const visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.isMaximized()));
+    // The reveal waits for the compositor to frame the grid, a moment after
+    // the thumbnails decode; give it a few seconds.
+    let visible = false;
+    for (let i = 0; i < 50 && !visible; i++) {
+      visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.isMaximized()));
+      if (!visible) await new Promise((r) => setTimeout(r, 100));
+    }
     check('main window visible and maximized', visible);
 
     // Open the first clip in the player.

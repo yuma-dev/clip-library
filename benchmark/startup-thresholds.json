@@ -1,0 +1,14 @@
+{
+  "_comment": "Median ms after process spawn (first run dropped), checked by npm run bench:startup. Reference machine (RTX 4070, NVMe, 2,800 clips): renderer_ready ~0.83 s, window_visible ~1.5 s (bounded by the GPU framing the grid), fresh list ~1.4 s. Limits leave headroom for noise, not for regressions.",
+  "warm": {
+    "renderer_ready": 1300,
+    "window_visible": 2100,
+    "fresh_list_committed": 2200
+  },
+  "cold-cache": {
+    "window_visible": 2200,
+    "fresh_list_committed": 2000,
+    "tags_loaded": 4000
+  },
+  "asar_bytes": 100000000
+}

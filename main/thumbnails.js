@@ -13,6 +13,10 @@ const crypto = require('crypto');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 const { ffmpeg, ffprobeAsync } = require('./ffmpeg');
+const { mapLimit } = require('../utils/pool');
+
+// Concurrent thumbnail validations (fs.access + two small reads each).
+const VALIDATE_CONCURRENCY = 16;
 
 // Constants
 const CONCURRENT_GENERATIONS = 4;
@@ -475,21 +479,19 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
       // up, tells the renderer instead of leaving an empty card.
       let clipsNeedingGeneration = [...fastPathDropped];
 
-      // Validate remaining clips
-      for (const clipName of remainingClips) {
+      // Validate remaining clips through a bounded pool: three file reads per
+      // clip, which used to run one clip at a time for the whole library.
+      const invalid = await mapLimit(remainingClips, VALIDATE_CONCURRENCY, async (clipName) => {
         const clipPath = path.join(settings.clipLocation, clipName);
         const thumbnailPath = generateThumbnailPath(clipPath);
-
         try {
-          const isValid = await validateThumbnail(clipName, thumbnailPath, getTrimData);
-          if (!isValid) {
-            clipsNeedingGeneration.push(clipName);
-          }
+          return (await validateThumbnail(clipName, thumbnailPath, getTrimData)) ? null : clipName;
         } catch (error) {
           logger.error(`Error validating thumbnail for ${clipName}:`, error);
-          clipsNeedingGeneration.push(clipName);
+          return clipName;
         }
-      }
+      });
+      clipsNeedingGeneration.push(...invalid.filter(Boolean));
 
       // Only show progress and start queue if there are clips to process
       if (clipsNeedingGeneration.length > 0) {
