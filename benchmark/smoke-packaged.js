@@ -4,7 +4,7 @@
 // isolated profile: the library paints, a clip opens in the player, the
 // settings and feed routes render, and the deferred services come up.
 //
-//   node benchmark/smoke-packaged.js [--exe PATH] [--profile DIR]
+//   node benchmark/smoke-packaged.js [--exe PATH] [--profile DIR] [--wait-before-open MS] [--card N] [--hover-wait MS] [--reset-cache]
 
 const { _electron: electron } = require('playwright');
 const fs = require('node:fs');
@@ -61,8 +61,26 @@ async function main() {
     }
     check('main window visible and maximized', visible);
 
-    // Open the first clip in the player.
-    await page.locator('.clip-item').first().click();
+    // Open the first clip in the player (optionally after the warmer had time).
+    const waitBeforeOpen = Number(opt('--wait-before-open', 0));
+    if (waitBeforeOpen > 0) await new Promise((r) => setTimeout(r, waitBeforeOpen));
+    const cardIndex = Number(opt('--card', 0));
+    const card = page.locator('.clip-item').nth(cardIndex);
+    await card.scrollIntoViewIfNeeded();
+    const cardName = await card.getAttribute('data-original-name');
+    if (args.includes('--reset-cache') && cardName) {
+      // Drop the probe and audio-track caches so the open is a true cold one.
+      await page.evaluate((name) => window.clips.resetClipCache(name), cardName);
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const hoverWait = Number(opt('--hover-wait', 0));
+    if (hoverWait > 0) {
+      // Hover triggers the clip warmer; give it time before the click.
+      await card.hover();
+      await new Promise((r) => setTimeout(r, hoverWait));
+    }
+    const clickAt = Date.now();
+    await card.click();
     await page.waitForFunction(() => {
       const overlay = document.getElementById('player-overlay');
       const video = document.querySelector('#player-overlay video');
@@ -72,7 +90,7 @@ async function main() {
     await page.waitForFunction(() => {
       const video = document.querySelector('#player-overlay video');
       return video && video.readyState >= 2;
-    }, { timeout: 20000 }).then(() => check('video has data', true), (e) => check('video has data', false, e.message.split('\n')[0]));
+    }, { timeout: 20000 }).then(() => check('video has data', true, `${Date.now() - clickAt} ms click to playable`), (e) => check('video has data', false, e.message.split('\n')[0]));
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => {
       const overlay = document.getElementById('player-overlay');

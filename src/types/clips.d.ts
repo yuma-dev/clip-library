@@ -254,6 +254,8 @@ export interface ClipsApi {
   getPreviewStartTime(clipName: string): Promise<number>;
   /** One-round-trip bundle of everything the player reads on clip open. */
   getClipOpenState(clipName: string): Promise<any>;
+  /** Probe and extract audio tracks for a clip at idle so its open is a cache hit. */
+  warmClipOpen(clipName: string): Promise<void>;
 
   // --- Audio tracks ---
   extractAudioTracks(...args: any[]): Promise<any>;

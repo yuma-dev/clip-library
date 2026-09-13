@@ -62,6 +62,9 @@ export class LibraryHover {
         /* default to 0 */
       }
       if (this.activePreview !== ctx || !cardEl.matches(":hover")) return;
+      // A hovered card is the likeliest next open: warm its probe and audio
+      // tracks now (main does it one clip at a time, off the click path).
+      window.clips.warmClipOpen?.(clip.originalName).catch(() => undefined);
 
       const media = cardEl.querySelector<HTMLElement>(".clip-item-media-container");
       if (!media) return;
