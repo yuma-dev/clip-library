@@ -101,12 +101,20 @@ function init({ ipcMain, userData }) {
     contentTracing.startRecording({
       // Lean set: enough for a DevTools-style view of the renderer main thread
       // (parse, compile, evaluate, layout, paint) without slowing the app down.
-      included_categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink.user_timing', 'v8.execute', 'loading', 'disabled-by-default-v8.compile'],
+      included_categories: (process.env.CLIPLIB_TRACE_CATEGORIES || 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,v8.execute,loading,disabled-by-default-v8.compile').split(','),
       recording_mode: 'record-until-full',
     }).then(() => { mark('content_trace_started'); }).catch(() => {});
     contentTraceTimer = setTimeout(stopContentTrace, 25000);
   }
   if (cpuProfileWanted) setTimeout(stopCpuProfile, 25000);
+  if (process.env.CLIPLIB_GPU_INFO === '1') {
+    const { app } = require('electron');
+    setTimeout(() => {
+      Promise.all([app.getGPUInfo('complete'), Promise.resolve(app.getGPUFeatureStatus())]).then(([info, features]) => {
+        require('fs').writeFileSync(path.join(userData, 'gpu-info.json'), JSON.stringify({ features, info }, null, 2));
+      }).catch(() => {});
+    }, 4000);
+  }
   ipcMain.on('boot-trace-mark', (_event, payload) => {
     if (payload && typeof payload.name === 'string') mark(payload.name, Number(payload.t));
   });
