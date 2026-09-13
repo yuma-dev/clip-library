@@ -30,7 +30,22 @@ export class LibraryHover {
   constructor(
     private readonly glow: ClipGlow,
     private clipLocation: string,
-  ) {}
+  ) {
+    // A preview left playing under a resting cursor decodes video and drives
+    // the glow at 30 fps for as long as it sits there. Nobody sees that when
+    // the window is unfocused or hidden, so stop it; the next mouse move over
+    // a card starts a fresh one.
+    window.addEventListener("blur", this.onWindowAway);
+    document.addEventListener("visibilitychange", this.onVisibility);
+  }
+
+  private readonly onWindowAway = (): void => {
+    this.leave();
+  };
+
+  private readonly onVisibility = (): void => {
+    if (document.hidden) this.leave();
+  };
 
   setClipLocation(loc: string): void {
     this.clipLocation = loc;
@@ -111,6 +126,8 @@ export class LibraryHover {
   }
 
   dispose(): void {
+    window.removeEventListener("blur", this.onWindowAway);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     this.cleanupPreview();
     this.glow.hide();
   }
