@@ -75,9 +75,27 @@ async function main() {
     }
     const hoverWait = Number(opt('--hover-wait', 0));
     if (hoverWait > 0) {
-      // Hover triggers the clip warmer; give it time before the click.
+      // Hover triggers the clip warmer; give it time before the click. The
+      // preview only runs while the window is focused.
+      await page.bringToFront();
       await card.hover();
+      // Chromium tracks one mouse: park the real OS cursor on the card too, or
+      // its position elsewhere on screen cancels the synthetic hover.
+      const box = await card.boundingBox();
+      if (box) {
+        const cx = Math.round(box.x + box.width / 2);
+        const cy = Math.round(box.y + box.height / 2);
+        require('node:child_process').execFileSync('powershell', ['-NoProfile', '-Command', `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${cx}, ${cy})`]);
+      }
       await new Promise((r) => setTimeout(r, hoverWait));
+    }
+    if (hoverWait > 0) {
+      const previewBefore = await page.evaluate(() => Boolean(document.querySelector('.clip-preview-video')));
+      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await new Promise((r) => setTimeout(r, 100));
+      const previewAfter = await page.evaluate(() => Boolean(document.querySelector('.clip-preview-video')));
+      check('hover preview stops on window blur', previewBefore && !previewAfter, `preview ${previewBefore ? 'ran' : 'absent'} before, ${previewAfter ? 'still running' : 'gone'} after`);
+      await card.hover();
     }
     const clickAt = Date.now();
     await card.click();

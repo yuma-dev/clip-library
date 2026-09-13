@@ -88,6 +88,26 @@ and paused while a clip is being opened. Measured with
 a cold open of a 5-track clip took 3.55 s from click to playable; after the
 hover warm it takes 0.27 s.
 
+## At rest and under interaction
+
+`node benchmark/idle-profile.js [--cursor X,Y] [--trace]` launches the app,
+waits for startup work to settle and prints CPU seconds per process over a
+window, plus renderer and main CPU profiles. True idle is ~10% of a core
+(most of it the profiler). Two hover states were not: a cursor resting on
+a tag pulsed a box-shadow, which repainted the rail on every vsync (127% of
+a core plus 45% of the GPU); the pulse is now a transform/opacity ring on a
+pseudo-element (14% and 19%). A cursor resting on a card keeps the preview
+video and the 30 fps glow running; both now stop when the window loses
+focus or is hidden.
+
+`node benchmark/interaction-bench.js` scrolls the library, types in the
+search field and collapses a group, reporting frame times and input
+latencies from the renderer (rAF deltas, Event Timing, long animation
+frames). Baseline on the reference machine: scroll p50 6 ms, p95 12 ms.
+Clearing the search was the outlier (315 ms frame): every group streamed
+its cards back at 80 per frame at once, so one frame mounted ~2,000 cards.
+useStreamedSlice now shares a per-frame budget across all groups.
+
 ## Things that were tested and did not matter
 
 Windows Defender, Windhawk, asar size, proxy auto-detection, the GPU

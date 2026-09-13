@@ -741,19 +741,35 @@ body.ui-blur-exit .app-body {
   transform: scale(1.1);
   box-shadow: 0 0 8px rgba(147, 51, 234, 0.2);
 }
-.tagf-item:hover .tagf-indicator {
+/* Hover pulse: a ring on a pseudo-element animated with transform and
+   opacity only. Animating box-shadow on the indicator itself repainted the
+   rail every frame for as long as the cursor rested on a tag (a full CPU
+   core plus half the GPU, measured at rest). Same look, compositor only. */
+.tagf-indicator::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1.5px rgba(147, 51, 234, 0.45);
+  opacity: 0;
+  pointer-events: none;
+}
+.tagf-item:hover .tagf-indicator::before {
   animation: tagIndicatorPulse 1.5s infinite;
+  will-change: transform, opacity;
 }
 .tagf-indicator:hover {
   transform: scale(1.2);
   background: rgba(147, 51, 234, 0.85) !important;
   box-shadow: 0 0 12px rgba(147, 51, 234, 0.35);
+}
+.tagf-indicator:hover::before,
+.tagf-item.focused .tagf-indicator::before {
   animation: none;
 }
 .tagf-item.focused .tagf-indicator {
   background: linear-gradient(180deg, #9333ea, #c084fc);
   box-shadow: 0 0 10px rgba(147, 51, 234, 0.4);
-  animation: none;
 }
 /* "Only show this tag" hint, opening to the left so it stays inside the rail. */
 .tagf-indicator::after {
@@ -782,13 +798,16 @@ body.ui-blur-exit .app-body {
 }
 @keyframes tagIndicatorPulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.4);
+    transform: scale(1);
+    opacity: 1;
   }
   70% {
-    box-shadow: 0 0 0 6px rgba(147, 51, 234, 0);
+    transform: scale(2.2);
+    opacity: 0;
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0);
+    transform: scale(2.2);
+    opacity: 0;
   }
 }
 .tagf-divider {
