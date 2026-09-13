@@ -19,6 +19,8 @@ export function initBootMarks(): void {
   const trace = window.__bootTrace;
   if (!trace) return;
   trace.mark("renderer_script_start");
+  trace.mark(document.hidden ? "doc_hidden_true" : "doc_hidden_false");
+  document.addEventListener("visibilitychange", () => trace.mark(document.hidden ? "vis_hidden" : "vis_visible"));
 
   try {
     const observer = new PerformanceObserver((list) => {

@@ -18,6 +18,8 @@
 // --trace (also record a Chromium content trace; analyze with benchmark/analyze-trace.js),
 // --cpu (also record a V8 CPU profile of the main process; analyze with benchmark/analyze-cpuprofile.js),
 // --settle MS (keep the app alive that long after the last mark, e.g. to let deferred services log),
+// --pixel-probe (sample three screen points during launch and report white/dark/content runs),
+// --env KEY=VAL (extra environment for the app, repeatable),
 // --app-args "--flag --other" (extra Chromium/Electron switches for the app).
 
 const { spawn, execFileSync } = require('node:child_process');
@@ -36,12 +38,13 @@ const PHASES = [
   'first_paint', 'first_contentful_paint', 'grid_first_card', 'grid_first_thumb',
   'window_visible', 'renderer_ready', 'get_clips_resolved', 'get_clips_returned',
   'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded',
+  'reveal_gate_start', 'reveal_gate_decoded', 'ready_to_show', 'gpu_ready', 'frame_after_ready', 'window_opaque', 'frame_2', 'frame_3', 'frame_4', 'doc_hidden_true', 'doc_hidden_false', 'vis_visible', 'io_all_offscreen', 'io_some_offscreen', 'io_all_onscreen',
 ];
 // The run is over once all of these exist (or the timeout hits).
-const DONE_MARKS = ['grid_first_thumb', 'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded'];
+const DONE_MARKS = ['window_visible', 'grid_first_thumb', 'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded'];
 
 function parseArgs(argv) {
-  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, appArgs: [], makeProfile: false, benchmarkMode: false };
+  const out = { runs: 7, profile: 'warm', timeout: 60000, label: '', exe: '', keep: false, coldFs: false, reuse: false, trace: false, cpu: false, settle: 0, pixelProbe: false, extraEnv: {}, appArgs: [], makeProfile: false, benchmarkMode: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -55,6 +58,8 @@ function parseArgs(argv) {
     else if (a === '--trace') out.trace = true;
     else if (a === '--cpu') out.cpu = true;
     else if (a === '--settle') out.settle = Number(next());
+    else if (a === '--pixel-probe') out.pixelProbe = true;
+    else if (a === '--env') { const [k, ...v] = next().split('='); out.extraEnv[k] = v.join('='); }
     else if (a === '--app-args') out.appArgs = next().split(/s+/).filter(Boolean);
     else if (a === '--cold-fs') out.coldFs = true;
     else if (a === '--make-profile') out.makeProfile = true;
@@ -88,7 +93,9 @@ function makeProfile() {
     const from = path.join(src, name);
     if (fs.existsSync(from)) fs.cpSync(from, path.join(dest, name), { recursive: true });
   };
-  for (const name of ['thumbnail-cache', 'Local Storage', 'Code Cache', 'global_tags.json', 'tagPreferences.json',
+  // GPUCache and the Dawn caches hold compiled shaders; without them every
+  // launch recompiles what a real user already has on disk.
+  for (const name of ['thumbnail-cache', 'Local Storage', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'global_tags.json', 'tagPreferences.json',
     'trackPreferences.json', 'watched-clips.json', 'last-clips.json']) copy(name);
   // Benchmark runs must never talk to the user's Discord, spawn clipdip or
   // pollute real telemetry. The clip folder stays the real library: it is
@@ -107,7 +114,7 @@ function seedProfile(profile, dir) {
   const template = path.join(profilesDir, 'warm-template');
   if (!fs.existsSync(template)) throw new Error('Run with --make-profile first');
   rmrf(dir);
-  const skip = profile === 'cold-cache' ? new Set(['Local Storage', 'thumbnail-cache', 'Code Cache']) : new Set();
+  const skip = profile === 'cold-cache' ? new Set(['Local Storage', 'thumbnail-cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache']) : new Set();
   fs.cpSync(template, dir, {
     recursive: true,
     filter: (p) => !skip.has(path.basename(p)) || path.dirname(p) !== template,
@@ -141,7 +148,18 @@ async function runOnce(opts, index, exe) {
   rmrf(chromiumTrace);
   delete env.ELECTRON_RUN_AS_NODE;
   if (opts.benchmarkMode) env.CLIPS_BENCHMARK = '1';
+  Object.assign(env, opts.extraEnv);
 
+  // Screen-pixel probe: samples the centre of the primary screen every
+  // ~25 ms so a white (or otherwise wrong) frame between the window
+  // appearing and the library painting shows up as data.
+  let probe = null;
+  let probeOut = '';
+  if (opts.pixelProbe) {
+    probe = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'pixel-probe.ps1'), String(Math.min(opts.timeout, 6000))], { stdio: ['ignore', 'pipe', 'ignore'] });
+    probe.stdout.on('data', (d) => { probeOut += d; });
+    await new Promise((r) => { const check = () => (probeOut.includes('epoch,') ? r() : setTimeout(check, 20)); check(); });
+  }
   const spawnAt = Date.now();
   const child = spawn(exe, opts.appArgs, { env, stdio: 'ignore', windowsHide: false });
   let trace = null;
@@ -173,6 +191,24 @@ async function runOnce(opts, index, exe) {
     console.log(`cpu profile: ${dest}`);
   }
   if (!opts.keep && !opts.reuse) rmrf(profileDir);
+
+  if (probe) {
+    await new Promise((r) => { probe.on('exit', r); setTimeout(r, 7000); });
+    const lines = probeOut.split(/\r?\n/).filter(Boolean);
+    const epoch = Number((lines.find((l) => l.startsWith('epoch,')) || 'epoch,0').split(',')[1]);
+    // Each sample line: t, then r,g,b for every probe point.
+    const samples = lines.filter((l) => !l.startsWith('epoch,')).map((l) => l.split(',').map(Number)).map(([t, ...rest]) => ({ t: Math.round(epoch + t - spawnAt), pts: rest }));
+    const kind = ({ pts }) => {
+      const px = [];
+      for (let i = 0; i + 2 < pts.length; i += 3) px.push(pts.slice(i, i + 3));
+      if (px.every(([r, g, b]) => r > 200 && g > 200 && b > 200)) return 'WHITE';
+      if (px.every(([r, g, b]) => r < 40 && g < 40 && b < 40)) return 'dark';
+      return 'content';
+    };
+    const runs = [];
+    for (const s of samples) { const k = kind(s); const last = runs[runs.length - 1]; if (last && last.k === k) last.to = s.t; else runs.push({ k, from: s.t, to: s.t }); }
+    console.log(`  pixel probe: ${runs.map((r) => `${r.k} ${r.from}..${r.to}`).join(' | ')}`);
+  }
 
   const rel = {};
   if (trace) {

@@ -348,15 +348,117 @@ async function runDeferredServices() {
 // first). There used to be a separate splash window here: its own renderer
 // process competed with the main window's, and its dismiss animation added a
 // fixed 300 ms between "library painted" and "library visible".
+// Reveal policy (CLIPLIB_REVEAL, benchmark only; default 'gpu'):
+//   paint  = on the renderer's first paint (ready-to-show)
+//   gpu    = first paint AND the GPU process is up, so the first frame can
+//            actually be presented; before that Windows shows a white window
+//   ready  = renderer-ready (library committed) AND the GPU process is up
+//   frame  = renderer-ready AND the compositor has since produced a frame
+//            (observed through a tiny DevTools screencast of the hidden
+//            window), i.e. the first content frame is really ready to show
+const REVEAL_POLICY = ['paint', 'gpu', 'ready', 'frame'].includes(process.env.CLIPLIB_REVEAL) ? process.env.CLIPLIB_REVEAL : 'frame';
+let framesSinceReady = 0;
+let screencastActive = false;
+function startFrameWatch(win) {
+  if (REVEAL_POLICY !== 'frame' || !win || win.isDestroyed()) return;
+  const dbg = win.webContents.debugger;
+  try {
+    dbg.attach('1.3');
+  } catch (error) {
+    logger.warn(`Frame watch unavailable, revealing on renderer-ready: ${error.message}`);
+    return;
+  }
+  screencastActive = true;
+  dbg.on('message', (_event, method, params) => {
+    if (method !== 'Page.screencastFrame') return;
+    dbg.sendCommand('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
+    if (!rendererReadySeen) return;
+    framesSinceReady += 1;
+    if (framesSinceReady <= 4) bootTrace.mark(framesSinceReady === 1 ? 'frame_after_ready' : `frame_${framesSinceReady}`);
+    maybeReveal();
+  });
+  dbg.sendCommand('Page.startScreencast', { format: 'jpeg', quality: 10, maxWidth: 16, maxHeight: 16, everyNthFrame: 1 }).catch((error) => {
+    logger.warn(`Frame watch screencast failed: ${error.message}`);
+    screencastActive = false;
+    maybeReveal();
+  });
+}
+function stopFrameWatch() {
+  if (!screencastActive || !mainWindow || mainWindow.isDestroyed()) return;
+  screencastActive = false;
+  const dbg = mainWindow.webContents.debugger;
+  dbg.sendCommand('Page.stopScreencast').catch(() => {}).then(() => {
+    try { dbg.detach(); } catch (_) { /* already detached */ }
+  });
+}
+let gpuReady = false;
+let firstPaintSeen = false;
+let rendererReadySeen = false;
+function markGpuReady() {
+  gpuReady = true;
+  bootTrace.mark('gpu_ready');
+  maybeReveal();
+}
+function maybeReveal() {
+  if (mainWindowRevealed) return;
+  if (REVEAL_POLICY === 'paint') {
+    if (firstPaintSeen || rendererReadySeen) revealMainWindow();
+  } else if (REVEAL_POLICY === 'gpu') {
+    if (gpuReady && (firstPaintSeen || rendererReadySeen)) revealMainWindow();
+  } else if (REVEAL_POLICY === 'ready') {
+    if (gpuReady && rendererReadySeen) revealMainWindow();
+  } else if (rendererReadySeen && (!screencastActive || framesSinceReady >= (Number(process.env.CLIPLIB_FRAMES) || 2))) {
+    revealMainWindow();
+  }
+}
 function revealMainWindow() {
   if (mainWindowRevealed) return;
   mainWindowRevealed = true;
+  if (process.env.CLIPLIB_FADE === '0') stopFrameWatch();
+  else setTimeout(stopFrameWatch, 400);
   scheduleDeferredServices();
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.maximize();
-    mainWindow.show();
+    // Show sequence (CLIPLIB_SHOW, benchmark only): max = maximize then show
+    // (the historical order), showfirst = show then maximize, plain = show
+    // only (already work-area sized), latemax = show, maximize 1.2 s later.
+    const mode = process.env.CLIPLIB_SHOW || 'showfirst';
+    // Windows presents one white frame between ShowWindow and the first
+    // composited frame of a window it has never shown. Showing it fully
+    // transparent and switching to opaque one compositor frame later hides
+    // that frame; the window is then a normal (non-layered) window again.
+    const fade = process.env.CLIPLIB_FADE !== '0';
+    if (fade) mainWindow.setOpacity(0);
+    if (mode === 'max') {
+      mainWindow.maximize();
+      mainWindow.show();
+    } else {
+      mainWindow.show();
+      if (mode === 'showfirst') mainWindow.maximize();
+      if (mode === 'latemax') setTimeout(() => { if (!mainWindow.isDestroyed()) mainWindow.maximize(); }, 1200);
+    }
     mainWindow.focus();
     bootTrace.mark('window_visible');
+    if (fade) {
+      let opaque = false;
+      const makeOpaque = () => {
+        if (opaque || mainWindow.isDestroyed()) return;
+        opaque = true;
+        mainWindow.setOpacity(1);
+        bootTrace.mark('window_opaque');
+      };
+      const dbg = mainWindow.webContents.debugger;
+      if (dbg.isAttached()) {
+        let frames = 0;
+        const onFrame = (_event, method) => {
+          if (method !== 'Page.screencastFrame') return;
+          frames += 1;
+          if (frames >= 2) { dbg.removeListener('message', onFrame); makeOpaque(); }
+        };
+        dbg.on('message', onFrame);
+      }
+      setTimeout(makeOpaque, Number(process.env.CLIPLIB_FADE_MS) || 120);
+    }
+    if (process.env.CLIPLIB_THROTTLE !== '1') mainWindow.webContents.setBackgroundThrottling(true);
   }
 }
 let pendingCliplibAuthSession = null;
@@ -670,9 +772,11 @@ function queueProtocolUrl(protocolUrl) {
   });
 }
 
-app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-zero-copy');
-app.commandLine.appendSwitch('ignore-gpu-blocklist');
+if (process.env.CLIPLIB_GPU_FLAGS !== '0') {
+  app.commandLine.appendSwitch('enable-gpu-rasterization');
+  app.commandLine.appendSwitch('enable-zero-copy');
+  app.commandLine.appendSwitch('ignore-gpu-blocklist');
+}
 
 const initialProtocolUrl = extractCliplibProtocolUrl(process.argv);
 if (initialProtocolUrl) {
@@ -895,6 +999,12 @@ async function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
       spellcheck: false,
+      // While the window is still hidden the renderer must keep producing
+      // frames, so the thumbnails that land after the first paint are
+      // rasterized before show(). Without this Chromium stops at the first
+      // hidden frame and the first visible frame is built from scratch on
+      // show: a white window for half a second. Re-enabled after reveal.
+      backgroundThrottling: process.env.CLIPLIB_THROTTLE === '1',
       enableRemoteModule: true,
       preload: path.join(__dirname, "preload.js"),
       // Dev serves the renderer from http://127.0.0.1:5173, so file:// thumbnails
@@ -957,14 +1067,28 @@ async function createWindow() {
     // Process start to a usable window. The only startup number a user ever
     // notices, and until now it was measured nowhere in production.
     telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
-    revealMainWindow();
+    rendererReadySeen = true;
+    maybeReveal();
+    // The compositor normally produces the next frame within a few dozen ms;
+    // never keep the window hidden for long if it does not.
+    setTimeout(() => { screencastActive = false; maybeReveal(); }, 1500);
   });
 
   // With a warm snapshot the first paint already contains the library grid
   // (the first React commit runs inside the module script). Without one
   // (first launch, cleared storage) it is the in-app loading state, which
   // beats showing nothing while the folder scan runs.
-  mainWindow.once('ready-to-show', revealMainWindow);
+  mainWindow.once('ready-to-show', () => {
+    bootTrace.mark('ready_to_show');
+    firstPaintSeen = true;
+    maybeReveal();
+  });
+  // The GPU process comes up in parallel with the renderer; asking for its
+  // info both starts it right away and tells us when a frame can be shown.
+  // Never gate forever on it (software rendering, driver trouble).
+  app.getGPUInfo('basic').then(markGpuReady, markGpuReady);
+  startFrameWatch(mainWindow);
+  setTimeout(() => { if (!gpuReady) markGpuReady(); }, 2500);
 
   // Safety fallback in case the renderer never signals ready
   const splashFallback = setTimeout(() => {
