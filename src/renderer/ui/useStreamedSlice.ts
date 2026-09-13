@@ -7,6 +7,24 @@
 
 import { useEffect, useState } from "react";
 
+// Cards mounted per animation frame across ALL streaming lists. Each list
+// used to take its full perFrame on its own, so when a filter cleared and
+// every group streamed back at once, a single frame mounted ~2,000 cards
+// (a 315 ms frame). The budget is shared per frame timestamp: the first
+// lists to run in a frame get their share, the rest wait a frame.
+const FRAME_BUDGET = 48;
+let budgetFrame = -1;
+let budgetLeft = 0;
+function takeBudget(frameTs: number, wanted: number): number {
+  if (frameTs !== budgetFrame) {
+    budgetFrame = frameTs;
+    budgetLeft = FRAME_BUDGET;
+  }
+  const granted = Math.min(wanted, budgetLeft);
+  budgetLeft -= granted;
+  return granted;
+}
+
 export interface StreamedSliceOptions {
   /** Mounted synchronously on first commit (default 24 — a screenful of cards). */
   initial?: number;
@@ -48,16 +66,22 @@ export function useStreamedSlice<T>(
     let advanced = false;
     let raf = 0;
     let timer = 0;
-    const advance = () => {
+    const advance = (frameTs: number) => {
       if (advanced) return;
+      const granted = takeBudget(frameTs, perFrame);
+      if (granted <= 0) {
+        // Budget spent by other lists this frame: try again next frame.
+        raf = requestAnimationFrame(advance);
+        return;
+      }
       advanced = true;
-      setVisible((v) => Math.min(v + perFrame, items.length));
+      setVisible((v) => Math.min(v + granted, items.length));
     };
     // rAF paces streaming to the display; the timeout fallback covers an
     // occluded window, where Chromium suspends rAF.
     const schedule = () => {
       raf = requestAnimationFrame(advance);
-      timer = window.setTimeout(advance, 64);
+      timer = window.setTimeout(() => advance(performance.now()), 64);
     };
     // A hidden document (the window not shown yet, or minimized) gets no
     // frame the user can see. Mounting cards there only makes the first
