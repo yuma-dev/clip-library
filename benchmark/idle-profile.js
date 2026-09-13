@@ -38,7 +38,7 @@ function cpuByType() {
 }
 
 async function main() {
-  const exe = path.join(root, 'dist', 'win-unpacked', 'ClipLib App.exe');
+  const exe = path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe');
   const template = path.join(root, 'benchmark', 'profiles', 'warm-template');
   const profile = path.join(os.tmpdir(), 'cliplib-bench', 'idle-profile');
   fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelayMs: 200 });

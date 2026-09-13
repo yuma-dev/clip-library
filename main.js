@@ -710,12 +710,17 @@ async function repairTaskbarPins() {
     try {
       const details = shell.readShortcutLink(lnkPath);
       const target = details?.target || '';
-      if (!target.toLowerCase().endsWith('\\clips.exe')) continue;
-      if (fss.existsSync(target)) continue; // still valid — leave it alone
+      const lowered = target.toLowerCase();
       // Prefer the native launcher next to the app (instant splash); the
       // Electron binary itself is the fallback.
-      const launcher = path.join(path.dirname(process.execPath), 'ClipLib.exe');
-      const newTarget = fss.existsSync(launcher) ? launcher : process.execPath;
+      const launcher = path.join(path.dirname(process.execPath), 'ClipLib Launcher.exe');
+      const haveLauncher = fss.existsSync(launcher);
+      const orphanedLegacy = lowered.endsWith('\\clips.exe') && !fss.existsSync(target);
+      // A pin created from the running window targets the Electron exe;
+      // move it to the launcher once, so pinned launches get the splash.
+      const pinnedElectron = haveLauncher && lowered === process.execPath.toLowerCase();
+      if (!orphanedLegacy && !pinnedElectron) continue;
+      const newTarget = haveLauncher ? launcher : process.execPath;
       shell.writeShortcutLink(lnkPath, 'replace', {
         ...details,
         target: newTarget,

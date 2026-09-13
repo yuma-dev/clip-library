@@ -67,17 +67,21 @@ animation was choppy and it added nothing to responsiveness.
 
 ## The native launcher
 
-`ClipLib.exe` at the install root is a 470 KB Rust program
+`ClipLib Launcher.exe` at the install root is a 470 KB Rust program
 (`clipdip/crates/launcher`), not Electron. It draws the splash (logo and sweep
 bar, per-pixel alpha, no frame) within a few tens of milliseconds of the
-click, starts `ClipLib App.exe` (the Electron binary, `build.executableName`)
-with the same arguments, and fades out once the app's window is visible and
-opaque (it polls the app's top-level windows: visible, not cloaked, layered
-alpha at full). If the app is already running, the spawned instance hands
-over to it and exits, so the splash disappears again at once. Shortcuts are
-retargeted to the launcher by `build/installer.nsh`; taskbar pins from older
-installs already point at `ClipLib.exe`. Deep links (`cliplib://`) are
-registered by Electron and open the app directly, without the splash.
+click, starts `ClipLib.exe` (the Electron binary) with the same arguments, and
+fades out once the app's window is visible and opaque (it polls the app's
+top-level windows: visible, not cloaked, layered alpha at full). If the app is
+already running, the spawned instance hands over to it and exits, so the
+splash disappears again at once. Shortcuts are retargeted to the launcher by
+`build/installer.nsh`; taskbar pins are retargeted by the app on launch
+(`repairTaskbarPins`). The Electron binary keeps its name on purpose: the
+installer only preserves shortcuts and taskbar pins across an update when the
+app executable it expects already exists in the old install (renaming it to
+"ClipLib App.exe" in an earlier attempt removed the pins). Deep links
+(`cliplib://`) are registered by Electron and open the app directly, without
+the splash.
 The harness launches through the launcher, the way a user does, and the
 Electron first line still lands at ~165 ms after the click.
 

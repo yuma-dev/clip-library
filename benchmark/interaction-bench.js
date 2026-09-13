@@ -82,7 +82,7 @@ async function measure(page, name, action) {
 }
 
 async function runOnce(index) {
-  const exe = path.join(root, 'dist', 'win-unpacked', 'ClipLib App.exe');
+  const exe = path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe');
   const template = path.join(root, 'benchmark', 'profiles', 'warm-template');
   const profile = path.join(os.tmpdir(), 'cliplib-bench', 'interaction-profile');
   if (!fs.existsSync(path.join(profile, 'settings.json'))) fs.cpSync(template, profile, { recursive: true });

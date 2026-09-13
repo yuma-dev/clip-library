@@ -260,7 +260,8 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.makeProfile) return makeProfile();
 
-  const builtExe = path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe');
+  // The user path: through the native splash launcher.
+  const builtExe = path.join(root, 'dist', 'win-unpacked', 'ClipLib Launcher.exe');
   const baseExe = opts.exe ? path.resolve(opts.exe) : builtExe;
   if (!fs.existsSync(baseExe)) throw new Error(`No packaged app at ${baseExe} (run npm run bench:build)`);
   fs.mkdirSync(scratchRoot, { recursive: true });
