@@ -4616,17 +4616,16 @@ body.ui-blur-exit .app-body {
 
 
 /* ---------- Boot reveal (src/renderer/boot/bootReveal.ts) ----------
-   The camera flies through the launcher's logo: the logo twin grows past the
-   viewport and fades while the whole library body dollies in from 1.5x to
-   rest around the same point and a vignette lifts. Four composited layers
-   (body, cover, vignette, hero),
-   transform and opacity only: no thumbnail or card glow repaints, and the
-   library is clickable throughout (the overlay ignores pointer events).
-   Every layer exists before the reveal (the .boot-pre promotion and the
-   overlay's static base state); the .run and .boot-dolly classes only start
-   the animations. A will-change layer keeps the raster scale it was created
-   with, so the 14x logo and the 1.5x body are the GPU upscaling textures
-   rasterised at rest, never a re-raster mid-flight. */
+   The camera flies through the launcher's logo inside a bloom of the accent
+   colour while the whole library body pushes in from 1.5x to rest; the
+   rail, group headers and cards land from their own depths, every card's
+   colour glow blooms and settles, a vignette lifts, and a few motes of light
+   drift up across the library. Transform and opacity only, on layers that
+   exist before the reveal (.boot-pre promotion and the overlay's static base
+   state); the .run, .boot-dolly and .boot-par classes only start the
+   animations. A will-change layer keeps the raster scale it was created
+   with, so the 14x logo, the 4.5x bloom and the 1.5x body are the GPU
+   upscaling textures rasterised at rest, never a re-raster mid-flight. */
 .boot-pre {
   will-change: transform, opacity;
 }
@@ -4651,6 +4650,55 @@ body.ui-blur-exit .app-body {
   from { transform: perspective(1200px) translateZ(400px); }
   to { transform: perspective(1200px) translateZ(0); }
 }
+/* Depth parallax inside the push: the rail from the left, headers from
+   above, cards from below and a hair bigger, each on its own --boot-d. */
+.rail.boot-par {
+  animation: boot-par-rail 700ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
+}
+@keyframes boot-par-rail {
+  from { opacity: 0; transform: translateX(-40px); }
+  to { opacity: 1; transform: none; }
+}
+.clip-group-header.boot-par {
+  animation: boot-par-head 600ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
+}
+@keyframes boot-par-head {
+  from { opacity: 0; transform: translateY(-14px); }
+  to { opacity: 1; transform: none; }
+}
+.clip-item.boot-par {
+  animation: boot-par-card 700ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
+}
+@keyframes boot-par-card {
+  from { opacity: 0; transform: translateY(28px) scale(1.04); }
+  to { opacity: 1; transform: none; }
+}
+/* Grid glow: one canvas behind the cards with the blur already baked in
+   (see buildGlowCanvas); only its opacity moves. Same blend as the hover
+   glow so it reads as the same light. */
+.clip-grid > canvas.boot-glow {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: screen;
+  will-change: opacity;
+}
+.clip-grid > canvas.boot-glow.run {
+  animation: boot-glow 1100ms ease-out 250ms both;
+}
+@keyframes boot-glow {
+  0% { opacity: 0; }
+  30% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+#boot-reveal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  overflow: hidden;
+}
 /* The body's opacity ride is a solid cover fading out instead, so the body
    never needs an offscreen surface of its own. */
 #boot-reveal .boot-cover {
@@ -4661,13 +4709,6 @@ body.ui-blur-exit .app-body {
 }
 #boot-reveal .boot-cover.run {
   animation: boot-fade-out 380ms ease-out 40ms both;
-}
-#boot-reveal {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  pointer-events: none;
-  overflow: hidden;
 }
 #boot-reveal .boot-hero {
   position: absolute;
@@ -4693,4 +4734,38 @@ body.ui-blur-exit .app-body {
 @keyframes boot-fade-out {
   from { opacity: 1; }
   to { opacity: 0; }
+}
+/* Afterglow: mounted before the reveal at its starting scale (see the
+   note on raster scale above). */
+#boot-reveal .boot-flash {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(199, 116, 224, 0.85) 0%, rgba(142, 50, 155, 0.35) 35%, transparent 68%);
+  will-change: transform, opacity;
+  transform: scale(0.3);
+  opacity: 0.9;
+}
+#boot-reveal .boot-flash.run {
+  animation: boot-flash 760ms cubic-bezier(0.2, 0.8, 0.3, 1) 40ms both;
+}
+@keyframes boot-flash {
+  from { opacity: 0.9; transform: scale(0.3); }
+  to { opacity: 0; transform: scale(4.5); }
+}
+/* Motes: tiny pre-rastered points of light, each on its own --boot-d. */
+#boot-reveal .boot-mote {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(199, 116, 224, 0.95);
+  box-shadow: 0 0 6px 1px rgba(199, 116, 224, 0.7);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+#boot-reveal .boot-mote.run {
+  animation: boot-mote 1700ms ease-out var(--boot-d, 0ms) both;
+}
+@keyframes boot-mote {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.6); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--boot-dx, 0px), var(--boot-dy, -60px)) scale(1.2); }
 }
