@@ -5,6 +5,10 @@ const fs = require('fs').promises;
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 const thumbnailsModule = require('./thumbnails');
+const { mapLimit } = require('../utils/pool');
+
+// Concurrent fs.stat calls during a library walk.
+const STAT_CONCURRENCY = 32;
 const { logActivity } = require('../utils/activity-tracker');
 
 // Supported video extensions
@@ -43,32 +47,35 @@ async function walkClips(dir, baseDir, depth = 0, statFailures = null) {
     return [];
   }
 
-  // Stat files and recurse into subdirectories concurrently — a sequential
-  // await-per-file walk costs ~180µs × N clips (366ms at 2,000 clips).
-  const tasks = entries.map(async (entry) => {
-    const fullPath = path.join(dir, entry.name);
+  // Recurse into subdirectories concurrently; stat files through a bounded
+  // pool. A sequential await-per-file walk costs ~180µs × N clips, while an
+  // unbounded fan-out queues thousands of stats on the libuv threadpool at
+  // once and starves every other file operation during startup.
+  const dirs = [];
+  const files = [];
+  for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (entry.name.startsWith('.') || entry.name === 'icons') return [];
-      return walkClips(fullPath, baseDir, depth + 1, dropped);
+      if (!entry.name.startsWith('.') && entry.name !== 'icons') dirs.push(entry.name);
+    } else if (entry.isFile() && VIDEO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      files.push(entry.name);
     }
-    if (entry.isFile()) {
-      const ext = path.extname(entry.name).toLowerCase();
-      if (VIDEO_EXTENSIONS.has(ext)) {
-        const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
-        try {
-          const stats = await fs.stat(fullPath);
-          return [{ name: relativePath, date: stats.mtime }];
-        } catch (error) {
-          logger.error(`Error reading stats for ${fullPath}:`, error);
-          // Tallied, not reported per file: one bad drive drops thousands.
-          dropped.count += 1;
-          if (!dropped.errno) dropped.errno = error.code;
-        }
-      }
+  }
+  const subtrees = Promise.all(dirs.map((name) => walkClips(path.join(dir, name), baseDir, depth + 1, dropped)));
+  const stats = await mapLimit(files, STAT_CONCURRENCY, async (name) => {
+    const fullPath = path.join(dir, name);
+    const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+    try {
+      const st = await fs.stat(fullPath);
+      return { name: relativePath, date: st.mtime };
+    } catch (error) {
+      logger.error(`Error reading stats for ${fullPath}:`, error);
+      // Tallied, not reported per file: one bad drive drops thousands.
+      dropped.count += 1;
+      if (!dropped.errno) dropped.errno = error.code;
+      return null;
     }
-    return [];
   });
-  const clips = (await Promise.all(tasks)).flat();
+  const clips = [...stats.filter(Boolean), ...(await subtrees).flat()];
   if (!statFailures && dropped.count > 0) {
     telemetry.event('clip_stat_dropped', {
       kind: telemetry.KIND.SILENT_FAILURE,
@@ -247,14 +254,17 @@ async function markClipsWatched(clipNames) {
  * treated as already watched, so highlights carry over unchanged. With
  * neither file (true first run) the whole library is seeded as watched.
  */
-async function getNewClipsInfo(getSettings) {
+async function getNewClipsInfo(getSettings, knownNames) {
   try {
     const settings = await getSettings();
     const clipsFolder = settings?.clipLocation;
     if (!clipsFolder) return { newClips: [], totalNewCount: 0 };
 
-    const files = await walkClips(clipsFolder, clipsFolder);
-    const currentClips = files.map((file) => file.name);
+    // The renderer passes the names from the get-clips scan it just did;
+    // only walk the library again when nobody did.
+    const currentClips = Array.isArray(knownNames)
+      ? knownNames
+      : (await walkClips(clipsFolder, clipsFolder)).map((file) => file.name);
 
     if (!(await loadWatchedClips())) {
       let previousClips = null;

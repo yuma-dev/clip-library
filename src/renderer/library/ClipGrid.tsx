@@ -68,14 +68,6 @@ function ClipGrid({
     if (!observerRef.current) {
       observerRef.current = new IntersectionObserver(
         (entries) => {
-          // Benchmark instrumentation: when does culling first hide cards?
-          const w = window as unknown as { __bootTrace?: { mark: (n: string) => void }; __noCv?: boolean };
-          if (w.__bootTrace) {
-            const off = entries.filter((e) => !e.isIntersecting).length;
-            if (off > 0) w.__bootTrace.mark(off === entries.length ? "io_all_offscreen" : "io_some_offscreen");
-            else w.__bootTrace.mark("io_all_onscreen");
-          }
-          if (w.__noCv) return;
           for (const entry of entries) {
             (entry.target as HTMLElement).classList.toggle("cv-offscreen", !entry.isIntersecting);
           }

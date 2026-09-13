@@ -98,13 +98,16 @@ export function useClips(): UseClips {
     const unsubs: Array<() => void> = [];
 
     (async () => {
-      const [loc, raw, newInfo] = await Promise.all([
+      const [loc, raw] = await Promise.all([
         window.clips.getClipLocation().catch(() => ""),
         window.clips.getClips().catch(() => []),
-        window.clips.getNewClipsInfo().catch(() => ({ newClips: [] })),
       ]);
       if (cancelled) return;
       bootMark("get_clips_returned");
+      // Handing over the names spares main a second walk of the library.
+      const knownNames = (Array.isArray(raw) ? raw : []).map((c) => String(c.originalName ?? ""));
+      const newInfo = await window.clips.getNewClipsInfo(knownNames).catch(() => ({ newClips: [] }));
+      if (cancelled) return;
 
       // Clips added since the last session — used to highlight them on load.
       const newSet = new Set<string>(Array.isArray(newInfo?.newClips) ? newInfo.newClips : []);
@@ -225,13 +228,15 @@ export function useClips(): UseClips {
         }),
       );
 
+      // Generation runs in the background; tags below must not wait for it
+      // (on a cold cache it takes seconds before the first thumbnail lands).
       const missing = names.filter((n) => !tmap.get(n));
-      if (missing.length > 0) {
-        const res = (await window.clips
-          .generateThumbnailsProgressively(missing)
-          .catch(() => null)) as { needsGeneration?: number } | null;
-        if (res?.needsGeneration) setGeneratingCount(res.needsGeneration);
-      }
+      const generation =
+        missing.length > 0
+          ? (window.clips.generateThumbnailsProgressively(missing).catch(() => null) as Promise<{
+              needsGeneration?: number;
+            } | null>)
+          : null;
 
       // --- Tags: batched IPC (500 names per call), fill in per batch. ---
       // One round trip per 500 clips instead of one per clip; clips whose tags
@@ -264,6 +269,11 @@ export function useClips(): UseClips {
       }
 
       requestAnimationFrame(() => bootMark("tags_loaded"));
+
+      if (generation) {
+        const res = await generation;
+        if (!cancelled && res?.needsGeneration) setGeneratingCount((n) => Math.max(n, res.needsGeneration ?? 0));
+      }
 
       // Snapshot for the next launch's instant first paint. "New" flags are
       // session-relative, so they're stripped. Never cache an empty library —

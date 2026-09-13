@@ -348,33 +348,43 @@ async function runDeferredServices() {
 // first). There used to be a separate splash window here: its own renderer
 // process competed with the main window's, and its dismiss animation added a
 // fixed 300 ms between "library painted" and "library visible".
-// Reveal policy (CLIPLIB_REVEAL, benchmark only; default 'gpu'):
-//   paint  = on the renderer's first paint (ready-to-show)
-//   gpu    = first paint AND the GPU process is up, so the first frame can
-//            actually be presented; before that Windows shows a white window
-//   ready  = renderer-ready (library committed) AND the GPU process is up
-//   frame  = renderer-ready AND the compositor has since produced a frame
-//            (observed through a tiny DevTools screencast of the hidden
-//            window), i.e. the first content frame is really ready to show
-const REVEAL_POLICY = ['paint', 'gpu', 'ready', 'frame'].includes(process.env.CLIPLIB_REVEAL) ? process.env.CLIPLIB_REVEAL : 'frame';
-let framesSinceReady = 0;
+// The window is created hidden and revealed once the compositor has framed
+// the library grid with its thumbnails (the renderer reports that state as
+// renderer-ready). Two facts drove this, both measured with a screen pixel
+// probe:
+//  - ready-to-show fires when the renderer submits its first frame, but the
+//    GPU process still needs time to compile shaders and raster before that
+//    frame can be presented; showing the window earlier means a white window
+//    until then. A tiny DevTools screencast of the hidden window reports each
+//    frame the compositor actually produces, so the reveal waits for the
+//    second one.
+//  - Windows presents one white frame for a window it has never shown. The
+//    window is shown at opacity 0 and made opaque one frame later.
+// The grid's first frame is expensive (about 600 ms of GPU work on a fast
+// machine), so the reveal lands at about 1.5 s after launch; anything earlier
+// is a white or empty window, not a faster app.
+const REVEAL_FALLBACK_MS = 1500;
+let framesSincePaint = 0;
 let screencastActive = false;
+// Set by renderer-ready: the grid and its visible thumbnails are committed.
+let firstPaintSeen = false;
+
 function startFrameWatch(win) {
-  if (REVEAL_POLICY !== 'frame' || !win || win.isDestroyed()) return;
+  if (!win || win.isDestroyed()) return;
   const dbg = win.webContents.debugger;
   try {
     dbg.attach('1.3');
   } catch (error) {
-    logger.warn(`Frame watch unavailable, revealing on renderer-ready: ${error.message}`);
+    logger.warn(`Frame watch unavailable, revealing on first paint: ${error.message}`);
     return;
   }
   screencastActive = true;
   dbg.on('message', (_event, method, params) => {
     if (method !== 'Page.screencastFrame') return;
     dbg.sendCommand('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
-    if (!rendererReadySeen) return;
-    framesSinceReady += 1;
-    if (framesSinceReady <= 4) bootTrace.mark(framesSinceReady === 1 ? 'frame_after_ready' : `frame_${framesSinceReady}`);
+    if (!firstPaintSeen) return;
+    framesSincePaint += 1;
+    if (framesSincePaint <= 3) bootTrace.mark(`frame_${framesSincePaint}`);
     maybeReveal();
   });
   dbg.sendCommand('Page.startScreencast', { format: 'jpeg', quality: 10, maxWidth: 16, maxHeight: 16, everyNthFrame: 1 }).catch((error) => {
@@ -383,6 +393,7 @@ function startFrameWatch(win) {
     maybeReveal();
   });
 }
+
 function stopFrameWatch() {
   if (!screencastActive || !mainWindow || mainWindow.isDestroyed()) return;
   screencastActive = false;
@@ -391,76 +402,47 @@ function stopFrameWatch() {
     try { dbg.detach(); } catch (_) { /* already detached */ }
   });
 }
-let gpuReady = false;
-let firstPaintSeen = false;
-let rendererReadySeen = false;
-function markGpuReady() {
-  gpuReady = true;
-  bootTrace.mark('gpu_ready');
-  maybeReveal();
-}
+
 function maybeReveal() {
-  if (mainWindowRevealed) return;
-  if (REVEAL_POLICY === 'paint') {
-    if (firstPaintSeen || rendererReadySeen) revealMainWindow();
-  } else if (REVEAL_POLICY === 'gpu') {
-    if (gpuReady && (firstPaintSeen || rendererReadySeen)) revealMainWindow();
-  } else if (REVEAL_POLICY === 'ready') {
-    if (gpuReady && rendererReadySeen) revealMainWindow();
-  } else if (rendererReadySeen && (!screencastActive || framesSinceReady >= (Number(process.env.CLIPLIB_FRAMES) || 2))) {
-    revealMainWindow();
-  }
+  if (mainWindowRevealed || !firstPaintSeen) return;
+  if (!screencastActive || framesSincePaint >= 2) revealMainWindow();
 }
+
 function revealMainWindow() {
   if (mainWindowRevealed) return;
   mainWindowRevealed = true;
-  if (process.env.CLIPLIB_FADE === '0') stopFrameWatch();
-  else setTimeout(stopFrameWatch, 400);
   scheduleDeferredServices();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    // Show sequence (CLIPLIB_SHOW, benchmark only): max = maximize then show
-    // (the historical order), showfirst = show then maximize, plain = show
-    // only (already work-area sized), latemax = show, maximize 1.2 s later.
-    const mode = process.env.CLIPLIB_SHOW || 'showfirst';
-    // Windows presents one white frame between ShowWindow and the first
-    // composited frame of a window it has never shown. Showing it fully
-    // transparent and switching to opaque one compositor frame later hides
-    // that frame; the window is then a normal (non-layered) window again.
-    const fade = process.env.CLIPLIB_FADE !== '0';
-    if (fade) mainWindow.setOpacity(0);
-    if (mode === 'max') {
-      mainWindow.maximize();
-      mainWindow.show();
-    } else {
-      mainWindow.show();
-      if (mode === 'showfirst') mainWindow.maximize();
-      if (mode === 'latemax') setTimeout(() => { if (!mainWindow.isDestroyed()) mainWindow.maximize(); }, 1200);
-    }
-    mainWindow.focus();
-    bootTrace.mark('window_visible');
-    if (fade) {
-      let opaque = false;
-      const makeOpaque = () => {
-        if (opaque || mainWindow.isDestroyed()) return;
-        opaque = true;
-        mainWindow.setOpacity(1);
-        bootTrace.mark('window_opaque');
-      };
-      const dbg = mainWindow.webContents.debugger;
-      if (dbg.isAttached()) {
-        let frames = 0;
-        const onFrame = (_event, method) => {
-          if (method !== 'Page.screencastFrame') return;
-          frames += 1;
-          if (frames >= 2) { dbg.removeListener('message', onFrame); makeOpaque(); }
-        };
-        dbg.on('message', onFrame);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setOpacity(0);
+  mainWindow.show();
+  mainWindow.maximize();
+  mainWindow.focus();
+  bootTrace.mark('window_visible');
+  telemetry.metric('startup.window_visible_ms', Math.round(perfNow()), { unit: 'ms' });
+  let opaque = false;
+  const makeOpaque = () => {
+    if (opaque || mainWindow.isDestroyed()) return;
+    opaque = true;
+    mainWindow.setOpacity(1);
+    bootTrace.mark('window_opaque');
+    stopFrameWatch();
+  };
+  const dbg = mainWindow.webContents.debugger;
+  if (screencastActive && dbg.isAttached()) {
+    let frames = 0;
+    const onFrame = (_event, method) => {
+      if (method !== 'Page.screencastFrame') return;
+      frames += 1;
+      if (frames >= 2) {
+        dbg.removeListener('message', onFrame);
+        makeOpaque();
       }
-      setTimeout(makeOpaque, Number(process.env.CLIPLIB_FADE_MS) || 120);
-    }
-    if (process.env.CLIPLIB_THROTTLE !== '1') mainWindow.webContents.setBackgroundThrottling(true);
+    };
+    dbg.on('message', onFrame);
   }
+  setTimeout(makeOpaque, 150);
 }
+
 let pendingCliplibAuthSession = null;
 let isProcessingProtocolQueue = false;
 const queuedProtocolUrls = [];
@@ -772,11 +754,9 @@ function queueProtocolUrl(protocolUrl) {
   });
 }
 
-if (process.env.CLIPLIB_GPU_FLAGS !== '0') {
-  app.commandLine.appendSwitch('enable-gpu-rasterization');
-  app.commandLine.appendSwitch('enable-zero-copy');
-  app.commandLine.appendSwitch('ignore-gpu-blocklist');
-}
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 const initialProtocolUrl = extractCliplibProtocolUrl(process.argv);
 if (initialProtocolUrl) {
@@ -999,12 +979,6 @@ async function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
       spellcheck: false,
-      // While the window is still hidden the renderer must keep producing
-      // frames, so the thumbnails that land after the first paint are
-      // rasterized before show(). Without this Chromium stops at the first
-      // hidden frame and the first visible frame is built from scratch on
-      // show: a white window for half a second. Re-enabled after reveal.
-      backgroundThrottling: process.env.CLIPLIB_THROTTLE === '1',
       enableRemoteModule: true,
       preload: path.join(__dirname, "preload.js"),
       // Dev serves the renderer from http://127.0.0.1:5173, so file:// thumbnails
@@ -1062,33 +1036,35 @@ async function createWindow() {
   const rendererWaitStartedAt = Date.now();
 
   // Renderer signals when clips are loaded and UI is fully ready
+  // The renderer reports when the library grid is painted with its visible
+  // thumbnails loaded (it fades its brand screen out at the same moment).
   ipcMain.once('renderer-ready', () => {
     bootTrace.mark('renderer_ready');
-    // Process start to a usable window. The only startup number a user ever
-    // notices, and until now it was measured nowhere in production.
+    // Process start to a usable library. The only startup number a user ever
+    // notices; startup.window_visible_ms is the brand screen before it.
     telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
-    rendererReadySeen = true;
-    maybeReveal();
-    // The compositor normally produces the next frame within a few dozen ms;
-    // never keep the window hidden for long if it does not.
-    setTimeout(() => { screencastActive = false; maybeReveal(); }, 1500);
-  });
-
-  // With a warm snapshot the first paint already contains the library grid
-  // (the first React commit runs inside the module script). Without one
-  // (first launch, cleared storage) it is the in-app loading state, which
-  // beats showing nothing while the folder scan runs.
-  mainWindow.once('ready-to-show', () => {
-    bootTrace.mark('ready_to_show');
     firstPaintSeen = true;
     maybeReveal();
+    // The compositor normally frames this state within a few dozen ms;
+    // never keep the window hidden for long if it does not.
+    setTimeout(() => {
+      screencastActive = false;
+      maybeReveal();
+    }, REVEAL_FALLBACK_MS);
   });
-  // The GPU process comes up in parallel with the renderer; asking for its
-  // info both starts it right away and tells us when a frame can be shown.
-  // Never gate forever on it (software rendering, driver trouble).
-  app.getGPUInfo('basic').then(markGpuReady, markGpuReady);
+
+  // Without a snapshot the renderer only reports ready after the folder
+  // scan; if even that never comes, show the window with whatever it has.
+  mainWindow.once('ready-to-show', () => {
+    bootTrace.mark('ready_to_show');
+    setTimeout(() => {
+      if (mainWindowRevealed) return;
+      firstPaintSeen = true;
+      screencastActive = false;
+      maybeReveal();
+    }, 6000);
+  });
   startFrameWatch(mainWindow);
-  setTimeout(() => { if (!gpuReady) markGpuReady(); }, 2500);
 
   // Safety fallback in case the renderer never signals ready
   const splashFallback = setTimeout(() => {
@@ -1842,8 +1818,10 @@ ipcMain.handle("get-clip-participants", async (event, clipNames) => {
   return metadataModule.getClipParticipants(clipNames, getSettings);
 });
 
-ipcMain.handle('get-new-clips-info', async () => {
-  return await clipsModule.getNewClipsInfo(getSettings);
+// The renderer passes the names it just got from get-clips, so this does not
+// walk the library a second time.
+ipcMain.handle('get-new-clips-info', async (_event, knownNames) => {
+  return await clipsModule.getNewClipsInfo(getSettings, Array.isArray(knownNames) ? knownNames : undefined);
 });
 
 ipcMain.handle('get-clips-folder-size', async () => {
