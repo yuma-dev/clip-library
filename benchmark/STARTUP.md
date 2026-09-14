@@ -119,6 +119,57 @@ Clearing the search was the outlier (315 ms frame): every group streamed
 its cards back at 80 per frame at once, so one frame mounted ~2,000 cards.
 useStreamedSlice now shares a per-frame budget across all groups.
 
+## Smooth after the reveal (September 2026, second pass)
+
+The target was 100+ fps from the moment the library is on screen, with no
+frame drops, scrolling included. Measured with `interaction-bench.js`,
+`scroll-experiments.js` (one launch, CSS overrides injected one after the
+other, each followed by the same wheel scroll) and `inspect-dom.js`
+(what the boot left in the live DOM). On the reference machine (165 Hz)
+every scenario now runs at 6.1 ms per frame p50 and 6.2 ms p95, zero
+frames over 33 ms, and the six seconds after the reveal have p95 6.2 ms
+and no frame over 25 ms. What it took, in the order it was found:
+
+- **A 2 s freeze after the intro** in every launch: `telemetry.collectMachine`
+  called `app.getGPUInfo('complete')`, which runs a DirectX diagnostics
+  pass that blocks the browser process on Windows despite its async
+  signature, and a blocked browser process freezes every window. Bisected
+  with `CLIPLIB_SKIP_DEFERRED=machine`. Vendor now comes from `'basic'`, model
+  and driver from a hidden PowerShell query. Taskbar pin repair, which
+  resolved every pin through synchronous COM, reads the `.lnk` bytes first
+  and only resolves candidates.
+- **Scrolling at 79 ms a frame with the cursor on the grid** (6 ms with the
+  cursor off it). Two causes. Dropped intersection-observer entries: the
+  observer reports each card once when first observed, and dropping the
+  reports that arrived during the intro hold left a thousand cards never
+  culled, so every compositing update ran over the whole library (47 ms).
+  The entries are now held back and applied in slices. And hover: each card
+  passing under a resting cursor gained and lost `:hover`, whose transform
+  transition and pre-rendered shadow each promote a layer. Hover is off on
+  the cards during scroll activity and re-entered when it settles.
+- **Groups the browser skips.** `.clip-group-content` gets
+  `content-visibility: auto` with an intrinsic height computed from the
+  measured columns and row height (`ClipGrid` measures, `ClipGroup` sets
+  `--group-h`), so paint and compositing scale with what is near the
+  viewport. This is what took wheel scrolling from 12 ms (the pre-intro
+  baseline, measured on a worktree of 443a3c9) to one vsync. The hover
+  shadow needs padding inside the containment box, cancelled by a margin.
+  During the intro the near groups are marked live and the rest hidden
+  outright, since the push changes every group's viewport intersection.
+- **Streaming.** Mounting cards after the reveal always shows: each commit
+  costs about 15 ms whatever its size (style, paint, compositing, plus the
+  hover hit-test Chromium runs after a layout change), so no chunk size
+  helps. Streaming now runs at full speed while the window is hidden (cheap,
+  with skipped groups) and is done before the reveal; whatever remains is
+  paced by frame feedback and pauses for 300 ms after any input. Idle-time
+  pacing was tried and rejected: the pauses between wheel steps look idle.
+- **Settle and teardown.** Dropping the will-change promotions of the body
+  and forty cards at once re-rasterised them in one 120 ms frame; they are
+  dropped eight per frame after the motes are gone.
+
+The bench's tail statistics (`after the intro (1.2 to 6 s)`) and the
+`interaction-bench.js` table are the guard for all of this.
+
 ## Things that were tested and did not matter
 
 Windows Defender, Windhawk, asar size, proxy auto-detection, the GPU
@@ -227,6 +278,16 @@ the fresh list and tags commit about 1.3 s later than they otherwise would.
   `--profile cold-cache` drops the snapshot and caches; `--park-cursor` moves
   the mouse to the screen edge before each launch so a card under it never
   starts a hover preview.
+- `node benchmark/scroll-experiments.js [--cursor grid|edge] [--exe PATH] [--wait MS]`
+  injects CSS overrides one after the other into a running packaged app and
+  scrolls after each, to attribute a scroll cost without rebuilding.
+- `node benchmark/inspect-dom.js [--exe PATH] [--wait MS]` prints what the
+  boot left in the live DOM: classes, promoted layers, culled cards,
+  running animations.
+- Bisecting the deferred services: `--env CLIPLIB_SKIP_DEFERRED=machine`
+  (updater, discord, ffmpeg, machine, clipdip, pins, warm) and
+  `--env CLIPLIB_DEFERRED_MS=30000`; their marks and any frame gap over
+  90 ms appear in the phase table.
 - `node benchmark/analyze-reveal.js <chromium-trace.json>` is the frame-level
   view of the reveal animation from a `--trace` run with
   `CLIPLIB_TRACE_CATEGORIES=benchmark,viz,gpu,cc,devtools.timeline,...`:

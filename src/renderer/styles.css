@@ -4632,7 +4632,7 @@ body.ui-blur-exit .app-body {
 /* No hover while the intro plays: the cursor often sits on the grid when the
    window appears, and a card's hover style repaints its tile inside the
    moving body. Any pointer press still ends the intro (bootHold). */
-.app-body.boot-pre {
+.app-body.boot-nohover {
   pointer-events: none;
 }
 .app-shell.boot-clip {
@@ -4793,4 +4793,11 @@ body.ui-blur-exit .app-body {
   contain-intrinsic-block-size: auto var(--group-h, 1200px);
   padding: 24px 24px 44px;
   margin: -20px -20px -32px;
+}
+
+/* During the boot intro (bootReveal.markLiveGroups): the groups near the
+   viewport stay as they are; every other group is hidden outright, so the
+   moving body cannot pull them into layout and paint mid-animation. */
+.app-body.boot-nohover .clip-group-content:not(.boot-live) {
+  content-visibility: hidden;
 }
