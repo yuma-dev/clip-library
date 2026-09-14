@@ -26,6 +26,7 @@ import { bootMark } from "../perf/bootMarks";
 import type { BootRevealPayload } from "../../types/clips";
 import titleUrl from "../../../assets/title.png";
 import { holdStreaming, holdCommits, releaseBoot, onBootRelease } from "./bootHold";
+import { preloadBootSound, startBootSound, cutBootSound, disposeBootSound } from "./bootSound";
 
 const MEASURE_MS = 1200;
 // The body, cards and glow are back to normal here; the hold lifts.
@@ -272,6 +273,10 @@ export async function prepareBootReveal(): Promise<void> {
   if (reducedMotion()) return;
   holdStreaming();
   window.addEventListener("mousemove", onPointerMove, { passive: true });
+  // Sound layers decode now; muted when hover previews are muted.
+  void Promise.resolve(window.clips?.getSettings?.())
+    .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0))
+    .catch(() => preloadBootSound(false));
   body = document.querySelector<HTMLElement>(".app-body");
   shell = document.querySelector<HTMLElement>(".app-shell");
   rail = document.querySelector<HTMLElement>(".rail");
@@ -354,6 +359,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     // Take the pre-mounted overlay down and let that frame commit before the
     // window turns opaque, so the plain reveal never shows the logo twin.
     clearAll();
+    disposeBootSound();
     releaseBoot();
     await twoFrames();
     window.clips?.bootRevealArmed();
@@ -422,6 +428,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   await twoFrames();
   window.clips?.bootRevealArmed();
   for (const a of held) a.play();
+  startBootSound();
   measureFrames();
 
   // The hold lifts at settle time, or at once on any input: then the intro
@@ -439,6 +446,8 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
       }
     }
     clearAll();
+    cutBootSound();
+    window.setTimeout(disposeBootSound, 1500);
   };
   onBootRelease(cutShort);
   window.setTimeout(() => {
@@ -457,6 +466,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     if (over) return;
     over = true;
     clearAll();
+    disposeBootSound();
   });
 }
 
