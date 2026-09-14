@@ -13,8 +13,22 @@
 // or key ends the visuals early, the sound plays out. Nothing plays on the
 // plain reveal.
 import wooshUrl from "../assets/sfx/woosh.ogg";
+import wooshFlightUrl from "../assets/sfx/woosh-flight.ogg";
+import wooshCreatureUrl from "../assets/sfx/woosh-creature.ogg";
+import wooshPointerUrl from "../assets/sfx/woosh-pointer.ogg";
+import wooshGustUrl from "../assets/sfx/woosh-gust.ogg";
 import chimesUrl from "../assets/sfx/chimes.ogg";
 import motesUrl from "../assets/sfx/motes.ogg";
+import type { WooshVariant } from "./bootPrefs";
+
+// Each variant is trimmed so its swell peaks about 0.4 s after it starts.
+const WOOSH_URLS: Record<WooshVariant, string> = {
+  classic: wooshUrl,
+  flight: wooshFlightUrl,
+  creature: wooshCreatureUrl,
+  pointer: wooshPointerUrl,
+  gust: wooshGustUrl,
+};
 
 const MASTER = 0.35;
 const GAIN = { woosh: 0.9, chimes: 1.0, motes: 0.5 };
@@ -41,7 +55,7 @@ async function load(name: SoundLayer, url: string): Promise<void> {
 }
 
 /** Decode the layers ahead of the reveal (a few ms of work, off the intro). */
-export function preloadBootSound(muted: boolean): void {
+export function preloadBootSound(muted: boolean, woosh: WooshVariant = "classic"): void {
   enabled = !muted;
   if (!enabled || loading) return;
   try {
@@ -50,7 +64,7 @@ export function preloadBootSound(muted: boolean): void {
     enabled = false;
     return;
   }
-  loading = Promise.all([load("woosh", wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl)])
+  loading = Promise.all([load("woosh", WOOSH_URLS[woosh] ?? wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl)])
     .then(() => undefined)
     .catch(() => {
       enabled = false;

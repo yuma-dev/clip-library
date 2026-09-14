@@ -8,7 +8,16 @@ import { useToast } from "../../ui/Toast";
 import { setDiscordPresenceEnabled } from "../../player/discordPresence";
 import type { UseClips } from "../../library/useClips";
 import type { UseLibraryFilter } from "../../library/useLibraryFilter";
-import { getBootPrefs, setBootPrefs, type BootPrefs } from "../../boot/bootPrefs";
+import { getBootPrefs, setBootPrefs, type BootPrefs, type WooshVariant } from "../../boot/bootPrefs";
+import Select from "../../ui/Select";
+
+const WOOSH_OPTIONS: { value: WooshVariant; label: string }[] = [
+  { value: "classic", label: "Classic" },
+  { value: "flight", label: "Take flight" },
+  { value: "creature", label: "Creature" },
+  { value: "pointer", label: "Pointer" },
+  { value: "gust", label: "Gust" },
+];
 
 export default function GeneralSection({ lib, filter }: { lib: UseClips; filter: UseLibraryFilter }) {
   const { settings, set } = useSettings();
@@ -77,6 +86,16 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         </SetRow>
         <SetRow title="Woosh" description="As the logo flies through">
           <Toggle checked={boot.woosh} onChange={(v) => setBoot({ woosh: v })} disabled={!boot.sound} aria-label="Woosh" />
+        </SetRow>
+        <SetRow title="Woosh sound" description="Which whoosh plays">
+          <Select
+            value={boot.wooshVariant}
+            width={180}
+            options={WOOSH_OPTIONS}
+            onChange={(v) => setBoot({ wooshVariant: v as WooshVariant })}
+            disabled={!boot.sound || !boot.woosh}
+            aria-label="Woosh sound"
+          />
         </SetRow>
         <SetRow title="Chimes" description="As the library settles">
           <Toggle checked={boot.chimes} onChange={(v) => setBoot({ chimes: v })} disabled={!boot.sound} aria-label="Chimes" />
