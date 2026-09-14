@@ -165,6 +165,22 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
 }
 
 /**
+ * Offscreen groups are skipped by the browser from their intersection with
+ * the viewport (content-visibility: auto). The push scales the body from
+ * 1.5x to rest, so that intersection changes every frame and groups at the
+ * edge got laid out and painted mid-animation (a 250 ms compositor stall).
+ * For the intro, the groups near the viewport are marked live and every
+ * other group is hidden outright (styles.css); settleGrid lifts it.
+ */
+function markLiveGroups(): void {
+  const vh = window.innerHeight;
+  for (const el of document.querySelectorAll<HTMLElement>(".clip-group-content")) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > -vh * 0.5 && r.top < vh * 1.5) el.classList.add("boot-live");
+  }
+}
+
+/**
  * Grid glow: every visible card's thumbnail drawn, blurred and saturated,
  * into one canvas behind the cards (the look of the shared hover glow,
  * `.clip-glow-canvas`, for the whole viewport at once). The blur is baked
@@ -275,6 +291,8 @@ export async function prepareBootReveal(): Promise<void> {
   cards = visibleCards();
   heads = visibleHeaders();
   for (const el of [body, rail, ...heads, ...cards]) el?.classList.add("boot-pre");
+  body?.classList.add("boot-nohover");
+  markLiveGroups();
   glowCanvas = prefs.glow ? buildGlowCanvas(cards) : null;
   try {
     preparedLogo = (await window.clips?.getBootLogoRect?.()) ?? null;
@@ -290,26 +308,51 @@ export async function prepareBootReveal(): Promise<void> {
 }
 
 /** The body, the grid and the rail back to normal (the overlay may stay). */
-function clearGrid(): void {
+// Elements still promoted (will-change) after the visuals settled; they are
+// de-promoted later, a few per frame (see depromote).
+let promoted: HTMLElement[] = [];
+
+/**
+ * The visuals have settled: hover comes back, the animation classes go
+ * (their end state is the natural one, so nothing changes on screen) and
+ * the glow canvas leaves. The will-change promotions stay for now: dropping
+ * forty layers plus the body at once re-rasterises all of them into the
+ * page in one frame (a 120 ms frame measured at this very moment).
+ */
+function settleGrid(): void {
   if (body) {
-    body.classList.remove("boot-pre", "boot-dolly");
+    body.classList.remove("boot-nohover", "boot-dolly");
     body.style.removeProperty("transform-origin");
   }
+  for (const el of document.querySelectorAll<HTMLElement>(".clip-group-content.boot-live")) el.classList.remove("boot-live");
   shell?.classList.remove("boot-clip");
-  rehoverUnderPointer();
   for (const el of [rail, ...heads, ...cards]) {
     if (!el) continue;
-    el.classList.remove("boot-pre", "boot-par");
+    el.classList.remove("boot-par");
     el.style.removeProperty("--boot-d");
   }
   glowCanvas?.remove();
   glowCanvas = null;
+  promoted = [body, rail, ...heads, ...cards].filter((el): el is HTMLElement => !!el && el.classList.contains("boot-pre"));
   cards = [];
   heads = [];
+  rehoverUnderPointer();
+}
+
+/** Drop the will-change promotions, `perFrame` elements a frame (or all at once). */
+function depromote(perFrame: number): void {
+  const list = promoted;
+  promoted = [];
+  const step = () => {
+    for (const el of list.splice(0, perFrame)) el.classList.remove("boot-pre");
+    if (list.length) requestAnimationFrame(step);
+  };
+  step();
 }
 
 function clearAll(): void {
-  clearGrid();
+  settleGrid();
+  depromote(8);
   overlay?.remove();
   overlay = null;
 }
@@ -340,7 +383,7 @@ function measureFrames(): void {
   let gaps = 0;
   const tick = (t: number) => {
     (t - start < MEASURE_MS ? deltas : tail).push(t - last);
-    if (t - last > 300 && gaps < 3) {
+    if (t - last > 90 && gaps < 3) {
       gaps += 1;
       bootMark(`tail_gap${gaps}_from`, origin + last);
       bootMark(`tail_gap${gaps}_to`, origin + t);
@@ -461,10 +504,10 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     settledNormally = true;
     // Streaming resumes (adaptively paced) once the visuals settle; the
     // whole-grid commits wait for the overlay, so nothing heavy lands while
-    // the tail still plays. The re-hover in clearGrid only needs the
+    // the tail still plays. The re-hover in settleGrid only needs the
     // streaming hold off.
     releaseStreaming();
-    clearGrid();
+    settleGrid();
   }, SETTLE_MS);
   // The overlay comes down once its last animation (the latest mote) has
   // finished, never on a fixed timer: a cut mid-fade reads as a pop.
