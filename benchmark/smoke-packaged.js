@@ -56,7 +56,15 @@ async function main() {
     // the thumbnails decode; give it a few seconds.
     let visible = false;
     for (let i = 0; i < 50 && !visible; i++) {
-      visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.isMaximized()));
+      // Around the reveal the main-process inspector context is sometimes
+      // reported destroyed for one call (the app stays up; seen 1 in 4 runs).
+      // A retry a moment later succeeds.
+      visible = await app
+        .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.isMaximized()))
+        .catch((error) => {
+          if (!/context was destroyed/.test(String(error.message))) throw error;
+          return false;
+        });
       if (!visible) await new Promise((r) => setTimeout(r, 100));
     }
     check('main window visible and maximized', visible);
