@@ -30,8 +30,9 @@ import { holdStreaming, holdCommits, releaseBoot, onBootRelease } from "./bootHo
 const MEASURE_MS = 1200;
 // The body, cards and glow are back to normal here; the hold lifts.
 const SETTLE_MS = 1300;
-// The motes drift on a little longer, on their own overlay layers.
-const OVERLAY_MS = 2300;
+// The motes drift on a little longer, on their own overlay layers; the
+// overlay leaves when their animations finish, or at this cap at the latest.
+const OVERLAY_CAP_MS = 5000;
 const MAX_CARDS = 64;
 const MOTES = 30;
 // Parallax: rail first, then headers, then rows from the top down.
@@ -425,10 +426,11 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
 
   // The hold lifts at settle time, or at once on any input: then the intro
   // jumps to its end state so the user's action lands on a library at rest.
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
+  let over = false; // everything torn down
+  let settledNormally = false; // the settle timer released the hold (not input)
+  const cutShort = () => {
+    if (over || settledNormally) return;
+    over = true;
     for (const a of held) {
       try {
         a.finish();
@@ -438,17 +440,24 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     }
     clearAll();
   };
-  onBootRelease(finish);
+  onBootRelease(cutShort);
   window.setTimeout(() => {
-    if (done) return;
+    if (over) return;
+    settledNormally = true;
     // Release first: the re-hover in clearGrid needs the hold to be off.
     releaseBoot();
     clearGrid();
   }, SETTLE_MS);
-  window.setTimeout(() => {
-    done = true;
+  // The overlay comes down once its last animation (the latest mote) has
+  // finished, never on a fixed timer: a cut mid-fade reads as a pop.
+  const overlayAnims = [...layer.children].flatMap((el) => el.getAnimations());
+  const finished = Promise.allSettled(overlayAnims.map((a) => a.finished));
+  const cap = new Promise<void>((resolve) => window.setTimeout(resolve, OVERLAY_CAP_MS));
+  void Promise.race([finished, cap]).then(() => {
+    if (over) return;
+    over = true;
     clearAll();
-  }, OVERLAY_MS);
+  });
 }
 
 /** Subscribe once; returns the unsubscribe for React's effect cleanup. */

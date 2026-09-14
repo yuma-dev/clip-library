@@ -4761,11 +4761,15 @@ body.ui-blur-exit .app-body {
   opacity: 0;
   will-change: transform, opacity;
 }
+/* Linear drift; the opacity ramps up quickly, holds, then eases out over
+   the second half so a mote fades away rather than switching off. */
 #boot-reveal .boot-mote.run {
-  animation: boot-mote 1700ms ease-out var(--boot-d, 0ms) both;
+  animation: boot-mote 2200ms linear var(--boot-d, 0ms) both;
 }
 @keyframes boot-mote {
   0% { opacity: 0; transform: translate(0, 0) scale(0.6); }
-  20% { opacity: 1; }
-  100% { opacity: 0; transform: translate(var(--boot-dx, 0px), var(--boot-dy, -60px)) scale(1.2); }
+  15% { opacity: 1; }
+  45% { opacity: 0.9; }
+  75% { opacity: 0.35; }
+  100% { opacity: 0; transform: translate(var(--boot-dx, 0px), var(--boot-dy, -60px)) scale(1.15); }
 }
