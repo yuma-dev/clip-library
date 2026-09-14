@@ -30,6 +30,9 @@ let loading: Promise<void> | null = null;
 let playing: Partial<Record<SoundLayer, Layer>> = {};
 let started = false;
 let enabled = true;
+// The visuals can finish before the longest clip; the context closes only
+// once every layer has ended (or never started).
+let disposeWanted = false;
 
 async function load(name: SoundLayer, url: string): Promise<void> {
   if (!ctx) return;
@@ -68,6 +71,7 @@ function play(name: SoundLayer, when: number): void {
   playing[name] = { source, gain, startAt: when };
   source.onended = () => {
     if (playing[name]?.source === source) delete playing[name];
+    maybeClose();
   };
 }
 
@@ -108,8 +112,31 @@ export function cutBootSound(): void {
   }
 }
 
-/** Free the context once the intro is over. */
+/** Free the context once the intro is over and every layer has ended. */
 export function disposeBootSound(): void {
+  disposeWanted = true;
+  maybeClose();
+}
+
+function maybeClose(): void {
+  if (!disposeWanted || !ctx) return;
+  if (Object.keys(playing).length > 0) return;
+  // Layers scheduled but not yet started would still fire; give a pending
+  // start (loading) a moment before giving up on it.
+  if (started && loading) {
+    void loading.then(() => {
+      // The scheduled plays land a couple of microtasks after this; look again
+      // once they have had the chance.
+      window.setTimeout(() => {
+        if (Object.keys(playing).length === 0) closeNow();
+      }, 50);
+    });
+    return;
+  }
+  closeNow();
+}
+
+function closeNow(): void {
   const c = ctx;
   ctx = null;
   buffers = {};
