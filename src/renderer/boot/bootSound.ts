@@ -4,9 +4,8 @@
 //  - woosh   as the logo flies through: trimmed so its swell peaks 0.42 s
 //            after it starts; started as the reveal arms, so the peak lands
 //            around the fastest part of the fly-through.
-//  - chimes  and
-//  - motes   together at +0.6 s, under the drifting motes, each with its
-//            own natural tail.
+//  - chimes, motes and wind together at +0.6 s, under the drifting motes,
+//            each with its own tail; the wind fades out last.
 //
 // The clips are pre-trimmed and faded (assets/sfx, see benchmark/STARTUP.md)
 // so nothing starts or stops abruptly. Input never cuts the sound: a click
@@ -19,6 +18,7 @@ import wooshPointerUrl from "../assets/sfx/woosh-pointer.ogg";
 import wooshGustUrl from "../assets/sfx/woosh-gust.ogg";
 import chimesUrl from "../assets/sfx/chimes.ogg";
 import motesUrl from "../assets/sfx/motes.ogg";
+import windUrl from "../assets/sfx/wind.ogg";
 import type { WooshVariant } from "./bootPrefs";
 
 // Each variant is trimmed so its swell peaks about 0.4 s after it starts.
@@ -31,8 +31,10 @@ const WOOSH_URLS: Record<WooshVariant, string> = {
 };
 
 const MASTER = 0.35;
-const GAIN = { woosh: 0.9, chimes: 1.0, motes: 0.5 };
-const AT = { woosh: 0, chimes: 0.6, motes: 0.6 };
+// wind: grass and birds under the whole tail; its own fade ends about
+// 0.6 s after the chimes (the clip runs 4.4 s from +0.6 s).
+const GAIN = { woosh: 0.9, chimes: 1.0, motes: 0.5, wind: 1.0 };
+const AT = { woosh: 0, chimes: 0.6, motes: 0.6, wind: 0.6 };
 
 export type SoundLayer = keyof typeof GAIN;
 type Layer = { source: AudioBufferSourceNode; gain: GainNode; startAt: number };
@@ -64,7 +66,7 @@ export function preloadBootSound(muted: boolean, woosh: WooshVariant = "classic"
     enabled = false;
     return;
   }
-  loading = Promise.all([load("woosh", WOOSH_URLS[woosh] ?? wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl)])
+  loading = Promise.all([load("woosh", WOOSH_URLS[woosh] ?? wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl), load("wind", windUrl)])
     .then(() => undefined)
     .catch(() => {
       enabled = false;
@@ -96,7 +98,7 @@ function play(name: SoundLayer, when: number): void {
 }
 
 /** Called the moment the reveal arms (the window turns opaque a frame later). */
-export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true }): void {
+export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }): void {
   if (!enabled || started || !ctx) return;
   started = true;
   const wanted = (Object.keys(AT) as SoundLayer[]).filter((name) => layers[name]);

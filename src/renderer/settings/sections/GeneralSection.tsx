@@ -103,6 +103,9 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         <SetRow title="Motes" description="Under the drifting lights">
           <Toggle checked={boot.motesSound} onChange={(v) => setBoot({ motesSound: v })} disabled={!boot.sound} aria-label="Motes sound" />
         </SetRow>
+        <SetRow title="Wind" description="Grass and birds under the tail, fading out last">
+          <Toggle checked={boot.wind} onChange={(v) => setBoot({ wind: v })} disabled={!boot.sound} aria-label="Wind" />
+        </SetRow>
       </SetGroup>
 
       <SetGroup title="Tags">
