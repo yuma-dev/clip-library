@@ -8,17 +8,7 @@ import { useToast } from "../../ui/Toast";
 import { setDiscordPresenceEnabled } from "../../player/discordPresence";
 import type { UseClips } from "../../library/useClips";
 import type { UseLibraryFilter } from "../../library/useLibraryFilter";
-import { getBootPrefs, setBootPrefs, type BootPrefs, type WooshVariant } from "../../boot/bootPrefs";
-import Select from "../../ui/Select";
-import Slider from "../../ui/Slider";
-
-const WOOSH_OPTIONS: { value: WooshVariant; label: string }[] = [
-  { value: "classic", label: "Classic" },
-  { value: "flight", label: "Take flight" },
-  { value: "creature", label: "Creature" },
-  { value: "pointer", label: "Pointer" },
-  { value: "gust", label: "Gust" },
-];
+import { getBootPrefs, setBootPrefs, type BootPrefs } from "../../boot/bootPrefs";
 
 export default function GeneralSection({ lib, filter }: { lib: UseClips; filter: UseLibraryFilter }) {
   const { settings, set } = useSettings();
@@ -71,15 +61,30 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         </SetRow>
       </SetGroup>
 
-      <SetGroup title="Integration">
-        <SetRow title="Discord Rich Presence" description="Show what you're watching in your Discord status">
-          <Toggle
-            checked={Boolean(settings.enableDiscordRPC)}
-            onChange={(v) => void toggleDiscord(v)}
-            aria-label="Discord Rich Presence"
-          />
-        </SetRow>
-      </SetGroup>
+      {/* The sound group is tall: the left column's groups stack on their own
+          so the sound group's height cannot push them down. */}
+      <div className="set-col">
+        <SetGroup title="Integration">
+          <SetRow title="Discord Rich Presence" description="Show what you're watching in your Discord status">
+            <Toggle
+              checked={Boolean(settings.enableDiscordRPC)}
+              onChange={(v) => void toggleDiscord(v)}
+              aria-label="Discord Rich Presence"
+            />
+          </SetRow>
+        </SetGroup>
+
+        <SetGroup title="Tags">
+          <SetRow
+            title="Manage tags"
+            description="Create, rename, and delete tags across your whole library"
+          >
+            <button type="button" className="btn" onClick={() => setTagsOpen(true)}>
+              <Tags size={14} /> Manage tags
+            </button>
+          </SetRow>
+        </SetGroup>
+      </div>
 
       <SetGroup title="Startup sound">
         <SetRow title="Play a sound at startup" description="The layers below play with the intro. Applies at the next launch.">
@@ -88,73 +93,17 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         <SetRow title="Woosh" description="As the logo flies through">
           <Toggle checked={boot.woosh} onChange={(v) => setBoot({ woosh: v })} disabled={!boot.sound} aria-label="Woosh" />
         </SetRow>
-        <SetRow title="Woosh sound" description="Which whoosh plays">
-          <Select
-            value={boot.wooshVariant}
-            width={180}
-            options={WOOSH_OPTIONS}
-            onChange={(v) => setBoot({ wooshVariant: v as WooshVariant })}
-            disabled={!boot.sound || !boot.woosh}
-            aria-label="Woosh sound"
-          />
-        </SetRow>
         <SetRow title="Chimes" description="As the library settles">
           <Toggle checked={boot.chimes} onChange={(v) => setBoot({ chimes: v })} disabled={!boot.sound} aria-label="Chimes" />
         </SetRow>
         <SetRow title="Motes" description="Under the drifting lights">
           <Toggle checked={boot.motesSound} onChange={(v) => setBoot({ motesSound: v })} disabled={!boot.sound} aria-label="Motes sound" />
         </SetRow>
-        <SetRow title="Wind" description="Grass and birds under the tail, fading out last">
+        <SetRow title="Wind" description="Grass and birds far under the tail, fading out with the chimes">
           <Toggle checked={boot.wind} onChange={(v) => setBoot({ wind: v })} disabled={!boot.sound} aria-label="Wind" />
-        </SetRow>
-        <SetRow title="Wind level" description="How loud the wind sits under the other layers">
-          <Slider
-            value={boot.windVolume}
-            min={0}
-            max={1}
-            step={0.01}
-            format={(v) => `${Math.round(v * 100)}%`}
-            onCommit={(v) => setBoot({ windVolume: v })}
-            disabled={!boot.sound || !boot.wind}
-            aria-label="Wind level"
-          />
-        </SetRow>
-        <SetRow title="Wind fade-out starts" description="Seconds after the wind begins (the chimes end at about 3.8)">
-          <Slider
-            value={boot.windFadeAt}
-            min={0}
-            max={7}
-            step={0.1}
-            format={(v) => `${v.toFixed(1)} s`}
-            onCommit={(v) => setBoot({ windFadeAt: v })}
-            disabled={!boot.sound || !boot.wind}
-            aria-label="Wind fade-out start"
-          />
-        </SetRow>
-        <SetRow title="Wind fade-out length" description="How long the fade to silence takes">
-          <Slider
-            value={boot.windFadeFor}
-            min={0.1}
-            max={5}
-            step={0.1}
-            format={(v) => `${v.toFixed(1)} s`}
-            onCommit={(v) => setBoot({ windFadeFor: v })}
-            disabled={!boot.sound || !boot.wind}
-            aria-label="Wind fade-out length"
-          />
         </SetRow>
       </SetGroup>
 
-      <SetGroup title="Tags">
-        <SetRow
-          title="Manage tags"
-          description="Create, rename, and delete tags across your whole library"
-        >
-          <button type="button" className="btn" onClick={() => setTagsOpen(true)}>
-            <Tags size={14} /> Manage tags
-          </button>
-        </SetRow>
-      </SetGroup>
 
       <TagManagerModal open={tagsOpen} onClose={() => setTagsOpen(false)} lib={lib} filter={filter} />
     </>

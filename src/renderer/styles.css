@@ -2616,6 +2616,13 @@ body.ui-blur-exit .app-body {
 .span-2 {
   grid-column: 1 / -1;
 }
+/* A stack of groups in one grid cell (the other column may hold one tall group). */
+.set-col {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
+}
 @media (max-width: 1120px) {
   .settings-page {
     grid-template-columns: minmax(0, 1fr);
