@@ -3,6 +3,11 @@ import type { LocalClip } from "./types";
 import { bootMark } from "../perf/bootMarks";
 import { whenCommitsAllowed } from "../boot/bootHold";
 
+// A rendering opportunity plus an optional pause, so consecutive whole-grid
+// commits never share a frame.
+const nextFrame = (pauseMs = 0) =>
+  new Promise<void>((resolve) => requestAnimationFrame(() => (pauseMs ? setTimeout(resolve, pauseMs) : resolve())));
+
 // Last session's library snapshot — lets the grid paint instantly on launch
 // while the real scan runs, instead of showing a loading screen for ~1s.
 // The fresh get-clips result replaces it wholesale when it arrives.
@@ -109,9 +114,11 @@ export function useClips(): UseClips {
       const knownNames = (Array.isArray(raw) ? raw : []).map((c) => String(c.originalName ?? ""));
       const newInfo = await window.clips.getNewClipsInfo(knownNames).catch(() => ({ newClips: [] }));
       if (cancelled) return;
-      // While the boot reveal animation plays, a commit that touches every
-      // card would cost its frames; the list waits for it (about a second).
+      // While the boot intro plays, a commit that touches every card would
+      // cost its frames; the list waits for it, then takes a frame of its own.
       await whenCommitsAllowed();
+      if (cancelled) return;
+      await nextFrame();
       if (cancelled) return;
 
       // Clips added since the last session — used to highlight them on load.
@@ -214,6 +221,8 @@ export function useClips(): UseClips {
 
       await whenCommitsAllowed();
       if (cancelled) return;
+      await nextFrame(40);
+      if (cancelled) return;
       setThumbnails(new Map(tmap));
       requestAnimationFrame(() => bootMark("thumb_paths_applied"));
 
@@ -275,6 +284,9 @@ export function useClips(): UseClips {
         const byName = await tagBatches[i / TAG_BATCH];
         if (cancelled) return;
         await whenCommitsAllowed();
+        if (cancelled) return;
+        // One batch per frame, with a breath between them.
+        await nextFrame(40);
         if (cancelled) return;
         // The batch returns an entry for every requested name ([] when
         // tagless); an empty object means the IPC failed — keep current tags.

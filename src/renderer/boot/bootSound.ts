@@ -67,6 +67,13 @@ function play(name: SoundLayer, when: number): void {
   const gain = ctx.createGain();
   gain.gain.value = GAIN[name] * MASTER;
   source.connect(gain).connect(ctx.destination);
+  // The chimes carry the tail of the intro: ease them out over their last
+  // 40 percent so sound and motes end together, slowly.
+  if (name === "chimes") {
+    const end = when + buffer.duration;
+    gain.gain.setValueAtTime(GAIN[name] * MASTER, end - buffer.duration * 0.4);
+    gain.gain.linearRampToValueAtTime(0, end);
+  }
   source.start(when);
   playing[name] = { source, gain, startAt: when };
   source.onended = () => {

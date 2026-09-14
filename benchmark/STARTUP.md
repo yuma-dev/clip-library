@@ -29,7 +29,7 @@ the September 2026 cold-start work; numbers are from the reference machine
    probe (two spawns), a PowerShell CIM query for telemetry, clipdip's
    `tasklist`, and taskbar pin repair (a synchronous COM loop, 300 ms) all
    ran before or during the first paint and competed with the renderer and
-   GPU process. They run from `runDeferredServices()` 2.5 s after the reveal.
+   GPU process. They run from `runDeferredServices()` 5 s after the reveal, past the intro.
 3. **The splash window.** A second renderer process plus a fixed 300 ms
    dismiss timer. Removed.
 4. **Module load and the asar.** `electron-squirrel-startup` (dead for an NSIS

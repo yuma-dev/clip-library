@@ -6,23 +6,38 @@
 // unbounded work.
 
 import { useEffect, useState } from "react";
-import { isStreamingHeld, onBootRelease } from "../boot/bootHold";
+import { isStreamingHeld, onStreamingRelease, isRevealed } from "../boot/bootHold";
 
 // Cards mounted per animation frame across ALL streaming lists. Each list
 // used to take its full perFrame on its own, so when a filter cleared and
 // every group streamed back at once, a single frame mounted ~2,000 cards
 // (a 315 ms frame). The budget is shared per frame timestamp: the first
 // lists to run in a frame get their share, the rest wait a frame.
-const FRAME_BUDGET = 64;
+// The budget adapts to what the machine keeps up with: a frame that arrived
+// late (the previous chunk cost more than a frame) halves it, quick frames
+// grow it back. 64 cards took 80 to 100 ms a frame in the launch traces,
+// which is a visible stall once anything on screen is moving.
+const MAX_BUDGET = 64;
+const MIN_BUDGET = 8;
+let frameBudget = 24;
 let budgetFrame = -1;
 let budgetLeft = 0;
+let lastFrameTs = -1;
 function takeBudget(frameTs: number, wanted: number): number {
   // Callbacks of one frame share a timestamp; timer-driven ones (occluded
   // window) do not, so quantize to ~8 ms slots for the budget to hold there.
   const slot = Math.floor(frameTs / 8);
   if (slot !== budgetFrame) {
+    // Only once the window is on screen: hidden-window frames are sparse
+    // and would read as slow ones, throttling the fill of the first viewport.
+    if (lastFrameTs >= 0 && isRevealed()) {
+      const delta = frameTs - lastFrameTs;
+      if (delta > 24) frameBudget = Math.max(MIN_BUDGET, Math.floor(frameBudget / 2));
+      else if (delta < 12) frameBudget = Math.min(MAX_BUDGET, frameBudget + 8);
+    }
+    lastFrameTs = frameTs;
     budgetFrame = slot;
-    budgetLeft = FRAME_BUDGET;
+    budgetLeft = frameBudget;
   }
   const granted = Math.min(wanted, budgetLeft);
   budgetLeft -= granted;
@@ -89,7 +104,7 @@ export function useStreamedSlice<T>(
       // the cards this would mount are below the fold, and the main thread
       // must be quiet for the reveal animation to keep its frames.
       if (isStreamingHeld()) {
-        offRelease = onBootRelease(schedule);
+        offRelease = onStreamingRelease(schedule);
         return;
       }
       raf = requestAnimationFrame(advance);

@@ -48,9 +48,43 @@ export function holdCommits(): void {
   commitsHeld = true;
 }
 
+const streamWaiters: Array<() => void> = [];
+
+// Set once main has revealed the window (with or without the intro). Before
+// that, frames in the hidden window are sparse and throughput is all that
+// matters, so pacing decisions wait for it.
+let revealed = false;
+export const markRevealed = (): void => {
+  revealed = true;
+};
+export const isRevealed = (): boolean => revealed;
+
+/** Lift only the streaming hold (the intro's visuals have settled; its tail
+ *  may still play). Whole-grid commits keep waiting for releaseBoot. */
+export function releaseStreaming(): void {
+  if (!streamingHeld) return;
+  streamingHeld = false;
+  const list = streamWaiters.splice(0, streamWaiters.length);
+  for (const cb of list) cb();
+}
+
+/** Run `cb` once streaming may resume (at once if it is not held). */
+export function onStreamingRelease(cb: () => void): () => void {
+  if (!streamingHeld) {
+    cb();
+    return () => {};
+  }
+  streamWaiters.push(cb);
+  return () => {
+    const i = streamWaiters.indexOf(cb);
+    if (i >= 0) streamWaiters.splice(i, 1);
+  };
+}
+
 /** Lift every hold and wake whoever waited. */
 export function releaseBoot(): void {
   const wasHeld = streamingHeld || commitsHeld;
+  releaseStreaming();
   streamingHeld = false;
   commitsHeld = false;
   window.clearTimeout(capTimer);

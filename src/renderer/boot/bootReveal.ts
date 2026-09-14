@@ -25,7 +25,7 @@
 import { bootMark } from "../perf/bootMarks";
 import type { BootRevealPayload } from "../../types/clips";
 import titleUrl from "../../../assets/title.png";
-import { holdStreaming, holdCommits, releaseBoot, onBootRelease } from "./bootHold";
+import { holdStreaming, holdCommits, releaseBoot, releaseStreaming, onBootRelease, markRevealed } from "./bootHold";
 import { preloadBootSound, startBootSound, cutBootSound, disposeBootSound } from "./bootSound";
 import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
 
@@ -40,6 +40,9 @@ const SETTLE_MS = 1300;
 const OVERLAY_CAP_MS = 5000;
 const MAX_CARDS = 64;
 const MOTES = 30;
+// The motes live exactly as long as the chimes: the sound starts at +0.6 s
+// and runs 3.8 s, so every mote, whatever its delay, fades out at +4.4 s.
+const MOTES_END_MS = 4400;
 // Parallax: rail first, then headers, then rows from the top down.
 const RAIL_MS = 60;
 const HEAD_MS = 120;
@@ -161,7 +164,8 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
     const dx = (rnd() - 0.5) * 80;
     const dy = -40 - rnd() * 90;
     const size = 2 + Math.round(rnd() * 2);
-    m.style.cssText = `left:-10px;top:-10px;width:${size}px;height:${size}px;--boot-dx:${dx.toFixed(0)}px;--boot-dy:${dy.toFixed(0)}px;--boot-d:${100 + j * 24}ms;`;
+    const delay = 100 + j * 24;
+    m.style.cssText = `left:-10px;top:-10px;width:${size}px;height:${size}px;--boot-dx:${dx.toFixed(0)}px;--boot-dy:${dy.toFixed(0)}px;--boot-d:${delay}ms;--boot-dur:${MOTES_END_MS - delay}ms;`;
     el.appendChild(m);
   }
 
@@ -359,6 +363,7 @@ function measureFrames(): void {
 async function onReveal(payload: BootRevealPayload): Promise<void> {
   if (handled) return;
   handled = true;
+  markRevealed();
   const animate = Boolean(payload?.animate) && !reducedMotion() && !!(body ?? document.querySelector(".app-body"));
   if (!animate) {
     // Take the pre-mounted overlay down and let that frame commit before the
@@ -458,8 +463,11 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   window.setTimeout(() => {
     if (over) return;
     settledNormally = true;
-    // Release first: the re-hover in clearGrid needs the hold to be off.
-    releaseBoot();
+    // Streaming resumes (adaptively paced) once the visuals settle; the
+    // whole-grid commits wait for the overlay, so nothing heavy lands while
+    // the tail still plays. The re-hover in clearGrid only needs the
+    // streaming hold off.
+    releaseStreaming();
     clearGrid();
   }, SETTLE_MS);
   // The overlay comes down once its last animation (the latest mote) has
@@ -472,6 +480,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     over = true;
     clearAll();
     disposeBootSound();
+    releaseBoot();
   });
 }
 
