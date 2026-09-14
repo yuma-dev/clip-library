@@ -27,6 +27,10 @@ import type { BootRevealPayload } from "../../types/clips";
 import titleUrl from "../../../assets/title.png";
 import { holdStreaming, holdCommits, releaseBoot, onBootRelease } from "./bootHold";
 import { preloadBootSound, startBootSound, cutBootSound, disposeBootSound } from "./bootSound";
+import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
+
+// Read once per launch (dev console changes apply at the next one).
+let prefs: BootPrefs = getBootPrefs();
 
 const MEASURE_MS = 1200;
 // The body, cards and glow are back to normal here; the hold lifts.
@@ -143,6 +147,7 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   const flashSize = logoSize * 3.2;
   const flash = document.createElement("div");
   flash.className = "boot-flash";
+  if (!prefs.afterglow) flash.style.display = "none";
   flash.style.cssText = `left:${origin.x - flashSize / 2}px;top:${origin.y - flashSize / 2}px;width:${flashSize}px;height:${flashSize}px;`;
   el.appendChild(flash);
 
@@ -150,7 +155,7 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   // lands. Created here (their layers must exist before the reveal), placed
   // over the cards by placeMotes.
   const rnd = seeded(0x5eed);
-  for (let j = 0; j < MOTES; j++) {
+  for (let j = 0; j < (prefs.motes ? MOTES : 0); j++) {
     const m = document.createElement("div");
     m.className = "boot-mote";
     const dx = (rnd() - 0.5) * 80;
@@ -283,7 +288,7 @@ export async function prepareBootReveal(): Promise<void> {
   cards = visibleCards();
   heads = visibleHeaders();
   for (const el of [body, rail, ...heads, ...cards]) el?.classList.add("boot-pre");
-  glowCanvas = buildGlowCanvas(cards);
+  glowCanvas = prefs.glow ? buildGlowCanvas(cards) : null;
   try {
     preparedLogo = (await window.clips?.getBootLogoRect?.()) ?? null;
   } catch {
@@ -416,7 +421,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   }
   shell?.classList.add("boot-clip");
   body?.classList.add("boot-dolly");
-  for (const el of [rail, ...heads, ...cards]) el?.classList.add("boot-par");
+  if (prefs.parallax) for (const el of [rail, ...heads, ...cards]) el?.classList.add("boot-par");
   glowCanvas?.classList.add("run");
   for (const el of layer.children) el.classList.add("run");
 
@@ -428,7 +433,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   await twoFrames();
   window.clips?.bootRevealArmed();
   for (const a of held) a.play();
-  startBootSound();
+  startBootSound({ woosh: prefs.woosh, landing: prefs.landing, motes: prefs.motesSound });
   measureFrames();
 
   // The hold lifts at settle time, or at once on any input: then the intro
@@ -474,6 +479,8 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
 export function installBootReveal(): () => void {
   if (installed || !window.clips?.onBootReveal) return () => {};
   installed = true;
+  installBootPrefsConsole();
+  prefs = getBootPrefs();
   const off = window.clips.onBootReveal((payload) => {
     void onReveal(payload);
   });

@@ -197,6 +197,12 @@ plays at +0.6 s. Input that cuts the intro short fades the woosh and motes
 out in 60 ms and plays the landing at once. Muted when hover previews are
 muted; nothing plays on the plain reveal.
 
+Every part has a switch, read at launch from localStorage and set from the
+dev console (`src/renderer/boot/bootPrefs.ts`): `__bootIntro.get()`,
+`__bootIntro.set({ landing: true, motes: false })`, `__bootIntro.reset()`.
+Keys: woosh, landing (off by default), motesSound, afterglow, glow,
+parallax, motes.
+
 Result on the reference machine (165 Hz): presented-frame gaps median one
 vsync, p95 12 ms, at most one or two frames over 25 ms, all inside the first
 150 ms while the launcher still fades over a solid cover. The bench prints
