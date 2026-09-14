@@ -71,16 +71,18 @@ function play(name: Name, when: number): void {
 }
 
 /** Called the moment the reveal arms (the window turns opaque a frame later). */
-export function startBootSound(): void {
+export function startBootSound(layers: Record<Name, boolean> = { woosh: true, landing: true, motes: true }): void {
   if (!enabled || started || !ctx) return;
   started = true;
+  const wanted = (Object.keys(AT) as Name[]).filter((name) => layers[name]);
+  if (!wanted.length) return;
   const go = () => {
     if (!ctx || !enabled) return;
     const resume = ctx.state === "suspended" ? ctx.resume() : Promise.resolve();
     void resume.then(() => {
       if (!ctx) return;
       const t0 = ctx.currentTime + 0.01;
-      for (const name of Object.keys(AT) as Name[]) play(name, t0 + AT[name]);
+      for (const name of wanted) play(name, t0 + AT[name]);
     });
   };
   if (loading) void loading.then(go);
