@@ -2,17 +2,17 @@
 // next launch. Driven from the dev console (installed by bootReveal.ts):
 //
 //   __bootIntro.get()                         current switches
-//   __bootIntro.set({ landing: true })        change one or more
+//   __bootIntro.set({ chimes: false })        change one or more
 //   __bootIntro.reset()                       back to the defaults
 //
-// Sound layers: woosh, landing, motesSound. Visuals: afterglow, glow
+// Sound layers: woosh, chimes, motesSound. Visuals: afterglow, glow
 // (the grid lighting up), parallax, motes (the drifting points of light).
 
 const KEY = "clip-library:boot-intro-v1";
 
 export interface BootPrefs {
   woosh: boolean;
-  landing: boolean;
+  chimes: boolean;
   motesSound: boolean;
   afterglow: boolean;
   glow: boolean;
@@ -22,7 +22,7 @@ export interface BootPrefs {
 
 export const BOOT_DEFAULTS: BootPrefs = {
   woosh: true,
-  landing: false,
+  chimes: true,
   motesSound: true,
   afterglow: true,
   glow: true,
