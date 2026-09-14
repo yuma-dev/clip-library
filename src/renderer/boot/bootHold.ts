@@ -26,7 +26,25 @@ const waiters: Array<() => void> = [];
 
 const INPUT_EVENTS = ["wheel", "keydown", "pointerdown", "touchstart"] as const;
 
-function onInput(): void {
+// A scroll wants the library to respond, not the intro to stop: it lifts the
+// streaming hold and tells the reveal (which restores hover) while the
+// visuals and sound play on. A press or key ends the intro so the action
+// lands on a library at rest.
+const scrollWaiters: Array<() => void> = [];
+export function onScrollInput(cb: () => void): () => void {
+  scrollWaiters.push(cb);
+  return () => {
+    const i = scrollWaiters.indexOf(cb);
+    if (i >= 0) scrollWaiters.splice(i, 1);
+  };
+}
+
+function onInput(e: Event): void {
+  if (e.type === "wheel") {
+    releaseStreaming();
+    for (const cb of scrollWaiters.splice(0, scrollWaiters.length)) cb();
+    return;
+  }
   releaseBoot();
 }
 

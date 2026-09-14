@@ -9,9 +9,9 @@
 //            own natural tail.
 //
 // The clips are pre-trimmed and faded (assets/sfx, see benchmark/STARTUP.md)
-// so nothing starts or stops abruptly. If the intro is cut short by input,
-// every layer fades out in 60 ms so the sound ends where the picture does.
-// Nothing plays on the plain reveal.
+// so nothing starts or stops abruptly. Input never cuts the sound: a click
+// or key ends the visuals early, the sound plays out. Nothing plays on the
+// plain reveal.
 import wooshUrl from "../assets/sfx/woosh.ogg";
 import chimesUrl from "../assets/sfx/chimes.ogg";
 import motesUrl from "../assets/sfx/motes.ogg";
@@ -19,7 +19,6 @@ import motesUrl from "../assets/sfx/motes.ogg";
 const MASTER = 0.35;
 const GAIN = { woosh: 0.9, chimes: 1.0, motes: 0.5 };
 const AT = { woosh: 0, chimes: 0.6, motes: 0.6 };
-const CUT_FADE_S = 0.06;
 
 export type SoundLayer = keyof typeof GAIN;
 type Layer = { source: AudioBufferSourceNode; gain: GainNode; startAt: number };
@@ -99,24 +98,6 @@ export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: tr
   };
   if (loading) void loading.then(go);
   else go();
-}
-
-/** The intro was cut short by input: fade everything out quickly. */
-export function cutBootSound(): void {
-  if (!ctx || !started) return;
-  const now = ctx.currentTime;
-  for (const name of Object.keys(playing) as SoundLayer[]) {
-    const layer = playing[name];
-    if (!layer) continue;
-    if (layer.startAt > now) {
-      layer.source.stop(now);
-      delete playing[name];
-      continue;
-    }
-    layer.gain.gain.setValueAtTime(layer.gain.gain.value, now);
-    layer.gain.gain.linearRampToValueAtTime(0, now + CUT_FADE_S);
-    layer.source.stop(now + CUT_FADE_S + 0.01);
-  }
 }
 
 /** Free the context once the intro is over and every layer has ended. */

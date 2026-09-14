@@ -25,8 +25,8 @@
 import { bootMark } from "../perf/bootMarks";
 import type { BootRevealPayload } from "../../types/clips";
 import titleUrl from "../../../assets/title.png";
-import { holdStreaming, holdCommits, releaseBoot, releaseStreaming, onBootRelease, markRevealed } from "./bootHold";
-import { preloadBootSound, startBootSound, cutBootSound, disposeBootSound } from "./bootSound";
+import { holdStreaming, holdCommits, releaseBoot, releaseStreaming, onBootRelease, onScrollInput, markRevealed } from "./bootHold";
+import { preloadBootSound, startBootSound, disposeBootSound } from "./bootSound";
 import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
 import { trackPointer, rehoverUnderPointer } from "../library/rehover";
 
@@ -495,10 +495,17 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
       }
     }
     clearAll();
-    cutBootSound();
-    window.setTimeout(disposeBootSound, 1500);
+    // The sound plays on: it is the one part of the intro that does not
+    // get in the way of what the user is doing.
+    disposeBootSound();
   };
   onBootRelease(cutShort);
+  // A scroll only needs the library to respond: hover back, holds lifted,
+  // the visuals and sound continue.
+  onScrollInput(() => {
+    body?.classList.remove("boot-nohover");
+    rehoverUnderPointer();
+  });
   window.setTimeout(() => {
     if (over) return;
     settledNormally = true;
