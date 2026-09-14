@@ -5,12 +5,14 @@
 //   __bootIntro.set({ chimes: false })        change one or more
 //   __bootIntro.reset()                       back to the defaults
 //
-// Sound layers: woosh, chimes, motesSound. Visuals: afterglow, glow
+// Sound: sound (master), woosh, chimes, motesSound. Visuals: afterglow, glow
 // (the grid lighting up), parallax, motes (the drifting points of light).
 
 const KEY = "clip-library:boot-intro-v1";
 
 export interface BootPrefs {
+  /** Master switch for the startup sound (the layers below still apply). */
+  sound: boolean;
   woosh: boolean;
   chimes: boolean;
   motesSound: boolean;
@@ -21,6 +23,7 @@ export interface BootPrefs {
 }
 
 export const BOOT_DEFAULTS: BootPrefs = {
+  sound: true,
   woosh: true,
   chimes: true,
   motesSound: true,
