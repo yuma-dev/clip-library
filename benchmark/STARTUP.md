@@ -242,9 +242,10 @@ keeps 0.9 to 3.0 s of the original so its swell peaks 0.42 s after it
 starts (it starts as the reveal arms, so the peak sits on the fastest part
 of the fly-through); the chimes and the motes clip play together at
 +0.6 s under the drifting motes, each with its own natural tail (the motes
-clip has an 80 ms fade-in, the chimes only edge fades). Input that cuts the
-intro short fades every layer out in 60 ms. Muted when hover previews are
-muted; nothing plays on the plain reveal.
+clip has an 80 ms fade-in, the chimes only edge fades). Input never cuts the
+sound: scrolling lets the whole intro play on (it only lifts the holds and
+restores hover), a click or key ends the visuals early and the sound plays
+out. Muted when hover previews are muted; nothing plays on the plain reveal.
 
 Every part has a switch, read at launch from localStorage and set from the
 dev console (`src/renderer/boot/bootPrefs.ts`): `__bootIntro.get()`,
