@@ -181,7 +181,7 @@ async function runOnce(opts, index, exe) {
     if (trace && DONE_MARKS.every((m) => trace.marks[m] !== undefined) && (!opts.trace || fs.existsSync(chromiumTrace)) && (!opts.cpu || fs.existsSync(cpuProfile))) {
       // The reveal animation and its frame statistics land up to ~1.5 s after
       // the window is opaque; wait for them (bounded) so they reach the trace.
-      const animDeadline = Date.now() + 2500;
+      const animDeadline = Date.now() + 7500;
       while (Date.now() < animDeadline) {
         trace = readTrace(traceFile) || trace;
         const notes = trace?.notes || {};
@@ -310,6 +310,7 @@ async function main() {
     const fr = (n) => (n ? `${n.frames} frames, p95 ${n.p95_ms} ms, max ${n.max_ms} ms, ${n.over_25ms} over 25 ms` : 'not animated');
     if (result.notes.reveal_raf || result.notes.reveal_compositor) {
       console.log(`        reveal renderer: ${fr(result.notes.reveal_raf)}  |  compositor: ${fr(result.notes.reveal_compositor)}`);
+      if (result.notes.reveal_raf_tail) console.log(`        after the intro (1.2 to 6 s): ${fr(result.notes.reveal_raf_tail)}`);
     }
     if (appCopy) rmrf(appCopy);
   }

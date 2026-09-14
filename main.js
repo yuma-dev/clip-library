@@ -512,6 +512,7 @@ ipcMain.on('boot-reveal-frames', (_event, stats) => {
   if (!animated) return;
   logger.info(`Reveal animation: ${frames} frames, p95 ${p95} ms, max ${max} ms, ${over25} over 25 ms`);
   bootTrace.note('reveal_raf', { frames, p95_ms: p95, max_ms: max, over_25ms: over25 });
+  if (stats.tail) bootTrace.note('reveal_raf_tail', { frames: stats.tail.frames, p95_ms: stats.tail.p95, max_ms: stats.tail.max, over_25ms: stats.tail.over25 });
   telemetry.metric('startup.reveal_frames_over_25ms', Number(over25) || 0, { unit: 'count' });
 });
 
