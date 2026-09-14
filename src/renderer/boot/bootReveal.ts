@@ -361,38 +361,23 @@ function clearAll(): void {
   overlay = null;
 }
 
-// Wind: scrolling pushes the motes' layer along (up when the content goes
-// up), with momentum that decays once the scroll stops, so the motes are
-// moved by the scroll without tracking it one to one. One transform write
-// per frame on a promoted layer, and only while there is momentum.
-// Total drift per scroll step is GAIN / (1 - DECAY) of the scroll distance:
-// 0.04 / 0.08 = half of it, so the motes are moved by the scroll, not
-// carried along with the content.
-const WIND_GAIN = 0.04;
-const WIND_MAX = 30;
-const WIND_DECAY = 0.92;
+// The motes sit in a fixed overlay; while the library scrolls they follow
+// the content one to one (their layer is translated by the scroll offset,
+// one transform write per scroll event on a promoted layer).
 let windOff: (() => void) | null = null;
 
 function attachWind(layer: HTMLElement): void {
   const motes = layer.querySelector<HTMLElement>(".boot-motes");
   const scroller = document.querySelector<HTMLElement>(".clip-scroll");
   if (!motes || !scroller) return;
-  let last = scroller.scrollTop;
-  let velocity = 0;
-  let offset = 0;
+  const start = scroller.scrollTop;
   let raf = 0;
-  const tick = () => {
+  const apply = () => {
     raf = 0;
-    offset += velocity;
-    velocity *= WIND_DECAY;
-    motes.style.transform = `translateY(${offset.toFixed(1)}px)`;
-    if (Math.abs(velocity) > 0.05) raf = requestAnimationFrame(tick);
+    motes.style.transform = `translateY(${(start - scroller.scrollTop).toFixed(1)}px)`;
   };
   const onScroll = () => {
-    const delta = scroller.scrollTop - last;
-    last = scroller.scrollTop;
-    velocity = Math.max(-WIND_MAX, Math.min(WIND_MAX, velocity - delta * WIND_GAIN));
-    if (!raf) raf = requestAnimationFrame(tick);
+    if (!raf) raf = requestAnimationFrame(apply);
   };
   scroller.addEventListener("scroll", onScroll, { passive: true });
   windOff = () => {
