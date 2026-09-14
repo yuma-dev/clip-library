@@ -10,6 +10,7 @@ import type { UseClips } from "../../library/useClips";
 import type { UseLibraryFilter } from "../../library/useLibraryFilter";
 import { getBootPrefs, setBootPrefs, type BootPrefs, type WooshVariant } from "../../boot/bootPrefs";
 import Select from "../../ui/Select";
+import Slider from "../../ui/Slider";
 
 const WOOSH_OPTIONS: { value: WooshVariant; label: string }[] = [
   { value: "classic", label: "Classic" },
@@ -105,6 +106,42 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         </SetRow>
         <SetRow title="Wind" description="Grass and birds under the tail, fading out last">
           <Toggle checked={boot.wind} onChange={(v) => setBoot({ wind: v })} disabled={!boot.sound} aria-label="Wind" />
+        </SetRow>
+        <SetRow title="Wind level" description="How loud the wind sits under the other layers">
+          <Slider
+            value={boot.windVolume}
+            min={0}
+            max={1}
+            step={0.01}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onCommit={(v) => setBoot({ windVolume: v })}
+            disabled={!boot.sound || !boot.wind}
+            aria-label="Wind level"
+          />
+        </SetRow>
+        <SetRow title="Wind fade-out starts" description="Seconds after the wind begins (the chimes end at about 3.8)">
+          <Slider
+            value={boot.windFadeAt}
+            min={0}
+            max={7}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)} s`}
+            onCommit={(v) => setBoot({ windFadeAt: v })}
+            disabled={!boot.sound || !boot.wind}
+            aria-label="Wind fade-out start"
+          />
+        </SetRow>
+        <SetRow title="Wind fade-out length" description="How long the fade to silence takes">
+          <Slider
+            value={boot.windFadeFor}
+            min={0.1}
+            max={5}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)} s`}
+            onCommit={(v) => setBoot({ windFadeFor: v })}
+            disabled={!boot.sound || !boot.wind}
+            aria-label="Wind fade-out length"
+          />
         </SetRow>
       </SetGroup>
 

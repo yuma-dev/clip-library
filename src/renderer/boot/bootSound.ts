@@ -80,13 +80,23 @@ function play(name: SoundLayer, when: number): void {
   const source = ctx.createBufferSource();
   source.buffer = buffer;
   const gain = ctx.createGain();
-  gain.gain.value = GAIN[name] * MASTER;
+  const level = GAIN[name] * MASTER * (name === "wind" ? windShape.volume : 1);
+  gain.gain.value = level;
   source.connect(gain).connect(ctx.destination);
+  // The wind fades out at a user-set point over a user-set time (settings);
+  // the clip itself carries no fade-out.
+  if (name === "wind") {
+    const fadeStart = when + Math.min(windShape.fadeAt, buffer.duration);
+    const fadeEnd = Math.min(fadeStart + windShape.fadeFor, when + buffer.duration);
+    gain.gain.setValueAtTime(level, fadeStart);
+    gain.gain.linearRampToValueAtTime(0, fadeEnd);
+    source.stop(fadeEnd + 0.02);
+  }
   // The chimes carry the tail of the intro: ease them out over their last
   // 40 percent so sound and motes end together, slowly.
   if (name === "chimes") {
     const end = when + buffer.duration;
-    gain.gain.setValueAtTime(GAIN[name] * MASTER, end - buffer.duration * 0.4);
+    gain.gain.setValueAtTime(level, end - buffer.duration * 0.4);
     gain.gain.linearRampToValueAtTime(0, end);
   }
   source.start(when);
@@ -98,9 +108,17 @@ function play(name: SoundLayer, when: number): void {
 }
 
 /** Called the moment the reveal arms (the window turns opaque a frame later). */
-export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }): void {
+export interface WindShape {
+  volume: number;
+  fadeAt: number;
+  fadeFor: number;
+}
+let windShape: WindShape = { volume: 0.25, fadeAt: 3.2, fadeFor: 1.2 };
+
+export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }, wind?: WindShape): void {
   if (!enabled || started || !ctx) return;
   started = true;
+  if (wind) windShape = wind;
   const wanted = (Object.keys(AT) as SoundLayer[]).filter((name) => layers[name]);
   if (!wanted.length) return;
   const go = () => {
