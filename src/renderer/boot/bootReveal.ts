@@ -33,6 +33,7 @@ import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPre
 let prefs: BootPrefs = getBootPrefs();
 
 const MEASURE_MS = 1200;
+const MEASURE_TAIL_MS = 6000;
 // The body, cards and glow are back to normal here; the hold lifts.
 const SETTLE_MS = 1300;
 // The motes drift on a little longer, on their own overlay layers; the
@@ -336,25 +337,26 @@ function clearAll(): void {
 // not otherwise need; in normal launches the main thread stays idle instead.
 function measureFrames(): void {
   if (!window.__bootTrace) return;
+  // Two windows: the animation itself (first 1.2 s, guarded by the bench)
+  // and the tail after it (to 6 s), where the held work resumes and must
+  // not be felt either.
   const deltas: number[] = [];
+  const tail: number[] = [];
   let last = performance.now();
   const start = last;
+  const stats = (list: number[]) => {
+    const sorted = [...list].sort((a, b) => a - b);
+    const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)] : 0;
+    return { frames: list.length, p95: Math.round(p95 * 10) / 10, max: Math.round(Math.max(0, ...list)), over25: list.filter((d) => d > 25).length };
+  };
   const tick = (t: number) => {
-    deltas.push(t - last);
+    (t - start < MEASURE_MS ? deltas : tail).push(t - last);
     last = t;
-    if (t - start < MEASURE_MS) {
+    if (t - start < MEASURE_TAIL_MS) {
       requestAnimationFrame(tick);
       return;
     }
-    const sorted = [...deltas].sort((a, b) => a - b);
-    const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)] : 0;
-    window.clips?.bootRevealFrames({
-      animated: true,
-      frames: deltas.length,
-      p95: Math.round(p95 * 10) / 10,
-      max: Math.round(Math.max(0, ...deltas)),
-      over25: deltas.filter((d) => d > 25).length,
-    });
+    window.clips?.bootRevealFrames({ animated: true, ...stats(deltas), tail: stats(tail) });
     bootMark("reveal_anim_done");
   };
   requestAnimationFrame(tick);

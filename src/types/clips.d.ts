@@ -464,4 +464,6 @@ export interface BootRevealFrames {
   p95: number;
   max: number;
   over25: number;
+  /** The same statistics for the seconds after the intro (bench only). */
+  tail?: { frames: number; p95: number; max: number; over25: number };
 }

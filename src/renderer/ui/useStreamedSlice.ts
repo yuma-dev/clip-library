@@ -1,59 +1,59 @@
 // Streamed mounting for card grids (extracted from library ClipGroup so the
 // feed/profile grids share it). Mounting a card costs ~2ms (React + layout +
 // paint), so a large list mounted in one commit blocks paint for seconds.
-// Instead: mount a screenful immediately, then stream the rest one chunk per
-// frame — time-to-content is one small commit, and no single frame does
-// unbounded work.
+// Instead: mount a screenful immediately, then stream the rest in idle time,
+// each chunk sized to the idle slack the browser reports and the measured
+// cost of a card, so streaming never takes a frame from anything on screen.
 
-import { useEffect, useState } from "react";
-import { isStreamingHeld, onStreamingRelease, isRevealed } from "../boot/bootHold";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isStreamingHeld, onStreamingRelease } from "../boot/bootHold";
 
-// Cards mounted per animation frame across ALL streaming lists. Each list
-// used to take its full perFrame on its own, so when a filter cleared and
-// every group streamed back at once, a single frame mounted ~2,000 cards
-// (a 315 ms frame). The budget is shared per frame timestamp: the first
-// lists to run in a frame get their share, the rest wait a frame.
-// The budget adapts to what the machine keeps up with: a frame that arrived
-// late (the previous chunk cost more than a frame) halves it, quick frames
-// grow it back. 64 cards took 80 to 100 ms a frame in the launch traces,
-// which is a visible stall once anything on screen is moving.
-const MAX_BUDGET = 64;
-const MIN_BUDGET = 8;
-let frameBudget = 24;
-let budgetFrame = -1;
-let budgetLeft = 0;
-let lastFrameTs = -1;
-function takeBudget(frameTs: number, wanted: number): number {
-  // Callbacks of one frame share a timestamp; timer-driven ones (occluded
-  // window) do not, so quantize to ~8 ms slots for the budget to hold there.
-  const slot = Math.floor(frameTs / 8);
-  if (slot !== budgetFrame) {
-    // Only once the window is on screen: hidden-window frames are sparse
-    // and would read as slow ones, throttling the fill of the first viewport.
-    if (lastFrameTs >= 0 && isRevealed()) {
-      const delta = frameTs - lastFrameTs;
-      if (delta > 24) frameBudget = Math.max(MIN_BUDGET, Math.floor(frameBudget / 2));
-      else if (delta < 12) frameBudget = Math.min(MAX_BUDGET, frameBudget + 8);
-    }
-    lastFrameTs = frameTs;
-    budgetFrame = slot;
-    budgetLeft = frameBudget;
-  }
-  const granted = Math.min(wanted, budgetLeft);
-  budgetLeft -= granted;
-  return granted;
+const MAX_CHUNK = 64;
+// Idle callbacks report the slack left in the current frame (up to ~50 ms
+// when nothing else is going on). Keep a margin for layout and paint, which
+// happen after the commit and are not counted in the measurement.
+const IDLE_MARGIN_MS = 3;
+// Measured render-plus-commit time per card, smoothed across all lists and
+// builds (the React dev build is several times slower than production).
+let perCardMs = 1.5;
+let measured = false;
+function noteCost(cards: number, ms: number): void {
+  if (cards <= 0 || ms <= 0) return;
+  const sample = ms / cards;
+  perCardMs = measured ? perCardMs * 0.7 + sample * 0.3 : sample;
+  measured = true;
 }
+function chunkFor(slackMs: number, wanted: number): number {
+  const fit = Math.floor((slackMs - IDLE_MARGIN_MS) / perCardMs);
+  return Math.max(1, Math.min(wanted, MAX_CHUNK, fit));
+}
+
+type IdleDeadline = { timeRemaining(): number; didTimeout: boolean };
+type IdleHandle = number;
+const idle = {
+  request(cb: (d: IdleDeadline) => void, timeout: number): IdleHandle {
+    const w = window as unknown as { requestIdleCallback?: (cb: (d: IdleDeadline) => void, o?: { timeout: number }) => number };
+    if (typeof w.requestIdleCallback === "function") return w.requestIdleCallback(cb, { timeout });
+    // No idle API: a timer with a fixed, modest slack.
+    return window.setTimeout(() => cb({ timeRemaining: () => 8, didTimeout: false }), 32) as unknown as number;
+  },
+  cancel(handle: IdleHandle): void {
+    const w = window as unknown as { cancelIdleCallback?: (h: number) => void };
+    if (typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(handle);
+    window.clearTimeout(handle);
+  },
+};
 
 export interface StreamedSliceOptions {
   /** Mounted synchronously on first commit (default 24 — a screenful of cards). */
   initial?: number;
-  /** Added per animation frame after that (default 80). */
+  /** Upper bound per idle chunk after that (default 80, capped at 64). */
   perFrame?: number;
 }
 
 /**
  * Returns the slice of `items` that should be mounted right now, or null while
- * `expanded` is false. Streams up to the full list across frames.
+ * `expanded` is false. Streams up to the full list across idle periods.
  *
  * Render-phase derived-state adjustments (callers should keep `items` identity
  * stable when membership didn't change):
@@ -80,35 +80,41 @@ export function useStreamedSlice<T>(
     }
   }
 
+  // Cost measurement: the chunk that was just requested and when, read back
+  // once its render has committed (layout effects run after DOM mutation).
+  const pending = useRef<{ cards: number; at: number } | null>(null);
+  useLayoutEffect(() => {
+    const p = pending.current;
+    if (!p) return;
+    pending.current = null;
+    noteCost(p.cards, performance.now() - p.at);
+  });
+
   useEffect(() => {
     if (!expanded || visible >= items.length) return;
     let advanced = false;
-    let raf = 0;
-    let timer = 0;
-    const advance = (frameTs: number) => {
+    let handle: IdleHandle = 0;
+    const advance = (deadline: IdleDeadline) => {
       if (advanced) return;
-      const granted = takeBudget(frameTs, perFrame);
-      if (granted <= 0) {
-        // Budget spent by other lists this frame: try again next frame.
-        raf = requestAnimationFrame(advance);
-        return;
-      }
+      // A timed-out callback has no slack to report; take a small chunk.
+      const slack = deadline.didTimeout ? IDLE_MARGIN_MS + perCardMs * 4 : deadline.timeRemaining();
+      const granted = chunkFor(slack, perFrame);
       advanced = true;
+      pending.current = { cards: granted, at: performance.now() };
       setVisible((v) => Math.min(v + granted, items.length));
     };
-    // rAF paces streaming to the display; the timeout fallback covers an
-    // occluded window, where Chromium suspends rAF.
+    // Idle time paces streaming to what the frame has left; the timeout
+    // keeps it moving in a busy or occluded window.
     let offRelease = () => {};
     const schedule = () => {
-      // The boot reveal holds streaming for about a second (src/renderer/boot):
+      // The boot intro holds streaming for about a second (src/renderer/boot):
       // the cards this would mount are below the fold, and the main thread
       // must be quiet for the reveal animation to keep its frames.
       if (isStreamingHeld()) {
         offRelease = onStreamingRelease(schedule);
         return;
       }
-      raf = requestAnimationFrame(advance);
-      timer = window.setTimeout(() => advance(performance.now()), 64);
+      handle = idle.request(advance, 200);
     };
     // A hidden document (the window not shown yet, or minimized) gets no
     // frame the user can see. Mounting cards there only makes the first
@@ -117,17 +123,16 @@ export function useStreamedSlice<T>(
     // up. Wait for visibility instead.
     const onVisibility = () => {
       if (document.hidden) return;
-      document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener("visibilitychange", onVisibility);
       schedule();
     };
-    if (document.hidden) document.addEventListener('visibilitychange', onVisibility);
+    if (document.hidden) document.addEventListener("visibilitychange", onVisibility);
     else schedule();
     return () => {
       advanced = true;
       offRelease();
-      cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisibility);
+      idle.cancel(handle);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [expanded, visible, items.length, perFrame]);
 
