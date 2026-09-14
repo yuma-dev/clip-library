@@ -28,23 +28,48 @@ function windowsMarketingVersion(release) {
   return `${build >= 22000 ? '11' : '10'} ${build}`;
 }
 
+// app.getGPUInfo('complete') runs a DirectX diagnostics pass that blocks the
+// browser process for about two seconds on Windows despite its async
+// signature, and a blocked browser process freezes every window. Measured
+// as a 2.1 s stall right after the boot intro. 'basic' answers from what
+// the GPU process already knows (vendor and device ids); the model and
+// driver come from a hidden PowerShell query that never touches our thread.
 async function collectGpu(app) {
   const out = {};
   try {
-    const info = await app.getGPUInfo('complete');
+    const info = await app.getGPUInfo('basic');
     const device = Array.isArray(info?.gpuDevice) ? info.gpuDevice.find((d) => d.active) || info.gpuDevice[0] : null;
-    if (device) {
-      out.gpu_vendor = GPU_VENDORS[device.vendorId] || 'other';
-      out.gpu_driver = device.driverVersion || undefined;
-    }
-    const aux = info?.auxAttributes;
-    if (aux) {
-      out.gpu_model = aux.glRenderer || aux.gpuDeviceName || undefined;
-    }
+    if (device) out.gpu_vendor = GPU_VENDORS[device.vendorId] || 'other';
   } catch {
     /* GPU info is best effort */
   }
+  if (process.platform === 'win32') {
+    const controller = await queryVideoController();
+    if (controller?.Name) out.gpu_model = String(controller.Name);
+    if (controller?.DriverVersion) out.gpu_driver = String(controller.DriverVersion);
+  }
   return out;
+}
+
+function queryVideoController() {
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile', '-NonInteractive', '-Command',
+        'Get-CimInstance Win32_VideoController | Select-Object -First 1 Name, DriverVersion | ConvertTo-Json -Compress'
+      ],
+      { windowsHide: true, timeout: 10000 },
+      (error, stdout) => {
+        if (error) return resolve(null);
+        try {
+          resolve(JSON.parse(String(stdout).trim()));
+        } catch {
+          resolve(null);
+        }
+      }
+    );
+  });
 }
 
 function collectDisplays(screen) {

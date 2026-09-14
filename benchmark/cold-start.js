@@ -43,6 +43,8 @@ const PHASES = [
   'window_visible', 'renderer_ready', 'get_clips_resolved', 'get_clips_returned',
   'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded',
   'emoji_font_loaded', 'reveal_gate_start', 'reveal_gate_decoded', 'reveal_gate_filled', 'ready_to_show', 'frame_1', 'frame_2', 'shown_frame_1', 'shown_frame_2', 'window_opaque', 'reveal_anim_start', 'reveal_anim_done',
+  'deferred_start', 'deferred_updater_discord_done', 'deferred_ffmpeg_started', 'deferred_machine_clipdip_started', 'deferred_pins_done',
+  'tail_gap1_from', 'tail_gap1_to', 'tail_gap2_from', 'tail_gap2_to', 'visibility_hidden_1', 'visibility_visible_2', 'visibility_hidden_3', 'visibility_visible_4',
 ];
 // The run is over once all of these exist (or the timeout hits).
 const DONE_MARKS = ['window_visible', 'grid_first_thumb', 'fresh_list_committed', 'thumb_paths_applied', 'tags_loaded'];

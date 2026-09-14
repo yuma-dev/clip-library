@@ -284,12 +284,15 @@ function scheduleDeferredServices() {
     runDeferredServices().catch((error) => {
       logger.warn(`Deferred startup services failed: ${error.message}`);
     });
-  }, 5000);
+  }, Number(process.env.CLIPLIB_DEFERRED_MS) || 5000);
 }
 
 async function runDeferredServices() {
+  bootTrace.mark('deferred_start');
+  // Bench bisecting: CLIPLIB_SKIP_DEFERRED=updater,discord,ffmpeg,machine,clipdip,pins,warm
+  const skip = new Set(String(process.env.CLIPLIB_SKIP_DEFERRED || '').split(',').filter(Boolean));
   const win = mainWindow;
-  if (win && !win.isDestroyed()) {
+  if (win && !win.isDestroyed() && !skip.has('updater')) {
     updaterModule.init(win);
     // "Updated to vX" toast after a silent update landed.
     try {
@@ -315,20 +318,22 @@ async function runDeferredServices() {
     }
   }
 
-  ffmpegModule.initFFmpeg().catch((err) => {
+  bootTrace.mark('deferred_updater_discord_done');
+  if (!skip.has('ffmpeg')) ffmpegModule.initFFmpeg().catch((err) => {
     logger.error('FFmpeg initialization failed:', err);
   });
+  bootTrace.mark('deferred_ffmpeg_started');
 
   // Machine block for the heartbeat. The collector needs the clip folder
   // (volume class + free space, never the path itself) and is a no-op until
   // telemetry.init() has run, which it has by now.
-  void telemetry.collectMachine({ app, screen, clipLocation: settings.clipLocation });
+  if (!skip.has('machine')) void telemetry.collectMachine({ app, screen, clipLocation: settings.clipLocation });
 
   // Bring the integrated clipdip up. Opt-out: the first launch where the
   // user never chose (no clipdip.enabled key) auto-enables it — supported
   // hardware only; a failed start records enabled=false so it never loops.
   // Later launches just start it if it's enabled but not running.
-  clipdipModule
+  if (!skip.has('clipdip')) clipdipModule
     .autoEnableIfUnconfigured(async (value) => {
       settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
       await saveSettings(settings);
@@ -342,13 +347,15 @@ async function runDeferredServices() {
   // (their .lnk targets the old Clips.exe path). Retarget any pin whose
   // Clips.exe target no longer exists to the running exe. Idempotent; cheap
   // no-op when there's nothing to repair.
-  repairTaskbarPins().catch((error) => {
+  bootTrace.mark('deferred_machine_clipdip_started');
+  if (!skip.has('pins')) repairTaskbarPins().catch((error) => {
     logger.warn(`Taskbar pin repair failed: ${error.message}`);
   });
+  bootTrace.mark('deferred_pins_done');
 
   // Newest clips are the likeliest first opens; warm them once the other
   // deferred work has had its moment.
-  setTimeout(() => clipWarmer.warmMany(lastClipNames, 12), 3000);
+  if (!skip.has('warm')) setTimeout(() => clipWarmer.warmMany(lastClipNames, 12), 3000);
 }
 
 // The window is created hidden and shown once, as soon as the renderer has
@@ -773,10 +780,35 @@ async function repairTaskbarPins() {
   let scanned = 0;
   let repaired = 0;
   let failed = 0;
+  // shell.readShortcutLink resolves a link through COM, synchronously on the
+  // main thread, and a blocked main thread freezes every window's rendering:
+  // reading every pin that way was a 2 s freeze after each launch. The
+  // target path is stored in the .lnk bytes (ANSI and UTF-16), so an async
+  // read decides which links can be ours at all; only those go through COM,
+  // and a pin already on the launcher never does.
+  const execLower = process.execPath.toLowerCase();
+  const launcherLower = path.join(path.dirname(process.execPath), 'ClipLib Launcher.exe').toLowerCase();
+  const candidates = [];
   for (const name of entries) {
     if (!name.toLowerCase().endsWith('.lnk')) continue;
     const lnkPath = path.join(pinDir, name);
     scanned += 1;
+    let buf;
+    try {
+      buf = await fs.readFile(lnkPath);
+    } catch {
+      continue;
+    }
+    const ansi = buf.toString('latin1').toLowerCase();
+    const wide = buf.toString('utf16le').toLowerCase();
+    const has = (needle) => ansi.includes(needle) || wide.includes(needle);
+    if (has(launcherLower)) continue;
+    if (!has('clips.exe') && !has(execLower)) continue;
+    candidates.push({ name, lnkPath });
+  }
+  for (const { name, lnkPath } of candidates) {
+    // One COM round trip per candidate, a task each, so frames get through.
+    await new Promise((resolve) => setImmediate(resolve));
     try {
       const details = shell.readShortcutLink(lnkPath);
       const target = details?.target || '';

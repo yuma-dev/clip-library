@@ -72,7 +72,7 @@ function mark(name, at) {
   if (name === 'renderer_ready' && cpuProfileWanted) setTimeout(stopCpuProfile, 3000);
   if (name === 'renderer_ready' && contentTraceWanted) {
     clearTimeout(contentTraceTimer);
-    contentTraceTimer = setTimeout(stopContentTrace, 4000);
+    contentTraceTimer = setTimeout(stopContentTrace, Number(process.env.CLIPLIB_TRACE_STOP_MS) || 4000);
   }
 }
 
@@ -115,7 +115,7 @@ function init({ ipcMain, userData }) {
       included_categories: (process.env.CLIPLIB_TRACE_CATEGORIES || 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,v8.execute,loading,disabled-by-default-v8.compile').split(','),
       recording_mode: 'record-until-full',
     }).then(() => { mark('content_trace_started'); }).catch(() => {});
-    contentTraceTimer = setTimeout(stopContentTrace, 25000);
+    contentTraceTimer = setTimeout(stopContentTrace, Math.max(25000, (Number(process.env.CLIPLIB_TRACE_STOP_MS) || 0) + 5000));
   }
   if (cpuProfileWanted) setTimeout(stopCpuProfile, 25000);
   if (process.env.CLIPLIB_GPU_INFO === '1') {

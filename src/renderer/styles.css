@@ -4773,3 +4773,24 @@ body.ui-blur-exit .app-body {
   70% { opacity: 0.5; }
   100% { opacity: 0; transform: translate(var(--boot-dx, 0px), var(--boot-dy, -60px)) scale(1.15); }
 }
+
+/* Scroll activity (ClipGrid): no hover on the cards until it settles; the
+   card under the cursor is re-entered when it does. */
+.clip-scroll.is-scrolling .clip-item {
+  pointer-events: none;
+}
+
+/* Offscreen groups are skipped by the browser: no layout, paint or
+   compositing work for them, so a compositing update costs what is near the
+   viewport rather than the whole library (scrolling with the cursor on the
+   grid measured at one vsync with this, 12 ms without). --group-h is the
+   height reserved for a group not yet laid out (ClipGroup, from the
+   measured columns and row height); once rendered, auto keeps the real one.
+   The padding, cancelled by the margin, keeps the hover shadow (30 px blur,
+   10 px down) inside the containment box so it is not clipped at the edges. */
+.clip-group-content {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto var(--group-h, 1200px);
+  padding: 24px 24px 44px;
+  margin: -20px -20px -32px;
+}
