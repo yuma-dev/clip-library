@@ -286,8 +286,8 @@ export async function prepareBootReveal(): Promise<void> {
   trackPointer();
   // Sound layers decode now; muted when hover previews are muted.
   void Promise.resolve(window.clips?.getSettings?.())
-    .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0))
-    .catch(() => preloadBootSound(false));
+    .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0, prefs.wooshVariant))
+    .catch(() => preloadBootSound(false, prefs.wooshVariant));
   body = document.querySelector<HTMLElement>(".app-body");
   shell = document.querySelector<HTMLElement>(".app-shell");
   rail = document.querySelector<HTMLElement>(".rail");

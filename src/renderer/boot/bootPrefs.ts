@@ -10,9 +10,14 @@
 
 const KEY = "clip-library:boot-intro-v1";
 
+export type WooshVariant = "classic" | "flight" | "creature" | "pointer" | "gust";
+export const WOOSH_VARIANTS: WooshVariant[] = ["classic", "flight", "creature", "pointer", "gust"];
+
 export interface BootPrefs {
   /** Master switch for the startup sound (the layers below still apply). */
   sound: boolean;
+  /** Which whoosh clip plays as the logo flies through. */
+  wooshVariant: WooshVariant;
   woosh: boolean;
   chimes: boolean;
   motesSound: boolean;
@@ -24,6 +29,7 @@ export interface BootPrefs {
 
 export const BOOT_DEFAULTS: BootPrefs = {
   sound: true,
+  wooshVariant: "classic",
   woosh: true,
   chimes: true,
   motesSound: true,
@@ -40,8 +46,9 @@ export function getBootPrefs(): BootPrefs {
     const parsed = JSON.parse(raw) as Partial<BootPrefs>;
     const out = { ...BOOT_DEFAULTS };
     for (const k of Object.keys(BOOT_DEFAULTS) as (keyof BootPrefs)[]) {
-      if (typeof parsed[k] === "boolean") out[k] = parsed[k] as boolean;
+      if (typeof parsed[k] === "boolean") (out as Record<string, unknown>)[k] = parsed[k];
     }
+    if (WOOSH_VARIANTS.includes(parsed.wooshVariant as WooshVariant)) out.wooshVariant = parsed.wooshVariant as WooshVariant;
     return out;
   } catch {
     return { ...BOOT_DEFAULTS };
@@ -51,8 +58,9 @@ export function getBootPrefs(): BootPrefs {
 export function setBootPrefs(patch: Partial<BootPrefs>): BootPrefs {
   const next = { ...getBootPrefs() };
   for (const k of Object.keys(BOOT_DEFAULTS) as (keyof BootPrefs)[]) {
-    if (typeof patch[k] === "boolean") next[k] = patch[k] as boolean;
+    if (typeof patch[k] === "boolean") (next as Record<string, unknown>)[k] = patch[k];
   }
+  if (patch.wooshVariant && WOOSH_VARIANTS.includes(patch.wooshVariant)) next.wooshVariant = patch.wooshVariant;
   try {
     localStorage.setItem(KEY, JSON.stringify(next));
   } catch {
