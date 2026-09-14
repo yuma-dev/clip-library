@@ -22,6 +22,10 @@ export interface BootPrefs {
   chimes: boolean;
   motesSound: boolean;
   wind: boolean;
+  /** Wind level (0 to 1), when its fade-out starts (seconds after it starts) and how long it takes. */
+  windVolume: number;
+  windFadeAt: number;
+  windFadeFor: number;
   afterglow: boolean;
   glow: boolean;
   parallax: boolean;
@@ -35,11 +39,21 @@ export const BOOT_DEFAULTS: BootPrefs = {
   chimes: true,
   motesSound: true,
   wind: true,
+  windVolume: 0.25,
+  windFadeAt: 3.2,
+  windFadeFor: 1.2,
   afterglow: true,
   glow: true,
   parallax: true,
   motes: true,
 };
+
+const NUMBER_KEYS = ["windVolume", "windFadeAt", "windFadeFor"] as const;
+const NUMBER_RANGE: Record<(typeof NUMBER_KEYS)[number], [number, number]> = { windVolume: [0, 1], windFadeAt: [0, 7], windFadeFor: [0.1, 5] };
+function clampNumber(k: (typeof NUMBER_KEYS)[number], v: number): number {
+  const [lo, hi] = NUMBER_RANGE[k];
+  return Math.min(hi, Math.max(lo, v));
+}
 
 export function getBootPrefs(): BootPrefs {
   try {
@@ -51,6 +65,7 @@ export function getBootPrefs(): BootPrefs {
       if (typeof parsed[k] === "boolean") (out as Record<string, unknown>)[k] = parsed[k];
     }
     if (WOOSH_VARIANTS.includes(parsed.wooshVariant as WooshVariant)) out.wooshVariant = parsed.wooshVariant as WooshVariant;
+    for (const k of NUMBER_KEYS) if (typeof parsed[k] === "number" && Number.isFinite(parsed[k])) out[k] = clampNumber(k, parsed[k] as number);
     return out;
   } catch {
     return { ...BOOT_DEFAULTS };
@@ -63,6 +78,7 @@ export function setBootPrefs(patch: Partial<BootPrefs>): BootPrefs {
     if (typeof patch[k] === "boolean") (next as Record<string, unknown>)[k] = patch[k];
   }
   if (patch.wooshVariant && WOOSH_VARIANTS.includes(patch.wooshVariant)) next.wooshVariant = patch.wooshVariant;
+  for (const k of NUMBER_KEYS) if (typeof patch[k] === "number" && Number.isFinite(patch[k])) next[k] = clampNumber(k, patch[k] as number);
   try {
     localStorage.setItem(KEY, JSON.stringify(next));
   } catch {
