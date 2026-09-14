@@ -365,9 +365,12 @@ function clearAll(): void {
 // up), with momentum that decays once the scroll stops, so the motes are
 // moved by the scroll without tracking it one to one. One transform write
 // per frame on a promoted layer, and only while there is momentum.
-const WIND_GAIN = 0.15;
-const WIND_MAX = 60;
-const WIND_DECAY = 0.9;
+// Total drift per scroll step is GAIN / (1 - DECAY) of the scroll distance:
+// 0.04 / 0.08 = half of it, so the motes are moved by the scroll, not
+// carried along with the content.
+const WIND_GAIN = 0.04;
+const WIND_MAX = 30;
+const WIND_DECAY = 0.92;
 let windOff: (() => void) | null = null;
 
 function attachWind(layer: HTMLElement): void {
