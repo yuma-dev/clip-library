@@ -175,6 +175,16 @@ renderer main-thread tasks and the compositor's PipelineReporter frames):
 - Step easing on the mockup's own gate animation ended at progress
   0.9999999 and never fired; the real hand-over uses frames and timers.
 
+On top of the push: an afterglow bloom around the logo, a grid glow (every
+visible thumbnail drawn blurred into one quarter-resolution canvas behind
+the cards before the reveal, blur baked into the pixels so only its opacity
+animates; cards without a saved thumbnail glow in the accent colour), depth
+parallax (rail, group headers and cards on pre-promoted layers with their
+own delays) and thirty seeded motes drifting up from the cards. The glow
+and the parallax set are redrawn at the reveal because a fresh clip list can
+shift the rows between prepare and reveal (a glow left at an old position
+looked like a ghost card).
+
 Result on the reference machine (165 Hz): presented-frame gaps median one
 vsync, p95 12 ms, at most one or two frames over 25 ms, all inside the first
 150 ms while the launcher still fades over a solid cover. The bench prints
