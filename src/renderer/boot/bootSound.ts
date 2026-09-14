@@ -1,7 +1,7 @@
 // Sound for the boot reveal: three layers mixed live against the intro's
 // real timing (src/renderer/boot/bootReveal.ts).
 //
-//  - woosh   as the logo flies through: trimmed so its swell peaks 0.42 s
+//  - woosh   as the logo flies through (the "gust" take): trimmed so its swell peaks 0.4 s
 //            after it starts; started as the reveal arms, so the peak lands
 //            around the fastest part of the fly-through.
 //  - chimes, motes and wind together at +0.6 s, under the drifting motes,
@@ -11,29 +11,16 @@
 // so nothing starts or stops abruptly. Input never cuts the sound: a click
 // or key ends the visuals early, the sound plays out. Nothing plays on the
 // plain reveal.
-import wooshUrl from "../assets/sfx/woosh.ogg";
-import wooshFlightUrl from "../assets/sfx/woosh-flight.ogg";
-import wooshCreatureUrl from "../assets/sfx/woosh-creature.ogg";
-import wooshPointerUrl from "../assets/sfx/woosh-pointer.ogg";
-import wooshGustUrl from "../assets/sfx/woosh-gust.ogg";
+import wooshUrl from "../assets/sfx/woosh-gust.ogg";
 import chimesUrl from "../assets/sfx/chimes.ogg";
 import motesUrl from "../assets/sfx/motes.ogg";
 import windUrl from "../assets/sfx/wind.ogg";
-import type { WooshVariant } from "./bootPrefs";
-
-// Each variant is trimmed so its swell peaks about 0.4 s after it starts.
-const WOOSH_URLS: Record<WooshVariant, string> = {
-  classic: wooshUrl,
-  flight: wooshFlightUrl,
-  creature: wooshCreatureUrl,
-  pointer: wooshPointerUrl,
-  gust: wooshGustUrl,
-};
-
 const MASTER = 0.35;
-// wind: grass and birds under the whole tail; its own fade ends about
-// 0.6 s after the chimes (the clip runs 4.4 s from +0.6 s).
-const GAIN = { woosh: 0.9, chimes: 1.0, motes: 0.5, wind: 1.0 };
+// wind: grass and birds far under the whole tail, fading from the moment it
+// starts over 4.3 s so it is gone just after the chimes.
+const GAIN = { woosh: 0.9, chimes: 1.0, motes: 0.5, wind: 0.07 };
+const WIND_FADE_AT = 0;
+const WIND_FADE_FOR = 4.3;
 const AT = { woosh: 0, chimes: 0.6, motes: 0.6, wind: 0.6 };
 
 export type SoundLayer = keyof typeof GAIN;
@@ -63,7 +50,7 @@ async function load(name: SoundLayer, url: string): Promise<void> {
 }
 
 /** Decode the layers ahead of the reveal (a few ms of work, off the intro). */
-export function preloadBootSound(muted: boolean, woosh: WooshVariant = "classic"): void {
+export function preloadBootSound(muted: boolean): void {
   enabled = !muted;
   if (!enabled || loading) return;
   try {
@@ -72,7 +59,7 @@ export function preloadBootSound(muted: boolean, woosh: WooshVariant = "classic"
     enabled = false;
     return;
   }
-  loading = Promise.all([load("woosh", WOOSH_URLS[woosh] ?? wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl), load("wind", windUrl)]).then(() => undefined);
+  loading = Promise.all([load("woosh", wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl), load("wind", windUrl)]).then(() => undefined);
 }
 
 function play(name: SoundLayer, when: number): void {
@@ -82,15 +69,14 @@ function play(name: SoundLayer, when: number): void {
   const source = ctx.createBufferSource();
   source.buffer = buffer;
   const gain = ctx.createGain();
-  const level = GAIN[name] * MASTER * (name === "wind" ? windShape.volume : 1);
+  const level = GAIN[name] * MASTER;
   gain.gain.value = level;
   source.connect(gain).connect(ctx.destination);
-  // The wind fades out at a user-set point over a user-set time (settings);
-  // the clip itself carries no fade-out.
+  // The wind fades out at play time; the clip itself carries no fade-out.
   let stopAt = 0;
   if (name === "wind") {
-    const fadeStart = when + Math.min(windShape.fadeAt, buffer.duration);
-    const fadeEnd = Math.min(fadeStart + windShape.fadeFor, when + buffer.duration);
+    const fadeStart = when + Math.min(WIND_FADE_AT, buffer.duration);
+    const fadeEnd = Math.min(fadeStart + WIND_FADE_FOR, when + buffer.duration);
     gain.gain.setValueAtTime(level, fadeStart);
     gain.gain.linearRampToValueAtTime(0, fadeEnd);
     stopAt = fadeEnd + 0.02;
@@ -114,17 +100,9 @@ function play(name: SoundLayer, when: number): void {
 }
 
 /** Called the moment the reveal arms (the window turns opaque a frame later). */
-export interface WindShape {
-  volume: number;
-  fadeAt: number;
-  fadeFor: number;
-}
-let windShape: WindShape = { volume: 0.25, fadeAt: 3.2, fadeFor: 1.2 };
-
-export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }, wind?: WindShape): void {
+export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }): void {
   if (!enabled || started || !ctx) return;
   started = true;
-  if (wind) windShape = wind;
   const wanted = (Object.keys(AT) as SoundLayer[]).filter((name) => layers[name]);
   if (!wanted.length) return;
   const go = () => {

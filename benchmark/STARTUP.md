@@ -237,9 +237,9 @@ shift the rows between prepare and reveal (a glow left at an old position
 looked like a ghost card).
 
 Sound (`src/renderer/boot/bootSound.ts`, assets in `src/renderer/assets/sfx`):
-three layers mixed with Web Audio against the intro's timing. The woosh
-keeps 0.9 to 3.0 s of the original so its swell peaks 0.42 s after it
-starts (it starts as the reveal arms, so the peak sits on the fastest part
+four layers mixed with Web Audio against the intro's timing. The woosh
+(the "gust" take, 1.3 to 4.4 s of the original, minus 8 dB) is trimmed so its
+swell peaks about 0.4 s after it starts (it starts as the reveal arms, so the peak sits on the fastest part
 of the fly-through); the chimes and the motes clip play together at
 +0.6 s under the drifting motes, each with its own natural tail (the motes
 clip has an 80 ms fade-in, the chimes only edge fades). Input never cuts the
@@ -250,7 +250,10 @@ out. Muted when hover previews are muted; nothing plays on the plain reveal.
 Every part has a switch, read at launch from localStorage and set from the
 dev console (`src/renderer/boot/bootPrefs.ts`): `__bootIntro.get()`,
 `__bootIntro.set({ chimes: false, motes: false })`, `__bootIntro.reset()`.
-Keys: woosh, chimes, motesSound, afterglow, glow, parallax, motes.
+Keys: sound, woosh (the "gust" take, woosh-gust.ogg), chimes, motesSound, wind, afterglow, glow, parallax,
+motes. Settings > General > Startup sound shows the sound switches. The wind
+sits at 7 percent and fades from the moment it starts over 4.3 s (constants
+in bootSound.ts).
 
 Result on the reference machine (165 Hz): presented-frame gaps median one
 vsync, p95 12 ms, at most one or two frames over 25 ms, all inside the first

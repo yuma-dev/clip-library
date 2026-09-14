@@ -286,8 +286,8 @@ export async function prepareBootReveal(): Promise<void> {
   trackPointer();
   // Sound layers decode now; muted when hover previews are muted.
   void Promise.resolve(window.clips?.getSettings?.())
-    .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0, prefs.wooshVariant))
-    .catch(() => preloadBootSound(false, prefs.wooshVariant));
+    .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0))
+    .catch(() => preloadBootSound(false));
   body = document.querySelector<HTMLElement>(".app-body");
   shell = document.querySelector<HTMLElement>(".app-shell");
   rail = document.querySelector<HTMLElement>(".rail");
@@ -512,7 +512,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   await twoFrames();
   window.clips?.bootRevealArmed();
   for (const a of held) a.play();
-  startBootSound({ woosh: prefs.sound && prefs.woosh, chimes: prefs.sound && prefs.chimes, motes: prefs.sound && prefs.motesSound, wind: prefs.sound && prefs.wind }, { volume: prefs.windVolume, fadeAt: prefs.windFadeAt, fadeFor: prefs.windFadeFor });
+  startBootSound({ woosh: prefs.sound && prefs.woosh, chimes: prefs.sound && prefs.chimes, motes: prefs.sound && prefs.motesSound, wind: prefs.sound && prefs.wind });
   measureFrames();
 
   // The hold lifts at settle time, or at once on any input: then the intro
