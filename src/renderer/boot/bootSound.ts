@@ -49,11 +49,17 @@ let enabled = true;
 // once every layer has ended (or never started).
 let disposeWanted = false;
 
+// One layer failing to fetch or decode must not silence the rest: each
+// load settles on its own and only its layer is missing.
 async function load(name: SoundLayer, url: string): Promise<void> {
   if (!ctx) return;
-  const res = await fetch(url);
-  const data = await res.arrayBuffer();
-  buffers[name] = await ctx.decodeAudioData(data);
+  try {
+    const res = await fetch(url);
+    const data = await res.arrayBuffer();
+    buffers[name] = await ctx.decodeAudioData(data);
+  } catch (error) {
+    console.warn(`[boot sound] ${name} did not load: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** Decode the layers ahead of the reveal (a few ms of work, off the intro). */
@@ -66,11 +72,7 @@ export function preloadBootSound(muted: boolean, woosh: WooshVariant = "classic"
     enabled = false;
     return;
   }
-  loading = Promise.all([load("woosh", WOOSH_URLS[woosh] ?? wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl), load("wind", windUrl)])
-    .then(() => undefined)
-    .catch(() => {
-      enabled = false;
-    });
+  loading = Promise.all([load("woosh", WOOSH_URLS[woosh] ?? wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl), load("wind", windUrl)]).then(() => undefined);
 }
 
 function play(name: SoundLayer, when: number): void {
@@ -85,12 +87,13 @@ function play(name: SoundLayer, when: number): void {
   source.connect(gain).connect(ctx.destination);
   // The wind fades out at a user-set point over a user-set time (settings);
   // the clip itself carries no fade-out.
+  let stopAt = 0;
   if (name === "wind") {
     const fadeStart = when + Math.min(windShape.fadeAt, buffer.duration);
     const fadeEnd = Math.min(fadeStart + windShape.fadeFor, when + buffer.duration);
     gain.gain.setValueAtTime(level, fadeStart);
     gain.gain.linearRampToValueAtTime(0, fadeEnd);
-    source.stop(fadeEnd + 0.02);
+    stopAt = fadeEnd + 0.02;
   }
   // The chimes carry the tail of the intro: ease them out over their last
   // 40 percent so sound and motes end together, slowly.
@@ -100,6 +103,9 @@ function play(name: SoundLayer, when: number): void {
     gain.gain.linearRampToValueAtTime(0, end);
   }
   source.start(when);
+  // stop() is only legal after start(): calling it first throws and the
+  // source never plays (the wind was silent for exactly that reason).
+  if (stopAt) source.stop(stopAt);
   playing[name] = { source, gain, startAt: when };
   source.onended = () => {
     if (playing[name]?.source === source) delete playing[name];
