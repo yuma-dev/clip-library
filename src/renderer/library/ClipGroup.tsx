@@ -1,7 +1,14 @@
 import { memo, useDeferredValue } from "react";
+import type React from "react";
 import ClipCard from "./ClipCard";
 import { useStreamedSlice } from "../ui/useStreamedSlice";
 import type { ClipGroupData } from "./grouping";
+
+export interface GridLayoutHint {
+  /** Columns the grid currently lays out, and one row's height plus gap. */
+  cols: number;
+  rowH: number;
+}
 
 interface ClipGroupProps {
   group: ClipGroupData;
@@ -10,9 +17,11 @@ interface ClipGroupProps {
   showNewIndicators: boolean;
   collapsed: boolean;
   onToggle: (name: string) => void;
+  /** Measured by ClipGrid; sizes a group the browser has not rendered yet. */
+  layoutHint: GridLayoutHint | null;
 }
 
-function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, collapsed, onToggle }: ClipGroupProps) {
+function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, collapsed, onToggle, layoutHint }: ClipGroupProps) {
   // The header reacts to `collapsed` urgently (instant diamond/aria feedback);
   // the card mounting below runs as a deferred, interruptible render.
   // Streamed mounting itself lives in useStreamedSlice (shared with the feed);
@@ -39,7 +48,17 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, colla
       </button>
 
       {shown ? (
-        <div className="clip-group-content">
+        // Offscreen groups are skipped by the browser (content-visibility:
+        // auto in styles.css); this is the height it reserves for a group it
+        // has not laid out yet, from the measured columns and row height.
+        <div
+          className="clip-group-content"
+          style={
+            layoutHint
+              ? ({ "--group-h": `${Math.max(1, Math.ceil(shown.length / layoutHint.cols)) * layoutHint.rowH}px` } as React.CSSProperties)
+              : undefined
+          }
+        >
           {shown.map((clip) => (
             <ClipCard
               key={clip.originalName}

@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupClips, type ClipGroupData } from "./grouping";
-import ClipGroup from "./ClipGroup";
+import ClipGroup, { type GridLayoutHint } from "./ClipGroup";
 import { ObserveContext, type ObserveFn } from "./visibility";
-import { isBootHeld } from "../boot/bootHold";
+import { isBootHeld, onBootRelease } from "../boot/bootHold";
+import { trackPointer, rehoverUnderPointer } from "./rehover";
 import { ClipGlow } from "./ClipGlow";
 import { LibraryHover } from "./hoverController";
 import { HoverContext } from "./hoverContext";
@@ -61,28 +62,84 @@ function ClipGrid({
   clipsRef.current = clips;
   const menuHostRef = useRef<ContextMenuHandle>(null);
   const [hover, setHover] = useState<LibraryHover | null>(null);
+  // Columns and row height of the rendered grid, for the intrinsic size of
+  // groups the browser skips (content-visibility: auto). Measured from the
+  // first rendered group after mount and again on resize.
+  const [layoutHint, setLayoutHint] = useState<GridLayoutHint | null>(null);
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const content = grid.querySelector<HTMLElement>(".clip-group-content");
+      const card = content?.querySelector<HTMLElement>(".clip-item");
+      if (!content || !card) return;
+      const cols = getComputedStyle(content).gridTemplateColumns.split(" ").filter(Boolean).length;
+      const gap = parseFloat(getComputedStyle(content).rowGap) || 16;
+      const rowH = card.offsetHeight + gap;
+      if (cols > 0 && rowH > 0) {
+        setLayoutHint((prev) => (prev && prev.cols === cols && prev.rowH === rowH ? prev : { cols, rowH }));
+      }
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    };
+    schedule();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(grid);
+    return () => {
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
   const toast = useToast();
 
   // Shared visibility observer (hard-won §4.2), created lazily on first observe.
+  // While the boot intro plays, entries are held back rather than applied:
+  // toggling content-visibility mid-animation repainted tiles inside the
+  // moving body (111 raster batches in one launch trace). They are not
+  // dropped: an observer reports each element once when it is first
+  // observed and then only on changes, so a dropped first report left cards
+  // mounted during the hold un-culled for the session (1,000 fully painted
+  // offscreen cards made every compositing update cost 47 ms, and scrolling
+  // with the cursor on the grid ran at 79 ms a frame).
+  const pendingCullRef = useRef<Map<HTMLElement, boolean>>(new Map());
   const observe = useCallback<ObserveFn>((el) => {
     if (!observerRef.current) {
+      const apply = (target: HTMLElement, offscreen: boolean) => target.classList.toggle("cv-offscreen", offscreen);
       observerRef.current = new IntersectionObserver(
         (entries) => {
-          // While the boot reveal moves the whole body, cards cross the root's
-          // edges every frame; toggling them repainted tiles mid-animation
-          // (111 raster batches in the launch trace). The layout is the same
-          // before and after the intro, so these entries carry nothing new.
-          if (isBootHeld()) return;
-          for (const entry of entries) {
-            (entry.target as HTMLElement).classList.toggle("cv-offscreen", !entry.isIntersecting);
+          if (isBootHeld()) {
+            for (const entry of entries) pendingCullRef.current.set(entry.target as HTMLElement, !entry.isIntersecting);
+            onBootRelease(() => {
+              // A thousand toggles in one frame were a 130 ms frame right
+              // after the intro; a slice per frame keeps it invisible.
+              const pending = [...pendingCullRef.current];
+              pendingCullRef.current = new Map();
+              const step = () => {
+                for (const [target, offscreen] of pending.splice(0, 120)) apply(target, offscreen);
+                if (pending.length) requestAnimationFrame(step);
+              };
+              step();
+            });
+            return;
           }
+          for (const entry of entries) apply(entry.target as HTMLElement, !entry.isIntersecting);
         },
-        { root: scrollRef.current, rootMargin: "600px 0px" },
+        // Three screens of lead: at wheel speed (12,000 px/s measured) rows
+        // are un-culled a dozen frames before they show, so the un-cull
+        // layout and paint spread out instead of landing on the frames the
+        // rows appear in. Everything further stays culled.
+        { root: scrollRef.current, rootMargin: "3000px 0px" },
       );
     }
     observerRef.current.observe(el);
-    return () => observerRef.current?.unobserve(el);
+    return () => {
+      observerRef.current?.unobserve(el);
+      pendingCullRef.current.delete(el as HTMLElement);
+    };
   }, []);
 
   // Glow + hover-preview controllers.
@@ -97,6 +154,44 @@ function ClipGrid({
   useEffect(() => {
     hover?.setClipLocation(clipLocation);
   }, [hover, clipLocation]);
+
+  // No hover while scrolling. With the cursor resting on the grid, every card
+  // passing under it gained and lost :hover: a transform transition and the
+  // shadow each promote a layer, and each layer change re-ran compositing
+  // over every mounted card (47 ms a time, 79 ms scroll frames measured).
+  // Pointer events are off on the cards during scroll activity and back
+  // 120 ms after the last event, when the card under the cursor is
+  // re-entered so nothing feels different once the scroll stops.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    trackPointer();
+    let timer = 0;
+    let active = false;
+    const stop = () => {
+      timer = 0;
+      active = false;
+      scroller.classList.remove("is-scrolling");
+      rehoverUnderPointer();
+    };
+    const bump = () => {
+      if (!active) {
+        active = true;
+        scroller.classList.add("is-scrolling");
+        hover?.leave();
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(stop, 120);
+    };
+    scroller.addEventListener("scroll", bump, { passive: true });
+    scroller.addEventListener("wheel", bump, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", bump);
+      scroller.removeEventListener("wheel", bump);
+      if (timer) window.clearTimeout(timer);
+      scroller.classList.remove("is-scrolling");
+    };
+  }, [hover]);
   useEffect(() => {
     hover?.setPreviewVolume(previewVolume);
   }, [hover, previewVolume]);
@@ -266,6 +361,7 @@ function ClipGrid({
                     thumbnails={thumbnails}
                     grayscaleIcons={grayscaleIcons}
                     showNewIndicators={showNewIndicators}
+                    layoutHint={layoutHint}
                     collapsed={Boolean(collapsed[group.name])}
                     onToggle={toggle}
                   />

@@ -28,6 +28,7 @@ import titleUrl from "../../../assets/title.png";
 import { holdStreaming, holdCommits, releaseBoot, releaseStreaming, onBootRelease, markRevealed } from "./bootHold";
 import { preloadBootSound, startBootSound, cutBootSound, disposeBootSound } from "./bootSound";
 import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
+import { trackPointer, rehoverUnderPointer } from "../library/rehover";
 
 // Read once per launch (dev console changes apply at the next one).
 let prefs: BootPrefs = getBootPrefs();
@@ -65,25 +66,6 @@ let rail: HTMLElement | null = null;
 let preparedLogo: BootRevealPayload["logo"] = null;
 let installed = false;
 let handled = false;
-// Last pointer position while the body ignores pointer events: when the
-// intro ends, whatever card sits under the cursor gets its hover back.
-let pointer: Point | null = null;
-const onPointerMove = (e: MouseEvent) => {
-  pointer = { x: e.clientX, y: e.clientY };
-};
-
-function rehover(): void {
-  window.removeEventListener("mousemove", onPointerMove);
-  if (!pointer) return;
-  const target = document.elementFromPoint(pointer.x, pointer.y);
-  const card = target?.closest<HTMLElement>(".clip-item");
-  pointer = null;
-  if (!card) return;
-  // React derives onMouseEnter from mouseover/mouseout pairs; a mouseover
-  // coming from outside the card is what a real entry would deliver.
-  card.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
-}
-
 const reducedMotion = () =>
   typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -282,7 +264,7 @@ function placeBody(logo: BootRevealPayload["logo"]): void {
 export async function prepareBootReveal(): Promise<void> {
   if (reducedMotion()) return;
   holdStreaming();
-  window.addEventListener("mousemove", onPointerMove, { passive: true });
+  trackPointer();
   // Sound layers decode now; muted when hover previews are muted.
   void Promise.resolve(window.clips?.getSettings?.())
     .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0))
@@ -314,7 +296,7 @@ function clearGrid(): void {
     body.style.removeProperty("transform-origin");
   }
   shell?.classList.remove("boot-clip");
-  rehover();
+  rehoverUnderPointer();
   for (const el of [rail, ...heads, ...cards]) {
     if (!el) continue;
     el.classList.remove("boot-pre", "boot-par");
@@ -337,6 +319,11 @@ function clearAll(): void {
 // not otherwise need; in normal launches the main thread stays idle instead.
 function measureFrames(): void {
   if (!window.__bootTrace) return;
+  let visChanges = 0;
+  document.addEventListener("visibilitychange", () => {
+    visChanges += 1;
+    if (visChanges <= 4) bootMark(`visibility_${document.visibilityState}_${visChanges}`);
+  });
   // Two windows: the animation itself (first 1.2 s, guarded by the bench)
   // and the tail after it (to 6 s), where the held work resumes and must
   // not be felt either.
@@ -349,8 +336,15 @@ function measureFrames(): void {
     const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)] : 0;
     return { frames: list.length, p95: Math.round(p95 * 10) / 10, max: Math.round(Math.max(0, ...list)), over25: list.filter((d) => d > 25).length };
   };
+  const origin = performance.timeOrigin;
+  let gaps = 0;
   const tick = (t: number) => {
     (t - start < MEASURE_MS ? deltas : tail).push(t - last);
+    if (t - last > 300 && gaps < 3) {
+      gaps += 1;
+      bootMark(`tail_gap${gaps}_from`, origin + last);
+      bootMark(`tail_gap${gaps}_to`, origin + t);
+    }
     last = t;
     if (t - start < MEASURE_TAIL_MS) {
       requestAnimationFrame(tick);
