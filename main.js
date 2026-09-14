@@ -284,7 +284,7 @@ function scheduleDeferredServices() {
     runDeferredServices().catch((error) => {
       logger.warn(`Deferred startup services failed: ${error.message}`);
     });
-  }, 2500);
+  }, 5000);
 }
 
 async function runDeferredServices() {
