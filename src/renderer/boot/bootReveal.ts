@@ -141,6 +141,8 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   // lands. Created here (their layers must exist before the reveal), placed
   // over the cards by placeMotes.
   const rnd = seeded(0x5eed);
+  const motesLayer = document.createElement("div");
+  motesLayer.className = "boot-motes";
   for (let j = 0; j < (prefs.motes ? MOTES : 0); j++) {
     const m = document.createElement("div");
     m.className = "boot-mote";
@@ -149,8 +151,9 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
     const size = 2 + Math.round(rnd() * 2);
     const delay = 100 + j * 24;
     m.style.cssText = `left:-10px;top:-10px;width:${size}px;height:${size}px;--boot-dx:${dx.toFixed(0)}px;--boot-dy:${dy.toFixed(0)}px;--boot-d:${delay}ms;--boot-dur:${MOTES_END_MS - delay}ms;`;
-    el.appendChild(m);
+    motesLayer.appendChild(m);
   }
+  el.appendChild(motesLayer);
 
   if (logo) {
     const hero = document.createElement("img");
@@ -353,8 +356,51 @@ function depromote(perFrame: number): void {
 function clearAll(): void {
   settleGrid();
   depromote(8);
+  detachWind();
   overlay?.remove();
   overlay = null;
+}
+
+// Wind: scrolling pushes the motes' layer along (up when the content goes
+// up), with momentum that decays once the scroll stops, so the motes are
+// moved by the scroll without tracking it one to one. One transform write
+// per frame on a promoted layer, and only while there is momentum.
+const WIND_GAIN = 0.15;
+const WIND_MAX = 60;
+const WIND_DECAY = 0.9;
+let windOff: (() => void) | null = null;
+
+function attachWind(layer: HTMLElement): void {
+  const motes = layer.querySelector<HTMLElement>(".boot-motes");
+  const scroller = document.querySelector<HTMLElement>(".clip-scroll");
+  if (!motes || !scroller) return;
+  let last = scroller.scrollTop;
+  let velocity = 0;
+  let offset = 0;
+  let raf = 0;
+  const tick = () => {
+    raf = 0;
+    offset += velocity;
+    velocity *= WIND_DECAY;
+    motes.style.transform = `translateY(${offset.toFixed(1)}px)`;
+    if (Math.abs(velocity) > 0.05) raf = requestAnimationFrame(tick);
+  };
+  const onScroll = () => {
+    const delta = scroller.scrollTop - last;
+    last = scroller.scrollTop;
+    velocity = Math.max(-WIND_MAX, Math.min(WIND_MAX, velocity - delta * WIND_GAIN));
+    if (!raf) raf = requestAnimationFrame(tick);
+  };
+  scroller.addEventListener("scroll", onScroll, { passive: true });
+  windOff = () => {
+    scroller.removeEventListener("scroll", onScroll);
+    if (raf) cancelAnimationFrame(raf);
+  };
+}
+
+function detachWind(): void {
+  windOff?.();
+  windOff = null;
 }
 
 // Bench mode only (CLIPLIB_BOOT_TRACE): a requestAnimationFrame loop forces a
@@ -467,11 +513,12 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   body?.classList.add("boot-dolly");
   if (prefs.parallax) for (const el of [rail, ...heads, ...cards]) el?.classList.add("boot-par");
   glowCanvas?.classList.add("run");
-  for (const el of layer.children) el.classList.add("run");
+  for (const el of layer.querySelectorAll(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")) el.classList.add("run");
+  attachWind(layer);
 
   // Hold every animation at its first frame until main confirms the window is
   // opaque: the pause runs on the compositor, so releasing it costs nothing.
-  const animated = [body, rail, ...heads, ...cards, glowCanvas, ...layer.children];
+  const animated = [body, rail, ...heads, ...cards, glowCanvas, ...layer.querySelectorAll<HTMLElement>(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")];
   const held = animated.flatMap((el) => (el ? el.getAnimations() : []));
   for (const a of held) a.pause();
   await twoFrames();
@@ -518,7 +565,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   }, SETTLE_MS);
   // The overlay comes down once its last animation (the latest mote) has
   // finished, never on a fixed timer: a cut mid-fade reads as a pop.
-  const overlayAnims = [...layer.children].flatMap((el) => el.getAnimations());
+  const overlayAnims = [...layer.querySelectorAll<HTMLElement>(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")].flatMap((el) => el.getAnimations());
   const finished = Promise.allSettled(overlayAnims.map((a) => a.finished));
   const cap = new Promise<void>((resolve) => window.setTimeout(resolve, OVERLAY_CAP_MS));
   void Promise.race([finished, cap]).then(() => {

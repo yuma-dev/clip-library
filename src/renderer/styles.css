@@ -4801,3 +4801,12 @@ body.ui-blur-exit .app-body {
 .app-body.boot-nohover .clip-group-content:not(.boot-live) {
   content-visibility: hidden;
 }
+
+/* The motes share one layer so the scroll wind can move them together
+   (bootReveal.attachWind). */
+#boot-reveal .boot-motes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  will-change: transform;
+}
