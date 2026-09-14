@@ -1,7 +1,7 @@
 {
   "name": "clips",
   "displayName": "ClipLib",
-  "version": "3.5.13",
+  "version": "3.5.14",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
   "main": "main.js",
