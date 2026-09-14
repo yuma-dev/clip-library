@@ -433,7 +433,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   await twoFrames();
   window.clips?.bootRevealArmed();
   for (const a of held) a.play();
-  startBootSound({ woosh: prefs.woosh, landing: prefs.landing, motes: prefs.motesSound });
+  startBootSound({ woosh: prefs.woosh, chimes: prefs.chimes, motes: prefs.motesSound });
   measureFrames();
 
   // The hold lifts at settle time, or at once on any input: then the intro
