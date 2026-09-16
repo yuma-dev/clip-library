@@ -11,21 +11,18 @@ import {
   ShieldCheck, Upload,
 } from "lucide-react";
 
-// ---------- design tokens ---------------------------------------------------
-// The overlay notification is the visual identity: charcoal card, violet
-// comet body, magenta comet head, lavender-white tip. The settings UI
-// borrows the same palette. Hex (not oklch) so the `${ACCENT}22`
-// alpha-suffix pattern used throughout produces valid 8-digit hex colors.
+// design tokens: same palette as the overlay notification (violet body, magenta
+// head, lavender tip). Hex not oklch, so ${ACCENT}22 alpha-suffix stays valid hex.
 
-const ACCENT = "#8b5cf6";      // violet — comet body
-const ACCENT_DIM = "#6d44c9";  // deeper violet — gradient tails
-const ACCENT_HOT = "#d844dd";  // magenta — comet head
-const ACCENT_TIP = "#f3e8ff";  // lavender white — comet tip / highlights
+const ACCENT = "#8b5cf6";      // violet, comet body
+const ACCENT_DIM = "#6d44c9";  // deeper violet, gradient tails
+const ACCENT_HOT = "#d844dd";  // magenta, comet head
+const ACCENT_TIP = "#f3e8ff";  // lavender white, comet tip / highlights
 const REC_ROSE = "#f43f5e";    // overlay recording dot
 
 const MONO = '"Cascadia Mono", Consolas, "JetBrains Mono", ui-monospace, monospace';
 
-// ---------- types -----------------------------------------------------------
+// types
 
 interface AudioSource {
   kind: "system_loopback" | "microphone" | "process_loopback";
@@ -92,7 +89,7 @@ interface AudioDeviceInfo {
   is_default: boolean;
 }
 
-// ---------- tab definitions -------------------------------------------------
+// tab definitions
 
 type TabId = "video" | "audio" | "output" | "hotkeys" | "notifications";
 
@@ -104,7 +101,7 @@ const TABS: { id: TabId; label: string; Icon: typeof Film }[] = [
   { id: "notifications", label: "Notifications", Icon: Bell },
 ];
 
-// ---------- layout primitives -----------------------------------------------
+// layout primitives
 
 function PanelHeader({
   Icon, title, subtitle,
@@ -151,8 +148,7 @@ function Row({
   vertical?: boolean;
   badge?: string;
 }) {
-  // Each row is a miniature of the overlay card: charcoal surface, hairline
-  // ring instead of a border, soft drop shadow, violet whisper on hover.
+  // miniature of the overlay card: charcoal surface, hairline ring, violet whisper on hover
   const [hover, setHover] = useState(false);
   return (
     <div
@@ -284,7 +280,7 @@ function AdvancedDisclosure({
   );
 }
 
-// ---------- design-style slider ---------------------------------------------
+// design-style slider
 
 function DesignSlider({
   value, onChange, min, max, step = 1, format,
@@ -337,7 +333,7 @@ function DesignSlider({
   );
 }
 
-// ---------- design-style toggle ---------------------------------------------
+// design-style toggle
 
 function DesignToggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
@@ -373,7 +369,7 @@ function DesignToggle({ value, onChange, disabled }: { value: boolean; onChange:
   );
 }
 
-// ---------- design-style select ---------------------------------------------
+// design-style select
 
 function DesignSelect<T extends string | number>({
   value, onChange, options, width = 200,
@@ -460,7 +456,7 @@ function DesignSelect<T extends string | number>({
   );
 }
 
-// ---------- design-style text input -----------------------------------------
+// design-style text input
 
 function DesignTextInput({
   value, onChange, placeholder, mono = false, width = 280, trailing,
@@ -506,13 +502,9 @@ function DesignTextInput({
   );
 }
 
-// ---------- hotkey capture --------------------------------------------------
+// hotkey capture
 
-// Physical-key (`e.code`) → canonical token understood by the Rust parser
-// (crates/hotkey parse_vk). Using `e.code` instead of `e.key` makes capture
-// immune to Shift mutations ("Shift+1" used to record as "Shift+!") and to
-// keyboard layouts. Only keys in this map can be recorded, so anything we
-// save is guaranteed to register on the backend.
+// e.code to canonical token for crates/hotkey parse_vk; immune to Shift mutations and layout
 const CODE_TO_TOKEN: Record<string, string> = (() => {
   const m: Record<string, string> = {
     Space: "Space", Tab: "Tab", Enter: "Enter", NumpadEnter: "Enter",
@@ -693,7 +685,7 @@ function HotkeyCapture({
   );
 }
 
-// ---------- corner picker ---------------------------------------------------
+// corner picker
 
 function CornerPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const corners = [
@@ -734,7 +726,7 @@ function CornerPicker({ value, onChange }: { value: string; onChange: (v: string
   );
 }
 
-// ---------- title bar -------------------------------------------------------
+// title bar
 
 function TitleBar({
   saveStatus, onReplayOnboarding,
@@ -860,7 +852,7 @@ function TitleBar({
   );
 }
 
-// ---------- top tab bar -----------------------------------------------------
+// top tab bar
 
 function TopTabs({
   active, onChange, pipelineError, pipelineRunning,
@@ -922,7 +914,7 @@ function TopTabs({
 
       <div style={{ flex: 1 }} />
 
-      {/* Pipeline status pill — the rose dot mirrors the overlay's
+      {/* Pipeline status pill, the rose dot mirrors the overlay's
           recording indicator, so "capture is live" reads the same in
           both surfaces. */}
       <div style={{
@@ -954,7 +946,7 @@ function TopTabs({
   );
 }
 
-// ---------- audio sources ---------------------------------------------------
+// audio sources
 
 function audioKindIcon(k: AudioSource["kind"]) {
   if (k === "microphone") return Mic;
@@ -1013,8 +1005,7 @@ function AudioSourcesList({
           const KindIcon = audioKindIcon(src.kind);
           const devOpts = deviceOptionsFor(src.kind, devices);
           const selectedDeviceValue = src.device_id ?? DEFAULT_DEVICE_VALUE;
-          // If the saved device_id no longer exists in enumeration, surface it
-          // so the user can see what's selected even if disconnected.
+          // surface a saved device_id even if it's no longer enumerated (disconnected)
           const knownDevice = devices.find(d => d.id === src.device_id);
           const showStaleWarning =
             src.kind !== "process_loopback" &&
@@ -1191,7 +1182,7 @@ function AudioSourcesList({
   );
 }
 
-// ---------- onboarding modal ------------------------------------------------
+// onboarding modal
 
 const ONBOARDING_KEY = "clipdip.onboarded.v1";
 
@@ -1572,18 +1563,12 @@ function OnboardingModal({
   );
 }
 
-// ---------- panel: recording ------------------------------------------------
+// panel: recording
 
-// ---------- panel: video ----------------------------------------------------
+// panel: video
 
-// Named quality presets over the encoder's QP. The +6-QP-halves-size rule
-// of thumb makes the steps roughly 25% / 50% / 100% / 160% of the default.
-// QP is on the H.264 0–51 scale; the encoder matches AV1 internally.
-// Each tier also carries an automatic bitrate ceiling (see
-// max_bps_for_quality in the core config) so a chaotic scene can't
-// balloon clip sizes. The Mbps figures are 1440p60 reference values;
-// the enforced cap scales with resolution/fps and is lower under AV1,
-// hence "around".
+// QP 0-51 (H.264 scale, AV1 matched internally), +6 QP is roughly half the size; each tier's Mbps
+// cap (max_bps_for_quality) is a 1440p60 reference.
 const QUALITY_PRESETS = [
   { qp: 32, label: "Space saver",  desc: "Visibly compressed, roughly a quarter of High quality's file size. Busy scenes cap out around 25 Mbps." },
   { qp: 26, label: "Balanced",     desc: "Looks great in motion at about half of High quality's file size. Busy scenes cap out around 60 Mbps." },
@@ -1591,10 +1576,7 @@ const QUALITY_PRESETS = [
   { qp: 16, label: "Maximum",      desc: "Near-perfect picture. Files get large. Busy scenes cap out around 100 Mbps." },
 ];
 
-// Quality used while a manual recording (start/stop hotkey) is running.
-// Recordings are meant to be kept and uploaded, so they get their own —
-// typically higher — quality than the always-on replay buffer. qp: null
-// means "match clips" (no boost).
+// quality while a manual recording runs, defaults higher than replay; qp: null means "match clips"
 const RECORDING_PRESETS: { qp: number | null; label: string; desc: string }[] = [
   { qp: null, label: "Match clips",   desc: "Recordings use the same quality as replay clips." },
   { qp: 16,   label: "High",          desc: "Noticeably crisper than clips with a modest size bump." },
@@ -1612,8 +1594,7 @@ type BufferStats = {
   budget_mb?: number;
 };
 
-/// Live file-size readout, measured from the actual encoded bytes in the
-/// replay ring — honest numbers that track whatever is on screen right now.
+/// live file-size readout from the actual encoded bytes in the replay ring
 function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
   const [stats, setStats] = useState<BufferStats | null>(null);
 
@@ -1697,13 +1678,11 @@ function VideoPanel({
     }));
   }, [monitors]);
 
-  // Which preset the current config corresponds to; -1 = custom (VBR mode
-  // or a QP that doesn't match any preset, e.g. set via Advanced).
+  // preset matching current config; -1 = custom (VBR, or a QP not in the presets)
   const presetIdx = config.video.rate_control.mode === "constant_qp"
     ? QUALITY_PRESETS.findIndex(p => p.qp === (config.video.rate_control as { mode: "constant_qp"; qp: number }).qp)
     : -1;
 
-  // Which recording-quality preset is active; -1 = custom QP set via Advanced.
   const recPresetIdx = config.video.recording_quality.mode === "match_clips"
     ? 0
     : RECORDING_PRESETS.findIndex(p => p.qp === (config.video.recording_quality as { mode: "constant_qp"; qp: number }).qp);
@@ -1870,7 +1849,7 @@ function VideoPanel({
   );
 }
 
-// ---------- panel: audio ----------------------------------------------------
+// panel: audio
 
 function AudioPanel({
   config, setSources, setIncludeMix, devices, devicesLoading, onRefreshDevices,
@@ -1920,13 +1899,11 @@ function AudioPanel({
   );
 }
 
-// ---------- panel: output ---------------------------------------------------
+// panel: output
 
 type FilenameVariableInfo = { token: string; description: string; example: string };
 
-/// Live preview of the filename template plus a collapsible reference of
-/// every available [variable]. Clicking a variable appends it to the
-/// template.
+/// live preview of the filename template plus a collapsible [variable] reference
 function FilenameTemplateHelp({ template, onInsert }: {
   template: string;
   onInsert: (token: string) => void;
@@ -2018,10 +1995,7 @@ interface DiscordStatus {
   message?: string;
 }
 
-/// Discord call-roster capture: enable toggle + a live connection status
-/// and Connect/Disconnect controls. Status is polled from the backend
-/// manager so it reflects the real RPC state (Discord closed, awaiting the
-/// authorize popup, connected as user, …).
+/// Discord call-roster toggle + Connect/Disconnect; status is polled from the backend RPC state
 function DiscordSettings({ enabled, onToggle }: { enabled: boolean; onToggle: (v: boolean) => void }) {
   const [status, setStatus] = useState<DiscordStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2108,10 +2082,8 @@ interface TelemetryStatus {
   install_id: string;
 }
 
-/// Anonymous, opt-out diagnostics: a toggle plus a manual "export & upload
-/// diagnostics" action. Self-contained — reads/writes its own state via the
-/// dedicated backend commands (telemetry is deliberately kept out of the
-/// general config round-trip), so toggling it never restarts the pipeline.
+/// opt-out diagnostics toggle + manual "export & upload"; own backend commands kept out of the
+/// config round-trip, so toggling never restarts the pipeline
 function TelemetrySettings() {
   const [status, setStatus] = useState<TelemetryStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2126,7 +2098,7 @@ function TelemetrySettings() {
 
   const toggle = async (v: boolean) => {
     setBusy(true);
-    // Optimistic — reflect the switch immediately.
+    // optimistic: reflect the switch immediately
     setStatus(s => (s ? { ...s, enabled: v } : s));
     try {
       await invoke("set_telemetry_enabled", { enabled: v });
@@ -2312,7 +2284,7 @@ function OutputPanel({
   );
 }
 
-// ---------- panel: hotkeys --------------------------------------------------
+// panel: hotkeys
 
 function HotkeysPanel({ config, patchHotkey }: {
   config: Config;
@@ -2352,10 +2324,9 @@ function HotkeysPanel({ config, patchHotkey }: {
   );
 }
 
-// ---------- overlay preview --------------------------------------------------
+// overlay preview
 
-/// Stage buttons that fire the real overlay on screen via `test_overlay`
-/// — the actual toast, in the configured corner, with current settings.
+/// stage buttons fire the real overlay via test_overlay, in the configured corner
 function OverlayPreviewRow({ enabled }: { enabled: boolean }) {
   const [recDot, setRecDot] = useState(false);
   const fire = (stage: string) =>
@@ -2439,7 +2410,7 @@ function OverlayPreviewRow({ enabled }: { enabled: boolean }) {
   );
 }
 
-// ---------- panel: notifications --------------------------------------------
+// panel: notifications
 
 function NotificationsPanel({ config, patchNotif }: {
   config: Config;
@@ -2480,9 +2451,8 @@ type NotificationRecord = {
   body: string;
 };
 
-// Recent notifications with timestamps and full alert text — the overlay
-// toasts auto-dismiss, so this is where their content can be read back
-// (and screenshotted) later.
+// recent notifications with full alert text; overlay toasts auto-dismiss, so this is where it can
+// be read back later
 function NotificationHistoryList() {
   const [items, setItems] = useState<NotificationRecord[] | null>(null);
 
@@ -2491,8 +2461,7 @@ function NotificationHistoryList() {
     const tick = () => {
       invoke<NotificationRecord[]>("get_notification_history")
         .then(h => { if (alive) setItems(h); })
-        // Transient IPC failure: keep showing what we have rather than
-        // flashing the empty state for a poll cycle.
+        // transient IPC failure: keep showing stale data rather than flashing empty
         .catch(() => {});
     };
     tick();
@@ -2564,7 +2533,7 @@ function NotificationHistoryList() {
   );
 }
 
-// ---------- main component --------------------------------------------------
+// main component
 
 export default function MainWindow() {
   const [config, setConfig] = useState<Config | null>(null);
@@ -2585,32 +2554,26 @@ export default function MainWindow() {
   const loadedRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
   const idleTimerRef = useRef<number | null>(null);
-  // Capture-relevant config slice as of the last applied pipeline state.
-  // When a save changes this slice, the pipeline must restart for the new
-  // settings to take effect (encoder/audio/replay length only apply at
-  // pipeline start).
+  // capture-relevant config slice; a change here means the pipeline must restart
+  // (encoder/audio/replay only apply at start)
   const captureCfgRef = useRef<string | null>(null);
-  // Everything the pipeline bakes in at start: capture settings plus the
-  // mux-bound output options (audio bitrate, sidecars, ffmpeg path read
-  // from the pipeline's startup config — directory/filename are re-read
-  // per save and don't belong here).
+  // everything the pipeline bakes in at start; directory/filename are re-read per save and don't belong here
   const captureSlice = (c: Config) =>
     JSON.stringify({
       v: c.video, r: c.replay_seconds, a: c.audio,
       ab: c.output.audio_bitrate_bps, ks: c.output.keep_sidecars, fp: c.output.ffmpeg_path,
     });
-  // Hotkeys re-register without a pipeline restart — track them separately.
+  // hotkeys re-register without a pipeline restart, tracked separately
   const hotkeyCfgRef = useRef<string | null>(null);
   const hotkeySlice = (c: Config) => JSON.stringify(c.hotkey);
 
-  // Load config
   useEffect(() => {
     invoke<Config>("get_config")
       .then(cfg => {
         setConfig(cfg);
         try {
           if (!localStorage.getItem(ONBOARDING_KEY)) setShowOnboarding(true);
-        } catch { /* private mode — just skip */ }
+        } catch { /* private mode, just skip */ }
       })
       .catch(() => {
         setConfig({
@@ -2626,7 +2589,6 @@ export default function MainWindow() {
       });
   }, []);
 
-  // Load autostart status
   useEffect(() => {
     invoke<{ enabled: boolean; is_dev: boolean }>("get_autostart_info")
       .then(info => {
@@ -2638,13 +2600,11 @@ export default function MainWindow() {
       });
   }, []);
 
-  // Pull monitor list once
   useEffect(() => {
     invoke<MonitorInfo[]>("list_monitors").then(setMonitors).catch(() => setMonitors([]));
   }, []);
 
-  // Audio devices: load on mount, refresh on window focus (user may have
-  // plugged in headphones since we last looked), expose manual refresh.
+  // load on mount + refresh on focus (user may have plugged in new headphones)
   const refreshAudioDevices = useCallback(() => {
     setAudioDevicesLoading(true);
     invoke<AudioDeviceInfo[]>("list_audio_devices")
@@ -2662,7 +2622,6 @@ export default function MainWindow() {
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshAudioDevices]);
 
-  // Autosave on config change (debounced)
   useEffect(() => {
     if (!config) return;
     if (!loadedRef.current) {
@@ -2678,15 +2637,13 @@ export default function MainWindow() {
       try {
         await invoke("update_config", { config });
         setSaveStatus("saved");
-        // Capture settings only apply at pipeline start — restart it so
-        // quality presets etc. take effect (and the size readout follows).
+        // capture settings only apply at pipeline start; restart it so presets take effect
         const slice = captureSlice(config);
         if (captureCfgRef.current !== slice) {
           captureCfgRef.current = slice;
           invoke("restart_pipeline").catch(() => {});
         }
-        // Re-register global hotkeys live — without this, an edited
-        // hotkey only took effect after an app restart.
+        // re-register hotkeys live, else an edit only took effect after an app restart
         const hkSlice = hotkeySlice(config);
         if (hotkeyCfgRef.current !== hkSlice) {
           hotkeyCfgRef.current = hkSlice;
@@ -2702,12 +2659,10 @@ export default function MainWindow() {
     };
   }, [config]);
 
-  // Initial pipeline state
   useEffect(() => {
     invoke<boolean>("get_pipeline_running").then(setPipelineRunning).catch(() => {});
   }, []);
 
-  // Pipeline status listeners
   useEffect(() => {
     const u1 = listen<string>("pipeline-error", e => setPipelineError(e.payload));
     const u2 = listen<{ running: boolean }>("pipeline-status", e => setPipelineRunning(e.payload.running));
@@ -2773,8 +2728,7 @@ export default function MainWindow() {
     <div style={{
       width: "100%", height: "100%",
       display: "flex", flexDirection: "column",
-      // Charcoal base with two faint comet-colored auroras — enough to
-      // tint the room, not enough to fight the content.
+      // charcoal base with two faint comet-colored auroras: tint the room, don't fight the content
       background: `
         radial-gradient(900px 420px at 85% -10%, ${ACCENT}14, transparent 65%),
         radial-gradient(700px 380px at -10% 110%, ${ACCENT_HOT}0d, transparent 60%),

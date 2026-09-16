@@ -48,7 +48,7 @@ const ACTIONS: { id: string; title: string; description: string; icon: LucideIco
   { id: "closePlayer", title: "Close player", description: "Close the player", icon: X },
 ];
 
-/** "ctrl+shift+e" -> "Ctrl+Shift+E" for display. */
+/** formats a combo like "ctrl+shift+e" as "Ctrl+Shift+E" for display */
 function prettyCombo(combo: string | undefined): string {
   if (!combo) return "";
   return combo
@@ -76,7 +76,7 @@ export default function ShortcutsSection() {
     [settings.keybindings],
   );
 
-  // Two actions on the same combo — flag both rows.
+  // two actions on the same combo, flag both rows
   const conflicts = useMemo(() => {
     const byCombo = new Map<string, string[]>();
     for (const [action, combo] of Object.entries(bindings)) {
@@ -90,14 +90,13 @@ export default function ShortcutsSection() {
     return flagged;
   }, [bindings]);
 
-  // The provider applies the map to the live player on every commit (and on
-  // undo/redo), so persisting is all that's needed here.
+  // provider applies the map to the live player on every commit (and undo/redo), so persisting is
+  // all that's needed here
   const persist = (next: Record<string, string>) => {
     void set("keybindings", next);
   };
 
-  // Key-capture flow (legacy keybinding-ui.js): show held keys live, commit
-  // when the last key is released.
+  // key-capture flow (legacy keybinding-ui.js): shows held keys live, commits when the last key releases
   const pressedRef = useRef(new Set<string>());
   const comboRef = useRef("");
   useEffect(() => {
@@ -132,7 +131,7 @@ export default function ShortcutsSection() {
 
       const display = comboRef.current;
       setCapturing(null);
-      // Releasing only modifiers (no main key) cancels the capture.
+      // releasing only modifiers (no main key) cancels the capture
       if (!display || ["Ctrl", "Shift", "Alt"].includes(display.split("+").pop() ?? "")) return;
 
       const combo = normalise(display);

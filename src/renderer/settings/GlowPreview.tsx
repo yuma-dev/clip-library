@@ -3,11 +3,9 @@ import { Play } from "lucide-react";
 import { loadPreviewImage, startBlobAnimation } from "./blobAnimation";
 import type { AmbientGlowSettings } from "./SettingsContext";
 
-// Live ambient-glow preview: a mini "player" showing a real library thumbnail
-// (plus faint drifting color so smoothing/fps are visible) driving a glow
-// canvas behind it — the player's pipeline (16×9 source → blur+saturate,
-// opacity). The real player blurs 40–120px across a ~1400px-wide video; this
-// preview's video is 160px, so blur scales by ~0.12 to look like the real thing.
+// mini "player" with a real thumbnail (plus drifting color so smoothing/fps are visible) driving
+// a glow canvas, same pipeline as the real player (16x9 source, blur+saturate, opacity). real
+// player blurs 40-120px across a ~1400px video; this one is 160px, so blur scales by ~0.12
 
 const W = 64;
 const H = 36;
@@ -18,7 +16,7 @@ export default function GlowPreview({
   thumb,
 }: {
   glow: AmbientGlowSettings;
-  /** Absolute path of a real library thumbnail (null → gradient fallback). */
+  /** real thumbnail path, null falls back to a gradient */
   thumb: string | null;
 }) {
   const videoRef = useRef<HTMLCanvasElement>(null);

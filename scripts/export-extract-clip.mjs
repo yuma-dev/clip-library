@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 // Extract a real clip into a disposable export spec + a HI-RES thumbnail.
 //
-// Reads the same on-disk files the app reads (settings.json -> clipLocation,
-// .clip_metadata/*.customname|.tags|.gameinfo, icons/) and renders a
-// full-resolution frame from the actual video with the bundled ffmpeg — the
-// cached thumbnail is only 640x360, so we re-grab it at native size for crisp
-// scaled assets. Output goes to export-out/<clip>/ (gitignored).
+// Reads the same on-disk files the app reads (settings.json for clipLocation
+// .clip_metadata/*.customname|.tags|.gameinfo, icons/) and renders a full-res
+// frame with the bundled ffmpeg (cached thumbnail is only 640x360). Output
+// goes to export-out/<clip>/ (gitignored).
 //
 //   node scripts/export-extract-clip.mjs "<clip filename>" [options]
 //     --time <sec>          frame timestamp (default: trim-less heuristic, duration/2 if >40s else 0)
@@ -37,7 +36,7 @@ if (!clipName) {
   process.exit(1);
 }
 
-// --- resolve clip location (mirrors utils/settings-manager.js) ---
+// resolve clip location (mirrors utils/settings-manager.js)
 const userData = opt(
   "user-data",
   path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "clips"),
@@ -68,7 +67,7 @@ const readMaybe = (p) => {
   }
 };
 
-// --- per-clip metadata (mirrors main/clips.js + main/metadata.js) ---
+// per-clip metadata (mirrors main/clips.js + main/metadata.js)
 const customName =
   readMaybe(path.join(metaFolder, `${safe}.customname`))?.trim() ||
   path.basename(clipName, path.extname(clipName));
@@ -76,7 +75,7 @@ const tags = JSON.parse(readMaybe(path.join(metaFolder, `${safe}.tags`)) || "[]"
 const stat = fs.statSync(clipPath);
 const createdAt = Math.round(stat.birthtimeMs || stat.ctimeMs);
 
-// --- game icon + Discord participants from .gameinfo (mirrors normalizeDiscordInfo) ---
+// game icon + Discord participants from .gameinfo (mirrors normalizeDiscordInfo)
 let gameIcon = null;
 const gi = readMaybe(path.join(metaFolder, `${safe}.gameinfo`));
 if (gi) {
@@ -108,7 +107,7 @@ if (gi) {
   gameIcon = { path: iconAbs, title: parsed.window_title || null, discord: discord?.participants?.length ? discord : null };
 }
 
-// --- pick timestamp (mirrors main/thumbnails.js) ---
+// pick timestamp (mirrors main/thumbnails.js)
 const ffprobeDuration = (file) =>
   parseFloat(
     execFileSync(
@@ -120,7 +119,7 @@ const ffprobeDuration = (file) =>
 const duration = ffprobeDuration(clipPath);
 const time = opt("time") != null ? parseFloat(opt("time")) : duration > 40 ? duration / 2 : 0;
 
-// --- output ---
+// output
 const outDir = path.resolve(opt("out", path.join(process.cwd(), "export-out", safe)));
 fs.mkdirSync(outDir, { recursive: true });
 

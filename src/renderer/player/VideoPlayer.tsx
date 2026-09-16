@@ -34,10 +34,8 @@ import ShareModal from "./ShareModal";
 import { fingerprint, reportEvent } from "../telemetry";
 import "./player.css";
 
-// The legacy player's four alert() paths are the loudest "something broke"
-// moments the app has. The message itself carries clip names and ffmpeg error
-// text, so only the code ships; anything unrecognised (the trim-reset success
-// notice) is not an error and is not reported.
+// only these alert codes get reported (message carries clip names/ffmpeg errors); trim-reset
+// success alert isn't an error
 const ALERT_CODES: Array<[string, string]> = [
   ["Failed to export clip", "export_failed"],
   ["Error opening clip", "open_failed"],
@@ -50,51 +48,40 @@ const alertCodeFor = (message: string): string | null =>
 
 interface VideoPlayerProps {
   clipLocation: string;
-  /** The clip list in display order — drives prev/next navigation. */
+  /** display order; drives prev/next navigation */
   clips: LocalClip[];
-  /** Persist + propagate a title change (player title edits funnel through this). */
+  /** persists + propagates a title change */
   renameClip: (originalName: string, newName: string) => Promise<boolean>;
-  /** Remove clips from the library list after a successful delete. */
+  /** called after a successful disk delete */
   removeClips: (names: string[]) => void;
-  /** Clear the "new" highlight + persist watched state when a clip is opened. */
+  /** clears the "new" highlight + persists watched state on open */
   markClipsWatched: (names: string[]) => void;
 }
 
-/**
- * Wraps the legacy crown-jewel player (plan D1). It renders the exact
- * `#player-overlay` DOM the legacy code expects, then on mount hands the
- * element refs + callbacks to `window.legacyPlayer.init()` (loaded verbatim via
- * preload). The legacy JS thereafter drives this DOM imperatively; React never
- * re-renders it. Card clicks call `window.legacyPlayer.openClip(...)`.
- *
- * Phase 4a scope: get a clip playing + close. Trim/speed/volume/audio-tracks/
- * fullscreen come from the legacy code once initialized; callbacks + faithful
- * CSS + keybindings are filled in across 4b–4d.
- */
+/** renders the legacy #player-overlay DOM; window.legacyPlayer.init() drives it imperatively
+ * (React never re-renders it). card clicks call legacyPlayer.openClip() */
 function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWatched }: VideoPlayerProps) {
   const initedRef = useRef(false);
   const { confirm } = useConfirm();
   const toast = useToast();
   const { connected: shareConnected } = useProfile();
   const [shareOpen, setShareOpen] = useState(false);
-  // Latest renameClip, read from the once-only init callbacks without stale closures.
+  // avoids stale closures in the once-only init callbacks
   const renameRef = useRef(renameClip);
   renameRef.current = renameClip;
-  // Latest markClipsWatched, read from the once-only openClip wrapper.
+  // avoids stale closures in the openClip wrapper
   const markWatchedRef = useRef(markClipsWatched);
   markWatchedRef.current = markClipsWatched;
-  // Pending debounced title save (also cleared by the legacy flush-on-close path).
+  // debounced title save timer; also cleared by legacy's flush-on-close
   const titleTimerRef = useRef<number | undefined>(undefined);
-  // Hidden video used to render timeline hover-preview frames.
+  // hover-preview scrub video
   const tempVideoRef = useRef<HTMLVideoElement | null>(null);
-  // Watch-session accumulator: only *active playing* time counts. `lastPlay`
-  // is set on `play` and folded into `activeMs` on `pause`/log. Feeds the
-  // activity log (year-end recap data) via log-watch-session.
+  // only active playing time counts (lastPlay set on play, folded into activeMs on pause/log);
+  // feeds the recap log via log-watch-session
   const watchRef = useRef<{ activeMs: number; lastPlay: number | null }>({ activeMs: 0, lastPlay: null });
 
-  // Flush the accumulated session for the current clip (legacy called this on
-  // player close and right before switching clips, while `state.currentClip`
-  // still points at the outgoing clip). Sessions ≤1s are noise and dropped.
+  // flushes session for the outgoing clip (legacy calls this on close and right before switching,
+  // while state.currentClip still points at it); sessions <=1s dropped as noise
   const logCurrentWatchSession = useCallback(() => {
     const w = watchRef.current;
     if (w.lastPlay != null) {
@@ -113,8 +100,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     });
   }, []);
 
-  // Move to the prev (-1) / next (+1) clip in the current display order.
-  // Reads live from the shared legacy state so it never captures a stale list.
+  // prev (-1) / next (+1); reads live legacy state so it never captures a stale list
   const navigate = useCallback((direction: number) => {
     const state = window.legacyState;
     const player = window.legacyPlayer;
@@ -130,7 +116,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     }
   }, []);
 
-  // Reflect prev/next availability at the ends of the list (matches legacy).
+  // disables prev/next at list ends, matches legacy
   const updateNavButtons = useCallback(() => {
     const state = window.legacyState;
     if (!state) return;
@@ -143,18 +129,16 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (next) next.disabled = index < 0 || index >= list.length - 1;
   }, []);
 
-  // Keep the legacy navigation list in sync with the displayed clips.
   useEffect(() => {
     if (window.legacyState) window.legacyState.currentClipList = clips;
     updateNavButtons();
-    // Grid view: refresh the "Browsing clips · Total: N" presence as the
-    // visible list changes (legacy did this on load + filter changes).
+    // grid view: refresh "Browsing clips, Total: N" presence as the list changes (legacy: on load +
+    // filter changes)
     if (!window.legacyState?.currentClip) updateDiscordPresenceBasedOnState();
   }, [clips, updateNavButtons]);
 
-  // Export progress toast is driven by the shared ./exportToast module (the
-  // #export-toast markup below is rendered once at document level and reused by
-  // both the player and the grid context menu).
+  // toast driven by ./exportToast; #export-toast markup below renders once at document level,
+  // reused by player + grid context menu
   const runExport = useCallback(
     (fn: (p: ProgressFn) => Promise<void>) => {
       fn(showExportProgress).catch((err) => {
@@ -165,7 +149,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     [toast],
   );
 
-  // Delete the open clip: confirm, close the player, delete on disk, drop from list.
   const handleDelete = useCallback(async () => {
     const clip = window.legacyState?.currentClip;
     if (!clip) return;
@@ -197,12 +180,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (!player || !state || initedRef.current) return;
     initedRef.current = true;
 
-    // The legacy player calls window.uiBlur.enable()/disable() on open/close;
-    // install the real refcounted blur before player.init runs so the grid
-    // actually blurs behind the player.
+    // legacy calls window.uiBlur.enable/disable on open/close; install the real refcounted blur
+    // before player.init so the grid actually blurs behind it
     installUiBlur();
 
-    // Seed the shared legacy state singleton.
     state.clipLocation = clipLocation;
     window.clips
       .getSettings()
@@ -213,16 +194,16 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         state.settings = state.settings ?? {};
       });
 
-    // Load player keybindings (Space/f/,/./[/] etc.) from settings.
+    // player keybindings (space/f/,/./[/] etc.) from settings
     void initKeybindings();
 
-    // Discord presence: initial "Browsing clips", idle poll, focus re-assert.
+    // discord presence: initial "Browsing clips", idle poll, focus re-assert
     initDiscordPresence();
 
-    // Grid navigation: arrows/Enter on the library grid (player closed).
+    // grid navigation: arrows/enter on the library grid (player closed)
     initGridKeyboardNavigation();
 
-    // Gamepad: 16ms poll, button/stick routing, quit confirm, grid nav.
+    // gamepad: 16ms poll, button/stick routing, quit confirm, grid nav
     initGamepad({
       navigateToVideo: (direction) => navigate(direction),
       exportDefault: () => runExport(exportTrimmedVideo),
@@ -231,8 +212,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     });
 
     const byId = (id: string) => document.getElementById(id);
-    // Hidden scrubbing video for the timeline hover preview (see the preview
-    // effect below). Kept in a ref so both effects share the same element.
+    // hover-preview scrub video, kept in a ref so both effects share it
     if (!tempVideoRef.current) {
       const tv = document.createElement("video");
       tv.crossOrigin = "anonymous";
@@ -278,8 +258,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       initializeVolumeControls: null,
       getCachedClipData: () => null,
       getThumbnailPath: (name: string) => window.clips.getThumbnailPath(name),
-      // Legacy calls these on clip open + seek (skipping Private clips) and on
-      // close/edit; the module gates on the enableDiscordRPC setting itself.
+      // legacy calls this on open/seek (skips Private clips) and close/edit; gated on
+      // enableDiscordRPC inside the module
       updateDiscordPresenceForClip: (clip: { originalName: string; customName: string; tags?: string[] }, isPlaying: boolean) =>
         updateDiscordPresenceForClip(clip, isPlaying),
       showCustomAlert: (msg: unknown) => {
@@ -290,7 +270,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             kind: "error",
             severity: "error",
             surface: "player",
-            // Per-path fingerprint, so one noisy alert can't hide the others.
+            // per-path fingerprint, so one noisy alert can't hide the others
             fingerprint: fingerprint(`legacy_alert_shown:${alertCode}`),
             context: { alert_code: alertCode },
           });
@@ -311,15 +291,14 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       exportAudioToClipboard: () => runExport((p) => exportAudio(null, p)),
       exportDefault: () => runExport(exportTrimmedVideo),
       confirmAndDeleteClip: () => void handleDelete(),
-      // Grid navigation (library/gridNavigation.ts) — the player re-enables it
-      // on close while a gamepad is connected (player-legacy:1747).
+      // player re-enables grid nav (library/gridNavigation.ts) on close while a gamepad is
+      // connected (player-legacy:1747)
       enableGridNavigation: () => enableGridNavigation(),
       disableGridNavigation: () => disableGridNavigation(),
       openCurrentGridSelection: () => openCurrentGridSelection(),
       moveGridSelection: (direction: GridDirection) => moveGridSelection(direction),
-      // Persist on close / clip-switch (legacy flushPendingClipEdits path).
-      // Unchanged titles skip the write — the flush runs on EVERY close, and
-      // the redundant save-custom-name IPC showed up in perf traces.
+      // flush runs on every close/switch (legacy flushPendingClipEdits); unchanged titles skip the
+      // write, the redundant save-custom-name IPC showed up in perf traces
       saveTitleChange: (clipName: string, old: string, newName: string) =>
         old === newName ? Promise.resolve(true) : renameRef.current(clipName, newName),
       clearSaveTitleTimeout: () => window.clearTimeout(titleTimerRef.current),
@@ -332,26 +311,20 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     try {
       player.init(elements, callbacks);
 
-      // The legacy player's key handlers (Space/f/,/./[/] …) were attached to
-      // `document` by the old renderer right before each open, and detached by
-      // closePlayer. Mirror that by wrapping openClip — the single chokepoint
-      // all opens (grid click, prev/next) funnel through — so the handlers are
-      // (re)bound every time. addEventListener dedupes identical listeners.
+      // mirrors legacy: key handlers bound on document before each open, detached by closePlayer;
+      // openClip is the one chokepoint all opens funnel through, addEventListener dedupes repeats
       const rawOpenClip = player.openClip.bind(player);
       player.openClip = (originalName: string, customName: string) => {
-        // Dev profiler: label this end-to-end flow so the trace reads "open-clip"
-        // instead of "pointerdown:clip-card". No-op unless the dev HUD is on.
+        // dev profiler: labels trace "open-clip" instead of "pointerdown:clip-card"; no-op unless HUD is on
         (window as unknown as { __perf?: { interaction(l: string): void } }).__perf?.interaction("open-clip");
-        // Opening the player is what makes a clip "watched" (grid click and
-        // prev/next both land here); hover previews never do.
+        // opening the player marks watched (grid click + prev/next land here); hover previews don't
         markWatchedRef.current([originalName]);
         document.addEventListener("keydown", player.handleKeyPress);
         document.addEventListener("keyup", player.handleKeyRelease);
         return rawOpenClip(originalName, customName);
       };
 
-      // Volume-range controls create their own DOM (state.volumeStart/End/Region
-      // elements) that the player's hideVolumeControls() expects to exist.
+      // volume-range controls create state.volumeStart/End/Region DOM that hideVolumeControls() expects
       window.legacyVolumeRange?.init({
         videoPlayer: elements.videoPlayer,
         progressBarContainer: elements.progressBarContainer,
@@ -364,8 +337,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       });
     } catch (err) {
       console.error("[VideoPlayer] legacy init failed:", err);
-      // The player stays permanently broken after this; console-only was the
-      // whole reason it never showed up in the field.
+      // stays broken after this; console-only logging was why it never surfaced in the field
       reportEvent("player_init_failed", { kind: "crash", severity: "error", surface: "player", error: err });
     }
 
@@ -376,15 +348,12 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (fs) fs.style.display = "none";
   }, [clipLocation]);
 
-  // Keep the shared clip location fresh.
   useEffect(() => {
     if (window.legacyState) window.legacyState.clipLocation = clipLocation;
   }, [clipLocation]);
 
-  // Play/pause on the (static) legacy video element drives two things:
-  // watch-session active-time accumulation and a Discord presence refresh
-  // (ticker runs while playing, frozen elapsed while paused). `pause` also
-  // fires before `ended` and on clip switch/close, so it covers all stops.
+  // play/pause drives watch-session active-time + discord presence (ticker while playing, frozen
+  // while paused); pause also fires before ended and on switch/close
   useEffect(() => {
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
     if (!video) return;
@@ -410,8 +379,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     };
   }, []);
 
-  // Live export progress streamed from the main process (fills the toast bar
-  // between the 0% start and 100% completion set by the export helpers).
+  // streamed export progress fills the toast bar between the 0%/100% set by the export helpers
   useEffect(() => {
     const unsub = window.clips.onExportProgress((progress: number) => {
       const pct = Math.max(0, Math.min(100, Number(progress) || 0));
@@ -420,8 +388,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     return unsub;
   }, [showExportProgress]);
 
-  // Hardware encode/decode fallback notices from main during export (legacy
-  // rendered dismissible .fallback-notice divs; toasts cover the same info).
+  // hw encode/decode fallback notices; legacy used dismissible .fallback-notice divs, toasts now cover it
   useEffect(() => {
     const offEncode = window.clips.onShowFallbackNotice(() => {
       toast.show(
@@ -448,11 +415,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     };
   }, [toast]);
 
-  // (Escape-to-close is now handled by the player's own keybindings, bound on
-  // open; backdrop click remains as a fallback.)
+  // escape-to-close is handled by the player's own keybindings; backdrop click is the fallback
 
-  // Inline title editing on the legacy #clip-title input: live debounced save,
-  // Enter commits, Escape cancels. Persists + propagates via renameClip.
+  // #clip-title inline editing: debounced save, enter commits, escape cancels, via renameClip
   useEffect(() => {
     const input = document.getElementById("clip-title") as HTMLInputElement | null;
     if (!input) return;
@@ -488,8 +453,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         input.value = original;
         input.blur();
       }
-      // Stop player keybindings (space, arrows, Escape-to-close) from firing
-      // while the user is typing a title.
+      // stop player keybindings (space/arrows/escape) firing while typing a title
       e.stopPropagation();
     };
 
@@ -506,11 +470,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     };
   }, []);
 
-  // Timeline hover preview: a hidden temp <video> is pointed at the current
-  // clip; hovering the progress bar seeks it (throttled) and each seeked frame
-  // is drawn into #preview-canvas. The player's updatePreview handles the seek
-  // + timestamp; we own positioning + the canvas draw (ported from the legacy
-  // renderer, which is where this wiring used to live).
+  // hidden temp <video> tracks the current clip; hover seeks it (throttled) and draws frames into
+  // #preview-canvas; legacy updatePreview handles seek+timestamp, we own positioning + the draw
   useEffect(() => {
     const container = document.getElementById("progress-bar-container");
     const preview = document.getElementById("timeline-preview") as HTMLElement | null;
@@ -525,7 +486,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     };
     temp.addEventListener("seeked", onSeeked);
 
-    // Point the temp video at each newly-loaded clip; size the canvas once.
+    // points the temp video at each newly-loaded clip; sizes the canvas once
     const onLoaded = () => {
       if (video.src && temp.src !== video.src) temp.src = video.src;
       canvas.width = 160;
@@ -534,16 +495,16 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     };
     video.addEventListener("loadedmetadata", onLoaded);
 
-    // Hover → position horizontally on the cursor + throttled frame seek.
+    // hover: position horizontally on the cursor + throttled frame seek
     let half = 0;
     let lastSeek = 0;
     let trailing: number | undefined;
     const seekAt = (clientX: number) => {
-      // updatePreview only reads e.clientX; the legacy module is loosely typed.
+      // updatePreview only reads e.clientX; the legacy module is loosely typed
       window.legacyPlayer?.updatePreview?.({ clientX }, { skipPosition: true });
     };
     const onMove = (e: MouseEvent) => {
-      // Don't fight the volume-range drag controls that live on the bar.
+      // don't fight the volume-range drag controls that live on the bar
       const t = e.target as HTMLElement;
       if (
         t.closest(".volume-drag-control") ||
@@ -590,7 +551,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     <div
       id="player-overlay"
       onClick={(e) => {
-        // Click on the backdrop (outside the video/controls) closes the player.
+        // click on the backdrop (outside the video/controls) closes the player
         const t = e.target as HTMLElement;
         if (t.id === "player-overlay" || t.id === "player-container") {
           void window.legacyPlayer?.closePlayer();
@@ -633,7 +594,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             </div>
           </div>
           <div id="video-controls">
-            {/* TOP: title + action buttons */}
+            {/* top: title + action buttons */}
             <div id="top-controls">
               <input type="text" id="clip-title" placeholder="Clip Title" />
               <div className="player-actions">
@@ -680,7 +641,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
               </div>
             </div>
 
-            {/* BOTTOM: playback controls, then progress bar, then time */}
+            {/* bottom: playback row, progress bar, time */}
             <div id="bottom-controls">
               <div className="playback-row">
                 <div id="volume-container">
@@ -722,8 +683,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       </div>
     </div>
 
-    {/* Export progress toast — legacy markup, positioned fixed at document
-        level (outside the overlay's stacking context) so it stays visible. */}
+    {/* legacy markup, positioned fixed at document level (outside the overlay stacking context) so it stays visible */}
     <div id="export-toast" className="export-toast">
       <div className="export-toast-content">
         <div className="export-toast-header">
@@ -743,6 +703,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   );
 }
 
-// The player DOM is driven imperatively by the legacy code after init; memo
-// keeps app-shell state changes from re-rendering this large static tree.
+// DOM is driven imperatively by legacy code after init; memo keeps app-shell state changes from
+// re-rendering this large static tree
 export default memo(VideoPlayer);

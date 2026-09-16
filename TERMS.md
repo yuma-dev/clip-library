@@ -1,4 +1,4 @@
-# Terms of Service — ClipLib
+# ClipLib Terms of Service
 
 **Last updated: 11 July 2026**
 
@@ -21,7 +21,7 @@ These Terms are between you and the App's developer, an individual based in Germ
 ClipLib is a desktop application for organising, trimming, tagging, and exporting video clips,
 designed to complement recording software such as OBS Studio. It includes:
 
-- **Local features** — clip management, non-destructive editing, tagging, and export, all
+- **Local features**: clip management, non-destructive editing, tagging, and export, all
   performed on your own computer;
 - an optional bundled recorder (**clipdip**);
 - an **optional sharing service** (`friends.cliplib.app`) for uploading and sharing clips.
@@ -48,7 +48,7 @@ that:
 - you will use the App **only for lawful purposes**;
 - you will **not upload or share** content that is illegal, infringing, malicious, or that
   violates anyone's rights;
-- you will **respect other people's privacy** — in particular, ClipLib can record which people
+- you will **respect other people's privacy**, in particular, ClipLib can record which people
   are in your Discord voice channel at record time. Only share clips that identify, name, or
   @mention other people with their awareness and consent, as appropriate.
 
@@ -96,7 +96,7 @@ The App and the sharing service are provided **"as is" and "as available", witho
 any kind**, to the fullest extent permitted by law. We do not guarantee that the App will be
 error-free or that the sharing service will always be available.
 
-**Data safety note:** ClipLib's edits are non-destructive and reversible — **except deletion**.
+**Data safety note:** ClipLib's edits are non-destructive and reversible, **except deletion**.
 Deleting a clip in the App permanently deletes the underlying video file. Keep your own backups
 of anything important.
 

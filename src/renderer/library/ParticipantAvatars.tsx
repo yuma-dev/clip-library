@@ -1,8 +1,6 @@
-// Stacked Discord-call participant avatars in the top-left corner of a clip
-// thumbnail — port of the ClipLib website's mention stack (ClipCard.tsx).
-// Shows up to 4 humans (bots filtered out) plus a "+X" bubble, each with a
-// hover profile popover. Identities render through the latest-known snapshot
-// registry (discord.ts) so old clips pick up renamed users / new avatars.
+// Stacked Discord-call participant avatars, port of the website's mention
+// stack. Up to 4 humans (bots filtered) plus a "+X" bubble, each with a hover
+// popover; identities render via discord.ts's latest-known snapshot registry.
 
 import { memo, useEffect } from "react";
 import UserPopover, { discordAvatarUrl } from "../ui/UserPopover";
@@ -21,7 +19,7 @@ const MAX_AVATARS = 4;
 
 interface ParticipantAvatarsProps {
   discord: ClipDiscordInfo;
-  /** Clip timestamp (ms) — decides which snapshot is "latest" per user. */
+  /** Clip timestamp (ms), decides which snapshot is "latest" per user. */
   clipCreatedAt: number;
 }
 
@@ -35,8 +33,7 @@ function ParticipantAvatars({ discord, clipCreatedAt }: ParticipantAvatarsProps)
     registerParticipants(discord, clipCreatedAt);
   }, [discord, clipCreatedAt]);
 
-  // Clicking an avatar jumps to the person's ClipLib profile — only when
-  // signed in AND the Discord id maps to a registered account.
+  // Jumps to the person's profile only when signed in and the Discord id maps to a registered account.
   const openParticipantProfile = async (discordId: string) => {
     if (!connected) return;
     let user = getShareUserForDiscordId(discordId);

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Downloads the BtbN LGPL-essentials ffmpeg build and caches ffmpeg.exe at
-// dist/ffmpeg-cache/ffmpeg.exe. Safe to run repeatedly — skips the download
-// if the cache already exists.
+// Downloads BtbN LGPL-essentials ffmpeg, caches at dist/ffmpeg-cache/ffmpeg.exe.
+// Safe to run repeatedly, skips the download if cached.
 
 import https from 'https';
 import fs    from 'fs';
@@ -16,9 +15,7 @@ const CACHE_DIR  = path.join(ROOT, 'ffmpeg-cache');
 const CACHED_EXE = path.join(CACHE_DIR, 'ffmpeg.exe');
 const CACHED_ZIP = path.join(CACHE_DIR, 'ffmpeg-lgpl.zip');
 
-// BtbN LGPL-essentials build — no GPL libs, smallest redistributable set.
-// Update the tag when a newer release is available.
-// GitHub Releases API endpoint — finds the right asset name automatically.
+// GitHub Releases API finds the right asset name automatically.
 const RELEASES_API =
   'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest';
 
@@ -45,7 +42,7 @@ if (existsSync(CACHED_EXE)) {
 
 mkdirSync(CACHE_DIR, { recursive: true });
 
-// Fetch JSON from a URL, following redirects.
+// follows redirects
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     https.get(url, { headers: { 'User-Agent': 'clipdip-build', 'Accept': 'application/vnd.github+json' } }, res => {
@@ -63,7 +60,7 @@ function fetchJson(url) {
   });
 }
 
-// Follow redirects (GitHub releases → CDN) and stream to disk.
+// follows redirects (GitHub releases to CDN) then streams to disk
 function download(url, dest) {
   return new Promise((resolve, reject) => {
     https.get(url, { headers: { 'User-Agent': 'clipdip-build' } }, res => {
@@ -88,11 +85,9 @@ function download(url, dest) {
   });
 }
 
-// Resolve the download URL via the GitHub Releases API.
 console.log('Resolving latest LGPL ffmpeg release from BtbN...');
 const releaseJson = await fetchJson(RELEASES_API);
-// Pick win64 LGPL (no shared libs — self-contained ffmpeg.exe).
-// Prefer stable tags (n8.x > n7.x > master) over the nightly master build.
+// win64 LGPL, no shared libs; prefer stable tags (n8.x > n7.x) over nightly master
 const candidates = (releaseJson.assets ?? []).filter(a =>
   a.name.includes('win64') &&
   a.name.includes('lgpl')  &&
@@ -103,12 +98,11 @@ if (!candidates.length) {
   console.error('Available assets:', releaseJson.assets?.map(a => a.name));
   throw new Error('Could not find a win64-lgpl zip in the latest BtbN release.');
 }
-// Sort: versioned stable releases (n8.1, n7.1, …) before master.
 candidates.sort((a, b) => {
   const stableA = /n\d+\.\d+/.test(a.name);
   const stableB = /n\d+\.\d+/.test(b.name);
   if (stableA !== stableB) return stableA ? -1 : 1;
-  return b.name.localeCompare(a.name); // higher version string wins
+  return b.name.localeCompare(a.name); // higher version wins
 });
 const asset = candidates[0];
 const FFMPEG_URL = asset.browser_download_url;
@@ -116,7 +110,7 @@ console.log(`Downloading: ${asset.name}`);
 console.log(`  ${FFMPEG_URL}`);
 await download(FFMPEG_URL, CACHED_ZIP);
 
-// Extract ffmpeg.exe from the zip using Windows built-in tar (Win 10+).
+// windows built-in tar, win10+
 console.log('Extracting ffmpeg.exe...');
 const extractDir = path.join(CACHE_DIR, 'extract');
 fs.mkdirSync(extractDir, { recursive: true });
@@ -124,11 +118,9 @@ execSync(`tar -xf "${CACHED_ZIP}" --strip-components=2 -C "${extractDir}" --incl
   stdio: 'inherit',
 });
 
-// tar --include isn't universally supported on Windows tar; fall back to
-// extracting everything and finding the exe.
+// tar --include isn't universal on windows tar, fall back to extracting all
 const found = findFile(extractDir, 'ffmpeg.exe');
 if (!found) {
-  // Retry: extract all, search.
   execSync(`tar -xf "${CACHED_ZIP}" -C "${extractDir}"`, { stdio: 'inherit' });
   const retry = findFile(extractDir, 'ffmpeg.exe');
   if (!retry) throw new Error('ffmpeg.exe not found in downloaded zip.');

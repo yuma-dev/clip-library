@@ -1,21 +1,12 @@
-//! Capture the Discord voice-call roster at clip time — no server bot.
+//! Capture the Discord voice-call roster at clip time, no server bot. Connects
+//! to the desktop client's local RPC over a named pipe; after one-time
+//! `AUTHORIZE` consent, polls `GET_SELECTED_VOICE_CHANNEL` so
+//! [`DiscordHandle::roster`] is a lock away for the clip save flow.
 //!
-//! Connects to the Discord desktop client's **local RPC** over a named
-//! pipe and keeps a background connection warm. After a one-time
-//! `AUTHORIZE` consent (triggered from the UI, never on the clip hotkey),
-//! the manager thread refreshes its OAuth token silently forever and polls
-//! `GET_SELECTED_VOICE_CHANNEL` so the current call's participant IDs are
-//! always a lock away. The clip save flow snapshots [`DiscordHandle::roster`]
-//! at the hotkey moment and writes it into the clip's metadata sidecar.
-//!
-//! Credentials: the app's public client id is compiled in; the client
-//! secret must be provided at build time via `CLIPDIP_DISCORD_CLIENT_SECRET`
-//! (or the same env var at runtime for dev). With no secret the whole
-//! feature reports [`DiscordStatus::Disabled`] and does nothing.
-//!
-//! Distribution note: the `rpc` scope is allowlist-gated by Discord. It
-//! works for the app owner and anyone added under **App Testers**; shipping
-//! to arbitrary users needs Discord to approve the app for RPC.
+//! Client secret comes from `CLIPDIP_DISCORD_CLIENT_SECRET` at build (or
+//! runtime env for dev); without it the feature reports [`DiscordStatus::Disabled`].
+//! The `rpc` scope is allowlist-gated by Discord (owner + App Testers only
+//! until Discord approves the app).
 
 mod ipc;
 mod oauth;
@@ -34,35 +25,27 @@ use tracing::{debug, info, warn};
 use ipc::{Connection, OP_CLOSE, OP_HANDSHAKE, OP_PING};
 use oauth::{TokenError, TokenResponse, TokenStore};
 
-/// The app's OAuth2 client id (public — safe to compile in).
+/// Public OAuth2 client id, safe to compile in.
 const CLIENT_ID: &str = "1523640943218000042";
-/// Must match a redirect registered on the app; the value is never
-/// actually navigated to, it only has to match at token-exchange time.
+/// Must match a redirect registered on the app; never actually navigated to.
 const REDIRECT_URI: &str = "http://localhost";
-/// How often the warm connection re-queries the current voice channel.
-/// The hotkey reads the last snapshot, so this bounds its staleness — 2s
-/// is plenty for "who was in the call".
+/// Hotkey reads the last snapshot, so this bounds staleness. 2s is plenty.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-/// Reconnect delay after the pipe drops or Discord is closed.
+/// Reconnect delay after the pipe drops or Discord closes.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(3);
-/// Refresh the access token this long before it expires, so a poll never
-/// races an expiry.
+/// Refresh this long before expiry so a poll never races it.
 const REFRESH_SLACK: Duration = Duration::from_secs(6 * 3600);
-/// Backoff bounds for retrying a transient token-endpoint failure without
-/// tearing down the (still healthy) RPC session.
+/// Backoff for a transient token-endpoint failure, without tearing down the RPC session.
 const REFRESH_RETRY_MIN: Duration = Duration::from_secs(60);
 const REFRESH_RETRY_MAX: Duration = Duration::from_secs(30 * 60);
-/// "Abnormal amount of consent popups": this many AUTHORIZE prompts inside
-/// the window means something is wrong (dying tokens, decline loop) and the
-/// overlay may hint that the settings toggle stops the popups. Auto-authorize
-/// records one prompt per launch while unauthenticated, so the threshold has
-/// to sit above a normal couple-of-days launch count.
+/// This many AUTHORIZE prompts in the window signals a dying-token/decline
+/// loop; above a normal couple-of-days launch count.
 const PROMPT_STORM_THRESHOLD: usize = 5;
 const PROMPT_STORM_WINDOW_SECS: i64 = 48 * 3600;
-/// Don't repeat the hint more often than this.
+/// Don't repeat the popup-storm hint more often than this.
 const PROMPT_HINT_COOLDOWN_SECS: i64 = 7 * 24 * 3600;
 
-// ---------- public types --------------------------------------------------
+// public types
 
 /// One member of a voice call.
 #[derive(Clone, Debug, Serialize)]
@@ -75,15 +58,14 @@ pub struct Participant {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nick: Option<String>,
     pub bot: bool,
-    /// Ready-to-use CDN URL for the member's avatar (animated `.gif` when
-    /// applicable, else `.png`), or their default avatar when they have
-    /// none set. `None` only if the id couldn't be parsed.
+    /// CDN avatar URL (`.gif` if animated, else `.png`), or default avatar.
+    /// `None` only if the id couldn't be parsed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
 }
 
 impl Participant {
-    /// Best display label: server nick → global (display) name → username.
+    /// Best display label: server nick, then global (display) name, then username.
     pub fn display_name(&self) -> &str {
         self.nick
             .as_deref()
@@ -107,13 +89,13 @@ pub struct CallRoster {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum DiscordStatus {
-    /// No client secret compiled in — feature off.
+    /// No client secret compiled in, feature off.
     Disabled,
     /// Establishing the pipe / authenticating.
     Connecting,
     /// Discord isn't running (no IPC pipe).
     DiscordNotRunning,
-    /// Connected but not yet authorized — the UI should offer "Connect".
+    /// Connected but not yet authorized, the UI should offer "Connect".
     NeedsAuthorization,
     /// Fully connected and reading voice state.
     Connected { user: String },
@@ -155,9 +137,8 @@ impl DiscordHandle {
         let _ = self.cmd_tx.send(Command::Shutdown);
     }
 
-    /// True when an abnormal number of consent popups fired recently and
-    /// the "you can turn this off in settings" hint hasn't been shown for a
-    /// while. The app polls this and shows the overlay hint.
+    /// True when consent popups fired abnormally often recently and the
+    /// settings hint hasn't shown in a while. App polls this for the overlay.
     pub fn prompt_hint_due(&self) -> bool {
         let log = oauth::PromptLog::load(&self.config_dir);
         let now = oauth::now_unix();
@@ -183,16 +164,10 @@ impl DiscordHandle {
     }
 }
 
-/// Spawn the background manager. Always returns a usable handle; if no
-/// client secret is available the handle simply reports `Disabled`.
-///
-/// `auto_authorize` makes an unauthenticated start behave as if the user
-/// clicked Connect once: the consent popup shows as soon as a Discord pipe
-/// connects. Callers pass the config's `discord.enabled` so an opted-out
-/// install never prompts. Declining just parks the manager in
-/// `NeedsAuthorization` for the rest of the run — the next process start
-/// asks again, so an enabled-but-unauthenticated install can't silently
-/// stay disconnected.
+/// Always returns a usable handle; reports `Disabled` if no client secret.
+/// `auto_authorize` (callers pass `discord.enabled`) shows the consent popup
+/// as soon as a pipe connects; a decline just parks in `NeedsAuthorization`
+/// and the next launch asks again.
 pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let roster = Arc::new(Mutex::new(None));
@@ -209,9 +184,7 @@ pub fn spawn(config_dir: PathBuf, auto_authorize: bool) -> DiscordHandle {
         };
     };
 
-    // A persisted invalid_scope rejection (account not on the tester
-    // allowlist) makes auto-prompting pointless — stay quiet until the user
-    // clicks Connect or the app updates.
+    // persisted invalid_scope rejection: stay quiet until Connect or an update
     let auth_blocked = oauth::AuthBlock::load(&config_dir).is_some();
     let mgr = Manager {
         config_dir: config_dir.clone(),
@@ -247,7 +220,7 @@ fn client_secret() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-// ---------- manager -------------------------------------------------------
+// manager
 
 enum Command {
     Authorize,
@@ -257,7 +230,7 @@ enum Command {
 
 /// Local result type for an RPC request/response round-trip.
 enum ReqError {
-    /// The pipe closed (Discord quit / connection dropped) — reconnect.
+    /// The pipe closed (Discord quit / connection dropped), reconnect.
     Closed,
     /// No response within the deadline.
     Timeout,
@@ -272,8 +245,7 @@ struct Manager {
     status: Arc<Mutex<DiscordStatus>>,
     cmd_rx: Receiver<Command>,
     nonce: AtomicU64,
-    /// Config's `discord.enabled` at spawn time: whether an unauthenticated
-    /// state may prompt on its own (also re-armed when a token dies).
+    /// Config's `discord.enabled` at spawn: may prompt unauthenticated (re-armed on token death).
     auto_authorize: bool,
     want_authorize: AtomicBool,
     reset: AtomicBool,
@@ -290,11 +262,8 @@ impl Manager {
             }
 
             let has_token = TokenStore::load(&self.config_dir).refresh_token.is_some();
-            // Discord stops servicing an idle, un-authenticated RPC connection
-            // after ~15s. So with no token we must NOT hold a live pipe waiting
-            // for the user — we idle here with NO connection until they click
-            // Connect, then open a fresh pipe and AUTHORIZE within milliseconds
-            // of the handshake (see `session`).
+            // Discord freezes an idle unauthenticated pipe after ~15s, so with no
+            // token we hold NO connection until Connect, then AUTHORIZE right after handshake.
             if !has_token && !self.want_authorize.load(Ordering::Relaxed) {
                 match oauth::AuthBlock::load(&self.config_dir) {
                     Some(block) => self.set_status(DiscordStatus::Error {
@@ -319,10 +288,8 @@ impl Manager {
         info!("discord manager stopped");
     }
 
-    /// Wait — holding NO pipe — until the user requests authorization or the
-    /// manager is shut down. Holding no connection is the whole point: an
-    /// idle un-authenticated RPC connection gets frozen by Discord, which is
-    /// what silently ate every AUTHORIZE before this restructure.
+    /// Holds NO pipe until authorize is requested or shutdown: an idle
+    /// unauthenticated pipe gets frozen by Discord (used to eat every AUTHORIZE).
     fn idle_until_authorize(&self) {
         while !self.stopped() {
             self.drain_commands();
@@ -333,10 +300,8 @@ impl Manager {
         }
     }
 
-    /// One connection lifetime: connect → handshake → authenticate → serve.
-    /// Authentication happens *immediately* after the handshake (no idle
-    /// gap), because Discord freezes an un-authenticated connection that sits
-    /// idle. Returns `Err` on any disconnect/failure so `run` reconnects.
+    /// Connect, handshake, authenticate immediately (no idle gap, Discord
+    /// freezes idle unauthenticated pipes), serve. `Err` triggers a reconnect.
     fn session(&self, has_token: bool) -> anyhow::Result<()> {
         self.reset.store(false, Ordering::Relaxed);
         self.set_status(DiscordStatus::Connecting);
@@ -352,12 +317,11 @@ impl Manager {
         self.handshake(&conn)?;
         debug!("discord: handshake complete");
 
-        // Authenticate now, within milliseconds of READY.
+        // authenticate now, within milliseconds of READY
         let expires_at = if has_token {
             self.auth_with_token(&conn)?
         } else {
-            // A Connect was requested — consume the flag and AUTHORIZE on this
-            // fresh connection right away, before Discord can freeze it.
+            // consume the Connect flag, AUTHORIZE now before Discord can freeze it
             self.want_authorize.store(false, Ordering::Relaxed);
             self.authorize_and_auth(&conn)?
         };
@@ -366,14 +330,11 @@ impl Manager {
         self.serve(&conn, expires_at)
     }
 
-    /// Steady-state loop: poll the voice channel, refresh before expiry,
-    /// answer pings, honor commands. Returns when the connection drops, a
-    /// disconnect/reset is requested, or the manager shuts down.
+    /// Poll voice, refresh before expiry, answer pings, honor commands until
+    /// the connection drops or a disconnect/reset/shutdown is requested.
     fn serve(&self, conn: &Connection, mut expires_at: Instant) -> anyhow::Result<()> {
         let mut next_poll = Instant::now();
-        // Transient token-endpoint failures back off on their own schedule
-        // instead of tearing down a healthy pipe — the current access token
-        // stays valid for up to REFRESH_SLACK anyway.
+        // transient failures back off on their own schedule; token stays valid REFRESH_SLACK longer
         let mut next_refresh_attempt = Instant::now();
         let mut refresh_backoff = REFRESH_RETRY_MIN;
         loop {
@@ -389,17 +350,14 @@ impl Manager {
                         refresh_backoff = REFRESH_RETRY_MIN;
                     }
                     Err(TokenError::InvalidGrant) => {
-                        // Token dead — end the session. With auto-authorize
-                        // on, re-arm the prompt so the next loop asks again
-                        // instead of silently going dark.
+                        // token dead: re-arm the prompt so the next loop asks again
                         TokenStore::clear(&self.config_dir);
                         self.rearm_auto_authorize();
                         return Ok(());
                     }
                     Err(TokenError::Transient(e)) => {
                         if Instant::now() >= expires_at {
-                            // Actually expired and unrefreshable — the
-                            // session can't continue.
+                            // expired and unrefreshable, session can't continue
                             return Err(e);
                         }
                         warn!("discord: token refresh failed ({e:#}) — retrying in {refresh_backoff:?}");
@@ -449,13 +407,9 @@ impl Manager {
         }
     }
 
-    /// AUTHENTICATE using stored credentials. Prefers the cached access
-    /// token — a reconnect (Discord restart, pipe drop, PC reboot) then
-    /// never touches the token endpoint, so the refresh token isn't rotated
-    /// and can't be stranded by a crash mid-rotation. Falls back to a
-    /// refresh when the cached token is missing, near expiry, or rejected.
-    /// On invalid-grant (both refresh tokens dead), clears the store,
-    /// re-arms the auto prompt, and errors so `run` re-asks.
+    /// Prefers the cached access token so a plain reconnect never rotates
+    /// the refresh token. Falls back to refresh if missing/near-expiry/rejected;
+    /// on invalid-grant clears the store and re-arms the auto prompt.
     fn auth_with_token(&self, conn: &Connection) -> anyhow::Result<Instant> {
         let store = TokenStore::load(&self.config_dir);
         if let (Some(at), Some(exp)) = (store.access_token.clone(), store.expires_at) {
@@ -466,8 +420,7 @@ impl Manager {
                         self.mark_connected(&data, "cached");
                         return Ok(Instant::now() + Duration::from_secs(remaining as u64));
                     }
-                    // Rejected by Discord (revoked server-side while still
-                    // unexpired) — fall through to a real refresh.
+                    // revoked server-side while still unexpired, fall through to a real refresh
                     Err(ReqError::Rpc(d)) => {
                         warn!("discord: cached access token rejected ({d}) — refreshing")
                     }
@@ -489,11 +442,8 @@ impl Manager {
         }
     }
 
-    /// Refresh with rotation-loss protection: try the current refresh
-    /// token, and on invalid-grant fall back once to the previous one
-    /// (Discord keeps it valid until its successor is used, so this
-    /// recovers a rotation whose response never reached disk). The new
-    /// pair is persisted BEFORE the tokens are used for anything.
+    /// On invalid-grant, retries the previous refresh token once (Discord
+    /// keeps it valid until its successor is used, rescuing a lost rotation).
     fn refresh_tokens(&self) -> Result<TokenResponse, TokenError> {
         let store = TokenStore::load(&self.config_dir);
         let Some(rt) = store.refresh_token.clone() else {
@@ -522,16 +472,12 @@ impl Manager {
         }
     }
 
-    /// Fresh authorization on a just-handshaked connection: AUTHORIZE (shows
-    /// the consent popup), exchange the code, then AUTHENTICATE. Must run
-    /// promptly after the handshake — that's the whole fix.
+    /// AUTHORIZE (consent popup), exchange the code, then AUTHENTICATE.
+    /// Must run promptly after the handshake.
     fn authorize_and_auth(&self, conn: &Connection) -> anyhow::Result<Instant> {
         info!("discord: sending AUTHORIZE — approve the popup in Discord");
-        // Log the popup so the app can spot an abnormal prompt rate and hint
-        // at the settings toggle. Recorded on the AUTHORIZE *outcome*, not the
-        // send: approve, decline and timeout all had a dialog on screen, but a
-        // closed pipe means it likely never rendered (Discord quit, or this
-        // process was a doomed update-restart twin) and must not count.
+        // recorded on the outcome not the send: a closed pipe means the dialog
+        // likely never rendered, so it must not count toward the prompt-storm rate
         let code = match self.authorize(conn) {
             Ok(code) => {
                 oauth::PromptLog::record(&self.config_dir);
@@ -543,10 +489,8 @@ impl Manager {
                 }
                 match e {
                     ReqError::Rpc(d) => {
-                        // invalid_scope is not a user decline — the account
-                        // isn't allowlisted for the rpc scope, so every
-                        // future AUTHORIZE this build would fail the same
-                        // way. Persist that and stop auto-prompting.
+                        // invalid_scope means the account isn't rpc-allowlisted, persist and stop
+                        // auto-prompting
                         if d.to_string().contains("invalid_scope") {
                             let reason = "Discord only lets invited accounts connect right now, \
                                 and this account isn't invited yet. Turn off voice capture in \
@@ -620,9 +564,8 @@ impl Manager {
             .map_err(TokenError::Transient)
     }
 
-    /// Send `AUTHORIZE` and return the resulting `code`. Long timeout — the
-    /// user has to click the consent popup. Returns the raw [`ReqError`] so
-    /// the caller can tell a closed pipe from a decline or timeout.
+    /// Long timeout, the user has to click the popup. Raw [`ReqError`] so the
+    /// caller can tell a closed pipe from a decline or timeout.
     fn authorize(&self, conn: &Connection) -> Result<String, ReqError> {
         let args = json!({
             "client_id": CLIENT_ID,
@@ -666,7 +609,7 @@ impl Manager {
         Ok(())
     }
 
-    /// Send a `FRAME` command and wait for the matching-nonce response,
+    /// Send a `FRAME` command and wait for the matching-nonce response
     /// answering pings while it waits.
     fn request(
         &self,
@@ -702,7 +645,7 @@ impl Manager {
                         }
                         return Ok(val.get("data").cloned().unwrap_or(Value::Null));
                     }
-                    // Some other dispatch/response — ignore and keep waiting.
+                    // some other dispatch/response, ignore and keep waiting
                 }
                 Err(RecvTimeoutError::Timeout) => return Err(ReqError::Timeout),
                 Err(RecvTimeoutError::Disconnected) => return Err(ReqError::Closed),
@@ -710,12 +653,10 @@ impl Manager {
         }
     }
 
-    // ----- small helpers --------------------------------------------------
+    // small helpers
 
-    /// Persist a token response atomically, BEFORE the tokens are used for
-    /// anything. `used_refresh` is the refresh token that produced this
-    /// response (None for a fresh code exchange); it's kept as the fallback
-    /// slot since Discord honors it until its successor is used.
+    /// Persists BEFORE the tokens are used. `used_refresh` (None for a fresh
+    /// code exchange) is kept as the fallback slot Discord still honors.
     fn commit_tokens(&self, used_refresh: Option<&str>, tok: &TokenResponse) {
         let store = TokenStore {
             refresh_token: tok
@@ -731,10 +672,8 @@ impl Manager {
         }
     }
 
-    /// A previously working grant died. When the feature is enabled, arm
-    /// the prompt again so the next loop asks the user — same behavior as
-    /// an unauthenticated start. The prompt log keeps a runaway loop
-    /// visible (the app shows the settings-toggle hint).
+    /// A working grant died: re-arm the prompt like an unauthenticated start.
+    /// The prompt log surfaces a runaway loop via the settings-toggle hint.
     fn rearm_auto_authorize(&self) {
         if self.auto_authorize && oauth::AuthBlock::load(&self.config_dir).is_none() {
             self.want_authorize.store(true, Ordering::Relaxed);
@@ -745,9 +684,7 @@ impl Manager {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
                 Command::Authorize => {
-                    // An explicit Connect always gets a fresh attempt, even
-                    // after an invalid_scope block (the user may just have
-                    // been added to the allowlist).
+                    // explicit Connect always gets a fresh attempt, even past an invalid_scope block
                     oauth::AuthBlock::clear(&self.config_dir);
                     self.want_authorize.store(true, Ordering::Relaxed);
                 }
@@ -763,11 +700,8 @@ impl Manager {
         }
     }
 
-    /// Sleep before reconnecting, but wake early if the user acts. Only a
-    /// Connect that arrives DURING the wait cuts it short — an authorize flag
-    /// that was already armed on entry (auto-authorize with Discord closed)
-    /// must still serve the full backoff, or the connect loop spins at 200ms
-    /// for as long as Discord isn't running.
+    /// Only a Connect arriving DURING the wait cuts it short; a flag already
+    /// armed on entry still serves the full backoff, else it spins at 200ms.
     fn sleep_backoff(&self) {
         let armed_on_entry = self.want_authorize.load(Ordering::Relaxed);
         let mut waited = Duration::ZERO;
@@ -794,7 +728,7 @@ impl Manager {
     }
 }
 
-// ---------- parsing -------------------------------------------------------
+// parsing
 
 /// Build a `user#tag`-ish label from an AUTHENTICATE user object.
 fn user_tag(user: &Value) -> String {
@@ -804,10 +738,8 @@ fn user_tag(user: &Value) -> String {
         .to_string()
 }
 
-/// Build the Discord CDN avatar URL for a user object. Uses the custom
-/// avatar when set (animated `.gif` for `a_`-prefixed hashes, else `.png`),
-/// otherwise the appropriate default avatar. `size=128` is a reasonable
-/// default the caller can swap in the URL if it wants a different one.
+/// Custom avatar when set (`.gif` for `a_`-prefixed hashes, else `.png`)
+/// else the default avatar. `size=128`, caller can swap it in the URL.
 fn avatar_url(user: &Value) -> Option<String> {
     let id = user.get("id")?.as_str()?;
     if let Some(hash) = user.get("avatar").and_then(Value::as_str) {
@@ -816,8 +748,7 @@ fn avatar_url(user: &Value) -> Option<String> {
             "https://cdn.discordapp.com/avatars/{id}/{hash}.{ext}?size=128"
         ));
     }
-    // Default avatar. Post-username-migration accounts have discriminator
-    // "0" and index by (id >> 22) % 6; legacy accounts use discriminator % 5.
+    // discriminator "0" (migrated) indexes by (id >> 22) % 6, legacy by disc % 5
     let disc = user
         .get("discriminator")
         .and_then(Value::as_str)

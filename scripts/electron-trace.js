@@ -1,12 +1,7 @@
 #!/usr/bin/env node
-/**
- * Launches Electron with the startup performance trace armed
- * (CLIPS_PERF_STARTUP=1) — used by `npm run dev:trace`.
- *
- * Dep-free + cross-platform: `require('electron')` resolves to the Electron
- * executable path, so we set the env var here and spawn it, avoiding cross-env
- * and the OS-specific `VAR=1 cmd` syntax that npm scripts can't do portably.
- */
+// Arms the startup perf trace (CLIPS_PERF_STARTUP=1) for `npm run dev:trace`.
+// require('electron') resolves to the binary path, so we set the env var and
+// spawn it here, avoiding cross-env and npm's non-portable `VAR=1 cmd` syntax.
 'use strict';
 
 const { spawn } = require('child_process');

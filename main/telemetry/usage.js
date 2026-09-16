@@ -1,23 +1,8 @@
-// Daily usage rollup. Design and payload: docs/telemetry-cliplib-api.md section 7.
-//
-// This is the "roughly how is the app used" half of telemetry, kept deliberately
-// separate from the event stream: one POST /v1/usage/daily per run carrying an
-// array of COMPLETED days.
-//
-// Three rules shape everything here:
-//   - Counts only. Clip names, tag text, source paths, server urls and remote
-//     ids never leave the machine. Clip identity is hashed locally purely so
-//     distinct clips can be counted, and the hashes are not sent either. Strings
-//     that do go out are fixed enums, and anything unrecognised becomes 'other'
-//     rather than being passed through.
-//   - Read forward from a watermark, never rescan. The activity log grows
-//     forever and is never pruned, so main/discord-widget.js:115 reading every
-//     file fully into memory every hour is exactly what this must not do.
-//   - The current day is never rolled up, so a day can never be sent twice with
-//     two different sets of numbers.
-//
-// The activity log itself is read-only to us. Nothing here prunes or rewrites
-// it; the local recap keeps owning that data.
+// Daily usage rollup: docs/telemetry-cliplib-api.md section 7. One POST /v1/usage/daily per run, an array
+// of COMPLETED days. Counts only, never clip names/tags/paths/urls/ids (clip identity hashed
+// locally, hash unsent).
+// Reads forward from a watermark, never rescans (unlike main/discord-widget.js:115); current day
+// never rolls up.
 
 const fs = require('fs');
 const path = require('path');
@@ -29,27 +14,22 @@ const PRODUCT = 'cliplib';
 const STATE_FILE = 'telemetry-usage-state.json';
 const STATE_VERSION = 1;
 
-// Far enough in that the rollup cannot compete with startup work, and the first
-// heartbeat has already gone out.
+// far enough in that the rollup can't compete with startup work, after the first heartbeat
 const FIRST_RUN_DELAY_MS = 90000;
 const RUN_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 const MAX_BACKFILL_DAYS = 30;
-// A single line this long is corrupt, not a log entry. Skipping it keeps the
-// byte cursor honest instead of buffering a whole file into memory.
+// a line this long is corrupt, not a log entry; skip it to keep the byte cursor honest
 const MAX_LINE_BYTES = 64 * 1024;
-// Distinct clips per day is a Set of 8 char hashes. Saturating it bounds memory
-// on a pathological day; the count is a floor at that point, never a lie upward.
+// Set of 8-char hashes per day; saturating bounds memory, the count becomes a floor, never a lie upward
 const MAX_DISTINCT_CLIPS = 20000;
-// Guards against a future call site inventing enum values and blowing up the
-// array length. Both dimensions are whitelisted, so this should never bind.
+// guards a future call site inventing enum values; both dims are whitelisted so this should never bind
 const MAX_ENUM_ROWS = 20;
 
 const EXPORT_FORMATS = ['video', 'audio'];
 const EXPORT_DESTINATIONS = ['file', 'clipboard', 'trimmed_clipboard', 'share_upload'];
 const IMPORT_SOURCES = ['steelseries'];
-// share_clip writes whatever the share server returned in `status`, so it is a
-// remote string and gets whitelisted like any other enum.
+// share_clip's `status` is whatever the share server returned, so it's whitelisted like any other enum
 const SHARE_STATUSES = ['processing', 'queued', 'ready', 'complete', 'completed', 'failed', 'error'];
 const SHARE_FAILED_STATUSES = ['failed', 'error'];
 
@@ -70,12 +50,8 @@ const state = {
 
 // ------------------------------------------------------------------- days ---
 
-/**
- * activity-tracker.js:43 writes `new Date(now - tzOffset).toISOString()`, so the
- * timestamp LOOKS like UTC but is local wall time. The first ten characters are
- * therefore already the local calendar day, and applying any timezone
- * conversion on top would shift entries into the wrong day.
- */
+/** activity-tracker.js:43 writes `new Date(now - tzOffset).toISOString()`, so it looks like UTC but is
+ * local wall time already; the first 10 chars are the local day, don't convert timezone again. */
 function dayOfTimestamp(timestamp) {
   if (typeof timestamp !== 'string' || timestamp.length < 10) return null;
   const day = timestamp.slice(0, 10);
@@ -89,14 +65,14 @@ function localDay(date) {
   return `${y}-${m}-${d}`;
 }
 
-/** Day arithmetic in UTC so a DST boundary cannot produce a 23 or 25 hour day. */
+/** UTC arithmetic so a DST boundary can't produce a 23 or 25 hour day. */
 function addDays(day, delta) {
   const ms = Date.parse(`${day}T00:00:00Z`);
   if (!Number.isFinite(ms)) return day;
   return new Date(ms + delta * 86400000).toISOString().slice(0, 10);
 }
 
-/** The monthly log file a day lives in, keyed the way activity-tracker names it. */
+/** monthly log file a day lives in, keyed the way activity-tracker names it */
 function monthOf(day) {
   return day.slice(0, 7);
 }
@@ -139,16 +115,14 @@ function freshState() {
   return { version: STATE_VERSION, last_day: null, cursors: {} };
 }
 
-/** Atomic write, same tmp + rename shape queue.js uses. Best effort. */
+/** atomic write, same tmp+rename shape queue.js uses, best effort */
 function writeState(next) {
   try {
     const tmp = `${state.statePath}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(next), 'utf8');
     fs.renameSync(tmp, state.statePath);
   } catch {
-    // Losing the watermark costs a rescan, not correctness: the day gate still
-    // refuses to send anything at or before last_day, and a lost last_day only
-    // reopens the 30 day window.
+    // losing the watermark costs a rescan, not correctness: the day gate still refuses last_day or earlier
   }
 }
 
@@ -162,29 +136,24 @@ function pruneCursors(cursors, oldestMonth) {
 
 // ------------------------------------------------------------------- scan ---
 
-/**
- * Read one monthly log forward from a byte offset, handing each complete line to
- * onLine. onLine returns false to stop, and the returned offset is then the
- * START of that line, so the unconsumed tail is picked up on a later run.
- *
+/** Reads one monthly log forward from a byte offset, handing each line to onLine; onLine returns false to
+ * stop, and the returned offset is then that line's START so the unconsumed tail is picked up next run.
  * @param {string} filePath
  * @param {number} startOffset
  * @param {(line:string) => boolean} onLine  return false to stop the scan
- * @returns {Promise<{offset:number, ok:boolean}>}
- */
+ * @returns {Promise<{offset:number, ok:boolean}>} */
 function scanForward(filePath, startOffset, onLine) {
   return new Promise((resolve) => {
     let size;
     try {
       size = fs.statSync(filePath).size;
     } catch {
-      // No file for this month. Nothing happened, or nothing happened yet.
+      // no file for this month yet
       resolve({ offset: 0, ok: false });
       return;
     }
 
-    // A cursor past EOF means the file was truncated or replaced under us. Start
-    // over; the day gate stops that from resending anything.
+    // a cursor past EOF means the file was truncated/replaced; start over, the day gate stops any resend
     let from = Number.isFinite(startOffset) && startOffset >= 0 && startOffset <= size ? startOffset : 0;
     if (from === size) {
       resolve({ offset: from, ok: true });
@@ -216,14 +185,12 @@ function scanForward(filePath, startOffset, onLine) {
         idx = pending.indexOf(0x0a);
       }
       if (pending.length > MAX_LINE_BYTES) {
-        // Unterminated garbage. Drop it and resync at the next newline; the
-        // remains of it parse as invalid JSON and get skipped.
+        // unterminated garbage; drop and resync at the next newline
         consumed += pending.length;
         pending = Buffer.alloc(0);
       }
     });
-    // A trailing partial line (append still in flight) is deliberately left
-    // unconsumed, so the next run reads it whole.
+    // a trailing partial line (append in flight) is left unconsumed so the next run reads it whole
     stream.on('end', () => done(true));
     stream.on('close', () => done(true));
     stream.on('error', () => done(false));
@@ -260,7 +227,7 @@ function bump(map, key) {
   map.set(key, (map.get(key) || 0) + 1);
 }
 
-/** Fold one activity entry into a day bucket. Only counts come out of `details`. */
+/** Folds one activity entry into a day bucket; only counts come out of `details`. */
 function countEntry(bucket, entry) {
   const details = entry.details && typeof entry.details === 'object' ? entry.details : {};
   bucket.entries += 1;
@@ -272,8 +239,7 @@ function countEntry(bucket, entry) {
         else bucket.clipsSaturated = true;
       }
       const seconds = Number(details.durationSeconds);
-      // A negative or day-long "session" is a clock or bookkeeping artefact,
-      // not watch time.
+      // a negative or day-long "session" is a clock/bookkeeping artefact, not watch time
       if (Number.isFinite(seconds) && seconds > 0 && seconds <= 86400) bucket.watchSeconds += seconds;
       break;
     }
@@ -304,9 +270,8 @@ function countEntry(bucket, entry) {
       );
       break;
     case 'share_clip': {
-      // share.js only logs after the upload was accepted, so a failed upload is
-      // invisible here and attempted == logged. Real failures live in the event
-      // stream as share_upload_failed.
+      // share.js only logs after the upload was accepted, so attempted == logged; real failures are
+      // in the event stream as share_upload_failed
       bucket.sharesAttempted += 1;
       const status = enumOf(details.status, SHARE_STATUSES);
       if (!SHARE_FAILED_STATUSES.includes(status)) bucket.sharesSucceeded += 1;
@@ -336,12 +301,8 @@ function importRows(map) {
     .map(([source, count]) => ({ source, count }));
 }
 
-/**
- * `sessions` and `app_minutes` are absent on purpose: nothing in the activity
- * log records app launches or foreground time, and inventing them would poison
- * the only numbers this endpoint exists for. Same for the `features` and
- * `errors` blocks in section 7, which need renderer counters that do not exist.
- */
+/** `sessions`/`app_minutes` are absent on purpose: the activity log has no launch or foreground time, and
+ * inventing them would poison the only numbers this endpoint exists for. Same for section 7's `features`/`errors`. */
 function buildActivity(bucket) {
   return {
     clips_watched: bucket.clips.size,
@@ -373,14 +334,10 @@ function buildDay(day, bucket) {
   };
 }
 
-// ----------------------------------------------------------------- rollup ---
+// rollup
 
-/**
- * Roll up every completed day the watermark has not covered yet, up to
- * MAX_BACKFILL_DAYS back. Never throws.
- *
- * @returns {Promise<Array<object>|null>} the days posted, or null when nothing ran
- */
+/** Rolls up every completed day the watermark hasn't covered, up to MAX_BACKFILL_DAYS back. Never throws.
+ * @returns {Promise<Array<object>|null>} the days posted, or null when nothing ran */
 async function runNow() {
   if (!state.configured || state.running) return null;
   if (!state.isEnabled()) return null;
@@ -394,8 +351,7 @@ async function runNow() {
       ? addDays(persisted.last_day, 1)
       : floor;
 
-    // Already current, or the clock moved backwards. Either way there is no
-    // completed day left to send.
+    // already current, or the clock moved backwards - either way nothing left to send
     if (startDay > endDay) return null;
 
     const buckets = new Map();
@@ -414,12 +370,11 @@ async function runNow() {
         }
         const day = dayOfTimestamp(entry && entry.timestamp);
         if (!day) return true;
-        // Entries are appended in order, so the first line at or after today
-        // ends this pass. Stopping here rather than consuming is what keeps the
-        // current day out of the rollup without losing it.
+        // entries are appended in order; stopping (not consuming) at the first line >= today keeps it
+        // out of the rollup without losing it
         if (day > endDay) return false;
-        // Older than the backfill window, or already rolled up. Consume the
-        // bytes so the cursor moves past them once and never again.
+        // older than the backfill window or already rolled up; consume the bytes so the cursor
+        // passes them once
         if (day < startDay) return true;
         if (!buckets.has(day)) buckets.set(day, newBucket());
         countEntry(buckets.get(day), entry);
@@ -440,8 +395,7 @@ async function runNow() {
     };
 
     if (days.length === 0) {
-      // Idle days still move the watermark, otherwise a user who stops using the
-      // app pays for a full rescan on every launch forever.
+      // idle days still move the watermark, else a user who stops using the app rescans fully forever
       writeState(advanced);
       return [];
     }
@@ -452,28 +406,25 @@ async function runNow() {
     }
 
     const result = await state.post('/v1/usage/daily', days);
-    // 'retry' leaves the watermark alone so the same days are rebuilt next run.
-    // 'drop' is permanent (4xx), so advancing is the only way out of a loop that
-    // would otherwise resend the same rejected days forever.
+    // 'retry' leaves the watermark to rebuild next run; 'drop' is a permanent 4xx, so advancing is the
+    // only way out of resending the same rejected days forever
     if (result.outcome === 'accepted' || result.outcome === 'drop') writeState(advanced);
     return days;
   } catch {
-    // A rollup that throws would take down whatever timer called it.
+    // a rollup that throws would take down whatever timer called it
     return null;
   } finally {
     state.running = false;
   }
 }
 
-/**
- * @param {object} deps
+/** @param {object} deps
  * @param {string} deps.userDataDir
  * @param {() => boolean} deps.isEnabled       telemetry on AND ingest configured
  * @param {() => string} deps.getAppVersion
  * @param {() => object} deps.getAppInfo       the heartbeat app block
  * @param {(input:any) => string} deps.hash32
- * @param {Function} [deps.post]               defaults to client.post
- */
+ * @param {Function} [deps.post]               defaults to client.post */
 function init(deps = {}) {
   try {
     if (state.configured || !deps.userDataDir) return;
@@ -487,9 +438,8 @@ function init(deps = {}) {
     if (typeof deps.post === 'function') state.post = deps.post;
     state.configured = true;
 
-    // Off the startup path entirely, then twice a day. Every run re-checks the
-    // enabled flag, so a user turning telemetry off stops this dead and leaves
-    // the state file untouched.
+    // off the startup path, then twice a day; re-checks enabled every run so turning telemetry off
+    // stops it dead
     const first = setTimeout(() => {
       void runNow();
     }, FIRST_RUN_DELAY_MS);

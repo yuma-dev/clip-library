@@ -1,17 +1,12 @@
-// Discord voice-call context attached to clips by the recorder (inside
-// .gameinfo, surfaced through get-game-icons-batch — see main/metadata.js).
-//
-// Usernames/avatars change over time and each clip only snapshots the
-// identities at record time, so this module also keeps a session-wide
-// registry of the *latest* known identity per Discord user id: whenever a
-// clip's participants load, they're registered with the clip's timestamp and
-// the newest snapshot wins. Every card then renders the freshest identity we
-// know of, even on old clips.
+// Discord voice-call context attached to clips by the recorder (.gameinfo
+// surfaced via get-game-icons-batch, see main/metadata.js). Each clip only
+// snapshots identities at record time, so this also keeps a session-wide registry of the latest
+// known identity per user id.
 
 import { useSyncExternalStore } from "react";
 
 export interface DiscordParticipant {
-  /** Discord user id — the cross-clip identity key. */
+  /** Discord user id, the cross-clip identity key. */
   id: string;
   username: string;
   global_name: string | null;
@@ -27,12 +22,12 @@ export interface ClipDiscordInfo {
   participants: DiscordParticipant[];
 }
 
-/** Preferred display name: server nick → global name → username. */
+/** Preferred display name: server nick, then global name, then username. */
 export function participantDisplayName(p: DiscordParticipant): string {
   return p.nick || p.global_name || p.username || p.id;
 }
 
-// ---- Latest-identity registry ----
+// latest-identity registry
 
 const latest = new Map<string, { at: number; participant: DiscordParticipant }>();
 let version = 0;
@@ -68,10 +63,7 @@ export function resolveLatest(p: DiscordParticipant): DiscordParticipant {
   return latest.get(p.id)?.participant ?? p;
 }
 
-/**
- * Re-render hook: subscribes to registry updates so a mounted card picks up a
- * fresher name/avatar when a newer clip's metadata loads later.
- */
+/** Re-render hook: a mounted card picks up a fresher name/avatar when a newer clip's metadata loads later. */
 export function useIdentityVersion(): number {
   return useSyncExternalStore(subscribe, getVersion);
 }

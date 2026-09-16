@@ -8,7 +8,7 @@ import { useToast } from "../../ui/Toast";
 import { reportUpdateAvailable } from "../../shell/useUpdater";
 import logoUrl from "../../../../assets/logo.png";
 
-/** Both telemetry documents live at the repo root on the default branch. */
+/** telemetry docs live at the repo root on the default branch */
 const TELEMETRY_DOC_URL = "https://github.com/yuma-dev/clip-library/blob/main/TELEMETRY.md";
 
 type Tone = "info" | "progress" | "success" | "error";
@@ -31,9 +31,8 @@ const DIAGNOSTICS_STAGE_LABELS: Record<string, string> = {
   complete: "Complete",
 };
 
-// Cycled through the note textarea's placeholder by the typing animation
-// below. Written like real user reports on purpose (typos and all) so the
-// field reads as "type something like this", not as UI copy.
+// cycled through the note textarea's placeholder; written like real user reports (typos and all)
+// so it reads as "type something like this", not UI copy
 const NOTE_EXAMPLES = [
   "my clips from last night arent showing up",
   "pressed the clip button and nothing got saved",
@@ -57,11 +56,8 @@ const NOTE_EXAMPLES = [
   "audio is out of sync on longer clips",
 ];
 
-/**
- * Types example reports into the placeholder character by character, holds,
- * deletes fast, moves on to the next. Paused while the user has text (the
- * placeholder is invisible then anyway).
- */
+/** types example reports into the placeholder char by char, holds, deletes fast, moves to the
+ * next; paused while the user has text (placeholder is invisible then anyway) */
 function useTypedPlaceholder(active: boolean): string {
   const [text, setText] = useState("");
   useEffect(() => {
@@ -99,7 +95,7 @@ function useTypedPlaceholder(active: boolean): string {
   return text;
 }
 
-/** Open a link in the system browser (legacy diagnostics used shell.openExternal). */
+/** opens a link in the system browser, legacy diagnostics used shell.openExternal */
 function openExternal(url: string): void {
   try {
     const req = (window as unknown as { require?: (m: string) => { shell: { openExternal(u: string): void } } }).require;
@@ -145,7 +141,7 @@ export default function AboutSection() {
       .catch(() => setVersion("unknown"));
   }, []);
 
-  // Staged diagnostics progress from main while a bundle is being built.
+  // staged diagnostics progress from main while a bundle is being built
   useEffect(() => {
     return window.clips.onDiagnosticsProgress((progress: { stage: string; completed?: number; total?: number; bytes?: number }) => {
       if (!generatingRef.current || !progress) return;
@@ -165,7 +161,7 @@ export default function AboutSection() {
       if (result?.manualUpdateUrl) manualUrlRef.current = result.manualUpdateUrl;
       if (result?.updateAvailable) {
         setUpdateStatus({ tone: "success", text: `Update available: v${result.latestVersion}` });
-        // Surface the rail pill too (legacy re-emitted show-update-notification).
+        // surfaces the rail pill too (legacy re-emitted show-update-notification)
         reportUpdateAvailable(result.latestVersion ?? null, result.changelog ?? null);
       } else if (result?.error === "network_unavailable") {
         setUpdateStatus({ tone: "error", text: 'Could not connect. You can still use "Open download page".' });
@@ -226,7 +222,7 @@ export default function AboutSection() {
   const uploadLogs = async () => {
     if (uploading) return;
     setUploading(true);
-    // Reuse the zip stage progress while the bundle is being built.
+    // reuses the zip stage progress while the bundle is being built
     generatingRef.current = true;
     setUploadStatus({ tone: "progress", text: "Building and uploading bundle…" });
     try {
@@ -237,13 +233,13 @@ export default function AboutSection() {
         setUploadStatus({ tone: "success", text: `Uploaded bundle #${response.bundleId}${sizeText}` });
         toast.show("Diagnostics uploaded", "success");
       } else if (response.url) {
-        // Text-upload fallback (build without an ingest key).
+        // text-upload fallback, build without an ingest key
         setUploadStatus({ tone: "success", link: response.url });
         try {
           await navigator.clipboard.writeText(response.url);
           toast.show("Share link copied to clipboard", "success");
         } catch {
-          /* clipboard denied — link is still shown */
+          /* clipboard denied, link is still shown */
         }
       } else {
         setUploadStatus({ tone: "success", text: "Uploaded." });
@@ -353,14 +349,9 @@ export default function AboutSection() {
   );
 }
 
-// Both automatic-telemetry switches, in one place on purpose.
-//
-// ClipLib and clipdip report separately and are stored separately: ClipLib's
-// lives in settings.json (main applies it immediately in the save-settings
-// handler), clipdip's lives in its own config and is toggled over the control
-// server. A user who turns "telemetry" off in the clipdip section would
-// reasonably believe they turned all of it off, so the ClipLib switch cannot
-// live somewhere else. The clipdip section keeps its copy of the clipdip row.
+// both telemetry switches in one place on purpose: ClipLib's lives in settings.json (applied
+// immediately on save), clipdip's lives in its own config via the control server; a user turning
+// one off shouldn't think both are off
 function TelemetryGroup() {
   const { settings, set } = useSettings();
   const toast = useToast();
@@ -369,8 +360,8 @@ function TelemetryGroup() {
   const [clipdip, setClipdip] = useState<{ enabled: boolean; configured: boolean } | null>(null);
   const [clipdipBusy, setClipdipBusy] = useState(false);
 
-  // One read on mount. clipdip answers only while it is running; the section
-  // that polls this lives under Settings → Clipdip and is not open here.
+  // one read on mount; clipdip answers only while running, the section that polls this lives under
+  // Settings -> Clipdip, not open here
   useEffect(() => {
     let cancelled = false;
     clipdipBridge()

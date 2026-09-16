@@ -1,7 +1,6 @@
-// Feed time-group section — mirrors the library's ClipGroup markup exactly
-// (.clip-group > .clip-group-header with diamond/title/count/divider >
-// .clip-group-content grid) so feed sections read as the SAME app surface as
-// the library. Renders FeedClipCards inside the shared grid.
+// Feed time-group section, mirrors the library's ClipGroup markup exactly (.clip-group
+// > .clip-group-header with diamond/title/count/divider > .clip-group-content grid)
+// so feed sections read as the same app surface as the library.
 
 import { memo, useDeferredValue } from "react";
 import FeedClipCard from "./FeedClipCard";
@@ -27,9 +26,8 @@ function FeedGroup({
   onFavoriteUpdate,
   onOpen,
 }: FeedGroupProps) {
-  // Same streamed mounting as the library's ClipGroup: a page of clips (or a
-  // cache-restored list) mounts a screenful in one small commit and streams
-  // the rest, instead of one giant commit per infinite-scroll page.
+  // same streamed mounting as the library's ClipGroup: a page (or cache-restored list)
+  // mounts a screenful in one small commit and streams the rest
   const expanded = !useDeferredValue(collapsed);
   const shown = useStreamedSlice(clips, expanded);
 
@@ -41,7 +39,7 @@ function FeedGroup({
         onClick={() => onToggle(name)}
         aria-expanded={!collapsed}
       >
-        {/* ◆ gradient diamond — rotates 45° when the group is open (design). */}
+        {/* gradient diamond, rotates 45deg when the group is open */}
         <span className={`clip-group-diamond${collapsed ? "" : " open"}`} aria-hidden="true" />
         <h2 className="clip-group-title">{name}</h2>
         <span className="clip-group-count">{clips.length}</span>

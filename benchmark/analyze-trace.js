@@ -4,9 +4,8 @@
 //
 //   node benchmark/analyze-trace.js benchmark/results/chromium-trace-x-1.json [--from MARK --to MARK] [--boot boot-trace.json]
 //
-// Prints, per process and thread, the longest complete events inside the
-// window, the busiest event names, and the resource loads (URL + duration)
-// seen by the devtools.timeline category. The trace is never printed whole.
+// per process/thread: longest complete events in the window, busiest event names, resource loads
+// (URL + duration) from devtools.timeline. never prints the trace whole.
 
 const fs = require('node:fs');
 
@@ -37,7 +36,6 @@ const label = (e) => `${procNames.get(e.pid) || 'pid' + e.pid}/${threadNames.get
 
 console.log(`events: ${events.length}, processes: ${[...procNames.values()].join(', ')}`);
 
-// Instant marks worth having on the timeline.
 const marksOfInterest = new Set(['navigationStart', 'domContentLoadedEventEnd', 'loadEventEnd', 'firstPaint', 'firstContentfulPaint',
   'RendererMainThreadCreated', 'ResourceSendRequest', 'ProcessLaunch', 'BrowserMain:MainMessageLoopRun']);
 const marks = events.filter((e) => marksOfInterest.has(e.name) && inWindow(e))
@@ -64,7 +62,6 @@ for (const l of loads.filter(inWindowByT).sort((a, b) => a.t - b.t).slice(0, 40)
 }
 function inWindowByT(l) { return (fromMs === null || l.t >= fromMs) && (toMs === null || l.t <= toMs); }
 
-// Longest complete events per thread inside the window.
 const complete = events.filter((e) => e.ph === 'X' && typeof e.dur === 'number' && inWindow(e));
 complete.sort((a, b) => b.dur - a.dur);
 console.log(`\n== ${top} longest complete events ==`);
@@ -73,7 +70,7 @@ for (const e of complete.slice(0, top)) {
   console.log(`${String(ms(e.ts)).padStart(8)}  ${String(Math.round(e.dur / 100) / 10).padStart(8)}  ${label(e).padEnd(40)} ${e.name}${extra ? '  ' + String(extra).slice(-70) : ''}`);
 }
 
-// Busiest event names by self-ish total (sum of dur, top-level only approximated by depth 0 heuristic skipped).
+// sums dur across nesting, not real self time (no depth-0 filtering)
 const byName = new Map();
 for (const e of complete) {
   const k = `${label(e)} :: ${e.name}`;
@@ -84,7 +81,6 @@ for (const [k, v] of [...byName.entries()].sort((a, b) => b[1] - a[1]).slice(0, 
   console.log(`${String(Math.round(v / 1000)).padStart(8)}  ${k}`);
 }
 
-// Per-thread wall coverage of the window: how busy each thread was.
 const byThread = new Map();
 for (const e of complete) {
   const k = label(e);

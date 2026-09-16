@@ -4,8 +4,8 @@
 //
 //   node benchmark/analyze-cpuprofile.js benchmark/results/main-x-1.cpuprofile [--top 40] [--bucket 250]
 //
-// Prints self time by function, inclusive time by function, self time by
-// file, and a timeline of which function dominated each time bucket.
+// self time by function, inclusive time by function, self time by file, timeline of dominant
+// function per bucket
 
 const fs = require('node:fs');
 

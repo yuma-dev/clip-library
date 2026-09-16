@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// Decodes every startup-sound asset inside the packaged app's renderer (the
-// way bootSound.ts does) and prints the saved intro preferences, to tell a
-// file that Chromium cannot decode from a preference problem.
+// Decodes every startup-sound asset the way bootSound.ts does and prints
+// saved intro prefs, to tell an undecodable file apart from a prefs bug.
 //
 //   node benchmark/probe-sound.js [--exe PATH]
 

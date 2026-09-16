@@ -1,14 +1,10 @@
-// Metric aggregation: bucket histograms, not quantiles.
-//
-// Quantiles do not merge across installs; buckets do. Each install ships sparse
-// {upper_bound: count} maps over a FIXED ladder per unit, the server sums them,
-// and the fleet p50/p95 falls out correctly. Never send a client-computed
-// percentile; averaging percentiles is meaningless.
+// Bucket histograms, not quantiles: quantiles don't merge across installs, sparse {upper_bound:
+// count} maps do.
+// Never send a client-computed percentile.
 
-// These MUST match the server's ladders exactly, or a bucket bound the server
-// does not recognise 400s the request. Verified against the live API on
-// 2026-07-29; the server accepts exactly four units and these bounds.
-// Do not "improve" a ladder here without changing the server in the same pass.
+// Must match the server's ladders exactly (verified 2026-07-29) or an unrecognised bucket bound
+// 400s the request.
+// Don't change a ladder here without changing the server in the same pass.
 const LADDERS = {
   ms: [1, 2, 5, 10, 50, 100, 500, 1000, 5000, 10000, 30000, 60000, 300000],
   bytes: [
@@ -23,12 +19,10 @@ const LADDERS = {
 
 const UNITS = Object.keys(LADDERS);
 
-// dims are capped hard: three keys, enum-ish values only. Free strings here
-// would explode server-side cardinality.
+// dims capped hard: three keys, enum-ish values only, else server-side cardinality explodes.
 const MAX_DIMS = 3;
-// ipc.handler_ms and ipc.call_ms are both dimmed by channel, and there are ~95
-// channels, so 200 was not enough headroom. Overflow is reported rather than
-// silently dropped: a capped metric set looks like full coverage otherwise.
+// ipc.handler_ms/call_ms alone dim by ~95 channels, so 200 wasn't enough. Overflow is reported, not
+// silently dropped.
 const MAX_SERIES = 600;
 
 const series = new Map();
@@ -71,10 +65,8 @@ function bucketFor(unit, value) {
 
 function record(name, value, { unit = 'ms', dims } = {}) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return;
-  // Drop unknown units here rather than letting the server reject them. A
-  // single invalid metric 400s the whole /v1/ingest envelope, and the client
-  // treats 400 as permanent, so it would discard the heartbeat and the entire
-  // event batch riding along with it.
+  // dropped here, not left for the server to reject: a 400 on one metric is treated as permanent and would
+  // discard the whole heartbeat plus the event batch riding along with it
   if (!isKnownUnit(unit)) {
     unsupportedUnits += 1;
     return;

@@ -1,29 +1,21 @@
-// Ambient types for the `window.clips` IPC facade exposed by preload.js.
-//
-// This is the typed seam between the new React renderer and the UNCHANGED
-// Electron main process (plan D2/D9). Method names are camelCase wrappers over
-// the kebab-case IPC channels verified in plan §5.
-//
-// NOTE (plan §5): argument/return payload shapes are loosely typed for now.
-// Verify each against the corresponding `main/` handler and tighten the types
-// as each phase starts consuming the channel.
+// Ambient types for the window.clips IPC facade exposed by preload.js: typed
+// seam between the React renderer and the unchanged Electron main process.
+// Method names are camelCase wrappers over kebab-case IPC channels.
 
-// Mirror of clipdip's TOML config (clipdip crates/core/src/config.rs).
-// Every field is serde-defaulted on the Rust side, so partial objects are fine.
+// mirror of clipdip's TOML config (clipdip crates/core/src/config.rs); every
+// field is serde-defaulted on the Rust side, so partial objects are fine
 
 /** Mode-tagged enum table; replaced whole on patch, never merged. */
 export type ClipdipRateControl =
   | { mode: "constant_qp"; qp: number }
   | { mode: "vbr"; avg_bps: number };
 
-/** Mode-tagged enum table; replaced whole on patch, never merged. */
 export type ClipdipRecordingQuality =
   | { mode: "match_clips" }
   | { mode: "constant_qp"; qp: number };
 
-/** Kind-tagged audio source entry (audio.sources[]). `fallbacks` is an
- *  ordered list of device ids tried when the entry above doesn't start;
- *  the literal "default" means the system default endpoint. */
+/** Kind-tagged audio source entry; fallbacks is an ordered list of device ids
+ *  tried when the entry above doesn't start ("default" = system default). */
 export type ClipdipAudioSource =
   | { kind: "system_loopback"; device_id?: string; fallbacks?: string[] }
   | { kind: "microphone"; device_id?: string; fallbacks?: string[] }
@@ -78,8 +70,6 @@ export interface ClipdipConfig {
   [key: string]: unknown;
 }
 
-// --- Clipdip bridge payloads (stateless CLI queries + control server) -------
-
 /** WASAPI endpoint from `clipdip --list-audio-devices`. */
 export interface AudioDeviceInfo {
   /** Stable WASAPI device ID; pin it via audio.sources[].device_id. */
@@ -106,7 +96,7 @@ export interface FilenameVariable {
   example?: string;
 }
 
-/** Discord RPC connection state (control `status` -> discord). */
+/** Discord RPC connection state (control status response's discord field). */
 export type DiscordStatus =
   | { state: "disabled" }
   | { state: "connecting" }
@@ -127,9 +117,7 @@ export interface LiveStatus {
     buffered_secs: number;
   };
   discord: DiscordStatus;
-  /** Per-source audio state (control `status` -> audio_sources): what the
-   *  config wants vs what is actually recording. Empty while the pipeline
-   *  is down. */
+  /** Per-source audio state (status's audio_sources): config wants vs what's actually recording, empty while down. */
   audio_sources?: ClipdipAudioSourceStatus[];
   version: string;
 }
@@ -138,8 +126,7 @@ export interface LiveStatus {
 export interface ClipdipAudioSourceStatus {
   index: number;
   kind: "system_loopback" | "microphone";
-  /** Display name of the configured primary device ("System default", a
-   *  friendly name, or "(disconnected device)"). */
+  /** Configured primary device's display name ("System default", a friendly name, or "(disconnected device)"). */
   wanted: string;
   /** Friendly name of the device actually recording; null = silent. */
   using: string | null;
@@ -154,11 +141,8 @@ export interface ClipdipControlResult {
   [key: string]: unknown;
 }
 
-// --- Telemetry wire payloads (preload -> main `telemetry-report`) -----------
-//
-// Mirrors the contract main/telemetry/index.js `registerIpc` accepts. Context
-// and dims carry numbers, booleans and enum strings only; never file names,
-// clip names, tag text, paths, search queries or account identifiers.
+// telemetry wire payloads (preload to main via telemetry-report); context/dims:
+// numbers/booleans/enum strings only, never names/paths/ids
 
 export type TelemetryKind =
   | "crash"
@@ -206,7 +190,6 @@ type ClipsEventCallback = (...args: any[]) => void;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface ClipsApi {
-  // --- Clips ---
   getClips(): Promise<any[]>;
   getNewClipInfo(fileName: string): Promise<any>;
   /** Pass the names from getClips to spare main a second library walk. */
@@ -235,7 +218,6 @@ export interface ClipsApi {
     byClip: Record<string, string[]>;
   }>;
 
-  // --- Per-clip metadata ---
   saveCustomName(originalName: string, customName: string): Promise<{ success: boolean; customName?: string; error?: string }>;
   getClipInfo(clip: any): Promise<any>;
   getTrim(clipName: string): Promise<any>;
@@ -257,14 +239,12 @@ export interface ClipsApi {
   /** Probe and extract audio tracks for a clip at idle so its open is a cache hit. */
   warmClipOpen(clipName: string): Promise<void>;
 
-  // --- Audio tracks ---
   extractAudioTracks(...args: any[]): Promise<any>;
   getTrackState(...args: any[]): Promise<any>;
   saveTrackState(...args: any[]): Promise<any>;
   getTrackPreferences(...args: any[]): Promise<any>;
   saveTrackPreferences(...args: any[]): Promise<any>;
 
-  // --- Global tags ---
   loadGlobalTags(): Promise<any>;
   saveGlobalTags(tags: any): Promise<any>;
   restoreMissingGlobalTags(...args: any[]): Promise<any>;
@@ -273,13 +253,11 @@ export interface ClipsApi {
   getTagPreferences(): Promise<any>;
   saveTagPreferences(prefs: any): Promise<any>;
 
-  // --- Thumbnails ---
   getThumbnailPath(...args: any[]): Promise<any>;
   getThumbnailPathsBatch(...args: any[]): Promise<any>;
   generateThumbnailsProgressively(...args: any[]): Promise<any>;
   regenerateThumbnailForTrim(...args: any[]): Promise<any>;
 
-  // --- Export / files ---
   exportVideo(...args: any[]): Promise<any>;
   exportTrimmedVideo(...args: any[]): Promise<any>;
   exportAudio(...args: any[]): Promise<any>;
@@ -287,22 +265,18 @@ export interface ClipsApi {
   revealClip(...args: any[]): Promise<any>;
   resetClipCache(...args: any[]): Promise<any>;
 
-  // --- Settings ---
   getSettings(): Promise<any>;
   saveSettings(settings: any): Promise<any>;
   getDefaultKeybindings(): Promise<any>;
 
-  // --- Dialogs ---
   openFolderDialog(): Promise<any>;
   openFolderDialogSteelseries(): Promise<any>;
   showDiagnosticsSaveDialog(...args: any[]): Promise<any>;
 
-  // --- Discord RPC ---
   updateDiscordPresence(...args: any[]): Promise<any>;
   toggleDiscordRpc(...args: any[]): Promise<any>;
   clearDiscordPresence(): Promise<any>;
 
-  // --- Share / ClipLib ---
   testShareConnection(...args: any[]): Promise<any>;
   startCliplibAuth(...args: any[]): Promise<any>;
   disconnectCliplibAuth(): Promise<any>;
@@ -323,14 +297,12 @@ export interface ClipsApi {
     data?: unknown;
   }>;
 
-  // --- Updates ---
   checkForUpdates(): Promise<any>;
   /** Download the latest installer, launch it, and quit (main auto-installs). */
   startUpdate(): Promise<{ success: boolean }>;
   openUpdatePage(url?: string | null): Promise<{ success: boolean; url?: string; error?: string }>;
   getAppVersion(): Promise<string>;
 
-  // --- Diagnostics / misc ---
   generateDiagnosticsZip(...args: any[]): Promise<any>;
   uploadSessionLogs(...args: any[]): Promise<any>;
   uploadDiagnosticsBundle(...args: any[]): Promise<any>;
@@ -340,14 +312,14 @@ export interface ClipsApi {
   importSteelseriesClips(...args: any[]): Promise<any>;
   quitApp(): Promise<any>;
 
-  // --- Source benchmark runner (handlers exist only in benchmark mode) ---
+  // source benchmark runner, handlers exist only in benchmark mode
   benchmarkGetResults(): Promise<any>;
   benchmarkOutputResult(result: any): Promise<boolean>;
   benchmarkOutputMarker(marker: string, payload: any): Promise<boolean>;
   benchmarkOutputComplete(data: any): Promise<boolean>;
   benchmarkQuit(): Promise<boolean>;
 
-  // --- Integrated clipdip (clipdip binary; config lives in its TOML) ---
+  // integrated clipdip binary; its own settings live in its TOML config
   clipdip: {
     getConfig(): Promise<{ exists: boolean; config: ClipdipConfig }>;
     /** Deep-merge patch into the TOML; a debounced --reload follows if running. */
@@ -367,16 +339,14 @@ export interface ClipsApi {
     setAutostart(enabled: boolean): Promise<{ success: boolean }>;
     setEnabled(enabled: boolean): Promise<{ success: boolean; error?: string }>;
 
-    // Stateless CLI queries (spawn the exe; no running instance needed).
+    // stateless CLI queries, spawn the exe, no running instance needed
     listAudioDevices(): Promise<{ ok: boolean; error?: string; devices?: AudioDeviceInfo[] }>;
     listMonitors(): Promise<{ ok: boolean; error?: string; monitors?: MonitorInfo[] }>;
     getFilenameVariables(): Promise<{ ok: boolean; error?: string; variables?: FilenameVariable[] }>;
     previewFilename(template: string): Promise<{ ok: boolean; error?: string; preview?: string }>;
 
-    /**
-     * Generic control-server call against the running clipdip instance.
-     * Resolves {ok:false, error:"not_running"} when it isn't up; never rejects.
-     */
+    /** Generic control-server call; resolves {ok:false, error:"not_running"}
+     * when clipdip isn't up, never rejects. */
     control(cmd: string, args?: Record<string, unknown>): Promise<ClipdipControlResult>;
     getLiveStatus(): Promise<({ ok: true } & LiveStatus) | { ok: false; error: string }>;
     testOverlay(stage: "flow" | "notice" | "rec_on" | "rec_off"): Promise<ClipdipControlResult>;
@@ -391,7 +361,6 @@ export interface ClipsApi {
     openClipsFolder(): Promise<ClipdipControlResult>;
   };
 
-  // --- Signal to main (fire-and-forget) ---
   rendererReady(): void;
   /** Where the launcher drew its logo, in CSS px of the content area (null without the launcher). */
   getBootLogoRect(): Promise<{ x: number; y: number; w: number; h: number } | null>;
@@ -401,11 +370,9 @@ export interface ClipsApi {
   bootRevealArmed(): void;
   bootRevealFrames(stats: BootRevealFrames): void;
 
-  // --- Telemetry (fire-and-forget) ---
   /** Post a renderer batch onto the `telemetry-report` channel. Never throws. */
   telemetryReport(payload: TelemetryReport): void;
 
-  // --- Events (main -> renderer); each returns an unsubscribe fn ---
   onLog(cb: ClipsEventCallback): ClipsUnsubscribe;
   onNewClipAdded(cb: ClipsEventCallback): ClipsUnsubscribe;
   onCheckActivityState(cb: ClipsEventCallback): ClipsUnsubscribe;
@@ -433,7 +400,6 @@ export interface ClipsApi {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-// Legacy video player (Phase 4) — loaded verbatim via preload; loosely typed.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface LegacyPlayerModule {
   init(elements: Record<string, unknown>, callbacks: Record<string, unknown>): void;

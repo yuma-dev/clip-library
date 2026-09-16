@@ -4,23 +4,16 @@ import GamepadIndicator from "./GamepadIndicator";
 interface TitlebarProps {
   /** Pinned = static width; the width button toggles collapsed/expanded. */
   pinned: boolean;
-  /** Rail is currently in dynamic (hover-to-expand) mode. */
+  /** hover-to-expand mode */
   dynamic: boolean;
-  /** Rail is currently statically collapsed. */
   collapsed: boolean;
-  /** Width button — toggles dynamic (unpinned) or collapsed (pinned). */
+  /** toggles dynamic (unpinned) or collapsed (pinned) */
   onToggleWidth: () => void;
-  /** Pin button — switches between dynamic and static modes. */
   onTogglePin: () => void;
 }
 
-/**
- * Custom titlebar strip. The whole bar is a drag region; native window controls
- * (min/max/close) sit at the top-right via Electron's `titleBarOverlay`. At the
- * far left, two tiny no-drag controls govern the rail:
- *   • width button — collapses/expands (pinned) or toggles hover-mode (unpinned)
- *   • pin — switches between dynamic (hover) and static (manual) behavior.
- */
+/** whole bar is a drag region; native window controls sit top-right via Electron's `titleBarOverlay`
+ * two no-drag controls at left: width toggles collapse/hover-mode, pin switches dynamic/static */
 export default function Titlebar({
   pinned,
   dynamic,

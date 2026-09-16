@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 
-/** Titled card grouping related settings rows. */
+/** titled card grouping related settings rows */
 export function SetGroup({
   title,
   children,
@@ -10,9 +10,9 @@ export function SetGroup({
 }: {
   title?: ReactNode;
   children: ReactNode;
-  /** Right-aligned extras in the group header (badge, toggle, reset). */
+  /** right-aligned extras in the group header (badge, toggle, reset) */
   aside?: ReactNode;
-  /** Span both columns of the settings page grid. */
+  /** spans both columns of the settings page grid */
   span2?: boolean;
 }) {
   return (
@@ -28,7 +28,7 @@ export function SetGroup({
   );
 }
 
-/** Small "reset to defaults" icon button for group headers. */
+/** small "reset to defaults" icon button for group headers */
 export function GroupReset({ onClick, label = "Reset to defaults" }: { onClick: () => void; label?: string }) {
   return (
     <button type="button" className="set-reset" title={label} aria-label={label} onClick={onClick}>
@@ -37,7 +37,7 @@ export function GroupReset({ onClick, label = "Reset to defaults" }: { onClick: 
   );
 }
 
-/** One setting: label + description on the left, control on the right. */
+/** one setting: label + description on the left, control on the right */
 export function SetRow({
   title,
   description,
@@ -49,11 +49,11 @@ export function SetRow({
   title: ReactNode;
   description?: ReactNode;
   children?: ReactNode;
-  /** Extra status line under the description (update check, diagnostics…). */
+  /** extra status line under the description (update check, diagnostics, etc) */
   status?: ReactNode;
-  /** Dim + badge the row as controlled by the export preset. */
+  /** dims + badges the row as controlled by the export preset */
   managed?: boolean;
-  /** Render the control full-width under the text instead of to the right. */
+  /** renders the control full-width under the text instead of to the right */
   stacked?: boolean;
 }) {
   return (
@@ -71,7 +71,7 @@ export function SetRow({
   );
 }
 
-/** Colored status line for async operations (updates, diagnostics, uploads). */
+/** colored status line for async operations (updates, diagnostics, uploads) */
 export function StatusLine({
   tone,
   children,

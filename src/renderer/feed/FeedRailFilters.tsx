@@ -1,4 +1,4 @@
-// Sidebar filter sections for the feed route — rendered by Sidebar in place
+// Sidebar filter sections for the feed route, rendered by Sidebar in place
 // of the library's Collections/Tags/stats when route === "feed". Reads and
 // writes the shared feedFilters store that FeedPage queries from.
 

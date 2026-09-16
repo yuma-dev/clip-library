@@ -4,16 +4,12 @@ import { ONBOARDING_VERSION } from "./version";
 
 const OnboardingWizard = lazy(() => import("./OnboardingWizard"));
 
-/**
- * Mounts the onboarding wizard (its own chunk, with framer-motion and the
- * clipdip settings tree) only when it is going to open: on a first run, or
- * when __showOnboarding() is called from the console before the wizard has
- * ever loaded. Once loaded, the wizard installs the real console hooks.
- */
+/** mounts the wizard chunk only when it's about to open: first run, or __showOnboarding()
+ * called from the console before the chunk has ever loaded */
 export default function OnboardingGate() {
   const { settings, ready, set } = useSettings();
   const [mounted, setMounted] = useState(false);
-  // __showOnboarding() before the wizard chunk loaded: open it as soon as it mounts.
+  // set when __showOnboarding() fires before the chunk loaded, opens as soon as it mounts
   const [openOnMount, setOpenOnMount] = useState(false);
 
   useEffect(() => {

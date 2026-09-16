@@ -1,8 +1,6 @@
 /**
- * Detailed Open Clip Profiler
- * 
- * Provides granular timing for each phase of clip opening to identify
- * exactly what causes the perceived delay and variance.
+ * Granular timing for each phase of clip opening, to find what causes the
+ * perceived delay and variance.
  */
 
 'use strict';
@@ -16,9 +14,6 @@ class OpenClipProfiler {
     this.currentProfile = null;
   }
 
-  /**
-   * Start a new profiling session
-   */
   startProfile(clipName) {
     this.currentProfile = {
       clipName,
@@ -34,9 +29,6 @@ class OpenClipProfiler {
     return this.currentProfile;
   }
 
-  /**
-   * Mark the start of a phase
-   */
   startPhase(phaseName) {
     if (!this.currentProfile) return;
     this.currentProfile.phases[phaseName] = {
@@ -46,9 +38,6 @@ class OpenClipProfiler {
     };
   }
 
-  /**
-   * Mark the end of a phase
-   */
   endPhase(phaseName) {
     if (!this.currentProfile || !this.currentProfile.phases[phaseName]) return;
     const phase = this.currentProfile.phases[phaseName];
@@ -57,9 +46,6 @@ class OpenClipProfiler {
     return phase.duration;
   }
 
-  /**
-   * Time an IPC call
-   */
   async timeIPC(channel, ...args) {
     const start = performance.now();
     try {
@@ -78,9 +64,6 @@ class OpenClipProfiler {
     }
   }
 
-  /**
-   * Record a video event timing
-   */
   recordEvent(eventName) {
     if (!this.currentProfile) return;
     this.currentProfile.events.push({
@@ -90,9 +73,6 @@ class OpenClipProfiler {
     });
   }
 
-  /**
-   * End the current profile
-   */
   endProfile() {
     if (!this.currentProfile) return null;
     
@@ -106,9 +86,6 @@ class OpenClipProfiler {
     return result;
   }
 
-  /**
-   * Get memory usage
-   */
   getMemory() {
     if (typeof process !== 'undefined' && process.memoryUsage) {
       const mem = process.memoryUsage();
@@ -129,30 +106,20 @@ class OpenClipProfiler {
     return null;
   }
 
-  /**
-   * Get all results
-   */
   getResults() {
     return this.results;
   }
 
-  /**
-   * Clear results
-   */
   clear() {
     this.results = [];
     this.currentProfile = null;
   }
 
-  /**
-   * Generate a detailed report
-   */
   generateReport() {
     if (this.results.length === 0) {
       return { error: 'No profiling data available' };
     }
 
-    // Aggregate phase timings across all runs
     const phaseAggregates = {};
     const ipcAggregates = {};
     const totalDurations = [];
@@ -160,7 +127,6 @@ class OpenClipProfiler {
     for (const result of this.results) {
       totalDurations.push(result.totalDuration);
 
-      // Aggregate phases
       for (const [phaseName, phase] of Object.entries(result.phases)) {
         if (phase.duration === null) continue;
         
@@ -170,7 +136,6 @@ class OpenClipProfiler {
         phaseAggregates[phaseName].push(phase.duration);
       }
 
-      // Aggregate IPC calls
       for (const ipc of result.ipcCalls) {
         if (!ipcAggregates[ipc.channel]) {
           ipcAggregates[ipc.channel] = [];
@@ -179,14 +144,13 @@ class OpenClipProfiler {
       }
     }
 
-    // Calculate statistics
     const calcStats = (arr) => {
       if (arr.length === 0) return null;
       const sorted = [...arr].sort((a, b) => a - b);
       const sum = sorted.reduce((a, b) => a + b, 0);
       const avg = sum / arr.length;
-      
-      // Calculate variance correctly
+
+      // sample variance, n-1 denominator
       let variance = 0;
       if (arr.length > 1) {
         const squaredDiffs = arr.map(val => Math.pow(val - avg, 2));
@@ -259,9 +223,8 @@ class OpenClipProfiler {
 }
 
 /**
- * Run a detailed benchmark of clip opening
- * @param {Object} options - Benchmark options
- * @returns {Object} Detailed profiling results
+ * @param {Object} options
+ * @returns {Object}
  */
 async function benchmarkOpenClipDetailed(options = {}) {
   const {
@@ -276,8 +239,7 @@ async function benchmarkOpenClipDetailed(options = {}) {
   } = options;
 
   const profiler = new OpenClipProfiler();
-  
-  // Get clips to test
+
   let clips = [];
   if (getAllClips) {
     const allClips = typeof getAllClips === 'function' ? getAllClips() : getAllClips;
@@ -290,15 +252,13 @@ async function benchmarkOpenClipDetailed(options = {}) {
 
   logger.info(`[OpenClip Profiler] Starting detailed benchmark with ${iterations} iterations on ${clips.length} clips`);
 
-  // Run warmup
   for (let w = 0; w < warmupRuns; w++) {
     logger.info(`[OpenClip Profiler] Warmup run ${w + 1}/${warmupRuns}`);
     await profileSingleOpen(profiler, clips[0], videoPlayer, closePlayerFn, logger);
     await delay(500);
   }
-  profiler.clear(); // Clear warmup data
+  profiler.clear(); // discard warmup runs
 
-  // Run actual benchmark iterations
   for (let i = 0; i < iterations; i++) {
     const clipIndex = testDifferentClips ? (i % clips.length) : 0;
     const clip = clips[clipIndex];
@@ -313,9 +273,7 @@ async function benchmarkOpenClipDetailed(options = {}) {
   }
 
   const report = profiler.generateReport();
-  
-  // Log summary
-  // Generate formatted console output
+
   const consoleOutput = formatProfilerReport(report);
   for (const line of consoleOutput) {
     logger.info(line);
@@ -327,13 +285,9 @@ async function benchmarkOpenClipDetailed(options = {}) {
   };
 }
 
-/**
- * Profile a single clip open operation
- */
 async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, logger) {
   const profile = profiler.startProfile(clip.originalName);
-  
-  // Close any open player first
+
   if (closePlayerFn) {
     profiler.startPhase('closeExistingPlayer');
     await closePlayerFn();
@@ -341,16 +295,14 @@ async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, log
     await delay(100);
   }
 
-  // Phase 1: Get thumbnail path
   profiler.startPhase('getThumbnailPath');
   const { result: thumbnailPath, duration: thumbDuration } = await profiler.timeIPC('get-thumbnail-path', clip.originalName);
   profiler.endPhase('getThumbnailPath');
 
-  // Phase 2: Get clip data (parallel IPC calls)
   profiler.startPhase('getClipData');
   const clipDataStart = performance.now();
-  
-  // Time each IPC call individually even though they run in parallel
+
+  // timed individually even though they run in parallel
   const [clipInfoResult, trimResult, tagsResult] = await Promise.all([
     profiler.timeIPC('get-clip-info', clip.originalName),
     profiler.timeIPC('get-trim', clip.originalName),
@@ -361,12 +313,10 @@ async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, log
 
   const clipInfo = clipInfoResult.result;
   const trimData = trimResult.result;
-  
-  // Phase 3: Set video source and wait for metadata
+
   profiler.startPhase('videoMetadataLoad');
-  
+
   if (videoPlayer) {
-    // Clear previous source
     if (videoPlayer.src) {
       videoPlayer.pause();
       videoPlayer.removeAttribute('src');
@@ -391,7 +341,6 @@ async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, log
   }
   profiler.endPhase('videoMetadataLoad');
 
-  // Phase 4: Initial seek
   profiler.startPhase('initialSeek');
   
   if (videoPlayer) {
@@ -416,33 +365,30 @@ async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, log
   }
   profiler.endPhase('initialSeek');
 
-  // Phase 5: Load volume settings
   profiler.startPhase('loadVolume');
   await profiler.timeIPC('get-volume', clip.originalName);
   profiler.endPhase('loadVolume');
 
-  // Phase 6: Load speed settings  
   profiler.startPhase('loadSpeed');
   await profiler.timeIPC('get-speed', clip.originalName);
   profiler.endPhase('loadSpeed');
 
-  // Phase 7: Start playback
   profiler.startPhase('startPlayback');
   
   if (videoPlayer) {
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         videoPlayer.removeEventListener('playing', handler);
-        // Don't reject, just resolve - video might be paused intentionally
+        // resolve, not reject: video might be paused intentionally
         resolve();
       }, 3000);
-      
+
       const handler = () => {
         clearTimeout(timeout);
         profiler.recordEvent('playing');
         resolve();
       };
-      
+
       videoPlayer.addEventListener('playing', handler, { once: true });
       videoPlayer.play().catch(e => {
         clearTimeout(timeout);
@@ -457,12 +403,11 @@ async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, log
   }
   profiler.endPhase('startPlayback');
 
-  // Phase 8: Wait for canplay (video ready for smooth playback)
+  // video ready for smooth playback
   profiler.startPhase('canplayReady');
-  
+
   if (videoPlayer) {
     if (videoPlayer.readyState >= 3) {
-      // Already ready
       profiler.recordEvent('canplay');
     } else {
       await new Promise((resolve) => {
@@ -486,25 +431,16 @@ async function profileSingleOpen(profiler, clip, videoPlayer, closePlayerFn, log
   return profiler.endProfile();
 }
 
-/**
- * Helper delay function
- */
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Format duration for display
- */
 function formatDuration(ms) {
   if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
   if (ms < 1000) return `${ms.toFixed(1)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-/**
- * Format a table row with fixed column widths
- */
 function formatTableRow(values, widths) {
   return values.map((val, i) => {
     const str = String(val);
@@ -514,28 +450,25 @@ function formatTableRow(values, widths) {
 }
 
 /**
- * Generate a formatted console report from profiler results
- * @param {Object} report - The profiler report
- * @returns {string[]} Array of lines for console output
+ * @param {Object} report
+ * @returns {string[]}
  */
 function formatProfilerReport(report) {
   const lines = [];
-  
+
   lines.push('');
   lines.push('═'.repeat(70));
   lines.push('           OPEN CLIP DETAILED PROFILER RESULTS');
   lines.push('═'.repeat(70));
   lines.push('');
-  
-  // Summary
+
   lines.push(`Runs: ${report.runs}`);
   if (report.total) {
     lines.push(`Total Time: avg=${formatDuration(report.total.avg)}, min=${formatDuration(report.total.min)}, max=${formatDuration(report.total.max)}`);
     lines.push(`Variance (stdDev): ${formatDuration(report.total.stdDev)}`);
   }
   lines.push('');
-  
-  // Phase breakdown table
+
   lines.push('PHASE BREAKDOWN (sorted by avg time)');
   lines.push('─'.repeat(70));
   lines.push(formatTableRow(['Phase', 'Avg', 'Min', 'Max', '% Total', 'StdDev'], [24, 10, 10, 10, 8, 10]));
@@ -556,8 +489,7 @@ function formatProfilerReport(report) {
   }
   lines.push('─'.repeat(70));
   lines.push('');
-  
-  // IPC breakdown
+
   lines.push('IPC CALL TIMINGS');
   lines.push('─'.repeat(70));
   lines.push(formatTableRow(['Channel', 'Avg', 'Min', 'Max', 'Calls', 'StdDev'], [28, 10, 10, 8, 6, 10]));
@@ -579,7 +511,6 @@ function formatProfilerReport(report) {
   lines.push('─'.repeat(70));
   lines.push('');
   
-  // Bottlenecks
   if (report.bottlenecks && report.bottlenecks.length > 0) {
     lines.push('⚠️  BOTTLENECKS (>20% of total time)');
     lines.push('─'.repeat(70));
@@ -590,7 +521,6 @@ function formatProfilerReport(report) {
     lines.push('');
   }
   
-  // High variance
   if (report.highVariance && report.highVariance.length > 0) {
     lines.push('⚠️  HIGH VARIANCE PHASES (coefficient of variation > 0.5)');
     lines.push('─'.repeat(70));
@@ -600,11 +530,10 @@ function formatProfilerReport(report) {
     lines.push('');
   }
   
-  // Analysis
   lines.push('ANALYSIS');
   lines.push('─'.repeat(70));
-  
-  // Calculate what percentage of time is spent on each type of operation
+
+  // coarse categorization, used only as a totalTime fallback
   let ipcTime = 0, videoTime = 0, otherTime = 0;
   for (const [phase, stats] of sortedPhases) {
     if (phase.includes('IPC') || phase.includes('get') || phase.includes('load') && phase !== 'videoMetadataLoad') {
@@ -617,8 +546,8 @@ function formatProfilerReport(report) {
   }
   
   const totalTime = report.total?.avg || (ipcTime + videoTime + otherTime);
-  
-  // Recalculate based on actual phases
+
+  // real breakdown: explicit phase lists
   const ipcPhases = ['getThumbnailPath', 'getClipData', 'loadVolume', 'loadSpeed'];
   const videoPhases = ['videoMetadataLoad', 'initialSeek', 'startPlayback', 'canplayReady'];
   
@@ -638,8 +567,7 @@ function formatProfilerReport(report) {
   lines.push('─'.repeat(70));
   
   const recommendations = [];
-  
-  // Check for slow phases
+
   for (const [phase, stats] of sortedPhases) {
     if (phase === 'getThumbnailPath' && stats.avg > 20) {
       recommendations.push('• Cache thumbnail paths in memory to avoid repeated IPC calls');
@@ -658,7 +586,6 @@ function formatProfilerReport(report) {
     }
   }
   
-  // Check for high variance
   for (const v of (report.highVariance || [])) {
     if (v.phase === 'getThumbnailPath') {
       recommendations.push('• Thumbnail path lookup has high variance - check disk I/O');

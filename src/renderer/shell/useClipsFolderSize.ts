@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const POLL_MS = 5 * 60 * 1000; // 5 min — main caches for 4 min, so most polls are cheap.
+const POLL_MS = 5 * 60 * 1000; // 5 min: main caches for 4 min, so most polls are cheap
 
 /** Format a byte count as a compact human string, e.g. "12.4 GB". */
 export function formatBytes(bytes: number): string {
@@ -11,14 +11,8 @@ export function formatBytes(bytes: number): string {
   return `${Math.round(value)} ${units[i]}`;
 }
 
-/**
- * Disk footprint (bytes) of the clip folder, or null until first fetched.
- *
- * Deliberately lazy: the first fetch is deferred to browser idle so it never
- * competes with startup, then it refreshes on a slow interval. Nothing depends
- * on this value, and the main process caches the walk — so it costs almost
- * nothing and never touches the render hot path.
- */
+/** disk footprint of the clip folder, null until first fetch
+ * lazy: deferred to idle so it doesn't compete with startup; main process caches the walk so it's nearly free */
 export function useClipsFolderSize(): number | null {
   const [bytes, setBytes] = useState<number | null>(null);
 

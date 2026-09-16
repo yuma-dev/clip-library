@@ -5,7 +5,7 @@
 //! bursts gate through here: the first occurrence in a window sends, repeats
 //! inside the window are counted, and the next send carries the suppressed
 //! count as `context: {"occurrences": n}` (the pattern the server brief asks
-//! for). A tail count lost at process exit is acceptable — high-frequency
+//! for). A tail count lost at process exit is acceptable: high-frequency
 //! codes by definition re-fire.
 
 use parking_lot::Mutex;

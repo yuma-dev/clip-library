@@ -1,16 +1,12 @@
-// Machine profile. Sent once per session on the first successful beat.
-//
-// Everything here is a category or a number about the hardware. No hostname,
-// no username, no paths, no serials. The Electron/Chrome/Node versions and the
-// DPI/refresh numbers are cliplib-only additions over clipdip's block: "only on
-// 4K at 150% scaling" is exactly the bug report that arrives without them.
+// Machine profile, sent once per session on the first successful beat.
+// Category/number only: no hostname, username, path or serial. Electron/Chrome/Node versions and DPI/refresh
+// are cliplib-only additions over clipdip's block, for "only on 4K at 150% scaling" style bug reports.
 
 const os = require('os');
 const { execFile } = require('child_process');
 const fsp = require('fs').promises;
 
-// Win32_LogicalDisk DriveType. 3 (fixed) is split into system vs other by
-// comparing against %SystemDrive%.
+// Win32_LogicalDisk DriveType; 3 (fixed) is split system/other via %SystemDrive%.
 const DRIVE_TYPES = { 2: 'removable', 3: 'fixed', 4: 'network', 5: 'removable' };
 
 const GPU_VENDORS = {
@@ -21,19 +17,15 @@ const GPU_VENDORS = {
 };
 
 function windowsMarketingVersion(release) {
-  // os.release() is "10.0.26100"; build >= 22000 is Windows 11.
+  // os.release() is "10.0.26100"; build >= 22000 = Windows 11
   const parts = String(release || '').split('.');
   const build = Number.parseInt(parts[2], 10);
   if (!Number.isFinite(build)) return release || null;
   return `${build >= 22000 ? '11' : '10'} ${build}`;
 }
 
-// app.getGPUInfo('complete') runs a DirectX diagnostics pass that blocks the
-// browser process for about two seconds on Windows despite its async
-// signature, and a blocked browser process freezes every window. Measured
-// as a 2.1 s stall right after the boot intro. 'basic' answers from what
-// the GPU process already knows (vendor and device ids); the model and
-// driver come from a hidden PowerShell query that never touches our thread.
+// getGPUInfo('complete') blocks the browser process (~2.1s stall, freezes every window); 'basic' +
+// a PowerShell query avoids that.
 async function collectGpu(app) {
   const out = {};
   try {
@@ -94,12 +86,8 @@ function collectDisplays(screen) {
   return out;
 }
 
-/**
- * Category of the volume the clips folder lives on. A network share is the
- * strongest single predictor of the file-watcher and enumeration failures, so
- * this is worth the one PowerShell call. Never returns anything derived from
- * the path itself, only the category.
- */
+/** category of the clips folder's volume; network share is the strongest predictor of watcher/enumeration failures.
+ * Never returns anything derived from the path itself, only the category. */
 function classifyVolumeCheap(clipLocation) {
   if (/^\\\\/.test(clipLocation)) return 'network';
   const match = /^([A-Za-z]):/.exec(clipLocation);
@@ -145,7 +133,6 @@ async function collectDisk(clipLocation) {
   const cheap = classifyVolumeCheap(clipLocation);
   out.disk_volume = cheap;
 
-  // Refine fixed-vs-removable-vs-network, which the path alone cannot tell.
   const letter = /^([A-Za-z]):/.exec(clipLocation)?.[1];
   if (letter && process.platform === 'win32') {
     const type = await queryDriveType(letter);

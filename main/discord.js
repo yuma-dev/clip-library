@@ -1,18 +1,12 @@
-// Imports
 const DiscordRPC = require('discord-rpc');
 const logger = require('../utils/logger');
 
-// Constants
 const CLIENT_ID = '1264368321013219449';
 
-// Module state
 let rpc = null;
 let rpcReady = false;
 let getSettings = null;
 
-/**
- * Initialize Discord RPC if enabled in settings.
- */
 async function initDiscordRPC(getSettingsFn) {
   getSettings = getSettingsFn;
 
@@ -38,9 +32,6 @@ async function initDiscordRPC(getSettingsFn) {
   });
 }
 
-/**
- * Update Discord presence text (if enabled/connected).
- */
 async function updateDiscordPresence(details, state = null) {
   const settings = getSettings ? await getSettings() : null;
 
@@ -65,18 +56,12 @@ async function updateDiscordPresence(details, state = null) {
   });
 }
 
-/**
- * Clear current Discord presence.
- */
 function clearDiscordPresence() {
   if (rpcReady && rpc) {
     rpc.clearActivity().catch(logger.error);
   }
 }
 
-/**
- * Dispose the Discord RPC client.
- */
 function destroyDiscordRPC() {
   if (!rpc) {
     rpcReady = false;

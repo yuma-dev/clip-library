@@ -1,7 +1,6 @@
-// Badge manager modal (admin only) — in-app port of the website
-// BadgeManagerModal.tsx. Two tabs: "Assign" (award/revoke a badge to a user)
-// and "Manage" (create / rename / delete badges). Reuses `.share-modal-*`
-// styling plus `.badge-mgr-*` extras in profile.css.
+// Badge manager modal (admin only), in-app port of the website BadgeManagerModal.tsx.
+// Two tabs: Assign (award/revoke a badge) and Manage (create/rename/delete badges).
+// Reuses .share-modal-* styling plus .badge-mgr-* extras in profile.css.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";

@@ -1,21 +1,10 @@
 /**
- * Benchmark Scenario Definitions
- * 
- * Defines all benchmark scenarios that can be run, including:
- * - Startup benchmarks
- * - Clip loading benchmarks
- * - Playback benchmarks
- * - Export benchmarks
- * - Search benchmarks
- * 
- * Note: Scenarios with `renderer: true` have implementations in renderer-harness.js
+ * Benchmark scenario definitions. `renderer: true` scenarios are implemented
+ * in renderer-harness.js.
  */
 
 'use strict';
 
-/**
- * Scenario categories for organization
- */
 const CATEGORIES = {
   STARTUP: 'startup',
   LOADING: 'loading',
@@ -25,11 +14,8 @@ const CATEGORIES = {
   THUMBNAILS: 'thumbnails'
 };
 
-/**
- * All available benchmark scenarios
- */
 const SCENARIOS = {
-  // ==================== STARTUP SCENARIOS ====================
+  // startup scenarios
 
   startup_detailed: {
     id: 'startup_detailed',
@@ -49,7 +35,7 @@ const SCENARIOS = {
     timeout: 60000
   },
 
-  // ==================== LOADING SCENARIOS ====================
+  // loading scenarios
 
   load_clips: {
     id: 'load_clips',
@@ -69,7 +55,7 @@ const SCENARIOS = {
     timeout: 30000
   },
 
-  // ==================== PLAYBACK SCENARIOS ====================
+  // playback scenarios
 
   open_clip: {
     id: 'open_clip',
@@ -120,7 +106,7 @@ const SCENARIOS = {
     timeout: 10000
   },
 
-  // ==================== SEARCH SCENARIOS ====================
+  // search scenarios
 
   search_simple: {
     id: 'search_simple',
@@ -142,9 +128,8 @@ const SCENARIOS = {
     timeout: 10000
   },
 
-  // ============= AUDIO TRACK COMPARISON SCENARIOS =============
-  // Each compares one single-audio-track clip vs one multi-audio-track clip,
-  // selected automatically by ffprobing the loaded clip set.
+  // audio track comparison scenarios: single vs multi-audio-track clip
+  // picked automatically by ffprobing the loaded clip set
 
   playback_cpu_compare: {
     id: 'playback_cpu_compare',
@@ -182,7 +167,7 @@ const SCENARIOS = {
     timeout: 60000
   },
 
-  // ==================== THUMBNAIL SCENARIOS ====================
+  // thumbnail scenarios
 
   thumbnail_batch: {
     id: 'thumbnail_batch',
@@ -195,18 +180,13 @@ const SCENARIOS = {
   }
 };
 
-/**
- * Predefined scenario suites for different testing needs
- */
 const SUITES = {
-  // Quick smoke test - minimal scenarios
   quick: [
     'load_clips',
     'open_clip',
     'close_player'
   ],
 
-  // Standard benchmark - core functionality
   standard: [
     'load_clips',
     'open_clip',
@@ -216,10 +196,8 @@ const SUITES = {
     'search_simple'
   ],
 
-  // Full benchmark - everything with renderer support
   full: Object.keys(SCENARIOS),
 
-  // Playback-focused
   playback: [
     'open_clip',
     'video_metadata',
@@ -227,24 +205,22 @@ const SUITES = {
     'close_player'
   ],
 
-  // Search-focused
   search: [
     'search_simple',
     'search_complex'
   ],
 
-  // Open clip deep-dive - detailed profiling to find bottlenecks
+  // deep-dive: detailed profiling to find bottlenecks
   openclip: [
     'open_clip_detailed'
   ],
 
-  // Startup analysis - detailed breakdown of app startup phases
   startup: [
     'startup_detailed'
   ],
 
-  // Audio-track regression suite — compares single vs multi audio playback
-  // across CPU, open phases, seek bursts, and memory footprint.
+  // audio-track regression: single vs multi audio across CPU, open phases
+  // seek bursts, memory footprint
   multitrack: [
     'open_phases_compare',
     'playback_cpu_compare',
@@ -254,9 +230,8 @@ const SUITES = {
 };
 
 /**
- * Get scenarios for a specific suite
- * @param {string} suiteName - Name of the suite
- * @returns {Array} Array of scenario objects
+ * @param {string} suiteName
+ * @returns {Array}
  */
 function getSuite(suiteName) {
   const suiteIds = SUITES[suiteName];
@@ -268,27 +243,22 @@ function getSuite(suiteName) {
 }
 
 /**
- * Get scenarios by category
- * @param {string} category - Category name
- * @returns {Array} Array of scenario objects
+ * @param {string} category
+ * @returns {Array}
  */
 function getByCategory(category) {
   return Object.values(SCENARIOS).filter(s => s.category === category);
 }
 
 /**
- * Get a single scenario by ID
- * @param {string} id - Scenario ID
- * @returns {Object|null} Scenario object or null
+ * @param {string} id
+ * @returns {Object|null}
  */
 function getScenario(id) {
   return SCENARIOS[id] || null;
 }
 
-/**
- * List all available scenarios
- * @returns {Array} Array of scenario summaries
- */
+/** @returns {Array} */
 function listScenarios() {
   return Object.values(SCENARIOS).map(s => ({
     id: s.id,
@@ -299,10 +269,7 @@ function listScenarios() {
   }));
 }
 
-/**
- * List all available suites
- * @returns {Object} Suite names and their scenario counts
- */
+/** @returns {Object} suite name -> scenario count/list */
 function listSuites() {
   const result = {};
   for (const [name, ids] of Object.entries(SUITES)) {

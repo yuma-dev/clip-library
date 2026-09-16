@@ -1,10 +1,5 @@
-// React commit profiler (dev-only).
-//
-// Wraps the app tree in React's <Profiler>. Every commit over a small threshold
-// becomes a span on the "React commits" lane, tagged with the phase (mount vs
-// update) and the actual vs base duration — so an expensive re-render (the grid,
-// the ambient glow, a context that re-renders too much) shows up next to the
-// long frame it caused.
+// dev-only: wraps the app in React's <Profiler>; commits over the threshold become spans
+// on the "React commits" lane so an expensive re-render shows up next to the long frame it caused
 
 import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from "react";
 import { span, TID, wallMs } from "./trace";

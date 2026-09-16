@@ -21,32 +21,30 @@ export interface UseLibraryFilter {
   collection: Collection;
   setCollection: (value: Collection) => void;
 
-  /** All filterable tags in display order: system tags first, then global. */
+  /** system tags first, then global, in display order */
   allTags: string[];
   globalTags: string[];
   tags: TagFilterState;
-  /** Selected count over the total tag universe (for the "(x/y)" label). */
+  /** selected count over the total tag universe, for the "(x/y)" label */
   selectedCount: number;
   totalCount: number;
-  /** Normal click — toggle a tag in the persisted (AND-exclusion) selection. */
+  /** normal click: toggle in the persisted (AND-exclusion) selection */
   toggleTag: (tag: string) => void;
-  /** Ctrl / indicator click — focus a single tag (OR), or clear focus. */
+  /** ctrl/indicator click: focus a single tag (OR), or clear focus */
   focusTag: (tag: string) => void;
   showAllTags: () => void;
   hideAllTags: () => void;
   clearFocus: () => void;
-  /** Create a new global tag (persists it and enables it in the filter). */
   addGlobalTag: (tag: string) => void;
-  /** Rename a tag in the global list + selections (disk scan done by caller). */
+  /** disk scan done by the caller */
   renameGlobalTag: (oldTag: string, newTag: string) => void;
-  /** Remove a tag from the global list + selections (disk scan done by caller). */
+  /** disk scan done by the caller */
   removeGlobalTag: (tag: string) => void;
 
-  /** clips run through search + tag + collection filters (newest-first). */
   filteredClips: LocalClip[];
 }
 
-/** Union of the persisted global-tags list and every tag present on a clip. */
+/** union of the persisted global-tags list and every tag present on a clip */
 function deriveGlobalTags(loaded: string[], clips: LocalClip[]): string[] {
   const set = new Set(loaded);
   for (const clip of clips) for (const t of clip.tags) set.add(t);
@@ -60,14 +58,12 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [temporary, setTemporary] = useState<Set<string>>(new Set());
   const [isTemporary, setIsTemporary] = useState(false);
-  // Until the persisted selection loads, the tag filter is bypassed so no
-  // tagged clip flashes hidden on first paint.
+  // bypassed until the persisted selection loads, so no tagged clip flashes hidden on first paint
   const [ready, setReady] = useState(false);
 
   const globalTags = useMemo(() => deriveGlobalTags(loadedTags, clips), [loadedTags, clips]);
   const allTags = useMemo(() => ["Untagged", "Unnamed", ...globalTags], [globalTags]);
 
-  // Load the global tag list + persisted selection once on mount.
   useEffect(() => {
     let cancelled = false;
     let restoreTimer: number | undefined;
@@ -91,7 +87,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       const savedPrefs: string[] | null = Array.isArray(prefs) ? prefs.map(String) : null;
       if (savedPrefs && savedPrefs.length > 0) {
         const set = new Set(savedPrefs);
-        // First-run migration: always surface Unnamed (legacy behavior).
+        // first-run migration: always surface Unnamed (legacy behavior)
         if (!set.has("Unnamed")) {
           set.add("Unnamed");
           window.clips.saveTagPreferences([...set]).catch(() => {});
@@ -102,12 +98,8 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       }
       setReady(true);
 
-      // Disaster recovery (legacy clip-grid behavior): rebuild the persisted
-      // global tag list from per-clip tags on disk (e.g. after settings loss).
-      // Display already self-heals via deriveGlobalTags; this repairs storage.
-      // Deferred past startup AND gated on user idle: the scan reads every
-      // clip's metadata on the main process (~400-600ms), so running it while
-      // the user is opening clips stalls their IPC behind it.
+      // rebuilds the persisted tag list from disk after settings loss (legacy behavior)
+      // gated on user idle: the scan takes ~400-600ms and would stall IPC while opening clips
       const runRestore = async () => {
         removeIdleListeners();
         try {
@@ -126,7 +118,6 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       const tryRestore = () => {
         if (cancelled) return;
         if (Date.now() - lastInputAt < 5_000) {
-          // User is active — check back shortly.
           restoreTimer = window.setTimeout(tryRestore, 5_000);
           return;
         }
@@ -168,7 +159,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
   }, []);
 
   const focusTag = useCallback((tag: string) => {
-    // Ctrl/indicator-click the already-sole focus tag exits focus mode.
+    // ctrl/indicator-click on the already-sole focus tag exits focus mode
     setTemporary((prev) => {
       const soleFocus = prev.size === 1 && prev.has(tag);
       setIsTemporary(!soleFocus);
@@ -190,9 +181,8 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     persist(next);
   }, [clearFocus, persist]);
 
-  // Create a new global tag: add it to the persisted universe and enable it in
-  // the saved selection so a clip freshly tagged with it stays visible. If it's
-  // already known, this is a no-op beyond ensuring it's selected.
+  // adds to the persisted universe and enables it in the saved selection so a freshly-tagged clip
+  // stays visible
   const addGlobalTag = useCallback(
     (raw: string) => {
       const tag = raw.trim();
@@ -271,10 +261,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     [saved, temporary, isTemporary],
   );
 
-  // `@mention` filtering needs the participant roster + per-clip index. It's a
-  // full-library metadata scan, so only trigger it once the user actually types
-  // an `@user` term (the roster is otherwise loaded lazily when the search field
-  // is focused). Re-render when the scan resolves so the grid picks it up.
+  // `@mention` needs a full-library scan, only triggered once the user types an `@` term
   const participantsVersion = useParticipantsVersion();
   const hasMentionQuery = useMemo(
     () => parseSearchTerms(query).mentions.length > 0,
@@ -284,18 +271,15 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     if (hasMentionQuery) ensureParticipants(clips.map((c) => c.originalName));
   }, [hasMentionQuery, clips]);
 
-  // Filtering (and the 2,000-card grid render it feeds) runs against a
-  // deferred copy of the criteria: the search input / tag buttons repaint
-  // immediately, and React re-renders the grid as a low-priority,
-  // interruptible pass instead of blocking every keystroke for ~450ms.
+  // filtering (and the 2000-card grid it feeds) runs against a deferred copy of the
+  // criteria so the grid re-renders as a low-priority pass, not blocking each keystroke
   const criteria = useMemo(
     () => ({
       query,
       tags,
       collection,
       applyTags: ready,
-      // `participantsVersion` bumps identity when the scan resolves, forcing the
-      // filter to re-run against the freshly built index.
+      // participantsVersion forces a re-run once the scan resolves
       mentionIndex:
         hasMentionQuery && participantsLoaded() ? getMentionIndex() : undefined,
     }),
@@ -311,8 +295,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
 
   const selectedCount = useMemo(() => activeSelection(tags).size, [tags]);
 
-  // Stable object identity so memoized consumers (Sidebar) only re-render
-  // when a filter value actually changes.
+  // stable identity so memoized consumers (Sidebar) only re-render on real changes
   return useMemo(
     () => ({
       query,

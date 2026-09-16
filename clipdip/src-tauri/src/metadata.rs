@@ -1,23 +1,13 @@
-//! Per-clip `.gameinfo` sidecar capture.
-//!
-//! Snapshots the foreground window at the moment of the save hotkey
-//! (HWND + PID), then — once the clip is muxed to disk — resolves the
-//! window title and the owning process's exe path, optionally extracts
-//! the exe icon as a PNG, and writes a small JSON sidecar next to the
-//! clip:
+//! Per-clip `.gameinfo` sidecar: snapshots the foreground window at save time, resolves
+//! title/exe/icon once muxed, writes JSON next to the clip. Icon extraction (from the
+//! old Windhawk ShadowPlay mod) uses ExtractIconExW, GetIconInfo/GetDIBits, and the png crate.
 //!
 //! ```text
 //! {output_dir}/
 //!   foo-1700000000.mp4
-//!   .clip_metadata/foo-1700000000.mp4.gameinfo   ← JSON: title + icon_file
-//!   icons/Game.png                               ← PNG (deduped per-exe)
+//!   .clip_metadata/foo-1700000000.mp4.gameinfo   JSON: title + icon_file
+//!   icons/Game.png                               PNG (deduped per-exe)
 //! ```
-//!
-//! Lifted from the standalone Windhawk mod previously used to annotate
-//! ShadowPlay clips. The bulk of the win32 work is icon extraction —
-//! `ExtractIconExW` returns an HICON, which we crack open via
-//! `GetIconInfo` + `GetDIBits` to read BGRA pixels, then encode with the
-//! `png` crate.
 
 use std::ffi::OsString;
 use std::fs;
@@ -44,9 +34,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_GETTEXTLENGTH,
 };
 
-/// Snapshot of the foreground window at the moment of the hotkey. We
-/// capture HWND+PID synchronously up-front because by the time the clip
-/// finishes muxing (~1–2 s later) the foreground may have shifted.
+/// hwnd+pid captured synchronously at hotkey time; muxing takes ~1-2s so the
+/// foreground window may have changed by the time we resolve it.
 #[derive(Clone, Copy, Debug)]
 pub struct ForegroundSnapshot {
     pub hwnd: isize,
@@ -70,10 +59,8 @@ impl ForegroundSnapshot {
     }
 }
 
-/// Quick name resolution for filename templating: the foreground exe's
-/// stem (e.g. `VALORANT`) and — only when `need_title` is set, because
-/// `WM_GETTEXT` against a hung window can block up to ~400 ms — the
-/// window title.
+/// exe stem for filename templating, plus window title only if need_title
+/// (WM_GETTEXT on a hung window can block up to ~400ms).
 pub fn filename_names(
     snap: Option<ForegroundSnapshot>,
     need_title: bool,
@@ -90,10 +77,8 @@ pub fn filename_names(
     (app, title)
 }
 
-/// Output of the heavy resolution work — title query, exe lookup, icon
-/// extraction. Computed up-front (in parallel with the mux) so the only
-/// thing left at save-completion is a cheap JSON write keyed by the
-/// clip's filename.
+/// title/exe/icon resolved up front in parallel with the mux, so save-completion
+/// is just a JSON write keyed by the clip's filename.
 #[derive(Clone, Debug)]
 pub struct ResolvedMetadata {
     pub title: String,
@@ -101,22 +86,16 @@ pub struct ResolvedMetadata {
     /// `{exe-stem}.png` for the gameinfo's `icon_file` field. `None`
     /// when icon capture is disabled or the icon extract failed.
     pub icon_filename: Option<String>,
-    /// Encoded PNG bytes for the icon, ready to write. Kept in-memory
-    /// during resolve so the actual file lands in the clip's directory
-    /// at finalize time — `output_dir` may have changed between save
-    /// hotkey and config reload, or the clip path's parent may simply
-    /// differ from what we assumed (rename, etc.).
+    /// PNG bytes kept in-memory until finalize, since output_dir may change
+    /// between the save hotkey and config reload (or a rename).
     pub icon_png: Option<Vec<u8>>,
-    /// Set when the foreground exe matched `ignored_processes`. The
-    /// final write step short-circuits on this so we don't even create
-    /// the `.clip_metadata/` directory for the clip.
+    /// set when the exe matched ignored_processes; write_gameinfo skips creating
+    /// .clip_metadata/ entirely when true.
     pub ignored: bool,
 }
 
-/// Resolve everything we can without knowing the final clip path — the
-/// expensive bits. Designed to run in parallel with `pipeline.save_clip()`
-/// so the user-facing save latency isn't extended by the two 200 ms
-/// `SendMessageTimeoutW` calls or the icon GDI/DIB pipeline.
+/// runs in parallel with pipeline.save_clip() so the 200ms SendMessageTimeoutW
+/// calls and icon GDI/DIB work don't add to save latency.
 pub fn resolve(snap: ForegroundSnapshot, cfg: &MetadataConfig) -> ResolvedMetadata {
     let hwnd = HWND(snap.hwnd as *mut _);
     let title = window_title(hwnd).unwrap_or_else(|| "Unknown".to_string());
@@ -167,23 +146,15 @@ pub fn resolve(snap: ForegroundSnapshot, cfg: &MetadataConfig) -> ResolvedMetada
     }
 }
 
-/// Finalize step: writes `.clip_metadata/{clip}.gameinfo` and (if
-/// available) `icons/{exe}.png` *next to* the saved MP4 — both
-/// directories derive from `clip_path.parent()` so they follow the
-/// clip's actual location, even if the user changed the output dir
-/// mid-flight.
-///
-/// Game metadata (`resolved`) and the Discord call roster (`discord`) are
-/// independent: either, both, or neither may be present. With a `resolved`
-/// that matched the ignore list, the game fields are dropped but the
-/// Discord roster is still recorded. When there's nothing to write at all,
-/// no sidecar (and no `.clip_metadata/` dir) is created.
+/// writes .clip_metadata/{clip}.gameinfo + icons/{exe}.png beside the clip's
+/// actual dir; resolved and discord are independent, an ignored resolved keeps the discord roster
+/// but drops game fields.
 pub fn write_gameinfo(
     clip_path: &Path,
     resolved: Option<&ResolvedMetadata>,
     discord: Option<&serde_json::Value>,
 ) -> Result<()> {
-    // Game fields only when we have a non-ignored resolution.
+    // game fields only if resolved isn't ignored
     let game = resolved.filter(|r| !r.ignored);
     if game.is_none() && discord.is_none() {
         return Ok(());
@@ -192,8 +163,7 @@ pub fn write_gameinfo(
         .parent()
         .ok_or_else(|| anyhow!("clip path has no parent"))?;
 
-    // Icon: write only if we have bytes and the file doesn't already
-    // exist (deduped per-exe across clips in the same folder).
+    // dedup: skip write if the icon file already exists for this exe
     if let Some(r) = game {
         if let (Some(name), Some(bytes)) = (r.icon_filename.as_deref(), r.icon_png.as_deref()) {
             let icons_dir = dir.join("icons");
@@ -310,11 +280,8 @@ fn exe_path_for_pid(pid: u32) -> Option<PathBuf> {
     }
 }
 
-/// Extract the large icon from `exe_path` and encode it as a PNG byte
-/// buffer. Uses `ExtractIconExW` to get an HICON, then walks the icon's
-/// color bitmap with `GetDIBits` to produce a flat BGRA buffer which we
-/// swizzle to RGBA and feed to the `png` encoder. The caller writes the
-/// bytes wherever it wants (we don't know the clip's parent dir here).
+/// ExtractIconExW gets an HICON; GetDIBits reads BGRA, swizzled to RGBA, png-encoded.
+/// caller writes the bytes; this fn doesn't know the clip's parent dir.
 fn extract_icon_png(exe_path: &Path) -> Result<Vec<u8>> {
     let wide: Vec<u16> = exe_path
         .as_os_str()
@@ -346,9 +313,8 @@ fn icon_to_png_bytes(hicon: HICON) -> Result<Vec<u8>> {
         let mut info: ICONINFO = std::mem::zeroed();
         GetIconInfo(hicon, &mut info).ok().context("GetIconInfo")?;
 
-        // hbmColor is the RGBA-ish bitmap; hbmMask is the AND-mask we
-        // don't need (the color bitmap of a modern icon is already
-        // 32-bit with proper alpha). Make sure we delete both.
+        // hbmColor is the pixel bitmap (modern icons are already 32-bit with
+        // alpha); hbmMask (AND mask) is unused but still needs deleting.
         struct BitmapGuard(HBITMAP);
         impl Drop for BitmapGuard {
             fn drop(&mut self) {
@@ -421,15 +387,13 @@ fn icon_to_png_bytes(hicon: HICON) -> Result<Vec<u8>> {
         // Patch up header in case the driver only filled in dimensions.
         header.biSizeImage = (stride * height as usize) as u32;
 
-        // BGRA -> RGBA in place.
+        // BGRA to RGBA, in place
         for px in pixels.chunks_exact_mut(4) {
             px.swap(0, 2);
         }
 
-        // Some 32-bit icons come back with alpha=0 across the board (older
-        // toolchains or 24-bit-converted icons). If every pixel is fully
-        // transparent, force-fill alpha to 255 so we don't write an
-        // invisible PNG.
+        // some 32-bit icons come back with alpha=0 (old toolchains); if fully
+        // transparent, force alpha=255 so we don't write an invisible PNG
         if pixels.chunks_exact(4).all(|p| p[3] == 0) {
             for px in pixels.chunks_exact_mut(4) {
                 px[3] = 0xff;

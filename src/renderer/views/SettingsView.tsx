@@ -83,13 +83,13 @@ const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
 
 const ALL_SECTIONS = NAV_GROUPS.flatMap((g) => g.items);
 
-/** Deep-link intent section -> nav section (legacy "clipdip" targets the group). */
+/** Deep-link intent section, mapped to nav section (legacy "clipdip" targets the group). */
 const INTENT_ALIASES: Record<string, SectionId> = { clipdip: "clipdip-general" };
 
 interface SettingsViewProps {
   lib: UseClips;
   filter: UseLibraryFilter;
-  /** Deep-link intent from main (cliplib://settings/<section>). The nonce
+  /** Deep-link intent from main (cliplib://settings/<section>); the nonce
    *  re-applies the section on repeated tray clicks. */
   intent?: { section?: string; nonce: number } | null;
 }
@@ -108,8 +108,7 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
   const { undo, redo } = useSettings();
   const toast = useToast();
 
-  // A real library thumbnail feeds the glow previews (newest clip that has
-  // one), so they show what the glow actually looks like on your content.
+  // real thumbnail feeds glow previews (newest clip with one) so they match your content
   const sampleThumb = useMemo(() => {
     for (const clip of lib.clips) {
       const t = lib.thumbnails.get(clip.originalName);
@@ -118,9 +117,8 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
     return null;
   }, [lib.clips, lib.thumbnails]);
 
-  // Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) step through this session's settings
-  // changes while the settings view is open. Text fields keep their native
-  // undo — we only handle the shortcut outside editable targets.
+  // ctrl+z / ctrl+shift+z (or ctrl+y) step through this session's settings
+  // changes; text fields keep native undo, handled only outside editable targets
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -143,7 +141,7 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, toast]);
 
-  // Section render map — adding a section stays one line.
+  // section render map, adding a section stays one line
   const renderers: Record<SectionId, () => ReactNode> = {
     general: () => <GeneralSection lib={lib} filter={filter} />,
     appearance: () => <AppearanceSection />,
@@ -162,7 +160,7 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
 
   return (
     <div className="settings-view">
-      {/* Section rail (inside the view — the app rail stays for top-level nav). */}
+      {/* Section rail (inside the view; the app rail stays for top-level nav). */}
       <nav className="settings-nav" aria-label="Settings sections">
         <div className="settings-nav-title">Settings</div>
         {NAV_GROUPS.map((group, gi) => (

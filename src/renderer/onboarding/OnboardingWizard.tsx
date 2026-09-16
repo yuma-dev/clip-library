@@ -31,23 +31,15 @@ import overlayUrl from "../../../assets/onboarding/clipdip-overlay.webp";
 import mixerUrl from "../../../assets/onboarding/mixer-showcase.png";
 import pillsUrl from "../../../assets/onboarding/user-pills-showcase.png";
 
-/**
- * One-time 3.0 introduction + ClipDip setup wizard. Shows once per
- * ONBOARDING_VERSION (persisted as settings.onboardingVersion), and can be
- * re-opened from the devtools console at any time:
- *
- *   __showOnboarding()   — open the wizard now
- *   __resetOnboarding()  — clear the seen-flag (shows again on next launch)
- */
+/** shown once per ONBOARDING_VERSION (settings.onboardingVersion); reopen from devtools:
+ *   __showOnboarding()   - open now
+ *   __resetOnboarding()  - clear the seen flag */
 export { ONBOARDING_VERSION } from "./version";
 import { ONBOARDING_VERSION } from "./version";
 
 type StepId = "welcome" | "clipdip" | "audio" | "hotkeys" | "discord" | "done";
 
-// ---------------------------------------------------------------------------
-// Host: gating + console hooks. The heavy wizard body (and the clipdip
-// status/config polling of ClipdipProvider) only mounts while open.
-// ---------------------------------------------------------------------------
+// host: gating + console hooks; wizard body + clipdip status polling only mounts while open
 
 let externalShow: (() => void) | null = null;
 
@@ -56,7 +48,7 @@ export default function OnboardingWizard({ openOnMount = false }: { openOnMount?
   const [open, setOpen] = useState(openOnMount);
   const autoShown = useRef(false);
 
-  // First-run gate: open once when settings arrive and the flag is behind.
+  // opens once when settings arrive and the version flag is behind
   useEffect(() => {
     if (!ready || autoShown.current) return;
     if (Number(settings.onboardingVersion ?? 0) < ONBOARDING_VERSION) {
@@ -65,7 +57,7 @@ export default function OnboardingWizard({ openOnMount = false }: { openOnMount?
     }
   }, [ready, settings.onboardingVersion]);
 
-  // Console hooks (kept in production on purpose — support/debug tool).
+  // kept in production on purpose - support/debug tool
   useEffect(() => {
     externalShow = () => setOpen(true);
     const w = window as unknown as Record<string, unknown>;
@@ -102,9 +94,7 @@ export default function OnboardingWizard({ openOnMount = false }: { openOnMount?
   );
 }
 
-// ---------------------------------------------------------------------------
-// Shell: backdrop, panel, step routing, footer navigation.
-// ---------------------------------------------------------------------------
+// shell: backdrop, panel, step routing, footer navigation
 
 function WizardShell({ onClose }: { onClose: (markSeen: boolean) => void }) {
   const { settings, set } = useSettings();
@@ -122,8 +112,7 @@ function WizardShell({ onClose }: { onClose: (markSeen: boolean) => void }) {
   const [direction, setDirection] = useState(1);
   const step = steps[Math.min(stepIndex, steps.length - 1)];
 
-  // ClipDip is opt-out in 3.0: the wizard's pending toggles default ON and are
-  // applied when the user advances past the ClipDip step (never on skip).
+  // ClipDip is opt-out in 3.0: toggles default ON, applied on advance past this step, never on skip
   const [pendingEnable, setPendingEnable] = useState(true);
   const [pendingAutostart, setPendingAutostart] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -161,7 +150,7 @@ function WizardShell({ onClose }: { onClose: (markSeen: boolean) => void }) {
     setStepIndex((i) => i - 1);
   }, [stepIndex]);
 
-  // Escape skips the tour (still marks it as seen — it shows only once).
+  // Escape skips the tour but still marks it seen, shows only once
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose(true);
@@ -262,9 +251,7 @@ function WizardShell({ onClose }: { onClose: (markSeen: boolean) => void }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Steps
-// ---------------------------------------------------------------------------
+// steps
 
 function WelcomeStep() {
   return (
@@ -404,8 +391,7 @@ function ClipdipStep({
   );
 }
 
-// Compact audio-source editor — same config shape and bridge calls as
-// Settings → ClipDip → Audio (ClipdipAudioSection), trimmed for the wizard.
+// same config shape and bridge calls as Settings > ClipDip > Audio (ClipdipAudioSection), trimmed
 type AudioSourceKind = "system_loopback" | "microphone" | "process_loopback";
 interface AudioSource {
   kind: AudioSourceKind;
@@ -577,8 +563,7 @@ function HotkeysStep() {
   );
 }
 
-// Live Discord link status via the clipdip control server. Read-only-ish:
-// the one action we offer is re-asking Discord for authorization.
+// live discord link status via the clipdip control server; only action offered is re-authorizing
 function DiscordSetup() {
   const { live, running } = useClipdip();
   const [asking, setAsking] = useState(false);

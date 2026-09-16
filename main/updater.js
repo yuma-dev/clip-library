@@ -1,4 +1,3 @@
-// Imports
 const { app, ipcMain, shell } = require('electron');
 const axios = require('axios');
 const semver = require('semver');
@@ -13,7 +12,6 @@ const telemetry = require('./telemetry');
 // show the "Updated to vX" toast (clipdip-style post-update confirmation).
 const pendingUpdateMarkerPath = () => path.join(app.getPath('userData'), 'pending-update.json');
 
-// Constants
 const GITHUB_OWNER = 'yuma-dev';
 const GITHUB_REPO = 'clip-library';
 const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
@@ -25,15 +23,12 @@ const REQUEST_HEADERS = {
 };
 const DOWNLOAD_RETRY_ATTEMPTS = 3;
 
-// Module state
 let updateHandlerRegistered = false;
 let openUpdatePageHandlerRegistered = false;
 let latestReleaseData = null;
 let latestResolvedVersion = null;
 let currentMainWindow = null;
-// Progress of the download currently in flight, so retry exhaustion can report
-// how far it actually got (downloadUpdateOnce owns the counters, the retry
-// wrapper is the one that reports).
+// downloadUpdateOnce owns these counters; retry wrapper reports them on exhaustion
 let lastDownloadBytes = 0;
 let lastDownloadTotalBytes = 0;
 
@@ -320,9 +315,7 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
 
   const downloadMs = Date.now() - downloadStartedAt;
   telemetry.metric('update.download_ms', downloadMs, { unit: 'ms' });
-  // Throughput is derived server side from sum(bytes)/sum(ms). The ingest API
-  // has no 'mbps' unit, and a client-computed rate would not merge across
-  // installs anyway.
+  // throughput derived server side from sum(bytes)/sum(ms); ingest API has no 'mbps' unit
   if (downloadedLength > 0) {
     telemetry.metric('update.download_bytes', downloadedLength, { unit: 'bytes' });
   }
@@ -358,11 +351,8 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
   sendToRenderer('download-progress', 100, mainWindow);
   sendToRenderer('update-download-complete', { path: tempPath }, mainWindow);
 
-  // Silent apply: the user already chose this by clicking the update pill —
-  // no wizard, no prompts. Stop the bundled clipdip first (the installer
-  // replaces resources\clipdip\clipdip.exe and NSIS can't swap a running
-  // exe), run NSIS silently, and have it relaunch the app when done. The
-  // relaunched app's startup hook brings clipdip back up.
+  // silent apply, no wizard: stop bundled clipdip first (NSIS can't swap a running
+  // exe), then run NSIS silently; relaunched app's startup hook brings clipdip back
   try {
     await clipdipModule.quit();
   } catch (error) {
@@ -377,8 +367,7 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
   try {
     fs.writeFileSync(
       pendingUpdateMarkerPath(),
-      // `from` is only read back by checkPostUpdateMarker, to name the version
-      // the silent install was supposed to replace.
+      // `from` is read back by checkPostUpdateMarker to name the replaced version
       JSON.stringify({ version, at: Date.now(), from: app.getVersion() })
     );
   } catch (error) {
@@ -394,9 +383,8 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
     detached: true,
     stdio: 'ignore'
   });
-  // A UAC denial, an antivirus quarantine or an NSIS failure is otherwise
-  // completely invisible: we quit 500ms later either way. Report only — the
-  // quit timing below is deliberately untouched.
+  // UAC denial/AV quarantine/NSIS failure would otherwise be invisible: we quit
+  // 500ms later either way. Report only, quit timing stays untouched.
   installer.on('error', (error) => {
     telemetry.event('update_install_spawn_failed', {
       kind: telemetry.KIND.SILENT_FAILURE,
@@ -415,18 +403,15 @@ async function downloadUpdateOnce({ url, mainWindow, expectedSize = 0, version =
   }, 500);
 }
 
-/**
- * Post-update confirmation: if the marker written before the silent install
- * matches the version we're now running, tell the renderer to toast it.
- * Called by main.js once the renderer has loaded.
- */
+// if the pre-install marker version matches what we're running now, toast it.
+// called by main.js once the renderer has loaded.
 function checkPostUpdateMarker(mainWindow) {
   const markerPath = pendingUpdateMarkerPath();
   let marker = null;
   try {
     marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
   } catch {
-    return; // no marker — normal launch
+    return; // no marker, normal launch
   }
   try {
     fs.unlinkSync(markerPath);
@@ -446,8 +431,7 @@ function checkPostUpdateMarker(mainWindow) {
     });
   } else if (version) {
     logger.warn(`Update marker version v${version} does not match running v${app.getVersion()} — update may not have applied`);
-    // The other half of the update funnel: the installer ran and the user was
-    // never told it did not take, so they sit on a version we cannot reach.
+    // installer ran but version didn't change, and user was never told
     telemetry.event('update_not_applied', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.ERROR,
@@ -570,11 +554,7 @@ function registerOpenUpdatePageHandler() {
 }
 
 /**
- * Check for updates from GitHub releases
- * @param {BrowserWindow} mainWindow - The main application window
- * @param {Object} options - Options for the check
- * @param {boolean} options.silent - If true, don't show notification (for manual checks)
- * @returns {Object} Result object with updateAvailable, currentVersion, latestVersion
+ * @param {boolean} options.silent - skip the notification, for manual checks
  */
 async function checkForUpdates(mainWindow, options = {}) {
   const { silent = false } = options;

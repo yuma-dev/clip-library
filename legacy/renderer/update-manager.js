@@ -1,14 +1,8 @@
-/**
- * Update Manager Module
- *
- * Handles manual update checks and update notifications.
- */
+// manual update check + download/notification banner
 
-// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 
-// Module state
 let initialized = false;
 let manualUpdateUrl = null;
 
@@ -28,9 +22,6 @@ async function openManualUpdatePage(preferredUrl = null) {
   }
 }
 
-/**
- * Handle a manual update check and update status UI.
- */
 async function handleManualUpdateCheck() {
   const btn = document.getElementById('checkForUpdatesBtn');
   const statusEl = document.getElementById('updateCheckStatus');
@@ -88,9 +79,6 @@ async function handleManualUpdateCheck() {
   }
 }
 
-/**
- * Render the current app version in the settings UI.
- */
 async function updateVersionDisplay() {
   try {
     const version = await ipcRenderer.invoke('get-app-version');
@@ -103,7 +91,6 @@ async function updateVersionDisplay() {
   }
 }
 
-// Module API
 function init() {
   if (initialized) return;
 

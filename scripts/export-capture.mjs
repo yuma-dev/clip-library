@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 // Capture a component-mockup spec into layered, high-res PNGs.
 //
-// Loads the built exporter (renderer-dist/export.html) over a file:// origin in
-// headless Chromium — file:// so ClipCard's `file://<abs path>` <img> sources
-// (hi-res thumbnail, game icon) resolve — injects the spec, waits for the frame
-// to signal ready, then screenshots #export-root once per layer. Non-composite
-// layers hide every sibling (visibility, so layout/registration is preserved),
-// giving perfectly aligned transparent layers that stack in any editor.
+// Loads renderer-dist/export.html over file:// (so ClipCard's file:// <img>
+// sources resolve), injects the spec, then screenshots #export-root once per
+// layer. Non-composite layers hide siblings via visibility so layout stays
+// registered, giving aligned transparent layers that stack in any editor.
 //
 //   node scripts/export-capture.mjs <spec.json> [options]
 //     --scale <n>            deviceScaleFactor / supersample (default 3)
@@ -63,15 +61,14 @@ await page.waitForFunction(() => document.documentElement.getAttribute("data-exp
   timeout: 30000,
 });
 
-// Show only the target subtree; keep #export-root itself visible (so Playwright
-// still considers it screenshottable) and preserve every element's box so all
-// layers share one coordinate frame.
+// keeps #export-root visible so Playwright can still screenshot it; every
+// element's box is preserved so all layers share one coordinate frame
 async function isolate(selector) {
   await page.evaluate((sel) => {
     const root = document.getElementById("export-root");
     if (!root) return;
     const all = root.querySelectorAll("*");
-    all.forEach((el) => (el.style.visibility = "")); // reset
+    all.forEach((el) => (el.style.visibility = ""));
     if (sel == null) return; // composite: everything visible
     all.forEach((el) => (el.style.visibility = "hidden"));
     document.querySelectorAll(sel).forEach((t) => {

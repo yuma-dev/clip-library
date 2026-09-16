@@ -4,9 +4,9 @@ import type { LocalClip } from "./types";
 export const SYSTEM_TAGS = ["Untagged", "Unnamed"] as const;
 
 export interface TagFilterState {
-  /** Persisted selection — normal (AND-exclusion) mode. */
+  /** Persisted selection, normal (AND-exclusion) mode. */
   saved: Set<string>;
-  /** Focus selection — Ctrl/indicator click, OR mode over these tags. */
+  /** Focus selection, Ctrl/indicator click, OR mode over these tags. */
   temporary: Set<string>;
   /** When true, `temporary` drives filtering instead of `saved`. */
   isTemporary: boolean;
@@ -23,9 +23,8 @@ export function isUnnamedClip(clip: LocalClip): boolean {
   return clip.customName === base;
 }
 
-// --- Search parsing ---
-// Two typed prefixes drive the search: `#tag` filters by clip tag, `@user`
-// filters by Discord call participant. Everything else is plain-text search.
+// Two typed prefixes drive search: `#tag` filters clip tag, `@user` filters
+// Discord call participant; everything else is plain text.
 export interface SearchTerms {
   /** `#tag` terms, WITHOUT the leading `#` (lowercased). */
   tags: string[];
@@ -44,20 +43,14 @@ export function parseSearchTerms(raw: string): SearchTerms {
   };
 }
 
-/**
- * Dropdown tag-filter predicate (ported verbatim from legacy
- * search-manager.matchesCurrentTagFilter). With an empty selection nothing
- * shows — deselecting a tag hides every clip carrying it.
- */
+/** Ported verbatim from legacy search-manager.matchesCurrentTagFilter: with
+ * an empty selection nothing shows, deselecting a tag hides every clip carrying it. */
 export function matchesTagFilter(clip: LocalClip, tags: TagFilterState): boolean {
   const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
   const isUntagged = clipTags.length === 0;
 
-  // Focus mode ("only show this tag", OR over the focus set): a clip matches
-  // iff it carries a focused tag. "Untagged"/"Unnamed" act as focusable
-  // pseudo-tags. Crucially, the AND-exclusion Untagged/Unnamed guards below do
-  // NOT apply here — focusing a real tag must show every clip carrying it,
-  // including unnamed ones (freshly captured clips have no custom name yet).
+  // Focus mode (OR over the focus set): "Untagged"/"Unnamed" are focusable
+  // pseudo-tags, and the AND-exclusion guards below don't apply here.
   if (tags.isTemporary) {
     const focus = tags.temporary;
     if (focus.size === 0) return false;
@@ -76,7 +69,7 @@ export function matchesTagFilter(clip: LocalClip, tags: TagFilterState): boolean
   return selected.has("Untagged");
 }
 
-// --- Collections (quick top-level filters, ANDed with search + tags) ---
+// collections: quick top-level filters, ANDed with search + tags
 export type Collection = "all" | "new" | "untagged" | "trimmed";
 
 export function matchesCollection(clip: LocalClip, collection: Collection): boolean {
@@ -98,20 +91,13 @@ export interface FilterInput {
   collection: Collection;
   /** Skip the tag-dropdown filter until the persisted selection has loaded. */
   applyTags?: boolean;
-  /**
-   * clipName → lowercased participant tokens, for `@mention` filtering. When
-   * omitted the roster hasn't loaded yet, so `@mention` filtering is skipped
-   * (the grid stays full) until the scan resolves.
-   */
+  /** clipName to lowercased participant tokens; omitted means the roster
+   * hasn't loaded, so `@mention` filtering is skipped until the scan resolves. */
   mentionIndex?: Map<string, Set<string>>;
 }
 
-/**
- * Full library filter: typed search terms first (`#tag`, `@user`, plain text),
- * then — only when the user hasn't typed a `#tag`/`@user` term — the dropdown
- * tag filter, then the active collection. Input order is preserved (clips
- * arrive newest-first).
- */
+/** Typed search terms first, then (only without a `#tag`/`@user` term) the
+ * dropdown tag filter, then the active collection. Input order preserved. */
 export function filterClips(clips: LocalClip[], input: FilterInput): LocalClip[] {
   const { tags, mentions, text } = parseSearchTerms(input.query);
   const hasSearch = tags.length > 0 || mentions.length > 0 || text.length > 0;
@@ -130,9 +116,8 @@ export function filterClips(clips: LocalClip[], input: FilterInput): LocalClip[]
             clip.customName.toLowerCase().includes(w) ||
             clip.originalName.toLowerCase().includes(w),
         );
-      // `@user` matches when the clip's participants include the term. Until the
-      // roster loads (mentionIndex undefined) the mention filter is a no-op, so
-      // the grid stays full instead of flashing empty mid-scan.
+      // Until the roster loads (mentionIndex undefined), mention filtering is a
+      // no-op so the grid stays full instead of flashing empty mid-scan.
       const hasMentions =
         mentions.length === 0 ||
         !mentionIndex ||

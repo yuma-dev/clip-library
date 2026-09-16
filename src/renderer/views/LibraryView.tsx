@@ -8,13 +8,13 @@ interface LibraryViewProps {
   /** Clips after search + tag + collection filtering. */
   clips: LocalClip[];
   grayscaleIcons: boolean;
-  /** Settings → show new-clip indicators (card glow + border). */
+  /** Settings: show new-clip indicators (card glow + border). */
   showNewIndicators: boolean;
-  /** Settings → hover preview volume (0–1). */
+  /** Settings: hover preview volume (0-1). */
   previewVolume: number;
   /** Assignable global tags for the card "Manage tags" menu. */
   globalTags: string[];
-  /** Create a new global tag (used by "Manage tags" → create). */
+  /** Create a new global tag, used by the "Manage tags" create action. */
   addGlobalTag: (tag: string) => void;
 }
 
@@ -61,6 +61,6 @@ function LibraryView({
   );
 }
 
-// Memoized so app-shell state changes (rail width, route, …) don't reconcile
-// the 2,000-card grid underneath.
+// memoized: app-shell state changes (rail width, route, etc) shouldn't
+// reconcile the 2,000-card grid underneath
 export default memo(LibraryView);

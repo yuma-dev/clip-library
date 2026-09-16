@@ -1,13 +1,7 @@
 /**
- * Settings Manager Module
- *
- * Handles all settings operations:
- * - Settings modal initialization and management
- * - Settings controls event handling
- * - Settings persistence
+ * settings modal init, control wiring, persistence
  */
 
-// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
@@ -146,13 +140,6 @@ function updateExportPresetVisualState(controls = {}) {
   });
 }
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
-
-/**
- * Initialize the settings manager with required dependencies.
- */
 function init(dependencies) {
   videoPlayerModule = dependencies.videoPlayerModule;
   searchManagerModule = dependencies.searchManagerModule;
@@ -170,24 +157,15 @@ function init(dependencies) {
   defaultUiFontKey = dependencies.defaultUiFontKey || 'modern_ui';
 }
 
-// ============================================================================
-// SETTINGS MODAL OPERATIONS
-// ============================================================================
-
-/**
- * Wire settings modal controls and tab handlers.
- */
 async function initializeSettingsModal() {
   const settingsModal = document.getElementById('settingsModal');
   const tabs = document.querySelectorAll('.settings-tab');
   const tabContents = document.querySelectorAll('.settings-tab-content');
 
-  // Tab switching
   tabs.forEach(tab => {
     tab.addEventListener('click', () => {
       const targetTab = tab.dataset.tab;
-      
-      // Update active states
+
       tabs.forEach(t => t.classList.remove('active'));
       tabContents.forEach(c => c.classList.remove('active'));
       
@@ -199,7 +177,6 @@ async function initializeSettingsModal() {
     });
   });
 
-  // Preview volume slider
   const previewVolumeSlider = document.getElementById('previewVolumeSlider');
   const previewVolumeValue = document.getElementById('previewVolumeValue');
 
@@ -217,15 +194,13 @@ async function initializeSettingsModal() {
     }
   });
 
-  // Settings controls event handlers
   document.getElementById('closeSettingsBtn').addEventListener('click', closeSettingsModal);
   document.getElementById('changeLocationBtn').addEventListener('click', changeClipLocation);
   document.getElementById('manageTagsBtn').addEventListener('click', () => {
     closeSettingsModal();
     searchManagerModule.openTagManagement();
   });
-  
-  // Escape key handler to close state.settings modal
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && settingsModal.style.display === 'block') {
       closeSettingsModal();
@@ -345,7 +320,6 @@ async function initializeSettingsModal() {
 
   updateExportPresetVisualState(exportUiRefs);
 
-  // Discord RPC toggle handler
   const discordRPCToggle = document.getElementById('enableDiscordRPC');
   discordRPCToggle.addEventListener('change', async (e) => {
     try {
@@ -357,7 +331,6 @@ async function initializeSettingsModal() {
     }
   });
 
-  // Greyscale icons toggle
   const greyscaleToggle = document.getElementById('greyscaleIcons');
   if (greyscaleToggle) {
     greyscaleToggle.checked = Boolean(state.settings.iconGreyscale);
@@ -372,14 +345,12 @@ async function initializeSettingsModal() {
     });
   }
 
-  // New clips indicators toggle
   const newClipsIndicatorsToggle = document.getElementById('showNewClipsIndicators');
   if (newClipsIndicatorsToggle) {
     newClipsIndicatorsToggle.checked = Boolean(state.settings.showNewClipsIndicators ?? true);
     newClipsIndicatorsToggle.addEventListener('change', async (e) => {
       try {
         await updateSettingValue('showNewClipsIndicators', e.target.checked);
-        // Re-render clips to show/hide indicators instantly
         if (state.currentClipList) {
           renderClips(state.currentClipList);
         }
@@ -390,7 +361,6 @@ async function initializeSettingsModal() {
     });
   }
 
-  // UI font dropdown
   const uiFontSelect = document.getElementById('uiFontSelect');
   if (uiFontSelect) {
     const currentUiFont = state.settings.uiFont || defaultUiFontKey;
@@ -420,7 +390,6 @@ async function initializeSettingsModal() {
     });
   }
 
-  // Ambient Glow state.settings
   const ambientGlowEnabled = document.getElementById('ambientGlowEnabled');
   const ambientGlowSmoothing = document.getElementById('ambientGlowSmoothing');
   const ambientGlowSmoothingValue = document.getElementById('ambientGlowSmoothingValue');
@@ -430,7 +399,6 @@ async function initializeSettingsModal() {
   const ambientGlowOpacity = document.getElementById('ambientGlowOpacity');
   const ambientGlowOpacityValue = document.getElementById('ambientGlowOpacityValue');
 
-  // Initialize ambient glow state.settings from saved values
   const glowSettings = state.settings?.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
   
   if (ambientGlowEnabled) {
@@ -511,31 +479,24 @@ async function initializeSettingsModal() {
   }
 }
 
-/**
- * Open and hydrate the settings modal with current values.
- */
 async function openSettingsModal() {
   logger.debug('Opening state.settings modal. Current state.settings:', state.settings);
-  
-  // Fetch fresh state.settings
+
   state.settings = await fetchSettings();
   logger.debug('Fresh state.settings fetched:', state.settings);
-  
+
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
     settingsModal.style.display = 'block';
     if (window.uiBlur) window.uiBlur.enable();
-    
-    // Update version display
+
     updateVersionDisplay();
-    
-    // Update clip location
+
     const currentClipLocation = document.getElementById('currentClipLocation');
     if (currentClipLocation) {
       currentClipLocation.textContent = state.clipLocation || 'Not set';
     }
-    
-    // Set control values from state.settings
+
     const enableDiscordRPCToggle = document.getElementById('enableDiscordRPC');
     const exportQualitySelect = document.getElementById('exportQuality');
     const exportPresetSelect = document.getElementById('exportPreset');
@@ -601,13 +562,11 @@ async function openSettingsModal() {
       exportSpeedBiasItem
     });
 
-    // Refresh greyscale toggle to reflect persisted value
     const greyscaleToggleEl = document.getElementById('greyscaleIcons');
     if (greyscaleToggleEl) {
       greyscaleToggleEl.checked = Boolean(state.settings.iconGreyscale);
     }
 
-    // Refresh new clips indicators toggle to reflect persisted value
     const newClipsIndicatorsToggleEl = document.getElementById('showNewClipsIndicators');
     if (newClipsIndicatorsToggleEl) {
       newClipsIndicatorsToggleEl.checked = Boolean(state.settings.showNewClipsIndicators ?? true);
@@ -631,7 +590,6 @@ async function openSettingsModal() {
       shareManagerModule.syncSettingsUiFromState();
     }
 
-    // Refresh ambient glow state.settings to reflect persisted values
     const glowSettings = state.settings.ambientGlow || { enabled: true, smoothing: 0.5, fps: 30, blur: 80, saturation: 1.5, opacity: 0.7 };
     
     const ambientGlowEnabledEl = document.getElementById('ambientGlowEnabled');
@@ -665,7 +623,6 @@ async function openSettingsModal() {
       ambientGlowOpacityValueEl.textContent = `${Math.round(glowSettings.opacity * 100)}%`;
     }
 
-    // Set initial active tab
     const defaultTab = document.querySelector('.settings-tab[data-tab="general"]');
     if (defaultTab) {
       defaultTab.click();
@@ -673,13 +630,9 @@ async function openSettingsModal() {
   }
 }
 
-/**
- * Close the settings modal and persist state.
- */
 function closeSettingsModal() {
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal) {
-    // Add fade-out animation
     settingsModal.style.opacity = '0';
     if (window.uiBlur) window.uiBlur.disable();
     setTimeout(() => {
@@ -687,33 +640,21 @@ function closeSettingsModal() {
       settingsModal.style.opacity = '1';
     }, 300);
   }
-  
-  // Save state.settings state
+
   updateSettings();
-  
-  // Update preview volumes
+
   const previewVolumeSlider = document.getElementById('previewVolumeSlider');
   if (previewVolumeSlider) {
     updateAllPreviewVolumes(parseFloat(previewVolumeSlider.value));
   }
 }
 
-/**
- * Refresh cached settings from disk.
- */
 async function updateSettings() {
   state.settings = await ipcRenderer.invoke('get-settings');
 }
 
-// ============================================================================
-// EXPORTS
-// ============================================================================
-
 module.exports = {
-  // Initialization
   init,
-
-  // Settings operations
   initializeSettingsModal,
   openSettingsModal,
   closeSettingsModal,

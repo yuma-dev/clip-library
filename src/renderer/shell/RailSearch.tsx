@@ -1,9 +1,6 @@
-// Search field for the nav rail. Two things beyond a plain <input>:
-//   1. Live syntax highlighting — `#tag` and `@user` tokens are colored via a
-//      mirror overlay behind a transparent-text input (the caret still shows).
-//   2. An autocomplete dropdown — `#` completes tags, `@` completes the people
-//      who've been in your clips' Discord calls (participants.ts). Typing a bare
-//      `@` opens the full roster; an empty roster shows the ClipDip hint.
+// beyond a plain input: #tag/@user syntax highlighting via a mirror overlay behind transparent input text
+// autocomplete: # completes tags, @ completes people from clips' Discord calls (participants.ts)
+// bare @ opens the full roster; empty roster shows the ClipDip hint
 
 import {
   memo,
@@ -30,9 +27,8 @@ interface RailSearchProps {
 /** The `#tag` / `@user` token straddling the caret, if any. */
 interface ActiveToken {
   kind: "#" | "@";
-  /** Text after the sigil, lowercased — the autocomplete needle. */
+  /** text after the sigil, lowercased: the autocomplete needle */
   text: string;
-  /** Character span of the whole token in the query. */
   start: number;
   end: number;
 }
@@ -54,7 +50,6 @@ function activeTokenAt(value: string, caret: number): ActiveToken | null {
   return null;
 }
 
-/** Split the query into colored runs for the highlight overlay. */
 function highlightRuns(value: string): { text: string; cls: string }[] {
   return value.split(/(\s+)/).map((run) => {
     if (/^\s+$/.test(run) || run === "") return { text: run, cls: "" };
@@ -73,14 +68,12 @@ function RailSearch({ filter, clips }: RailSearchProps) {
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [anchor, setAnchor] = useState<{ left: number; top: number; width: number } | null>(null);
-  // Caret position to restore after inserting a completed token.
   const pendingCaret = useRef<number | null>(null);
 
   const query = filter.query;
   const clipNames = useMemo(() => clips.map((c) => c.originalName), [clips]);
 
-  // Warm the participant roster as soon as the field is focused, so the `@`
-  // dropdown is ready the instant the user types the sigil.
+  // warm participant roster on focus so the @ dropdown is ready when typed
   useEffect(() => {
     if (focused) ensureParticipants(clipNames);
   }, [focused, clipNames]);
@@ -90,7 +83,6 @@ function RailSearch({ filter, clips }: RailSearchProps) {
     [focused, query, caret],
   );
 
-  // All assignable tags for the `#` autocomplete (system + global, deduped).
   const allTags = useMemo(
     () => [...SYSTEM_TAGS, ...filter.globalTags],
     [filter.globalTags],
@@ -117,8 +109,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
     return matches.slice(0, MAX_SUGGESTIONS);
   }, [active, people]);
 
-  // The dropdown shows when an `@`/`#` token is active. For `@` it also shows
-  // the empty/loading state (so the ClipDip hint can appear).
+  // @ also opens for the empty/loading state so the ClipDip hint can show
   const showTags = active?.kind === "#" && tagSuggestions.length > 0;
   const showPeople = active?.kind === "@";
   const open = focused && (showTags || showPeople);
@@ -176,7 +167,6 @@ function RailSearch({ filter, clips }: RailSearchProps) {
     if (el && overlay) overlay.scrollLeft = el.scrollLeft;
   }, []);
 
-  // Replace the active token with a completed one and drop the caret after it.
   const applySuggestion = useCallback(
     (value: string) => {
       if (!active) return;

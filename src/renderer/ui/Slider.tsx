@@ -15,11 +15,8 @@ interface SliderProps {
   "aria-label"?: string;
 }
 
-/**
- * Range slider with a live value label. Local state tracks the drag so the
- * label/track update every frame; the (usually IPC-saving) commit fires only
- * on release — same input/change split as the legacy settings sliders.
- */
+/** Range slider with live label; local state tracks the drag, commit fires
+ * only on release, same input/change split as the legacy sliders. */
 export default function Slider({
   value,
   min,

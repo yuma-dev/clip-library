@@ -1,18 +1,8 @@
 /**
- * Audio Tracks Manager
- *
- * For mp4 clips that contain more than one audio stream, this module:
- *   - Builds an N-way Web Audio graph (one MediaElementSource + GainNode per track)
- *     fed by hidden <audio> elements pointed at pre-extracted .m4a track files.
- *   - Mutes the underlying <video> element (its native audio is replaced).
- *   - Keeps all <audio> elements in lockstep with the <video>: play/pause/seek/rate
- *     are mirrored, and a rAF tick snaps any track that drifts more than ~60ms.
- *   - Renders a per-track UI row (name + mute + 0..2 gain slider) into a target
- *     container; debounces persistence via the host's saveState callback.
- *
- * The host (video-player.js) owns the master gain node and the master volume slider.
- * Per-track gain nodes connect into the master gain; the master then connects to
- * destination as it does today.
+ * For multi-audio-track mp4s: one MediaElementSource+GainNode per track, fed by
+ * hidden <audio> elements playing pre-extracted .m4a files; mutes <video> and
+ * mirrors play/pause/seek/rate, snapping drift > ~60ms. video-player.js owns the
+ * master gain node; per-track gains connect into it.
  */
 
 const logger = require('../utils/logger');
@@ -26,28 +16,19 @@ const COLOR_PALETTE = [
 const BOOSTED_COLOR = '#f59e0b';
 const ICON_X = '<svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>';
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-// Snap to unity (1.0 gain == 100%) within ±5% to give the slider a detent.
+// snap to unity (1.0 gain = 100%) within 5%, gives the slider a detent
 const detentSnap = (vol) => Math.abs(vol - 1) < 0.05 ? 1 : Math.round(vol * 100) / 100;
-// Wait this long after the video's last seeking==true tick before we treat the
-// seek as "settled" and snap audio to it. Prevents queueing audio decode work
-// while the user is actively scrubbing the scrub bar. Kept short so one-shot
-// seeks (click on scrub bar, arrow-key skip) feel near-instant; the dedicated
-// 'seeked' listener also fast-paths the snap so we don't have to wait for the
-// next mirror rAF tick.
+// wait this long after seeking last goes false before snapping audio; avoids
+// queuing decoder seeks mid-scrub. 'seeked' listener fast-paths the common case
 const SEEK_SETTLE_DELAY_MS = 25;
-// Debounce for the fast-path seek snap fired from the video's 'seeked' event.
-// Coalesces the burst of seeks that happen mid-scrub-drag into one snap.
+// coalesces the burst of seeks mid-scrub-drag into one snap
 const SEEKED_SNAP_DEBOUNCE_MS = 20;
-// During the first ~250 ms after video.play() — and any time video.currentTime
-// stops advancing while we believe the video is playing — assume the video
-// element is warming up. Audio that races ahead in that window must NOT be
-// snapped back (snap restarts the AAC decoder mid-syllable → "h-h-h-h-hallo"
-// stutter at clip start). Pause it instead so video can catch up.
+// while video warms up after play()/seek, don't snap audio back (restarts AAC
+// decoder mid-syllable, causes stutter); pause it instead until video catches up
 const VIDEO_STALL_EPSILON_SEC = 0.0005;
 
-// Diagnostic — set true to dump a per-tick + per-event trace of the first
-// ~2 s of playback to the console. Used to chase start-of-clip stutter bugs.
-// Leave false in production.
+// set true to trace first ~2s of playback per-tick/event to console, for
+// chasing start-of-clip stutter bugs. leave false in production
 const TRACE_STARTUP = false;
 const TRACE_DURATION_MS = 2500;
 
@@ -57,20 +38,18 @@ class AudioTracksManager {
     this.audioContext = audioContext;
     this.masterGainNode = masterGainNode;
     this.panelEl = panelEl;
-    // Per-clip persistence (only volume, keyed by ordinal).
+    // per-clip persistence (only volume, keyed by ordinal)
     this.onPersistClip = onPersistClip || (() => {});
-    // Global persistence keyed by track *name*: { color, hidden }. Applied
-    // across every clip that contains a track with the same name.
+    // keyed by track name: {color, hidden}; applies to every clip with a same-named track
     this.onPersistGlobal = onPersistGlobal || (() => {});
 
     this.tracks = [];          // [{ ordinal, name, audioEl, sourceNode, gainNode, muted, volume }]
     this.disposed = false;
     this.lastMirrorTick = 0;
-    this.lastVideoSeekingTs = 0;   // Timestamp (ms) of the last tick observing video.seeking==true.
-    this.wasVideoSeeking = false;  // Tracks transition seeking==true → false.
-    // For stall detection — track whether video.currentTime is actually advancing
-    // when it's supposed to be. If not, the video element is warming up after
-    // play()/seek; we must not let audio race ahead and then snap-restart.
+    this.lastVideoSeekingTs = 0;   // ms of the last tick observing video.seeking==true
+    this.wasVideoSeeking = false;  // tracks transition seeking==true -> false
+    // stall detection: track whether video.currentTime is actually advancing.
+    // if not, video is warming up after play/seek; don't let audio race ahead then snap
     this._lastVideoTime = -1;
     this._lastVideoTimeAdvanceTs = 0;
     this._rafId = null;
@@ -116,14 +95,10 @@ class AudioTracksManager {
 
   /**
    * @param {Array<{ordinal, streamIndex, path, name, channels}>} trackMetas
-   * @param {{tracks: Object}} persistedState - per-clip state (volume by ordinal)
-   * @param {Object} globalPrefs - { [trackName]: { color, hidden } }
-   * @param {Map<number, HTMLAudioElement>} [preloadedAudioEls] - audio elements
-   *   already created and warmed during hover. When provided, init reuses them
-   *   instead of creating new <audio> elements — their AAC decoders are
-   *   already partway (or fully) through warmup, so `_waitForReady` returns
-   *   nearly instantly. The caller transfers ownership: dispose() will tear
-   *   them down.
+   * @param {{tracks: Object}} persistedState - per-clip volume by ordinal
+   * @param {Object} globalPrefs - {[trackName]: {color, hidden}}
+   * @param {Map<number, HTMLAudioElement>} [preloadedAudioEls] - hover-prewarmed
+   *   audio els; faster _waitForReady. caller transfers ownership to dispose()
    */
   async init(trackMetas, persistedState, globalPrefs, preloadedAudioEls) {
     if (!trackMetas || trackMetas.length === 0) return;
@@ -136,13 +111,11 @@ class AudioTracksManager {
     const prefs = globalPrefs || {};
 
     for (const meta of trackMetas) {
-      // Prefer a pre-warmed <audio> element if one was created during hover.
-      // It's already in the DOM with src set and (hopefully) past readyState>=2.
+      // reuse hover-prewarmed <audio> el if present (already past readyState>=2)
       const warm = preloadedAudioEls && preloadedAudioEls.get(meta.ordinal);
       let audioEl;
       if (warm) {
         audioEl = warm;
-        // Clear the warmed dataset so the element looks normal post-adoption.
         delete audioEl.dataset.warmedClip;
         delete audioEl.dataset.warmedOrdinal;
       } else {
@@ -150,7 +123,7 @@ class AudioTracksManager {
         audioEl.preload = 'auto';
         audioEl.src = `file://${meta.path.replace(/\\/g, '/')}`;
         audioEl.style.display = 'none';
-        // Keep the element's intrinsic volume at 1 — gain comes from the GainNode.
+        // keep intrinsic volume at 1, gain comes from GainNode instead
         audioEl.volume = 1;
         document.body.appendChild(audioEl);
       }
@@ -165,8 +138,8 @@ class AudioTracksManager {
       const muted = !!saved.muted;
       const trackName = meta.name || `Track ${meta.ordinal + 1}`;
       const globalPref = prefs[trackName] || {};
-      // `hidden` = removed from active mix into the floating tray (global pref).
-      // `muted`  = right-click soft mute, per-clip. Either silences the track.
+      // hidden = removed from active mix into the floating tray (global pref)
+      // muted  = right-click soft mute, per-clip. either silences the track
       const hidden = !!globalPref.hidden;
       const color = typeof globalPref.color === 'string' && /^#[0-9a-f]{6}$/i.test(globalPref.color)
         ? globalPref.color
@@ -185,21 +158,17 @@ class AudioTracksManager {
         hidden,
         muted,
         volume,
-        // Unclamped "true" volume for shift-drag offset memory. Tracks the
-        // value as if it had unlimited range; the displayed `volume` is the
-        // clamped projection into [0, 2]. Lets a track that was pushed below
-        // 0 by a shift-drag come back at the right level when the group is
-        // shifted up again. Session-local only — not persisted.
+        // unclamped volume for shift-drag memory; `volume` is the clamped [0,2]
+        // projection, so a track pushed past the clamp returns right when shifted back
         _trueVolume: volume,
         color
       });
     }
 
-    // Wait until each <audio> can actually start playing (readyState >= 2).
-    // This dramatically reduces start-of-clip drift.
+    // wait for readyState>=2 on each track; cuts start-of-clip drift
     await Promise.all(this.tracks.map((t) => this._waitForReady(t.audioEl)));
 
-    // Mute the original video element — all sound now comes from the track graph.
+    // mute the original video, sound now comes from the track graph
     this.videoEl.muted = true;
 
     this._renderPanel();
@@ -213,18 +182,13 @@ class AudioTracksManager {
       this._trace('init complete (before forceSnap)');
     }
 
-    // Sync currentTime + playbackRate up front in case the video already moved.
+    // sync currentTime + playbackRate up front in case the video already moved
     this._enforceVideoState(performance.now(), true);
   }
 
   /**
-   * Fast-path for seek end: snap audio.currentTime immediately when the video
-   * emits 'seeked', without waiting for the next ~90 ms mirror tick. Debounced
-   * so a burst of mid-scrub seeks collapses into one snap at drag-end.
-   *
-   * The mirror-loop seekInFlight gate still keeps audio paused during the drag
-   * itself; this listener just ensures the snap-and-resume happens quickly
-   * after release, instead of accumulating settle delay + tick interval.
+   * snaps audio on 'seeked' without waiting for the ~90ms mirror tick; debounced
+   * so a mid-scrub seek burst collapses to one snap. mirror loop still gates pause during drag
    */
   _attachSeekFastPath() {
     this._onVideoSeeked = () => {
@@ -234,15 +198,13 @@ class AudioTracksManager {
         this._seekedSnapTimer = null;
         if (this.disposed || !this.videoEl || this.videoEl.seeking) return;
         const videoTime = this.videoEl.currentTime;
-        this._trace(`seeked FAST-PATH snap → v.t=${videoTime.toFixed(3)}`);
+        this._trace(`seeked FAST-PATH snap -> v.t=${videoTime.toFixed(3)}`);
         for (const t of this.tracks) {
           try { t.audioEl.currentTime = videoTime; } catch (_) { /* ignore */ }
         }
-        // Reset stall detector: a fresh seek means video is about to warm up
-        // again at the new position, and we don't want stale "advancing" data.
+        // reset stall detector: fresh seek means video will re-warm at new position
         this._lastVideoTime = videoTime;
         this._lastVideoTimeAdvanceTs = performance.now();
-        // Next mirror tick will resume play() if the video is supposed to play.
       }, SEEKED_SNAP_DEBOUNCE_MS);
     };
     this.videoEl.addEventListener('seeked', this._onVideoSeeked);
@@ -263,37 +225,18 @@ class AudioTracksManager {
       audioEl.addEventListener('canplay', done);
       audioEl.addEventListener('loadeddata', done);
       audioEl.addEventListener('error', done);
-      // Safety net — never block forever.
+      // safety net, never block forever
       setTimeout(done, 2000);
     });
   }
 
   /**
-   * Continuously enforce that every track <audio> matches the <video>'s
-   * paused/playing state, playbackRate, and currentTime. This is more robust
-   * than listening to individual events because anything that changes the
-   * video state (frame stepping, trim auto-loop, manual currentTime writes,
-   * speed boost on space-hold, etc.) is automatically mirrored.
-   *
-   * Called from the rAF loop and once at init.
-   *
-   * @param {boolean} forceSnap - if true, always snap currentTime regardless of drift.
-   */
-  /**
-   * Reconcile every track <audio> against the <video>'s state. Strategy:
-   *
-   *  - playbackRate is always cheap/idempotent — mirror it every tick.
-   *  - While the video is actively seeking (scrub bar drag), KEEP audio paused
-   *    and DON'T write currentTime. Each currentTime write queues an audio
-   *    decoder seek; doing that 10×/sec during a scrub starves the decoder
-   *    and produces audible glitches plus a slow scrub feel.
-   *  - When seeking transitions true→false (settled), wait one extra tick
-   *    (SEEK_SETTLE_DELAY_MS) so any straggling video updates land, then
-   *    snap audio.currentTime once and resume the play/pause mirror.
-   *  - During steady playback, only snap on drift > DRIFT_SNAP_THRESHOLD_SEC.
-   *
-   * @param {number} now - performance.now() timestamp of this tick.
-   * @param {boolean} forceSnap - bypass all gating and snap immediately.
+   * Mirrors track <audio> to <video> every tick (steadier than per-event
+   * listeners). During an active seek audio stays paused with no currentTime
+   * writes (avoids decoder-seek glitches); settles after SEEK_SETTLE_DELAY_MS
+   * then snaps on drift > DRIFT_SNAP_THRESHOLD_SEC.
+   * @param {number} now - performance.now() of this tick
+   * @param {boolean} forceSnap - bypass gating, snap immediately
    */
   _enforceVideoState(now, forceSnap) {
     const videoEl = this.videoEl;
@@ -305,18 +248,13 @@ class AudioTracksManager {
 
     if (videoSeeking) this.lastVideoSeekingTs = now;
     const sinceSeek = now - this.lastVideoSeekingTs;
-    // True while a seek is "in flight" — either actively seeking OR just settled
-    // and we haven't yet waited out the settle delay. During this window we
-    // freeze audio (paused, no currentTime writes).
+    // seek in flight: actively seeking, or just settled but still inside the
+    // settle-delay window. audio stays paused with no currentTime writes here
     const seekInFlight = videoSeeking || sinceSeek < SEEK_SETTLE_DELAY_MS;
     const seekJustSettled = this.wasVideoSeeking && !videoSeeking && sinceSeek >= SEEK_SETTLE_DELAY_MS;
     this.wasVideoSeeking = seekInFlight;
 
-    // Detect "video supposed to be playing but its currentTime isn't advancing"
-    // — i.e. the video element is still warming its decoder after play() or a
-    // seek. In that window, audio elements (which warm up faster) would race
-    // ahead, then get snapped back, restarting the decoder mid-syllable. We
-    // sidestep that by pausing audio instead of letting it run ahead.
+    // video stalled: warming up after play/seek; pause audio instead of racing ahead
     const videoAdvanced = videoTime > this._lastVideoTime + VIDEO_STALL_EPSILON_SEC;
     if (videoAdvanced) {
       this._lastVideoTime = videoTime;
@@ -334,19 +272,14 @@ class AudioTracksManager {
       if (a.playbackRate !== videoRate) a.playbackRate = videoRate;
 
       if (forceSnap || seekJustSettled) {
-        // Snap once after settle (or unconditionally on force).
+        // snap once after settle (or unconditionally on force)
         this._trace(`mirror SNAP (force=${!!forceSnap} settled=${seekJustSettled}) ord=${t.ordinal} from a.t=${a.currentTime.toFixed(3)} to v.t=${videoTime.toFixed(3)}`);
         try { a.currentTime = videoTime; } catch (_) { /* ignore */ }
       } else if (!seekInFlight && !videoStalled) {
-        // Steady-state drift correction only. Skip while the video is stalled —
-        // see comment above; snapping audio back when it's only ahead because
-        // the video hasn't started yet is what causes the "h-h-h-h-hallo"
-        // stutter at clip open.
+        // steady-state drift correction; skip while stalled to avoid the AAC stutter noted above
         const drift = a.currentTime - videoTime;
         if (drift > DRIFT_SNAP_THRESHOLD_SEC && videoShouldPlay) {
-          // Audio ahead of video during steady playback: rather than snap
-          // (decoder restart), just pause briefly — next tick re-engages once
-          // video catches up. Same idea as the stall path, safer for ear.
+          // audio ahead: pause briefly instead of snapping (avoids decoder restart), same idea as stall path
           this._trace(`mirror PAUSE-AHEAD ord=${t.ordinal} drift=${drift.toFixed(3)}`);
           if (!a.paused) a.pause();
           continue;
@@ -357,8 +290,7 @@ class AudioTracksManager {
         }
       }
 
-      // Pause everything during a seek-in-flight or while video is warming up.
-      // Resume mirrors video state.
+      // pause during seek-in-flight or warmup; otherwise mirror video state
       const targetPlay = videoShouldPlay && !seekInFlight && !videoStalled;
       if (targetPlay) {
         if (a.paused) {
@@ -394,8 +326,7 @@ class AudioTracksManager {
   _renderPanel() {
     if (!this.panelEl) return;
     this.panelEl.innerHTML = '';
-    // Hidden tray floats *above* the panel (absolutely positioned). Sliders
-    // start right at the top of the panel for thumb reachability.
+    // tray floats above panel (absolute positioned); sliders start at panel top for thumb reachability
     const tray = document.createElement('div');
     tray.className = 'mixer__hidden-tray';
     tray.hidden = true;
@@ -495,9 +426,8 @@ class AudioTracksManager {
       this._setHidden(track, true);
     });
 
-    // Snapshot taken at mousedown when shift is held. Locks the baseline so
-    // delta from the dragged track propagates to every other track,
-    // preserving the offset of tracks that get clamped at 0 or 2.
+    // shift-drag snapshot at mousedown locks a baseline so the delta propagates to
+    // every track, preserving offsets for tracks clamped at 0 or 2
     let dragShiftSnapshot = null;
 
     const applyFromClientX = (clientX) => {
@@ -548,7 +478,7 @@ class AudioTracksManager {
       dragging = false;
       dragShiftSnapshot = null;
       delete row.dataset.dragging;
-      // Re-enable per-row transitions on all rows once the group drag ends.
+      // re-enable per-row transitions on all rows once the group drag ends
       if (this.panelEl) this.panelEl.removeAttribute('data-shift-drag');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -557,8 +487,7 @@ class AudioTracksManager {
     };
     const onDown = (e) => {
       if (e.target.closest('.mixer__dot, .mixer__hide, .mixer__palette')) return;
-      // Ignore non-primary buttons — right-click is reserved for soft mute
-      // and must not drag the slider before the contextmenu fires.
+      // right-click is reserved for soft mute; must not start a drag before contextmenu fires
       if (typeof e.button === 'number' && e.button !== 0) return;
       e.preventDefault();
       dragging = true;
@@ -572,8 +501,7 @@ class AudioTracksManager {
             base: t._trueVolume != null ? t._trueVolume : t.volume
           }))
         };
-        // Kill the .mixer__fill width transition on *every* row so they
-        // track the drag 1:1 with the dragged row instead of easing behind.
+        // kill .mixer__fill transition on every row so they track the drag 1:1
         if (this.panelEl) this.panelEl.setAttribute('data-shift-drag', 'true');
       } else {
         dragShiftSnapshot = null;
@@ -613,7 +541,7 @@ class AudioTracksManager {
       this._schedulePersistClip();
     }, { passive: false });
 
-    // Right-click toggles per-clip soft mute (separate from "hide to tray").
+    // right-click toggles per-clip soft mute (separate from "hide to tray")
     row.addEventListener('contextmenu', (e) => {
       if (e.target.closest('.mixer__dot, .mixer__hide, .mixer__palette')) return;
       e.preventDefault();
@@ -704,7 +632,7 @@ class AudioTracksManager {
     }
   }
 
-  /** Per-clip soft mute (right-click). Keeps the row in the active mix, just silences it. */
+  /** per-clip soft mute (right-click): stays in the mix, just silenced */
   _setMuted(track, muted) {
     const next = !!muted;
     if (track.muted === next) return;
@@ -712,8 +640,7 @@ class AudioTracksManager {
     const gain = (track.hidden || next) ? 0 : track.volume;
     track.gainNode.gain.setValueAtTime(gain, this.audioContext.currentTime);
     this._repaintTrackRow(track);
-    // Also reflect the muted class on the row element directly (in case the
-    // row was just rebuilt).
+    // also set muted class directly in case the row was just rebuilt
     const row = this.panelEl && this.panelEl.querySelector(`.mixer__row[data-ordinal="${track.ordinal}"]`);
     if (row) row.classList.toggle('mixer__row--muted', next);
     this._schedulePersistClip();
@@ -740,15 +667,13 @@ class AudioTracksManager {
       }
     }
     if (anyChanged) this._schedulePersistClip();
-    // Reveal the panel while the user is nudging so they get visual feedback,
-    // then auto-hide a short while after the last nudge.
+    // reveal panel during nudges for feedback, auto-hide shortly after
     this._showPanelTransient();
   }
 
   /**
-   * Snapshot of the audible mix for export. Returns one entry per track that
-   * is neither hidden (tray) nor muted (right-click). Each entry carries the
-   * absolute source stream index so ffmpeg can map it directly.
+   * audible mix for export: entries not hidden or muted, each carrying the
+   * absolute source stream index so ffmpeg can map it directly
    */
   getExportMix() {
     return this.tracks
@@ -845,7 +770,7 @@ class AudioTracksManager {
       this.panelEl.classList.add('hidden');
     }
 
-    // Unmute the video element for single-track playback going forward.
+    // unmute video for single-track playback going forward
     try { this.videoEl.muted = false; } catch (_) {}
   }
 }

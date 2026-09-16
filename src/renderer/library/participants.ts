@@ -1,25 +1,18 @@
-// "Everyone who's ever been in a call when you clipped" — the roster behind the
-// search bar's `@mention` autocomplete and `@`-filtering.
-//
-// Discord participants are stamped into each clip's .gameinfo at record time;
-// scanning every file on demand (get-clip-participants) yields both the deduped
-// people list (dropdown) and a per-clip id index (grid filtering) in one pass.
-// The scan runs once per session, lazily — triggered the first time the search
-// field is focused or the library filter needs the index.
+// discord participants are stamped into each clip's .gameinfo at record time
+// get-clip-participants scans lazily (first search focus) into a dropdown roster + per-clip mention index
 
 import { useSyncExternalStore } from "react";
 import type { DiscordParticipant } from "./discord";
 import { registerParticipants } from "./discord";
 
 export interface Person {
-  /** Discord user id — stable identity key. */
   id: string;
-  /** Preferred display name (nick → global name → username). */
+  /** nick -> global_name -> username fallback order */
   displayName: string;
   username: string;
-  /** How many local clips this person appears in (dropdown sort order). */
+  /** clip count, dropdown sort order */
   count: number;
-  /** Full snapshot — feeds the avatar + hover popover. */
+  /** feeds the avatar + hover popover */
   participant: DiscordParticipant;
 }
 
@@ -28,11 +21,11 @@ interface RawPerson extends DiscordParticipant {
 }
 
 let people: Person[] = [];
-/** clipName → lowercased searchable tokens for every participant in it. */
+/** clipName -> lowercased searchable tokens for its participants */
 let mentionIndex = new Map<string, Set<string>>();
 let loaded = false;
 let loading = false;
-/** Clip count the current roster was built from — a resync trigger. */
+/** clip count the roster was built from, triggers resync */
 let builtForCount = -1;
 
 let version = 0;
@@ -47,18 +40,13 @@ function displayNameOf(p: DiscordParticipant): string {
   return p.nick || p.global_name || p.username || p.id;
 }
 
-/** Lowercased tokens a `@mention` term is tested against for one participant. */
 function tokensOf(p: DiscordParticipant): string[] {
   return [p.nick, p.global_name, p.username, displayNameOf(p)]
     .filter((t): t is string => Boolean(t))
     .map((t) => t.toLowerCase());
 }
 
-/**
- * Kick off (or refresh) the participant scan. Idempotent: no-ops while a scan
- * is in flight or when the roster already covers the current clip set. Safe to
- * call on every render — pass the live clip-name list.
- */
+/** no-ops mid-scan or once the roster covers this clip count; safe to call every render */
 export function ensureParticipants(clipNames: string[]): void {
   if (loading) return;
   if (loaded && clipNames.length === builtForCount) return;
@@ -91,8 +79,7 @@ export function ensureParticipants(clipNames: string[]): void {
       }
       mentionIndex = index;
 
-      // Seed the shared identity registry so hover popovers resolve names even
-      // for people whose cards haven't mounted yet.
+      // seed the shared identity registry so hover popovers resolve before cards mount
       for (const p of raw) {
         registerParticipants({ channel_id: null, channel_name: null, guild_id: null, participants: [p] }, 0);
       }
@@ -101,8 +88,7 @@ export function ensureParticipants(clipNames: string[]): void {
       builtForCount = forCount;
     })
     .catch(() => {
-      /* scan failed (offline metadata, permissions) — leave the roster empty;
-         the dropdown shows its empty state and callers retry on the next call */
+      /* scan failed (offline/permissions) - roster stays empty, retried next call */
     })
     .finally(() => {
       loading = false;
@@ -110,12 +96,10 @@ export function ensureParticipants(clipNames: string[]): void {
     });
 }
 
-/** The current mention index (clipName → participant tokens). */
 export function getMentionIndex(): Map<string, Set<string>> {
   return mentionIndex;
 }
 
-/** Whether the roster scan has resolved at least once this session. */
 export function participantsLoaded(): boolean {
   return loaded;
 }
@@ -129,12 +113,11 @@ function getVersion(): number {
   return version;
 }
 
-/** Re-render hook: fires when the roster / index loads or refreshes. */
+/** fires when the roster/index loads or refreshes */
 export function useParticipantsVersion(): number {
   return useSyncExternalStore(subscribe, getVersion);
 }
 
-/** People roster + load state for the `@mention` dropdown. */
 export function useParticipants(): { people: Person[]; loaded: boolean } {
   useParticipantsVersion();
   return { people, loaded };

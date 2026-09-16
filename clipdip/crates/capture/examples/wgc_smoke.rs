@@ -1,4 +1,4 @@
-//! Headless smoke test for the WGC backend: create a capturer on output 0,
+//! Headless smoke test for the WGC backend: create a capturer on output 0
 //! poll for ~2 seconds at 60 Hz, and report how many real vs repeat frames
 //! arrived. Run with `cargo run -p clipdip-capture --example wgc_smoke`.
 

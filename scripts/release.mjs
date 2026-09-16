@@ -1,13 +1,12 @@
 // One-command GitHub release for ClipLib (ported from clipdip's release flow).
 //
-//   npm run release:preview   -> generates RELEASE_DRAFT.md from commits; edit it
-//   npm run release           -> build + tag + GitHub release with the installer
+//   npm run release:preview   generates RELEASE_DRAFT.md from commits; edit it
+//   npm run release           build + tag + GitHub release with the installer
 //
 // Flags: --draft, --prerelease, --skip-build, --skip-tag
 //
-// INVARIANT (updater back-compat): every release must contain exactly ONE
-// .exe asset — the shipped updater (2.1.0 and later) picks any non-blockmap,
-// non-delta .exe from the latest release. Never attach a second exe.
+// INVARIANT: exactly ONE .exe asset per release. The shipped updater (2.1.0+)
+// picks any non-blockmap, non-delta .exe from the latest release.
 import { execSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
@@ -68,8 +67,7 @@ async function main() {
     throw new Error(`Installer not found: ${installerPath}. Run without --skip-build or check the build.`);
   }
 
-  // GitHub replaces spaces in asset names anyway — stage with a clean name so
-  // the URL is predictable. Still exactly one exe.
+  // GitHub replaces spaces in asset names anyway, so stage with a clean name for a predictable URL
   const stageDir = join(tmpdir(), `cliplib-release-${Date.now()}`);
   await mkdir(stageDir, { recursive: true });
   const assetName = `${appTitle}.Setup.${version}.exe`;
@@ -175,8 +173,7 @@ function publishGitHubRelease(tag, notesFile, assets, options) {
   runCommand('gh', args, { stdio: 'inherit' });
 }
 
-// With shell:true, Node concatenates args unquoted (see DEP0190), so an arg
-// with a space ("ClipLib v3.1.0") splits into two. Quote anything unsafe.
+// shell:true concatenates args unquoted (DEP0190): a space splits an arg in two, so quote anything unsafe
 function shellQuote(args) {
   if (process.platform !== 'win32') return args;
   return args.map((arg) => (/[\s"^&|<>()]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg));

@@ -13,11 +13,8 @@ interface TagManagerModalProps {
   filter: UseLibraryFilter;
 }
 
-/**
- * Global tag management (settings → "Manage tags"): create, rename across all
- * clips, and delete across all clips — the legacy tag-management dialog,
- * rebuilt on the shared modal/tag primitives.
- */
+/** settings "Manage tags": create/rename/delete across all clips; the legacy tag dialog rebuilt
+ * on the shared modal/tag primitives */
 export default function TagManagerModal({ open, onClose, lib, filter }: TagManagerModalProps) {
   const confirm = useConfirm();
   const toast = useToast();

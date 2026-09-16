@@ -1,12 +1,6 @@
-// Per-clip game/application icon lookup (get-game-icons-batch → { path, title }).
-// Cached + in-flight-deduped at module scope so a card remounting (visibility
-// churn, re-filter) never re-hits IPC for an icon it already resolved.
-//
-// Individual loadGameIcon() calls are coalesced: when the grid mounts, every
-// card requests its icon in the same tick, so we collect names for one frame
-// and resolve them with a handful of batch IPC calls instead of one round trip
-// per clip (2,000 concurrent get-game-icon calls used to saturate the main
-// process for minutes).
+// Per-clip game icon lookup via get-game-icons-batch (returns {path, title}).
+// Cached + in-flight deduped at module scope. loadGameIcon() calls coalesce
+// per tick into batch IPC calls (2,000 concurrent calls used to saturate the main process for minutes).
 
 import type { ClipDiscordInfo } from "./discord";
 
@@ -24,11 +18,8 @@ const EMPTY: GameIcon = { path: null, title: null, discord: null };
 const cache = new Map<string, GameIcon>();
 const inflight = new Map<string, Promise<GameIcon>>();
 
-// Icon results are effectively immutable per clip (resolved from the game +
-// Discord context recorded with it), so the whole cache — including "no icon"
-// results, which are the majority — persists across sessions. Without this,
-// every launch re-resolved ~2000 icons through 10+ IPC batches and re-rendered
-// every visible card as answers streamed in (a chunk of the startup jank).
+// Results are immutable per clip, so the cache persists across sessions;
+// else every launch re-resolved ~2000 icons through 10+ IPC batches (startup jank).
 const ICON_CACHE_KEY = "clip-library:game-icons-v1";
 
 try {
@@ -56,7 +47,7 @@ function schedulePersist(): void {
     try {
       localStorage.setItem(ICON_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
     } catch {
-      /* quota — next launch refetches */
+      /* quota, next launch refetches */
     }
   }, 5_000);
 }
@@ -93,7 +84,7 @@ async function flushQueue(): Promise<void> {
     try {
       results = (await window.clips.getGameIconsBatch(slice)) ?? {};
     } catch {
-      /* transient IPC failure — resolve waiters empty but DON'T cache, so a
+      /* transient IPC failure, resolve waiters empty but don't cache, so a
          later remount retries instead of blanking 500 icons until restart */
     }
     for (const name of slice) {
@@ -116,10 +107,8 @@ export function loadGameIcon(name: string): Promise<GameIcon> {
     queue.set(name, resolve);
     if (!flushScheduled) {
       flushScheduled = true;
-      // Collect a few frames' worth of mount waves into one flush: cards (and
-      // now groups) stream in across frames, so a 0ms flush produced one IPC
-      // batch per frame. 50ms is imperceptible for icon pop-in and cuts the
-      // batch count several-fold.
+      // Collect a few frames of mount waves into one flush (0ms flush was one
+      // IPC batch per frame); 50ms is imperceptible and cuts batch count a lot.
       setTimeout(() => void flushQueue(), 50);
     }
   });

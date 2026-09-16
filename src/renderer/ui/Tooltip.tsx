@@ -6,10 +6,8 @@ interface TooltipProps {
   side?: "top" | "bottom";
 }
 
-/**
- * Lightweight CSS hover tooltip. Good for buttons/icons; for edge-sensitive or
- * dynamic placement use a Popover instead.
- */
+/** CSS hover tooltip for buttons/icons; use Popover instead for
+ * edge-sensitive or dynamic placement. */
 export default function Tooltip({ label, children, side = "top" }: TooltipProps) {
   return (
     <span className="tt-wrap">

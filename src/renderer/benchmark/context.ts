@@ -11,8 +11,8 @@ export interface BenchmarkContext {
 let current: BenchmarkContext | null = null;
 
 export function setBenchmarkContext(context: BenchmarkContext): void {
-  // Keep object identity stable: the runtime may already hold this bridge
-  // while React replaces the closures on a later render.
+  // keep object identity stable: the runtime may already hold this bridge
+  // while React replaces the closures on a later render
   if (current) Object.assign(current, context);
   else current = context;
 }

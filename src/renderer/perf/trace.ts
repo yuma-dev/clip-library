@@ -1,13 +1,6 @@
-// Live performance profiler — RENDERER hub (dev-only).
-//
-// Collects Chrome Trace Event Format objects from every renderer probe (frames,
-// long tasks, IPC, React commits, interactions) onto a wall-clock-anchored
-// timeline that lines up with the main process (benchmark/perf-main.js). Also
-// keeps a small live-stats snapshot for the HUD, and writes the merged trace to
-// disk on dump.
-//
-// Everything here is gated by import.meta.env.DEV at the call sites in index.ts,
-// so it tree-shakes out of the packaged bundle entirely.
+// dev-only renderer hub: collects Chrome Trace Event Format objects from every probe onto a
+// wall-clock-anchored timeline that lines up with the main process (benchmark/perf-main.js)
+// gated by import.meta.env.DEV at call sites in index.ts, so it tree-shakes out of prod
 
 export interface TraceEvent {
   name: string;
@@ -21,7 +14,7 @@ export interface TraceEvent {
   s?: "g" | "p" | "t"; // scope for instant events
 }
 
-// pid/tid lanes — keep in sync with benchmark/perf-main.js.
+// pid/tid lanes, keep in sync with benchmark/perf-main.js
 export const PID_RENDERER = 1;
 export const TID = {
   frames: 10,
@@ -35,7 +28,7 @@ export const TID = {
 
 const MAX_EVENTS = 100000;
 
-// Anchor performance.now() to wall clock, same scheme as main → comparable ts.
+// anchors performance.now() to wall clock, same scheme as main, so ts values are comparable
 const EPOCH_OFFSET_MS = Date.now() - performance.now();
 export const wallMs = (): number => EPOCH_OFFSET_MS + performance.now();
 const toTs = (ms: number): number => Math.round(ms * 1000);
@@ -62,8 +55,6 @@ const stats: LiveStats = {
   droppedFrames: 0,
 };
 
-// The whole session accumulates here (from boot). A hotkey dump snapshots it —
-// startup phases + everything since, in one file. Bounded by a ring cap.
 let events: TraceEvent[] = [];
 let lastLongTaskAt = 0;
 
@@ -94,7 +85,6 @@ export function counter(name: string, values: Record<string, number>, tid: numbe
   push({ name, cat: "renderer", ph: "C", ts: toTs(wallMs()), pid: PID_RENDERER, tid, args: values });
 }
 
-// --- live-stats mutators (called by the probes) --------------------------
 
 export function reportFps(fps: number): void {
   stats.fps = fps;
@@ -127,7 +117,6 @@ export function resetStats(): void {
   stats.worstInteraction = null;
 }
 
-// --- process metadata + dump ---------------------------------------------
 
 function rendererMetadata(): TraceEvent[] {
   const meta = (tid: number, name: string, key: string): TraceEvent => ({
@@ -144,16 +133,13 @@ function rendererMetadata(): TraceEvent[] {
   ];
 }
 
-/**
- * Snapshot the whole renderer session (with lane metadata) to hand to main for
- * merging into one file. NON-draining, so repeated hotkey dumps each give the
- * full session from boot. "Clear" (clearBuffer) starts a fresh window.
- */
+/** non-draining: repeated hotkey dumps each give the full session from boot.
+ * clearBuffer starts a fresh window */
 export function snapshotForDump(): TraceEvent[] {
   return [...rendererMetadata(), ...events];
 }
 
-/** Explicitly drop buffered events — starts a fresh capture window. */
+/** Explicitly drop buffered events, starts a fresh capture window. */
 export function clearBuffer(): void {
   events = [];
   stats.eventCount = 0;

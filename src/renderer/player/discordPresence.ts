@@ -1,14 +1,8 @@
 import type { LocalClip } from "../library/types";
 
-// Discord Rich Presence — port of legacy/renderer/discord-manager.js.
-//
-// Presence lines are composed here and pushed via `update-discord-presence`
-// (details = top line, state = bottom line; main adds the logo + GitHub
-// button). While a public clip plays, a 1s ticker refreshes the elapsed/total
-// "M:SS/M:SS" state line. The ticker interval id is stored on the shared
-// legacy state (`state.discordPresenceInterval`) because the legacy player's
-// closePlayer() clears it there; `clipStartTime`/`elapsedTime` also live on
-// legacy state because the player writes `elapsedTime` on seek.
+// port of legacy/renderer/discord-manager.js. details = top line, state = bottom line (main adds
+// logo + button). ticker interval lives on state.discordPresenceInterval (legacy closePlayer
+// clears it there); clipStartTime/elapsedTime also live on legacy state (player writes elapsedTime on seek)
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // matches main.js IDLE_TIMEOUT
 
@@ -25,8 +19,7 @@ const legacyState = (): any => (window as any).legacyState;
 const videoEl = (): HTMLVideoElement | null =>
   document.getElementById("video-player") as HTMLVideoElement | null;
 
-// Gate flag — mirrors settings.enableDiscordRPC (seeded in init, flipped by
-// the Settings toggle via setDiscordPresenceEnabled).
+// mirrors settings.enableDiscordRPC, seeded in init, flipped via setDiscordPresenceEnabled
 let enabled = false;
 let lastActivityTime = Date.now();
 
@@ -37,13 +30,11 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-// Last payload pushed to main — identical consecutive updates are dropped.
-// Interactions fire presence from several places at once (player open + the
-// video 'play' event, pause + close), which doubled every IPC in perf traces.
+// last payload sent; identical consecutive updates are dropped. player open + video
+// 'play'/pause/close all fire presence at once, doubling every IPC in perf traces
 let lastSent: { details: string; state: string | null } | null = null;
 
-/** Forget the last payload so the next update always goes through (used after
- * presence may have been cleared outside this module). */
+/** forgets the last payload so the next update always goes through, used after presence was cleared outside this module */
 function resetPresenceDedupe(): void {
   lastSent = null;
 }
@@ -77,9 +68,8 @@ export function updateDiscordPresenceForClip(clip: PresenceClip, isPlaying = tru
   if (isPlaying) state.discordPresenceInterval = setInterval(tick, 1000);
 }
 
-// The grid-browsing line updates whenever the clip list changes; during
-// startup the tag batches change it several times in ~1s, and each distinct
-// "Total: N" payload defeated the dedupe. Trailing debounce coalesces them.
+// startup tag batches change the clip list several times within ~1s, each distinct "Total: N"
+// defeats the dedupe; trailing debounce coalesces them
 let browseDebounce: ReturnType<typeof setTimeout> | undefined;
 
 /** Presence for the current view: open clip if any, else grid browsing. */
@@ -102,7 +92,7 @@ export function updateDiscordPresenceBasedOnState(): void {
   }
 }
 
-/** Settings toggle hook — refreshes presence immediately when re-enabled. */
+/** settings toggle hook, refreshes presence immediately when re-enabled */
 export function setDiscordPresenceEnabled(value: boolean): void {
   enabled = value;
   const state = legacyState();
@@ -113,12 +103,8 @@ export function setDiscordPresenceEnabled(value: boolean): void {
 
 let initialized = false;
 
-/**
- * One-time wiring: seed the enabled flag from settings, publish the initial
- * "Browsing clips" presence, track user activity for the 60s idle poll, and
- * answer main's `check-activity-state` (sent on window focus / screen unlock)
- * by re-asserting presence when the user is active or a clip is playing.
- */
+/** seeds enabled from settings, publishes initial "Browsing clips", tracks activity for the 60s
+ * idle poll, and re-asserts presence on main's check-activity-state (focus/unlock) */
 export function initDiscordPresence(): void {
   if (initialized) return;
   initialized = true;
@@ -137,8 +123,7 @@ export function initDiscordPresence(): void {
   document.addEventListener("mousemove", onActivity);
   document.addEventListener("keydown", onActivity);
 
-  // Idle: clear presence after 5 min without input while nothing plays.
-  // (Main runs its own 5-min clear on window blur / screen lock.)
+  // clears presence after 5 min without input while nothing plays; main runs its own 5-min clear on blur/lock
   setInterval(() => {
     if (!enabled) return;
     const video = videoEl();
@@ -154,8 +139,8 @@ export function initDiscordPresence(): void {
     const video = videoEl();
     const playing = video ? !video.paused : false;
     if (Date.now() - lastActivityTime <= IDLE_TIMEOUT_MS || playing) {
-      // Main may have cleared presence while we were blurred/locked — force
-      // the re-assert through even if the payload matches the last send.
+      // main may have cleared presence while blurred/locked; force the re-assert even if payload
+      // matches last send
       resetPresenceDedupe();
       updateDiscordPresenceBasedOnState();
     }

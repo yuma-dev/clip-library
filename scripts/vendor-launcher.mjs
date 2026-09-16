@@ -1,11 +1,7 @@
-// Copies the native splash launcher from the in-repo cargo build into
-// vendor/launcher/"ClipLib Launcher.exe" so electron-builder's extraFiles can
-// place it at the install root next to ClipLib.exe (the Electron binary,
-// whose name must not change: the installer only keeps shortcuts and taskbar
-// pins across an update when the app executable name is stable). Shortcuts
-// and pins are pointed at the launcher afterwards; it starts ClipLib.exe and
-// fades out once its window is on screen.
-//
+// Copies the native splash launcher into vendor/launcher/"ClipLib Launcher.exe"
+// for electron-builder to place at the install root next to ClipLib.exe (name
+// must stay stable, or the installer loses shortcut/taskbar pins on update).
+// Launcher starts ClipLib.exe and fades out once its window is on screen.
 // Run via `npm run vendor:launcher` (or as part of `npm run build`).
 import { copyFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";

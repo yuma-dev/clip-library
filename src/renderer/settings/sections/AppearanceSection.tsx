@@ -5,11 +5,10 @@ import { useSettings } from "../SettingsContext";
 import { useEffect } from "react";
 import { UI_FONTS, UI_FONT_DEFAULT, ensureWebfonts, fontStack } from "../fonts";
 
-// Example game icon for the greyscale preview (real icon from the library's
-// icon cache).
+// example game icon for the greyscale preview, real icon from the library's icon cache
 const EXAMPLE_ICON = "file:///C:/Users/Fabia/Videos/Clips/icons/League of Legends.png";
 
-/** Mini clip card used by both library previews. */
+/** mini clip card used by both library previews */
 function MockCard({
   isNew,
   iconSrc,
@@ -49,8 +48,8 @@ function MockCard({
 
 export default function AppearanceSection() {
   const { settings, set } = useSettings();
-  // The picker previews every family in its own face; the webfonts load on
-  // demand (not at app start), so request them when this section is open.
+  // picker previews every family in its own face; webfonts load on demand, so request them when
+  // this section opens
   useEffect(() => {
     ensureWebfonts();
   }, []);

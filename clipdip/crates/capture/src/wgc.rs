@@ -1,18 +1,9 @@
-//! Windows.Graphics.Capture monitor capture.
-//!
-//! Unlike DXGI Desktop Duplication (which duplicates DWM's *desktop
-//! composition* and therefore never sees content presented on an
-//! independent-flip swapchain, an MPO hardware overlay plane, or a
-//! legacy exclusive-fullscreen mode), WGC captures the final composed
-//! image for the monitor — fullscreen games included. This is the same
-//! API OBS uses for display capture on modern Windows, and the reason
-//! Game Bar can always record.
-//!
-//! The output contract matches [`crate::DesktopDuplicator`]: frames are
-//! copied into a private texture ring so the encoder never sees the same
-//! `ID3D11Texture2D` pointer twice in a row, and when no new content
-//! arrived we re-emit the previous image with `was_repeat = true` so the
-//! caller keeps a CFR stream.
+//! Windows.Graphics.Capture monitor capture. Unlike DXGI Desktop Duplication (which
+//! duplicates DWM composition and misses independent-flip/MPO/exclusive-fullscreen
+//! content), WGC sees the final composed image, fullscreen games included; same
+//! API OBS and Game Bar use. Frames copy into a private texture ring like
+//! [`crate::DesktopDuplicator`] so NVENC never sees the same pointer twice;
+//! `was_repeat = true` on repeats to keep a CFR stream.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -41,24 +32,22 @@ use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use crate::CapturedFrame;
 
 const POOL_SIZE: usize = 4;
-/// WGC frame pool depth. 2 is the conventional minimum; we drain to the
-/// newest frame every acquire so a deeper queue only adds latency.
+/// WGC frame pool depth; 2 is the minimum since we drain to newest every acquire.
 const WGC_BUFFERS: i32 = 2;
 
 pub struct WgcCapturer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    // Held for the lifetime of the capture; dropping stops delivery.
+    // dropping stops delivery
     frame_pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     _item: GraphicsCaptureItem,
-    /// Set from the item's `Closed` event (monitor unplugged / mode torn
-    /// down). Once set, `acquire_frame` errors so the caller can rebuild.
+    /// Set from the item's `Closed` event; once set, `acquire_frame` errors
+    /// so the caller can rebuild.
     closed: Arc<AtomicBool>,
     width: u32,
     height: u32,
-    /// Private-texture ring; same rationale as the DXGI path — NVENC
-    /// rejects back-to-back submissions of the same input pointer.
+    /// NVENC rejects back-to-back submissions of the same input pointer.
     pool: [Option<ID3D11Texture2D>; POOL_SIZE],
     next_slot: usize,
     last_slot: Option<usize>,
@@ -66,10 +55,8 @@ pub struct WgcCapturer {
 }
 
 impl WgcCapturer {
-    /// Create a WGC monitor capture on the given D3D11 device (the same
-    /// device that drives NVENC, so no cross-device copies). `output_index`
-    /// selects the DXGI output on the device's adapter, mirroring the
-    /// DXGI-duplication path's monitor selection.
+    /// `device` should be the one driving NVENC (avoids cross-device copies).
+    /// `output_index` selects the DXGI output on its adapter.
     pub fn new(
         device: ID3D11Device,
         context: ID3D11DeviceContext,
@@ -77,9 +64,7 @@ impl WgcCapturer {
         include_cursor: bool,
     ) -> Result<Self> {
         unsafe {
-            // WinRT activation needs the thread initialized for WinRT.
-            // RPC_E_CHANGED_MODE (already initialized STA) is fine — the
-            // free-threaded frame pool doesn't care.
+            // WinRT activation needs the thread initialized; RPC_E_CHANGED_MODE is fine here
             let _ = RoInitialize(RO_INIT_MULTITHREADED);
 
             if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
@@ -88,7 +73,7 @@ impl WgcCapturer {
                 ));
             }
 
-            // HMONITOR for the requested output on *this device's* adapter.
+            // HMONITOR for the requested output
             let dxgi_device: IDXGIDevice = device.cast()?;
             let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
             let output = adapter
@@ -121,12 +106,11 @@ impl WgcCapturer {
                 .CreateCaptureSession(&item)
                 .context("CreateCaptureSession failed")?;
 
-            // Cursor is composited natively (no GDI pass like the DXGI path).
+            // cursor composited natively, no GDI pass needed
             if let Err(e) = session.SetIsCursorCaptureEnabled(include_cursor) {
                 warn!(error = ?e, "WGC: SetIsCursorCaptureEnabled failed (older OS?)");
             }
-            // Best-effort: hide the yellow capture border (needs Win11 /
-            // recent Win10; harmless if unavailable).
+            // best-effort: hide the yellow capture border (Win11+)
             if let Err(e) = session.SetIsBorderRequired(false) {
                 info!(error = ?e, "WGC: capture border can't be hidden on this OS");
             }
@@ -167,10 +151,8 @@ impl WgcCapturer {
         self.height
     }
 
-    /// Poll for the newest captured frame. Non-blocking (`_timeout_ms` is
-    /// accepted for interface parity with the DXGI path; pacing is the
-    /// caller's job). With no new content, re-emits the previous frame
-    /// (`was_repeat = true`); returns `Ok(None)` before the first frame.
+    /// Non-blocking; `_timeout_ms` is only for parity with the DXGI path.
+    /// `Ok(None)` before the first frame, repeat frame if nothing new.
     pub fn acquire_frame(&mut self, _timeout_ms: u32) -> Result<Option<CapturedFrame>> {
         let _t = clipdip_profile::start("capture.acquire");
         if self.closed.load(Ordering::Relaxed) {
@@ -179,7 +161,7 @@ impl WgcCapturer {
             ));
         }
 
-        // Drain the pool to the newest frame so we never build up latency.
+        // drain to newest so latency never builds up
         let mut newest = None;
         while let Ok(frame) = self.frame_pool.TryGetNextFrame() {
             if let Some(prev) = newest.replace(frame) {
@@ -199,10 +181,7 @@ impl WgcCapturer {
             let mut src_desc = D3D11_TEXTURE2D_DESC::default();
             unsafe { source.GetDesc(&mut src_desc) };
 
-            // A different frame size means the display mode changed under
-            // us; the encoder was initialized for the old dimensions, so
-            // this session can't continue — the caller rebuilds capture
-            // (and, if the size really changed, the whole pipeline).
+            // size mismatch means display mode changed; caller must rebuild capture
             if src_desc.Width != self.width || src_desc.Height != self.height {
                 return Err(anyhow!(
                     "capture size changed {}x{} -> {}x{} (display mode change)",
@@ -218,14 +197,12 @@ impl WgcCapturer {
             let t_copy = clipdip_profile::start("capture.copy_flush");
             unsafe {
                 self.context.CopyResource(&dst, &source);
-                // Make sure the copy is submitted before NVENC samples it
-                // (same rationale as the DXGI path — avoids black frames).
+                // flush before NVENC samples it, avoids black frames
                 self.context.Flush();
             }
             drop(t_copy);
 
-            // TimeSpan is 100-ns ticks on the QPC timebase — the same unit
-            // and epoch as WASAPI positions and the DXGI path's PTS.
+            // TimeSpan: 100ns ticks on QPC timebase, same as WASAPI/DXGI PTS
             let pts_100ns = frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0);
 
             self.last_slot = Some(slot_idx);
@@ -243,8 +220,8 @@ impl WgcCapturer {
         result
     }
 
-    /// Re-emit the last captured image from a fresh ring slot (fresh
-    /// pointer for NVENC). `Ok(None)` if nothing has been captured yet.
+    /// Re-emits the last image from a fresh ring slot (fresh pointer for NVENC).
+    /// `Ok(None)` if nothing captured yet.
     fn emit_repeat(&mut self) -> Result<Option<CapturedFrame>> {
         let src_slot = match self.last_slot {
             Some(s) => s,
@@ -273,9 +250,8 @@ impl WgcCapturer {
         }))
     }
 
-    /// Lazily allocate the private ring texture for `slot`. Unlike the
-    /// DXGI path there's no GDI compatibility flag — WGC composites the
-    /// cursor for us.
+    /// Lazily allocates the ring texture for `slot`; no GDI compat flag needed
+    /// WGC composites the cursor itself.
     fn ensure_slot(
         &mut self,
         slot: usize,

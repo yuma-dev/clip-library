@@ -1,29 +1,19 @@
 /**
- * Live Performance Profiler — MAIN PROCESS side (dev-only).
+ * Live perf profiler, main-process side (dev-only). Not the offline runner
+ * (main-harness.js + runner.js). Wraps ipcMain.handle to time each channel
+ * (plus arg/result size), records startup phases before the window exists
+ * exposes global __perf for finer spans (ffmpeg spawn, fs scans, thumbnail
+ * gen), and buffers it all as Chrome Trace Event Format on a wall-clock
+ * timeline shared with the renderer for one flame graph (chrome://tracing /
+ * Perfetto).
  *
- * This is NOT the offline benchmark runner (that's main-harness.js + runner.js).
- * This module powers the always-on, real-use profiler you toggle inside the app
- * during development. It:
- *   - wraps every ipcMain.handle to time the handler body (backend "where did
- *     the time go" for each channel), plus arg/result size,
- *   - records STARTUP phases before the window even exists (see startup mode),
- *   - exposes a global `__perf` hook so hot spots inside handlers (ffmpeg spawn,
- *     fs scans, thumbnail gen) can add finer spans incrementally,
- *   - buffers everything as Chrome Trace Event Format objects on a shared,
- *     wall-clock-anchored timeline so main + renderer events line up in one
- *     flame graph (chrome://tracing / Perfetto).
+ * initPerfMain() no-ops unless dev; main.js requires this behind !app.isPackaged.
  *
- * Gating: initPerfMain() is a no-op unless dev. Nothing here is reachable in a
- * packaged build — main.js only requires it behind `!app.isPackaged`.
- *
- * Startup trace mode (CLIPS_PERF_STARTUP=1, wired by `npm run dev:trace`):
- *   - stands in as main.js's `benchmarkHarness` so the startup mark sites
- *     already placed there (moduleLoad / settingsLoad / fileWatcherSetup /
- *     windowCreation / appReady) feed this trace with zero new marks,
- *   - once the renderer signals ready, asks it to dump, then MERGES renderer +
- *     main startup spans into one file and prints a phase summary to the
- *     terminal. A fallback timer guarantees a file even if the renderer never
- *     signals.
+ * CLIPS_PERF_STARTUP=1 (npm run dev:trace): stands in as main.js's
+ * benchmarkHarness for the existing startup marks (moduleLoad / settingsLoad /
+ * fileWatcherSetup / windowCreation / appReady); once the renderer signals
+ * ready, merges main+renderer startup spans into one file and prints a phase
+ * summary. A fallback timer guarantees a file even if the renderer never signals.
  */
 
 'use strict';
@@ -32,7 +22,7 @@ const { ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-// pid/tid lanes — keep in sync with the renderer (src/renderer/perf/trace.ts).
+// pid/tid lanes, keep in sync with the renderer (src/renderer/perf/trace.ts)
 const PID_MAIN = 2;
 const TID = {
   startup: 24, // startup phases (before/around window creation)
@@ -44,14 +34,14 @@ const TID = {
 
 const MAX_EVENTS = 100000; // ring cap; oldest dropped past this
 
-// Anchor performance.now() (monotonic, sub-ms) to wall clock so main + renderer
-// timestamps are directly comparable. Both processes anchor to Date.now().
+// anchor performance.now() to wall clock so main + renderer timestamps line up;
+// both processes anchor to Date.now()
 const EPOCH_OFFSET_MS = Date.now() - performance.now();
 const wallMs = () => EPOCH_OFFSET_MS + performance.now();
 const toTs = (ms) => Math.round(ms * 1000); // Chrome trace ts is microseconds
 
-// Earliest timestamp we can see: this module is required at the very top of
-// main.js, before the heavy requires. Used as the "process boot" reference.
+// earliest timestamp visible: required at the top of main.js before the heavy
+// requires, so this stands in for "process boot"
 const BOOT_MS = wallMs();
 
 let enabled = false;
@@ -62,12 +52,12 @@ const startupSummary = []; // [{ phase, ms, note }] in finalisation order
 function push(evt) {
   events.push(evt);
   if (events.length > MAX_EVENTS) {
-    // Drop the oldest 10% in one splice rather than shifting per-event.
+    // drop oldest 10% in one splice, cheaper than shifting per event
     events.splice(0, Math.floor(MAX_EVENTS * 0.1));
   }
 }
 
-/** Record a completed span (ph:'X') on the main-process side of the timeline. */
+/** completed span (ph:'X') on the main-process timeline */
 function span(name, tid, startMs, durMs, args) {
   if (!enabled) return;
   push({
@@ -82,7 +72,7 @@ function span(name, tid, startMs, durMs, args) {
   });
 }
 
-/** Cheap, safe byte estimate. Avoids stringifying huge/circular payloads. */
+/** cheap byte estimate; avoids stringifying huge/circular payloads */
 function roughBytes(value) {
   if (value == null) return 0;
   try {
@@ -92,18 +82,18 @@ function roughBytes(value) {
     const s = JSON.stringify(value);
     return s ? s.length : 0;
   } catch {
-    return -1; // uncountable (circular / non-serialisable)
+    return -1; // circular / non-serialisable
   }
 }
 
 /**
- * Intercept ipcMain.handle so every channel body is timed. Must run BEFORE any
- * handlers are registered (main.js requires this near the top).
+ * Intercepts ipcMain.handle to time every channel body; must run before
+ * handlers register (main.js requires this near the top).
  */
 function interceptIpc() {
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = function (channel, handler) {
-    // Never instrument our own plumbing — would recurse / pollute the trace.
+    // skip our own plumbing, would recurse and pollute the trace
     if (channel.startsWith('perf:') || channel.startsWith('benchmark:')) {
       return original(channel, handler);
     }
@@ -129,11 +119,9 @@ function interceptIpc() {
   };
 }
 
-// --- startup recorder ------------------------------------------------------
-//
-// Implements the small slice of main-harness's interface that main.js calls
-// (markStartup / endStartup / recordAppReady). Each phase becomes a span on the
-// startup lane plus a line in the terminal summary.
+// startup recorder: implements the slice of main-harness's interface main.js
+// calls (markStartup / endStartup / recordAppReady); each phase becomes a span
+// plus a terminal summary line
 
 const startupMarks = new Map();
 
@@ -151,7 +139,7 @@ const startupRecorder = {
     return { duration: dur };
   },
   recordAppReady() {
-    // Whole boot → app ready, measured from the earliest point we can see.
+    // whole boot to app ready, measured from the earliest point we can see
     const dur = wallMs() - BOOT_MS;
     span('app-ready', TID.startup, BOOT_MS, dur, { note: 'process boot → app ready' });
     startupSummary.push({ phase: 'app-ready', ms: dur, note: 'boot → ready' });
@@ -167,13 +155,13 @@ function logStartupSummary(file) {
   }
   if (file) lines.push(`  → ${file}`);
   lines.push('─────────────────────────────────────────────', '');
-  // Direct to stdout so it stands out from the app's own logging.
+  // stdout so it stands out from the app's own logging
   process.stdout.write(lines.join('\n') + '\n');
 }
 
-// --- trace assembly + write ------------------------------------------------
+// trace assembly + write
 
-/** Process/thread name metadata so Perfetto labels the lanes. */
+/** process/thread metadata so Perfetto labels the lanes */
 function processMetadata() {
   const meta = (pid, tid, name, key) => ({ name: key, ph: 'M', pid, tid, args: { name } });
   return [
@@ -191,9 +179,8 @@ function fsStamp() {
 }
 
 /**
- * Merge the main buffer with any renderer events and write one trace file.
- * NON-draining: the buffer is kept, so every dump (hotkey or auto) yields the
- * full session from boot — one continuous capture, not a series of fragments.
+ * Merges the main buffer with renderer events into one trace file. Non-draining:
+ * the buffer is kept, so every dump yields the full session from boot, not fragments.
  */
 function writeTrace(rendererEvents, meta) {
   const merged = [...processMetadata(), ...events, ...(rendererEvents || [])];
@@ -211,22 +198,22 @@ function writeTrace(rendererEvents, meta) {
 function registerHandlers() {
   ipcMain.handle('perf:epoch', () => ({ epochOffsetMs: EPOCH_OFFSET_MS, nowMs: wallMs() }));
 
-  // Return + clear the buffered main events (renderer merges into its trace).
+  // clears buffered main events; renderer merges them into its own trace
   ipcMain.handle('perf:flush', () => {
     const batch = events;
     events = [];
     return batch;
   });
 
-  // Hotkey dump: the renderer hands us its full session, we merge our own
-  // startup + IPC + ffmpeg spans and write one file. The app is alive during a
-  // keypress, so this round-trip is reliable (unlike a quit-time one).
+  // hotkey dump: renderer hands us its full session, we merge our startup/IPC/
+  // ffmpeg spans and write one file; app is alive during a keypress, so this
+  // round-trip is reliable (unlike a quit-time one)
   ipcMain.handle('perf:dumpTrace', (_event, rendererEvents, meta) => writeTrace(rendererEvents, meta));
 }
 
 /**
- * Public hook other main modules can use to add finer spans without importing
- * this file directly, e.g.:
+ * global.__perf hook for other main modules to add finer spans without
+ * importing this file, e.g.:
  *   const t = global.__perf?.ffmpeg('export:encode'); ... t?.end();
  *   global.__perf?.span('scan-clips', start, dur);
  */
@@ -244,9 +231,8 @@ function installGlobalHook() {
 }
 
 /**
- * Once the renderer signals ready, echo the startup phase timings to the
- * terminal for immediate feedback. The full trace (startup + everything since)
- * is saved on demand with the HUD's Dump button — see perf:dumpTrace.
+ * Echoes startup phase timings to the terminal once the renderer signals ready.
+ * Full trace saved on demand via the HUD's Dump button, see perf:dumpTrace.
  */
 function printStartupSummaryWhenReady() {
   const SETTLE_MS = 1200;
@@ -269,7 +255,7 @@ function initPerfMain({ isDev } = {}) {
   printStartupSummaryWhenReady();
 }
 
-/** Startup recorder that stands in as main.js's `benchmarkHarness` (see header). */
+/** stands in as main.js's `benchmarkHarness` (see header) */
 function getStartupRecorder() {
   return startupRecorder;
 }

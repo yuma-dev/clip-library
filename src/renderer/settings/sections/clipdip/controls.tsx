@@ -3,7 +3,7 @@ import { AlertTriangle, ChevronRight, KeyRound } from "lucide-react";
 import Slider from "../../../ui/Slider";
 import { useClipdip, type LiveStatus } from "./ClipdipContext";
 
-/** Text input that commits on blur/Enter (clipdip settings write TOML + reload). */
+/** commits on blur/Enter; clipdip settings write TOML + reload */
 export function CommitInput({
   value,
   onCommit,
@@ -54,12 +54,8 @@ export function CommitInput({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Hotkey capture. Physical-key (`e.code`) to canonical token understood by
-// the Rust parser (crates/hotkey parse_vk). Using `e.code` instead of `e.key`
-// makes capture immune to Shift mutations and keyboard layouts. Only keys in
-// this map can be recorded, so anything saved registers on the backend.
-// ---------------------------------------------------------------------------
+// e.code (not e.key) so capture is immune to Shift mutations and keyboard layouts
+// maps to tokens the Rust parser understands (crates/hotkey parse_vk); unmapped keys can't be recorded
 
 const CODE_TO_TOKEN: Record<string, string> = (() => {
   const m: Record<string, string> = {
@@ -214,10 +210,6 @@ export function HotkeyCapture({
   );
 }
 
-// ---------------------------------------------------------------------------
-// 2x2 corner picker for the notification overlay position.
-// ---------------------------------------------------------------------------
-
 const CORNERS = ["top_left", "top_right", "bottom_left", "bottom_right"] as const;
 
 export function CornerPicker({
@@ -247,11 +239,7 @@ export function CornerPicker({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Preset slider: maps a discrete preset list onto Slider, showing "Custom"
-// when the current config doesn't match any preset.
-// ---------------------------------------------------------------------------
-
+// shows "Custom" when the current config doesn't match any preset
 export function PresetSlider({
   presets,
   activeIndex,
@@ -281,7 +269,6 @@ export function PresetSlider({
   );
 }
 
-/** Collapsible "Advanced" block at the bottom of a group. */
 export function Disclosure({
   label = "Advanced",
   children,
@@ -301,7 +288,6 @@ export function Disclosure({
   );
 }
 
-/** Pipeline status pill: Recording / Capture error / Starting, from live status. */
 export function PipelinePill({ live }: { live: LiveStatus | null }) {
   if (!live) return null;
   const error = live.pipeline_error ?? null;
@@ -315,7 +301,7 @@ export function PipelinePill({ live }: { live: LiveStatus | null }) {
   );
 }
 
-/** Process badge + pipeline pill for group headers across clipdip sections. */
+/** process badge + pipeline pill, shared across clipdip section headers */
 export function ClipdipStatusBadge() {
   const { status, live, running } = useClipdip();
   return (

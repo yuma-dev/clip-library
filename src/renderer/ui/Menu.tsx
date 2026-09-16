@@ -1,9 +1,7 @@
 import type { ReactNode } from "react";
 
-/**
- * Menu content primitives. Purely presentational — drop inside a <Popover/>
- * (anchored) or a fixed-position wrapper (right-click context menu, Phase 3).
- */
+/** Menu content primitives, presentational. Drop inside a <Popover/> (anchored)
+ * or a fixed wrapper (right-click context menu). */
 
 export function MenuList({ children }: { children: ReactNode }) {
   return (

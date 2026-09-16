@@ -1,14 +1,8 @@
 // Identity: install_id, machine_key, session_id.
-//
-// install_id is SHARED with clipdip by design. When clipdip has an install_id
-// on this machine we adopt it, so the server can join the two products for free
-// (see docs/telemetry-cliplib-api.md §1). That is why the server keys installs
-// on (product, install_id) rather than install_id alone.
-//
-// machine_key is a random UUID in HKCU, surviving a reinstall so that a
-// reinstall is not miscounted as a new user. It is NOT derived from MachineGuid,
-// hardware serials, MAC addresses or the username. Deleting the registry value
-// makes this machine brand new to us.
+// install_id is shared with clipdip when present, so the server keys installs on (product,
+// install_id) (docs/telemetry-cliplib-api.md 1).
+// machine_key: random UUID in HKCU, survives reinstall, not derived from
+// hardware/MachineGuid/username. Delete the value to reset it.
 
 const { execFile } = require('child_process');
 const crypto = require('crypto');
@@ -26,24 +20,14 @@ let machineKeySource = 'unknown';
 let sessionId = null;
 let sessionStartedAt = null;
 
-/**
- * Run reg.exe, distinguishing "the value is not there" from "we could not ask".
- *
- * Collapsing those two into one null is how a machine_key gets destroyed: a
- * reg.exe that times out on a busy cold boot, or is blocked by an EDR agent,
- * looks exactly like a first run, and the caller then mints and writes a fresh
- * UUID over the existing one. That silently breaks the reinstall-survival
- * property this whole module exists for.
- *
- * @returns {Promise<{ok: boolean, transient: boolean, stdout: string}>}
- */
+/** distinguishes "value not there" from "could not ask": collapsing those is how a busy-boot or EDR-blocked reg.exe looks like a first run and overwrites machine_key
+ * @returns {Promise<{ok: boolean, transient: boolean, stdout: string}>} */
 function execReg(args) {
   return new Promise((resolve) => {
     execFile('reg', args, { windowsHide: true, timeout: 5000 }, (error, stdout) => {
       if (!error) return resolve({ ok: true, transient: false, stdout: String(stdout || '') });
-      // reg.exe exits with a number when it ran and had something to say
-      // (1 = key or value not found). A non-numeric code means it never ran
-      // (ENOENT, EACCES), and `killed` means our timeout fired.
+      // numeric exit code = reg.exe ran and answered (1 = not found); non-numeric = never ran
+      // (ENOENT/EACCES); killed = our timeout
       const ranAndAnswered = typeof error.code === 'number' && !error.killed;
       resolve({ ok: false, transient: !ranAndAnswered, stdout: String(stdout || '') });
     });
@@ -71,13 +55,8 @@ async function readRegValue(regPath) {
   return { value: parseRegSz(result.stdout, REG_VALUE), transient: false };
 }
 
-/**
- * Resolve the machine key, and NEVER overwrite an existing one on a failure we
- * cannot interpret. On a transient failure we return null, which makes the
- * heartbeat omit machine_key entirely for this session. Omitting it costs one
- * session of machine correlation; overwriting it costs the install's whole
- * history.
- */
+/** never overwrites an existing key on an unreadable failure, returns null instead so the heartbeat
+ * just omits machine_key this session rather than risk clobbering the install's whole history */
 async function resolveMachineKey() {
   if (machineKey) return machineKey;
   if (process.platform !== 'win32') {
@@ -96,8 +75,8 @@ async function resolveMachineKey() {
       return machineKey;
     }
 
-    // Adopt clipdip's key when it already exists so both products report the
-    // same machine. A transient failure here also aborts rather than minting.
+    // adopt clipdip's key if it exists, so both products report the same machine; transient failure
+    // aborts rather than minting
     const sibling = await readRegValue(CLIPDIP_REG_PATH);
     if (sibling.transient) {
       machineKeySource = 'unavailable';
@@ -107,8 +86,7 @@ async function resolveMachineKey() {
     const candidate = sibling.value || crypto.randomUUID();
     await execReg(['add', REG_PATH, '/v', REG_VALUE, '/t', 'REG_SZ', '/d', candidate, '/f']);
 
-    // Verify the write landed. An unverified write is how a fleet ends up
-    // minting a new key every launch with nothing to show for it.
+    // verify the write landed, else a fleet mints a new key every launch with nothing to show for it
     const verify = await readRegValue(REG_PATH);
     if (verify.value !== candidate) {
       machineKeySource = 'write_failed';
@@ -123,14 +101,8 @@ async function resolveMachineKey() {
   return machineKey;
 }
 
-/**
- * Resolve the install id, preferring clipdip's.
- *
- * The old getInstallId() in main/log-uploader.js swallowed the write failure,
- * which could mint a fresh id on every launch and silently destroy server-side
- * correlation. Here the write is verified and the outcome is reported as
- * install_id_source so a fleet of ephemeral ids is visible instead.
- */
+/** prefers clipdip's install id. Old main/log-uploader.js getInstallId() swallowed write failures and could mint a fresh id every launch;
+ * here the write is verified and the outcome reported as install_id_source */
 function resolveInstallId(userDataDir, clipdipInstallIdPath) {
   if (installId) return installId;
 

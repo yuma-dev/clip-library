@@ -1,15 +1,14 @@
-// Local library clip (distinct from the web feed `Clip` — plan §5/D3).
-// Shape mirrors what `get-clips` returns (main/clips.js), plus tags loaded
-// separately via `get-clip-tags`.
+// local library clip, distinct from the web feed `Clip` (plan section 5/D3)
+// shape mirrors get-clips (main/clips.js); tags load separately via get-clip-tags
 export interface LocalClip {
-  /** Path relative to the clip location; may contain `/` subfolders. Identity key. */
+  /** path relative to the clip location, may contain `/` subfolders. identity key */
   originalName: string;
   customName: string;
-  /** ms since epoch. */
+  /** ms since epoch */
   createdAt: number;
   thumbnailPath: string | null;
   isTrimmed: boolean;
   tags: string[];
-  /** True for clips added since the last session, or added live while running. Drives new-clip highlighting. */
+  /** true for clips added since last session or live while running; drives new-clip highlighting */
   isNewSinceLastSession?: boolean;
 }

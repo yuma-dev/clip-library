@@ -1,18 +1,12 @@
-// Faithful React-era port of the legacy ClipGlowManager (video-player.js:271).
-// A SINGLE shared 16x9 canvas lives behind the cards (in .clip-grid, unclipped)
-// and is repositioned over the hovered card with a 55px overflow so the colour
-// bleeds onto the surroundings. drawImage() downscales the thumbnail/preview
-// video to 16x9 (keeping spatial colour), then CSS blows it up + blurs it.
-// While a preview video plays, it redraws at 30fps with a 0.2 blend (temporal
-// smoothing). All imperative — no React state on the per-frame loop.
+// Port of the legacy ClipGlowManager (video-player.js:271). Single shared
+// 16x9 canvas repositioned over the hovered card (55px overflow bleed);
+// drawImage downscales to 16x9, CSS upscales + blurs. All imperative, no React state on the per-frame loop.
 import { glowConfig } from "./glowConfig";
 
 export class ClipGlow {
   private readonly ctx: CanvasRenderingContext2D | null;
-  // Positioned wrapper (.clip-glow-wrap): moved with `transform` so hovering a
-  // card never dirties layout or resizes the blur(45px) layer — left/top/width/
-  // height writes on the filtered canvas forced a re-layout AND a re-rasterize
-  // of the heavily filtered surface on every card enter (16-40ms frames).
+  // .clip-glow-wrap: moved via transform, not left/top/width/height, to avoid re-layout of the
+  // blur(45px) layer (was 16-40ms frames).
   private readonly wrap: HTMLElement;
   private currentSource: HTMLImageElement | HTMLVideoElement | null = null;
   private currentCard: HTMLElement | null = null;
@@ -76,8 +70,8 @@ export class ClipGlow {
     const g = this.gridEl.getBoundingClientRect();
     const m = media.getBoundingClientRect();
     const o = glowConfig.overflow;
-    // Compositor-only reposition; width/height (layout) only when the card
-    // size actually changed — cards in a grid are uniform, so ~never.
+    // Compositor-only reposition; width/height (layout) only when card size changes, so ~never in a
+    // uniform grid.
     this.wrap.style.transform = `translate3d(${m.left - g.left - o}px, ${m.top - g.top - o + glowConfig.yShift}px, 0)`;
     const w = m.width + o * 2;
     const h = m.height + o * 2;
@@ -103,14 +97,13 @@ export class ClipGlow {
       ctx.drawImage(src, 0, 0, this.canvas.width, this.canvas.height);
       ctx.globalAlpha = 1;
     } catch {
-      /* drawImage can throw on not-yet-ready media; ignore. */
+      /* drawImage throws on not-yet-ready media */
     }
   }
 
   private loop = (ts: number): void => {
     if (!this.isActive) return;
-    // Track the hovered card: streamed-in cards below can shift it after
-    // show() ran, which would leave the glow floating over the old position.
+    // Track the hovered card: streamed-in cards below can shift it after show() ran.
     if (this.currentCard && ts - this.lastPositionTime >= 100) {
       this.position(this.currentCard);
       this.lastPositionTime = ts;

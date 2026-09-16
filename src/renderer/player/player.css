@@ -1,7 +1,6 @@
-/* Faithful legacy player CSS — extracted verbatim from legacy/styles.css (Phase 4b).
-   Player uses ids + player-specific classes; no overlap with the new grid classes. */
+/* extracted verbatim from legacy/styles.css; player uses ids + player-specific classes, no overlap with grid classes */
 
-/* ===== legacy/styles.css 207-261 ===== */
+/* legacy/styles.css 207-261 */
 #current-time, #total-time {
   color: white;
   font-size: 14px;
@@ -44,9 +43,7 @@
   z-index: 10;
 }
 
-/* Pre-play placeholder state: while the low-res thumbnail is showing, the
-   loading overlay just darkens it — no spinner. The class is removed when
-   playback starts, so mid-playback buffering still gets the spinner. */
+/* pre-play: thumbnail showing, overlay just darkens it, no spinner; class removed on playback start so mid-playback buffering still gets one */
 #loading-overlay.thumbnail-backdrop {
   background-color: rgba(0, 0, 0, 0.45);
 }
@@ -69,15 +66,14 @@
   100% { transform: rotate(360deg); }
 }
 
-/* ===== legacy/styles.css 886-916 ===== */
-/* Ambient glow canvas - YouTube-style background glow effect */
+/* legacy/styles.css 886-916 */
+/* ambient glow canvas: YouTube-style background glow */
 #ambient-glow-canvas {
   position: fixed;
   top: 51%;
   left: 50%;
   transform: translate(-50%, -50%);
-  /* Larger than video player for glow overflow */
-  width: calc(90% + 200px);
+  width: calc(90% + 200px); /* larger than the player for overflow */
   height: auto;
   aspect-ratio: 16 / 9;
   z-index: 998;
@@ -89,12 +85,10 @@
   transition: opacity 0.3s ease;
 }
 
-/* Hide ambient glow in true fullscreen or when marked hidden */
 #ambient-glow-canvas.hidden {
   opacity: 0;
 }
 
-/* Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   #ambient-glow-canvas {
     display: none !important;
@@ -102,7 +96,7 @@
 }
 
 
-/* ===== legacy/styles.css 952-2116 ===== */
+/* legacy/styles.css 952-2116 */
 #fullscreen-player {
   position: fixed;
   top: 51%;
@@ -155,7 +149,6 @@
   display: flex !important;
 }
 
-/* Staggered entrance for control elements */
 #video-controls.visible .left-controls > *,
 #video-controls.visible .right-controls > *,
 #video-controls.visible #speed-container,
@@ -215,21 +208,20 @@
 
 #video-container {
   width: 100%;
-  height: 100%; /* Adjust based on your bottom bar height */
-  position: relative; /* Add this */
+  height: 100%;
+  position: relative;
 }
 
 #video-wrapper {
   width: 100%;
   position: relative;
-  padding-top: 56.25%; /* 16:9 aspect ratio */
+  padding-top: 56.25%; /* 16:9 */
 }
 
 #video-player {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  /* Add these new properties */
   transform: translateZ(0);
   backface-visibility: hidden;
   perspective: 1000px;
@@ -266,7 +258,7 @@
   left: 0;
   width: 100%;
   height: 100%;
-  z-index: 1; /* Above the video but below the controls */
+  z-index: 1; /* above the video, below the controls */
 }
 
 #top-controls, #bottom-controls {
@@ -413,19 +405,14 @@
   left: 10px;
 }
 
-/* ===========================================================================
- * Multi-track audio mixer popout (lives inside #volume-container).
- * Compact horizontal-row mixer per track: drag = volume, dbl-click = 100%,
- * wheel = ±5%, X = hide (mute), color dot opens palette.
- * =========================================================================== */
+/* multi-track audio mixer popout, lives inside #volume-container: drag = volume, dbl-click =
+   100%, wheel = +/-5%, X = hide (mute), color dot opens palette */
 #audio-tracks-panel {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
   width: 320px;
   padding: 12px;
-  /* Match the player controls gradient aesthetic: dark translucent backdrop
-     that blends with the bottom-of-player controls bar. */
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.78) 0%, rgba(0, 0, 0, 0.88) 100%),
     rgba(20, 20, 24, 0.55);
@@ -438,9 +425,7 @@
   box-sizing: border-box;
   color: #fff;
   font-size: 13px;
-  /* Expand outward from the volume button anchor (bottom-left of the panel
-     sits just above the button). */
-  transform-origin: bottom left;
+  transform-origin: bottom left; /* expands from the volume button, bottom-left anchor */
   animation: mixerPanelOpen 200ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
 }
 
@@ -476,7 +461,7 @@
 .mixer__row[data-dragging="true"] .mixer__fill,
 #audio-tracks-panel[data-shift-drag="true"] .mixer__fill { transition: none; }
 
-/* Soft-muted row (right-click mute): stays in the active mix but reads as silenced. */
+/* right-click mute: stays in the active mix but reads as silenced */
 .mixer__row--muted .mixer__fill { filter: grayscale(0.85) brightness(0.6); }
 .mixer__row--muted .mixer__name,
 .mixer__row--muted .mixer__value { text-decoration: line-through; opacity: 0.65; }
@@ -577,8 +562,7 @@
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* Floating hidden-tray: positioned above the panel, outside its background.
-   Chips look "disabled" with a checkered/striped fill. */
+/* positioned above the panel, outside its background; chips look "disabled" with a striped fill */
 .mixer__hidden-tray {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -599,8 +583,7 @@
   pointer-events: auto;
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 8px 3px 6px;
-  /* Diagonal "disabled" stripe over a dark translucent backdrop. */
-  background:
+  background: /* diagonal "disabled" stripe over a dark translucent backdrop */
     repeating-linear-gradient(
       45deg,
       rgba(255, 255, 255, 0.05) 0 4px,
@@ -674,7 +657,7 @@
 }
 
 #volume-slider.boosted {
-  accent-color: #ff5722; /* Change color when volume is boosted */
+  accent-color: #ff5722;
 }
 
 #volume-slider.collapsed {
@@ -802,7 +785,6 @@
   100% { transform: scaleY(1); }
 }
 
-/* Ripple effect */
 .ripple {
   position: absolute;
   border-radius: 50%;
@@ -815,7 +797,6 @@
 
 @keyframes ripple { to { transform: scale(4); opacity: 0; } }
 
-/* Micro press feedback */
 #export-button:active,
 #share-button:active,
 #delete-button:active,
@@ -876,7 +857,7 @@
   align-items: center;
 }
 
-/* Blend the custom titlebar during playback without blocking clicks */
+/* blends the custom titlebar during playback without blocking clicks */
 body.player-open .cet-titlebar {
   background-color: rgba(18, 18, 18, 0.5) !important;
   backdrop-filter: blur(6px) saturate(1.1);
@@ -893,7 +874,6 @@ body.player-open .cet-titlebar {
   height: 100%;
 }
 
-/* Responsive adjustments */
 @media (max-width: 1200px) {
   #clip-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -1017,7 +997,6 @@ body.player-open .cet-titlebar {
   }
 }
 
-/* Separate blur into its own layer */
 .blur-layer {
   position: absolute;
   top: 0;
@@ -1033,7 +1012,6 @@ body.player-open .cet-titlebar {
   backdrop-filter: blur(10px);
 }
 
-/* Optimize the loading screen fade out */
 #loading-screen.fade-out {
   animation: fadeOutScale 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
   pointer-events: none;
@@ -1047,7 +1025,6 @@ body.player-open .cet-titlebar {
   animation: particleDissipate 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
-/* Background dots pattern */
 .particle-field {
   position: absolute;
   top: -100%;
@@ -1086,7 +1063,6 @@ body.player-open .cet-titlebar {
   }
 }
 
-/* Animated glow overlay */
 .logo-container::before {
   content: '';
   position: absolute;
@@ -1118,7 +1094,6 @@ body.player-open .cet-titlebar {
   }
 }
 
-/* Secondary glow for dots enhancement */
 .logo-container::after {
   content: '';
   position: absolute;
@@ -1232,7 +1207,6 @@ body.player-open .cet-titlebar {
   overflow: hidden;
 }
 
-/* Progress fill effect */
 .export-toast-content::before {
   content: '';
   position: absolute;
@@ -1248,8 +1222,7 @@ body.player-open .cet-titlebar {
   );
   transition: width 0.3s ease-out;
   filter: blur(8px);
-  /* Make the gradient wider than the container to ensure smooth edges */
-  transform: scale(1.2, 1);
+  transform: scale(1.2, 1); /* wider than the container, for smooth edges */
   transform-origin: left;
 }
 
@@ -1286,7 +1259,7 @@ body.player-open .cet-titlebar {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
-/* ===== legacy/styles.css 2555-2596 ===== */
+/* legacy/styles.css 2555-2596 */
 .button-tooltip-container {
   position: relative;
   display: inline-block;
@@ -1295,10 +1268,10 @@ body.player-open .cet-titlebar {
 .tooltip {
   visibility: hidden;
   position: absolute;
-  top: 100%; /* Changed from bottom: 100% to top: 100% */
+  top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  margin-top: 5px; /* Changed from margin-bottom to margin-top */
+  margin-top: 5px;
   padding: 8px;
   background-color: rgba(0, 0, 0, 0.8);
   color: #fff;
@@ -1313,11 +1286,10 @@ body.player-open .cet-titlebar {
   backdrop-filter: blur(4px);
 }
 
-/* Move arrow to top of tooltip */
 .tooltip::after {
   content: "";
   position: absolute;
-  bottom: 100%; /* Changed from top: 100% to bottom: 100% */
+  bottom: 100%;
   left: 50%;
   margin-left: -5px;
   border-width: 5px;
@@ -1330,19 +1302,18 @@ body.player-open .cet-titlebar {
   opacity: 1;
 }
 
-/* Volume-range elements start hidden; the legacy JS reveals them on demand. */
+/* legacy JS reveals these on demand */
 .volume-start,.volume-end,.volume-region,.volume-drag-control{position:absolute;display:none;}
 
-/* ================= Phase 4b overrides (fix / modernize) ================= */
+/* Phase 4b overrides */
 
-/* Use the app font (Inter) inside the player, not the OS fallback. */
 #player-overlay,
 #player-overlay input,
 #player-overlay button {
   font-family: var(--font-sans);
 }
 
-/* Title: no hover/focus outline or border — stays invisible until edited. */
+/* no hover/focus outline or border, stays invisible until edited */
 #clip-title,
 #clip-title:hover,
 #clip-title:focus {
@@ -1352,23 +1323,19 @@ body.player-open .cet-titlebar {
   background: transparent;
 }
 
-/* ================= Modern control layout (Phase 4b) ================= */
-/* #video-controls is the full-video overlay (shown via .visible); the top
-   section pins to the top, the bottom section to the bottom. */
+/* #video-controls is the full-video overlay (shown via .visible); top section pins to the top, bottom to the bottom */
 #video-controls {
   justify-content: space-between !important;
   padding: 16px 18px !important;
   gap: 10px;
-  /* Let the empty middle pass clicks to the video (play/pause); the top/bottom
-     bars re-enable pointer events for their buttons. */
-  pointer-events: none;
+  pointer-events: none; /* empty middle passes clicks to the video; top/bottom bars re-enable it for their buttons */
 }
 #top-controls,
 #bottom-controls {
   pointer-events: auto;
 }
 
-/* ---- TOP: title (left) + action buttons (right) ---- */
+/* top: title (left) + action buttons (right) */
 #top-controls {
   display: flex;
   align-items: center;
@@ -1403,7 +1370,7 @@ body.player-open .cet-titlebar {
   border: 0;
   border-radius: 8px;
   box-shadow: none;
-  animation: none; /* kill the pulsing export glow */
+  animation: none; /* no pulsing export glow */
   color: #fff;
   display: inline-flex;
   align-items: center;
@@ -1411,8 +1378,7 @@ body.player-open .cet-titlebar {
   cursor: pointer;
   transition: background-color 120ms ease;
 }
-/* Ghost buttons — no fill at rest; a translucent color tint on hover only
-   (same 0.25 alpha as the feed player's close-button hover). */
+/* ghost buttons: no fill at rest, translucent tint on hover (0.25 alpha, matches the feed player's close-button hover) */
 #export-button,
 #share-button,
 #delete-button {
@@ -1437,14 +1403,12 @@ body.player-open .cet-titlebar {
   fill: none;
 }
 
-/* ---- BOTTOM: playback row -> progress bar -> time (stacked) ---- */
+/* bottom: playback row, progress bar, time (stacked) */
 #bottom-controls {
   display: flex !important;
   flex-direction: column;
   align-items: stretch !important;
-  /* Pack the rows tightly at the bottom (override the legacy space-between,
-     which spread them vertically). */
-  justify-content: flex-end !important;
+  justify-content: flex-end !important; /* pack rows tightly, overrides legacy's vertical space-between */
   flex: 0 0 auto !important;
   gap: 8px;
   z-index: 2;
@@ -1506,15 +1470,11 @@ body.player-open .cet-titlebar {
   font-size: 12px;
 }
 
-/* Speed keeps the legacy click-to-expand behavior (.collapsed hides the slider);
-   only the slider's LOOK is modernized. */
+/* keeps legacy's click-to-expand behavior (.collapsed hides the slider), only the look is modernized */
 #speed-container,
 #volume-container {
   position: relative;
-  /* Reset the legacy absolute offsets (bottom/left/right). Without this, the
-     leftover `bottom: 5xpx` from the old rules shifts these relative-positioned
-     containers upward, so volume/speed float above the fullscreen button. */
-  inset: auto;
+  inset: auto; /* resets legacy's absolute bottom/left/right, else leftover bottom offsets shift these above the fullscreen button */
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1540,7 +1500,6 @@ body.player-open .cet-titlebar {
   cursor: pointer;
 }
 
-/* Progress bar spans the full width of the bottom section. */
 #trim-controls {
   width: 100%;
 }
@@ -1548,7 +1507,6 @@ body.player-open .cet-titlebar {
   width: 100%;
 }
 
-/* Time row pinned at the very bottom. */
 .time-row {
   display: flex;
   align-items: center;
@@ -1566,8 +1524,7 @@ body.player-open .cet-titlebar {
   margin: 0;
 }
 
-/* Timeline hover preview: hidden by default, revealed on progress-bar hover
-   (positioned imperatively by VideoPlayer's mousemove handler). */
+/* revealed on progress-bar hover, positioned imperatively by VideoPlayer's mousemove handler */
 #timeline-preview {
   display: none;
 }

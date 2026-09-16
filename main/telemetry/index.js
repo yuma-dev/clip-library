@@ -1,17 +1,8 @@
-// ClipLib telemetry. Full design and the server contract: docs/telemetry-cliplib-api.md
-//
-// Why this exists: cliplib had 168 catch blocks in the renderer and 4
-// console.error calls. Most failures were converted into plausible-looking
-// empty values, so a user with a broken library, no thumbnails, no audio tracks
-// or a silently failed update produced zero server-visible signal.
-//
-// Rules for call sites:
-//   - event() NEVER throws and NEVER returns a promise you have to await.
-//   - kind is the urgency axis. Use 'silent_failure' whenever the user was not
-//     told, which is the case for most of the sites this module instruments.
-//   - context carries numbers, booleans and enum strings ONLY. No paths, no
-//     file names, no tag text, no account identifiers. See the never-send list
-//     in the design doc.
+// ClipLib telemetry. Full design and server contract: docs/telemetry-cliplib-api.md
+// Exists because cliplib had 168 renderer catch blocks turning failures into plausible-looking empty values
+// so a broken library or silently failed update produced zero server-visible signal.
+// event() never throws/awaits. kind='silent_failure' when the user wasn't told. context:
+// numbers/booleans/enum strings only, never paths/filenames/tags/account ids.
 
 const fs = require('fs');
 const path = require('path');
@@ -35,8 +26,7 @@ const FLUSH_MAX_BACKOFF_MS = 300000;
 const HEARTBEAT_INTERVAL_MS = 900000;
 const MAX_BATCH = 100;
 const MAX_EVENTS_PER_SESSION = 200;
-// Crashes must never be starved by a noisy warning site, so fatal events get
-// headroom above the general cap rather than competing for it.
+// fatal events get their own headroom so a noisy warning site can't starve crash reporting
 const MAX_FATAL_EVENTS_PER_SESSION = 40;
 const MAX_PENDING_METRICS = 1200;
 const MAX_COALESCE_GATES = 5000;
@@ -66,9 +56,8 @@ const CODE_PATTERN = /^[a-z0-9_]{3,64}$/;
 
 const state = {
   initialized: false,
-  // Opt-out product default, so startup-path metrics recorded before init()
-  // are not silently dropped. init() overrides this from settings and clears
-  // everything collected so far when the user has telemetry off.
+  // opt-out default so startup-path metrics recorded before init() aren't dropped; init() overrides
+  // from settings
   enabled: true,
   configured: false,
   debug: process.env.CLIPS_TELEMETRY_DEBUG === '1',
@@ -95,13 +84,12 @@ const state = {
 
 const coalesceGates = new Map();
 
-// Startup-path call sites (settings load, ffmpeg init, thumbnail cache init)
-// run BEFORE init(). Buffer them rather than making every call site think about
-// ordering; replayed verbatim once init lands.
+// startup call sites (settings load, ffmpeg init, thumbnail cache init) run before init(); buffered
+// and replayed
 const preInitBuffer = [];
 const MAX_PREINIT = 50;
 
-// ---------------------------------------------------------------- helpers ---
+// helpers
 
 function hash32(input) {
   // djb2, matching the fingerprint scheme the renderer bridge uses.
@@ -130,9 +118,8 @@ function sanitizeContext(context) {
     } else if (typeof value === 'number' || typeof value === 'boolean') {
       out[key] = value;
     } else if (Array.isArray(value)) {
-      // Strings are scrubbed, primitives pass, anything else (objects, nested
-      // arrays) is DROPPED. Previously non-strings passed through verbatim,
-      // which would have shipped an object containing a path unscrubbed.
+      // strings scrubbed, primitives pass, objects/nested arrays dropped - used to pass verbatim
+      // and could leak a path
       out[key] = value
         .slice(0, 20)
         .map((v) => {
@@ -164,12 +151,8 @@ function errorFields(error) {
   };
 }
 
-/**
- * Last LOG_TAIL_BYTES of the current log, scrubbed then gzipped then base64.
- * cliplib scrubs its tails; clipdip does not. Clip filenames still survive the
- * scrub, which is why tails attach only to fatal events and to codes the server
- * explicitly promotes via attach_log_codes.
- */
+/** Last LOG_TAIL_BYTES of the log, scrubbed then gzipped then base64. Clip filenames still survive the
+ * scrub, so tails attach only to fatal events and codes the server promotes via attach_log_codes. */
 function readLogTail() {
   try {
     const logger = require('../../utils/logger');
@@ -197,8 +180,7 @@ function gate(key, minIntervalMs) {
   const now = Date.now();
   const entry = coalesceGates.get(key);
   if (!entry) {
-    // JS fingerprints are stack-derived, so a reload loop can mint new keys
-    // indefinitely. Evict oldest-first rather than growing without bound.
+    // stack-derived fingerprints mean a reload loop can mint keys forever; evict oldest first
     if (coalesceGates.size >= MAX_COALESCE_GATES) {
       const oldest = coalesceGates.keys().next();
       if (!oldest.done) coalesceGates.delete(oldest.value);
@@ -229,21 +211,17 @@ function shouldAttachLog(code, severity, explicit) {
   return Array.isArray(promoted) && promoted.includes(code);
 }
 
-// ----------------------------------------------------------------- events ---
+// events
 
-/**
- * Record an event. Never throws, never blocks on the network.
- *
+/** Never throws, never blocks on the network.
  * @param {string} code                snake_case, stable, greppable
- * @param {object} [opts]
- * @param {string} [opts.kind]         KIND.*  (default 'error')
+ * @param {string} [opts.kind]         KIND.* (default 'error')
  * @param {string} [opts.severity]     SEVERITY.* (default 'error')
- * @param {object} [opts.context]      numbers / booleans / enum strings only
+ * @param {object} [opts.context]      numbers/booleans/enum strings only
  * @param {string} [opts.message]      free text, scrubbed and truncated
- * @param {Error}  [opts.error]        convenience: fills message/errno/frames
- * @param {string} [opts.surface]      main | renderer | preload | player | worker
- * @param {string} [opts.fingerprint]  grouping key; derived when omitted
- * @param {boolean}[opts.attachLog]    force the log tail on or off
+ * @param {Error}  [opts.error]        fills message/errno/frames
+ * @param {string} [opts.surface]      main|renderer|preload|player|worker
+ * @param {string} [opts.fingerprint]  grouping key, derived when omitted
  * @param {number} [opts.coalesceMs]   suppression window, default 60s
  */
 function event(code, opts = {}) {
@@ -262,8 +240,7 @@ function event(code, opts = {}) {
     const fingerprint = opts.fingerprint
       || (derived.frames ? hash32(`${code}|${derived.errorName}|${derived.frames.join('|')}`) : undefined);
 
-    // Cap BEFORE the coalesce gate, otherwise a post-cap error storm keeps
-    // allocating gate entries for events that will never be sent.
+    // cap before the coalesce gate, else a post-cap error storm keeps allocating gate entries for nothing
     const isFatal = severity === SEVERITY.FATAL || kind === KIND.CRASH;
     const overCap = isFatal
       ? state.fatalEventsThisSession >= MAX_FATAL_EVENTS_PER_SESSION
@@ -271,7 +248,7 @@ function event(code, opts = {}) {
     if (overCap) {
       if (!state.capReported) {
         state.capReported = true;
-        // One explicit event rather than silent truncation.
+        // explicit event rather than silent truncation
         appendWire({
           event_id: crypto.randomUUID(),
           client_ts: new Date().toISOString(),
@@ -357,7 +334,7 @@ function timer(name, opts = {}) {
   };
 }
 
-// -------------------------------------------------------------- app block ---
+// app block
 
 /** Merge into the heartbeat `app` block. Sent only when the value changes. */
 function setAppInfo(partial) {
@@ -377,7 +354,7 @@ function appInfoChanged() {
   return current !== state.lastSentAppInfo;
 }
 
-// ---------------------------------------------------------------- payload ---
+// payload
 
 function envelopeIdentity() {
   return {
@@ -412,7 +389,7 @@ function applyRemoteConfig(body) {
   }
 }
 
-// ------------------------------------------------------------------ flush ---
+// flush
 
 async function flush({ heartbeat = false } = {}) {
   if (state.flushing || !state.enabled || !state.configured) return;
@@ -420,12 +397,10 @@ async function flush({ heartbeat = false } = {}) {
   try {
     const queued = queue.readAll();
     const batch = queued.slice(0, MAX_BATCH);
-    // Metrics are drained into a pending buffer, not straight onto the wire:
-    // a failed send must not lose the window, and re-recording a mean would
-    // destroy the bucket distribution.
+    // drained into a pending buffer: a failed send must not lose the window, and re-recording a
+    // mean would destroy the bucket distribution
     if (heartbeat) {
-      // Bounded: an unreachable server must not turn this into a growing
-      // payload that eventually 413s and then can never succeed again.
+      // bounded, else an unreachable server turns this into a growing payload that eventually 413s for good
       state.pendingMetrics = state.pendingMetrics
         .concat(metrics.drain())
         .slice(-MAX_PENDING_METRICS);
@@ -459,7 +434,7 @@ async function flush({ heartbeat = false } = {}) {
     }
 
     if (result.outcome === 'accepted' || result.outcome === 'drop') {
-      // dropFirst re-reads: anything appended during the await survives.
+      // dropFirst re-reads: anything appended during the await survives
       if (batch.length) {
         const dropped = queue.dropFirst(batch.length);
         if (dropped > 0) {
@@ -473,9 +448,8 @@ async function flush({ heartbeat = false } = {}) {
       }
       state.backoffMs = FLUSH_MIN_INTERVAL_MS;
       state.nextFlushAt = Date.now() + FLUSH_MIN_INTERVAL_MS;
-      // Metrics are discarded on a permanent 4xx too, exactly like the event
-      // batch. Keeping them would grow the payload until it 413s, and a 413 is
-      // itself a permanent 4xx, so the buffer could never drain again.
+      // discarded on a permanent 4xx too, like the event batch - a 413 is itself permanent, so
+      // keeping them would mean never draining again
       if (heartbeat) state.pendingMetrics = [];
       if (result.outcome === 'accepted') {
         if (heartbeat) {
@@ -485,7 +459,7 @@ async function flush({ heartbeat = false } = {}) {
         applyRemoteConfig(result.body);
       }
     } else {
-      // Retry: keep the batch AND keep pendingMetrics for the next attempt.
+      // retry: keep the batch and pendingMetrics for the next attempt
       state.backoffMs = Math.min(state.backoffMs * 2, FLUSH_MAX_BACKOFF_MS);
       const waitMs = result.retryAfterS ? result.retryAfterS * 1000 : state.backoffMs;
       state.nextFlushAt = Date.now() + waitMs;
@@ -511,13 +485,10 @@ function tick() {
   }
 }
 
-// ------------------------------------------------------------- lifecycle ---
+// lifecycle
 
-/**
- * The marker file makes crash-versus-clean-exit decidable. cliplib had no
- * clean-shutdown marker at all, so "did the previous session die" was
- * unanswerable from disk state.
- */
+/** Marker file makes crash-vs-clean-exit decidable; cliplib had no clean-shutdown marker before this,
+ * so "did the previous session die" was unanswerable from disk state. */
 function claimDirtyMarker() {
   try {
     let previous = null;
@@ -532,16 +503,12 @@ function claimDirtyMarker() {
         kind: KIND.CRASH,
         severity: SEVERITY.FATAL,
         coalesceMs: 0,
-        // Summary line so the dashboard row is readable on its own. No version
-        // here: the server normalises digits in issue titles for grouping, so
-        // "3.1.0" would render as "<num>.0". It is already on the event and in
-        // prev_app_version below.
+        // no version here: the server normalises digits in issue titles, so "3.1.0" would render "<num>.0"
         message: 'previous session did not exit cleanly',
         context: {
           prev_session_id: previous.session_id,
           prev_app_version: previous.app_version,
-          // Wall time between the dead session starting and this launch. Not
-          // its uptime: we cannot know when it actually died.
+          // wall time to this launch, not uptime - we can't know when it actually died
           prev_session_age_s: Number.isFinite(startedMs)
             ? Math.round((Date.now() - startedMs) / 1000)
             : undefined
@@ -570,12 +537,8 @@ function clearDirtyMarker() {
   }
 }
 
-/**
- * Fire-and-forget session end. A session that stops heartbeating without one
- * is derived as `died` server-side; the client never sends that.
- *
- * @param {'quit'|'window_all_closed'|'update'|'shutdown'|'crash_restart'} reason
- */
+/** Fire-and-forget; a session that stops heartbeating without one is derived as `died` server-side.
+ * @param {'quit'|'window_all_closed'|'update'|'shutdown'|'crash_restart'} reason */
 function sessionEnd(reason) {
   try {
     if (!state.initialized || state.sessionEnded) return;
@@ -592,11 +555,8 @@ function sessionEnd(reason) {
       clean: true
     };
 
-    // Persist BEFORE attempting the network. Electron does not wait for pending
-    // sockets during quit, so a fire-and-forget POST usually loses the race with
-    // process exit. Without this, almost every clean exit would arrive as a
-    // session that simply stopped heartbeating, the server would derive it as
-    // `died`, and the fleet crash rate would be meaningless.
+    // persist before the network call: Electron doesn't wait for pending sockets during quit, so a
+    // fire-and-forget POST usually loses the race and every clean exit would look like a `died` session
     try {
       fs.writeFileSync(state.sessionEndPath, JSON.stringify(record), 'utf8');
     } catch {
@@ -622,10 +582,8 @@ function clearPendingSessionEnd() {
   }
 }
 
-/**
- * Deliver the previous session's end record, if the quit raced us. Re-sending is
- * safe: the server keys on session_id, so a duplicate is an idempotent update.
- */
+/** Delivers the previous session's end record if the quit raced us; safe to resend since the server
+ * keys on session_id and dedupes. */
 function flushPendingSessionEnd() {
   let record = null;
   try {
@@ -650,7 +608,7 @@ function setEnabled(enabled) {
   if (next === state.enabled) return;
   state.enabled = next;
   if (!next) {
-    // Off means off: stop the network and drop anything unsent.
+    // off means off: stop the network and drop anything unsent
     queue.clear();
     metrics.clear();
     coalesceGates.clear();
@@ -689,14 +647,12 @@ function registerIpc(ipcMain) {
   });
 }
 
-/**
- * @param {object} options
+/** @param {object} options
  * @param {string} options.userDataDir
  * @param {string} options.appVersion
  * @param {boolean} options.enabled          from settings.telemetry.enabled
  * @param {string} [options.clipdipInstallIdPath]
- * @param {object} [options.ipcMain]
- */
+ * @param {object} [options.ipcMain] */
 function init(options = {}) {
   try {
     if (state.initialized) return;
@@ -708,8 +664,7 @@ function init(options = {}) {
     state.enabled = options.enabled !== false;
 
     queue.init(options.userDataDir);
-    // append() does not trim, so a long offline stretch across many sessions
-    // can leave the file over the cap. Enforce it once at startup.
+    // append() doesn't trim, so a long offline stretch can leave the file over the cap; enforce it once here
     queue.trimToCap();
     identity.resolveInstallId(options.userDataDir, options.clipdipInstallIdPath);
     identity.startSession();
@@ -725,7 +680,7 @@ function init(options = {}) {
       return;
     }
 
-    // Replay anything the startup path recorded before we were ready.
+    // replay anything the startup path recorded before we were ready
     const buffered = preInitBuffer.splice(0, preInitBuffer.length);
     for (const [code, opts] of buffered) event(code, opts);
 
@@ -738,8 +693,7 @@ function init(options = {}) {
     state.timer = setInterval(tick, TICK_MS);
     if (typeof state.timer.unref === 'function') state.timer.unref();
 
-    // Counts-only daily rollup, on its own timer. It re-checks isEnabled on
-    // every run, so setEnabled(false) stops it without any further wiring.
+    // counts-only daily rollup on its own timer; re-checks isEnabled every run, so setEnabled(false) stops it
     usage.init({
       userDataDir: options.userDataDir,
       isEnabled: () => state.enabled && state.configured,

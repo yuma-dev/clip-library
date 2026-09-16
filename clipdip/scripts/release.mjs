@@ -13,7 +13,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const nsisDir = join(root, 'target', 'release', 'bundle', 'nsis');
 const draftFile = join(root, 'RELEASE_DRAFT.md');
 
-// --- CONFIG: auto-derived. If a derived value is wrong for this project, hard-code it here. ---
+// config: auto-derived, hard-code below if a value is wrong for this project
 const tauriConf = JSON.parse(readFileSync(join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
 const appTitle = tauriConf.productName ?? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name;
 const keyName = appTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -22,7 +22,6 @@ const defaultSigningPassword = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ??
 const { githubOwner, githubRepo } = resolveGitHubSlug();
 const githubSlug = `${githubOwner}/${githubRepo}`;
 const pm = existsSync(join(root, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm';
-// ----------------------------------------------------------------------------------------------
 
 const defaultOptions = {
   build: true,
@@ -157,8 +156,8 @@ async function runBuild() {
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: String(defaultSigningPassword),
   };
 
-  // Invoke the tauri CLI directly. Do NOT use `<pm> run tauri build -- --bundles nsis`: pnpm forwards
-  // the `--` into `tauri build`, which then hands `--bundles` to cargo ("unexpected argument").
+  // not `<pm> run tauri build -- --bundles nsis`: pnpm forwards the -- into tauri build
+  // which then hands --bundles to cargo ("unexpected argument")
   const [cmd, args] =
     pm === 'pnpm'
       ? ['pnpm', ['exec', 'tauri', 'build', '--bundles', 'nsis']]

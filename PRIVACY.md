@@ -1,4 +1,4 @@
-# Privacy Policy — ClipLib
+# ClipLib Privacy Policy
 
 **Last updated: 29 July 2026**
 
@@ -35,7 +35,7 @@ You can delete any of this at any time by deleting the corresponding files or yo
 
 ---
 
-## 3. ClipLib Sharing — `friends.cliplib.app` (opt-in)
+## 3. ClipLib Sharing: `friends.cliplib.app` (opt-in)
 
 ClipLib includes an **optional** sharing service. Nothing is uploaded until you sign in
 and choose to share.
@@ -57,17 +57,17 @@ supports a social feed (listing clips, reactions, comments) and a directory used
 to other signed-in users).
 
 **Legal basis (GDPR Art. 6):** your **consent** and the **performance of the service you
-requested** — Art. 6(1)(a) and 6(1)(b). You can stop at any time by not sharing, or by
+requested**, Art. 6(1)(a) and 6(1)(b). You can stop at any time by not sharing, or by
 deleting your shared clips/account (contact us if you need help removing content).
 
 ---
 
-## 4. Updates — GitHub (automatic check)
+## 4. Updates: GitHub (automatic check)
 
 To keep the app current, ClipLib checks GitHub
 (`api.github.com` / `github.com/yuma-dev/clip-library`) for the latest release and, if you
 choose to update, downloads the installer from there. These requests send only a generic
-`User-Agent` header — **no account, no identifiers**. GitHub, as the host, may log the
+`User-Agent` header, **no account, no identifiers**. GitHub, as the host, may log the
 request under [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ---
@@ -75,8 +75,8 @@ request under [GitHub's Privacy Statement](https://docs.github.com/en/site-polic
 ## 5. Discord voice-channel data (recorded locally)
 
 ClipLib's recorder (**clipdip**) can, **if you connect it to Discord**, read **who is in
-your Discord voice channel at the moment a clip is recorded** — participants' Discord IDs,
-usernames, display names, and avatars — and store that roster **locally** in the clip's
+your Discord voice channel at the moment a clip is recorded**, participants' Discord IDs,
+usernames, display names, and avatars, and store that roster **locally** in the clip's
 `.gameinfo` sidecar. This powers @mention autocomplete and the sharing "mentions" feature.
 
 Important points:
@@ -91,12 +91,12 @@ Important points:
   awareness/consent, as also required by ClipLib's Terms.
 
 The main app's **Discord Rich Presence** feature (which can show "Browsing clips" on your
-Discord profile) is **off by default** and talks only to your **local** Discord client — no
+Discord profile) is **off by default** and talks only to your **local** Discord client, no
 clip data is transmitted.
 
 ---
 
-## 6. Diagnostics & crash telemetry — `logs.yuma-homeserver.online`
+## 6. Diagnostics & crash telemetry: `logs.yuma-homeserver.online`
 
 To find and fix bugs, **both** parts of ClipLib can send **anonymous** diagnostics to a
 developer-operated server:
@@ -105,7 +105,7 @@ developer-operated server:
 - the **recorder** (**clipdip**), which runs as its own background app.
 
 They report **separately** and have **separate opt-out switches**, both shown together in
-**Settings → About → Anonymous diagnostics**. Turning one off does not turn the other off.
+**Settings > About > Anonymous diagnostics**. Turning one off does not turn the other off.
 This is designed to contain **no accounts and no personal identifiers**.
 
 **Identifiers used.** Random UUIDs only: a per-install ID, a per-session ID, and a
@@ -118,8 +118,8 @@ the two products' reports about the same machine can be matched.
 - **What the library app sends automatically (if not disabled):**
   - a **heartbeat** roughly every 15 minutes: the random IDs, app version, uptime, a
     one-time hardware profile (OS build, CPU, RAM, GPU and driver, monitor resolutions,
-    locale, time zone, and the **category** of the drive your clips are on — system, other,
-    removable or network — with its free space in GB), and a small set of your **feature
+    locale, time zone, and the **category** of the drive your clips are on (system, other,
+    removable or network) with its free space in GB, and a small set of your **feature
     settings** (e.g. export preset, whether Discord Rich Presence is on) alongside a few
     coarse measurements of the app's state (library size as a **bucket** rather than an
     exact count, total library size in GB, number of tags, and whether hardware encoding,
@@ -147,7 +147,7 @@ the two products' reports about the same machine can be matched.
   date/time. We do not use these to identify you, but you should be aware they can appear.
   Log tails are attached only to **fatal** errors and to specific error codes while a
   particular bug is being investigated, never to routine events.
-- **Opt-out:** Settings → About → Anonymous diagnostics, one switch per product. Turning the
+- **Opt-out:** Settings > About > Anonymous diagnostics, one switch per product. Turning the
   library app's switch off takes effect immediately: no heartbeat, no events, no metrics,
   no daily usage rollup, and anything queued locally but not yet sent is **deleted**.
 
@@ -158,14 +158,14 @@ The full, itemised description for each product lives in `TELEMETRY.md` (library
 settings files, your local activity log, captured console output, the recorder's logs and
 status, a crash-dump listing, system info, and the note you typed. It is far more detailed
 than the automatic telemetry above, which is why it is never sent on its own. (Discord tokens
-are deliberately excluded.) In Settings → About:
+are deliberately excluded.) In Settings > About:
 
 - **"Save zip"** writes that bundle to a folder you choose. Nothing is transmitted.
 - **"Export and upload"** sends it to the diagnostics server. It requires you to describe
   the problem first, so you always know an upload is happening.
 
-**Legal basis:** **legitimate interest** in keeping the software stable and secure —
-Art. 6(1)(f) — balanced by the data being anonymous and the opt-out above. Manual uploads
+**Legal basis:** **legitimate interest** in keeping the software stable and secure , 
+Art. 6(1)(f), balanced by the data being anonymous and the opt-out above. Manual uploads
 rely on your **consent** (Art. 6(1)(a)).
 
 ---
@@ -189,11 +189,11 @@ Recording and video processing (ffmpeg/ffprobe) run **entirely on your device**.
 
 - **Local data** stays until **you** delete it (your clips, sidecars, settings, logs).
 - **Shared clips and account data** are kept while your account/shared clips exist. You can
-  delete shared clips or ask us to delete your account and content — email us.
+  delete shared clips or ask us to delete your account and content, email us.
 - **Diagnostics** are kept only as long as needed to investigate stability issues: error
   events and their log tails **90 days**, manual bundles **30 days**, raw heartbeats
   **7 days**. Kept **indefinitely**: the daily usage rollup, and one row per install and
-  per machine. These are pseudonymous rather than aggregate — each daily rollup is stored
+  per machine. These are pseudonymous rather than aggregate, each daily rollup is stored
   against the random install ID and machine key described in section 6, alongside the
   feature-settings snapshot, so a single install's day-by-day counts remain queryable.
   They contain no name, account, path or file name, and the random IDs are the only thing
@@ -206,7 +206,7 @@ Recording and video processing (ffmpeg/ffprobe) run **entirely on your device**.
 ## 9. Where data is processed (international transfers)
 
 The ClipLib sharing and diagnostics servers are operated by the developer. Depending on the
-hosting provider, data may be processed on servers **[in/outside the EU — to be confirmed by
+hosting provider, data may be processed on servers **[in/outside the EU, to be confirmed by
 the operator]**. Where processing occurs outside the EU/EEA, we rely on appropriate
 safeguards under GDPR (e.g. Standard Contractual Clauses). Contact us for details.
 

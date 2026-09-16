@@ -16,7 +16,7 @@ export default function ClipdipOutputSection() {
   const output = config?.output;
   const template = String(output?.filename_stem ?? "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]");
 
-  // Live filename preview, debounced while typing.
+  // debounced so typing doesn't fire a preview call per keystroke
   const [draft, setDraft] = useState<string | null>(null);
   const [preview, setPreview] = useState("");
   const previewSource = draft ?? template;
@@ -202,8 +202,7 @@ export default function ClipdipOutputSection() {
   );
 }
 
-// Live Discord connection status (from the 2 s live-status poll) with
-// Connect/Disconnect via the control server.
+// connection state comes from the 2 s live-status poll; connect/disconnect go through the control server
 function DiscordConnection({
   running,
   status,

@@ -1,68 +1,52 @@
 /**
- * Gamepad Manager Module
- *
- * Handles gamepad/controller input for both grid view and video player modes:
- * - Button mappings and actions
- * - Analog stick navigation
- * - Connection state management
- * - Customizable mappings
+ * gamepad input for grid view and video player: button/analog mappings
+ * connection state, customizable via settings
  */
 
-// Imports
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 
-// Default mappings
-// Default gamepad button mappings (Xbox controller layout)
+// xbox controller layout
 const DEFAULT_GAMEPAD_MAPPINGS = {
-  // Face buttons (A, B, X, Y)
-  0: 'playPause',        // A button - play/pause
-  1: 'closePlayer',      // B button - close/back
-  2: 'exportDefault',    // X button - export
-  3: 'fullscreen',       // Y button - fullscreen
-  
-  // Shoulder buttons
-  4: 'navigatePrev',     // LB - previous clip
-  5: 'navigateNext',     // RB - next clip
-  6: 'setTrimStart',     // LT - set trim start
-  7: 'setTrimEnd',       // RT - set trim end
-  
-  // Special buttons
-  8: 'focusTitle',       // Back/Select - focus title
-  9: 'exportVideo',      // Start/Menu - export menu
-  10: null,              // Left stick click
-  11: null,              // Right stick click
-  
-  // D-pad
-  12: 'volumeUp',        // D-pad up - volume up
-  13: 'volumeDown',      // D-pad down - volume down
-  14: 'skipBackward',    // D-pad left - skip backward
-  15: 'skipForward'      // D-pad right - skip forward
+  0: 'playPause',        // A
+  1: 'closePlayer',      // B
+  2: 'exportDefault',    // X
+  3: 'fullscreen',       // Y
+
+  4: 'navigatePrev',     // LB
+  5: 'navigateNext',     // RB
+  6: 'setTrimStart',     // LT
+  7: 'setTrimEnd',       // RT
+
+  8: 'focusTitle',       // back/select
+  9: 'exportVideo',      // start/menu
+  10: null,              // left stick click
+  11: null,              // right stick click
+
+  12: 'volumeUp',        // d-pad up
+  13: 'volumeDown',      // d-pad down
+  14: 'skipBackward',    // d-pad left
+  15: 'skipForward'      // d-pad right
 };
 
-// Analog stick mappings
 const ANALOG_MAPPINGS = {
   leftStick: {
-    xAxis: 0,    // Left stick X (horizontal navigation)
-    yAxis: 1,    // Left stick Y (vertical navigation)
-    deadzone: 0.4  // Higher deadzone for less sensitive grid navigation
+    xAxis: 0,
+    yAxis: 1,
+    deadzone: 0.4  // higher than right stick, grid nav is less sensitive
   },
   rightStick: {
-    xAxis: 2,    // Right stick X (timeline seeking)
-    yAxis: 3,    // Right stick Y (volume control)
+    xAxis: 2,    // timeline seek
+    yAxis: 3,    // volume
     deadzone: 0.2
   }
 };
 
-// Module state
 let dependencies = null;
 let isQuitConfirmVisible = false;
 let originalConfirmOkText = null;
 let originalConfirmCancelText = null;
 
-/**
- * Show the quit confirmation modal in gamepad mode.
- */
 function showQuitConfirmModal() {
   const modal = document.getElementById("custom-modal");
   const modalMessage = document.getElementById("modal-message");
@@ -86,9 +70,6 @@ function showQuitConfirmModal() {
   isQuitConfirmVisible = true;
 }
 
-/**
- * Hide the quit confirmation modal and restore labels.
- */
 function hideQuitConfirmModal() {
   const modal = document.getElementById("custom-modal");
   const modalOk = document.getElementById("modal-ok");
@@ -105,15 +86,11 @@ function hideQuitConfirmModal() {
   isQuitConfirmVisible = false;
 }
 
-/**
- * Confirm quit from the gamepad modal.
- */
 function confirmQuit() {
   hideQuitConfirmModal();
   ipcRenderer.invoke('quit-app');
 }
 
-// Core manager
 class GamepadManager {
   constructor() {
     this.connectedGamepads = new Map();
@@ -128,17 +105,15 @@ class GamepadManager {
     this.onRawNavigationCallback = null;
     this.onConnectionCallback = null;
     this.lastQuitCombo = false;
-    
-    // Timing for analog stick actions
-    this.seekSensitivity = 0.5;  // Seconds per second of stick movement
-    this.volumeSensitivity = 0.1; // Volume change per second of stick movement
+
+    this.seekSensitivity = 0.5;   // seconds per second of stick movement
+    this.volumeSensitivity = 0.1; // volume change per second of stick movement
     this.lastAnalogTime = 0;
     
     this.setupEventListeners();
   }
 
   setupEventListeners() {
-    // Gamepad connection events
     window.addEventListener('gamepadconnected', (e) => {
       logger.info('Gamepad connected:', e.gamepad.id);
       this.onGamepadConnected(e.gamepad);
@@ -159,12 +134,11 @@ class GamepadManager {
     
     this.lastButtonStates.set(gamepad.index, new Array(gamepad.buttons.length).fill(false));
     this.lastAnalogStates.set(gamepad.index, new Array(gamepad.axes.length).fill(0));
-    
+
     if (!this.pollInterval && this.isEnabled) {
       this.startPolling();
     }
-    
-    // Trigger UI update if callback exists
+
     if (this.onConnectionCallback) {
       this.onConnectionCallback(true, gamepad.id);
     }
@@ -178,8 +152,7 @@ class GamepadManager {
     if (this.connectedGamepads.size === 0) {
       this.stopPolling();
     }
-    
-    // Trigger UI update if callback exists
+
     if (this.onConnectionCallback) {
       this.onConnectionCallback(false, gamepad.id);
     }
@@ -202,7 +175,7 @@ class GamepadManager {
     
     this.pollInterval = setInterval(() => {
       this.pollGamepads();
-    }, 16); // ~60 FPS polling
+    }, 16); // ~60fps
   }
 
   stopPolling() {
@@ -233,72 +206,65 @@ class GamepadManager {
       this.onActionCallback('quitApp');
     }
     this.lastQuitCombo = quitComboPressed;
-    
-    // Process button presses (only on press, not hold)
+
+    // fire only on press, not hold
     for (let i = 0; i < gamepad.buttons.length; i++) {
       const button = gamepad.buttons[i];
       const isPressed = button.pressed;
       const wasPressed = lastButtons[i];
-      
+
       if (isPressed && !wasPressed) {
-        // Button just pressed
         const action = this.buttonMappings[i];
         if (action && this.onActionCallback) {
           this.onActionCallback(action);
         }
       }
-      
+
       lastButtons[i] = isPressed;
     }
-    
-    // Process analog sticks
+
     this.processAnalogInput(gamepad, lastAxes);
-    
-    // Update stored states
+
     this.lastButtonStates.set(index, lastButtons);
     this.lastAnalogStates.set(index, [...gamepad.axes]);
   }
 
   processAnalogInput(gamepad, lastAxes) {
     const currentTime = Date.now();
-    const deltaTime = (currentTime - this.lastAnalogTime) / 1000; // Convert to seconds
+    const deltaTime = (currentTime - this.lastAnalogTime) / 1000;
     this.lastAnalogTime = currentTime;
-    
-    // Process right stick X for timeline seeking
+
     const rightStickX = gamepad.axes[this.analogMappings.rightStick.xAxis];
     if (Math.abs(rightStickX) > this.analogMappings.rightStick.deadzone) {
       const seekAmount = rightStickX * this.seekSensitivity * deltaTime;
       if (this.onNavigationCallback) {
         this.onNavigationCallback('seek', seekAmount);
       }
-      // Also send raw value for grid scrolling
+      // raw value drives grid scrolling
       if (this.onRawNavigationCallback) {
         this.onRawNavigationCallback('seekRaw', rightStickX);
       }
     }
-    
-    // Process right stick Y for volume control
+
     const rightStickY = gamepad.axes[this.analogMappings.rightStick.yAxis];
     if (Math.abs(rightStickY) > this.analogMappings.rightStick.deadzone) {
-      // Invert Y axis (up is negative, but we want up to increase volume)
+      // up is negative on the axis but should raise volume
       const volumeAmount = -rightStickY * this.volumeSensitivity * deltaTime;
       if (this.onNavigationCallback) {
         this.onNavigationCallback('volume', volumeAmount);
       }
-      // Also send raw value for grid scrolling (inverted)
       if (this.onRawNavigationCallback) {
         this.onRawNavigationCallback('volumeRaw', -rightStickY);
       }
     }
-    
-    // Process left stick for UI navigation (discrete movements)
+
     const leftStickX = gamepad.axes[this.analogMappings.leftStick.xAxis];
     const leftStickY = gamepad.axes[this.analogMappings.leftStick.yAxis];
     const lastLeftStickX = lastAxes[this.analogMappings.leftStick.xAxis] || 0;
     const lastLeftStickY = lastAxes[this.analogMappings.leftStick.yAxis] || 0;
-    
-    // Check for stick crossing deadzone threshold (for discrete navigation)
-    if (Math.abs(leftStickX) > this.analogMappings.leftStick.deadzone && 
+
+    // discrete nav fires only when the stick crosses the deadzone
+    if (Math.abs(leftStickX) > this.analogMappings.leftStick.deadzone &&
         Math.abs(lastLeftStickX) <= this.analogMappings.leftStick.deadzone) {
       const direction = leftStickX > 0 ? 'right' : 'left';
       if (this.onNavigationCallback) {
@@ -315,7 +281,6 @@ class GamepadManager {
     }
   }
 
-  // Public methods for customization
   setButtonMapping(buttonIndex, action) {
     this.buttonMappings[buttonIndex] = action;
   }
@@ -344,7 +309,6 @@ class GamepadManager {
     return this.connectedGamepads.size > 0;
   }
 
-  // Methods for loading/saving settings
   loadMappings(mappings) {
     if (mappings.buttons) {
       this.buttonMappings = { ...DEFAULT_GAMEPAD_MAPPINGS, ...mappings.buttons };
@@ -362,15 +326,10 @@ class GamepadManager {
   }
 }
 
-/**
- * Handle controller button actions
- * 
- * @param {string} action - The action identifier from the gamepad mapping
- */
 function handleControllerAction(action) {
   logger.info('Controller action:', action);
-  
-  // These will be injected by the renderer during initialization
+
+  // injected by the renderer at init
   const {
     videoPlayer,
     playerOverlay,
@@ -392,24 +351,21 @@ function handleControllerAction(action) {
   
   if (!playerOverlay) return;
 
-  // Check if we're in the video player
   const isPlayerActive = playerOverlay.style.display === "block";
-  
+
   if (isPlayerActive) {
     if (videoPlayerModule) {
       videoPlayerModule.showControls();
     }
-    // Use existing keyboard action handler for consistency
     const fakeEvent = {
       preventDefault: () => {},
-      key: '', // We'll use the action directly
+      key: '',
       code: ''
     };
-    
-    // Map the action to the existing switch case logic
+
     switch (action) {
       case 'closePlayer':
-        // If in fullscreen, exit fullscreen first before closing player
+        // exit fullscreen first, else close leaves the OS in fullscreen
         if (document.fullscreenElement) {
           try {
             if (document.exitFullscreen) {
@@ -421,13 +377,13 @@ function handleControllerAction(action) {
             } else if (document.msExitFullscreen) {
               document.msExitFullscreen();
             }
-            // Small delay to let fullscreen exit complete before closing player
+            // let fullscreen exit finish before closing player
             setTimeout(() => {
               closePlayer();
             }, 100);
           } catch (error) {
             logger.error('Error exiting fullscreen before closing player:', error);
-            closePlayer(); // Fallback to just closing
+            closePlayer();
           }
         } else {
           closePlayer();
@@ -501,11 +457,10 @@ function handleControllerAction(action) {
       return;
     }
 
-    // Handle actions when in grid view
     if (!state.gridNavigationEnabled) {
       enableGridNavigation();
     }
-    
+
     switch (action) {
       case 'closePlayer':
         showQuitConfirmModal();
@@ -514,45 +469,30 @@ function handleControllerAction(action) {
         showQuitConfirmModal();
         break;
       case 'playPause':
-        // Open the currently selected clip
         openCurrentGridSelection();
         break;
       case 'exportDefault':
-        // Also open the currently selected clip (alternative action)
         openCurrentGridSelection();
         break;
       case 'volumeUp':
-        // D-pad up - navigate up in grid
         moveGridSelection('up');
         break;
       case 'volumeDown':
-        // D-pad down - navigate down in grid
         moveGridSelection('down');
         break;
       case 'skipBackward':
-        // D-pad left - navigate left in grid
         moveGridSelection('left');
         break;
       case 'skipForward':
-        // D-pad right - navigate right in grid
         moveGridSelection('right');
         break;
       default:
-        // Silently ignore unhandled actions to reduce spam
         break;
     }
   }
 }
 
-/**
- * Handle controller navigation (analog sticks)
- * 
- * Handle high-level navigation requests (grid/player).
- * @param {string} type - The navigation type ('seek', 'volume', 'navigate')
- * @param {number} value - The navigation value
- */
 function handleControllerNavigation(type, value) {
-  // These will be injected by the renderer during initialization
   const {
     videoPlayer,
     playerOverlay,
@@ -571,30 +511,25 @@ function handleControllerNavigation(type, value) {
     }
     switch (type) {
       case 'seek':
-        // Right stick X - timeline seeking
-        if (Math.abs(value) > 0.1) { // Minimum threshold
+        if (Math.abs(value) > 0.1) {
           const newTime = Math.max(0, Math.min(videoPlayer.currentTime + value, videoPlayer.duration));
-          
-          // If seeking outside bounds, disable auto-reset
-          // Note: This assumes state is available, might need to be injected
+
           if (newTime < 0 || newTime > videoPlayer.duration) {
             // state.isAutoResetDisabled = true;
           }
-          
+
           videoPlayer.currentTime = newTime;
           videoPlayerModule.showControls();
         }
         break;
-        
+
       case 'volume':
-        // Right stick Y - volume control
-        if (Math.abs(value) > 0.05) { // Minimum threshold
+        if (Math.abs(value) > 0.05) {
           videoPlayerModule.changeVolume(value);
         }
         break;
-        
+
       case 'navigate':
-        // Left stick - UI navigation in video player
         logger.info('Navigation direction:', value);
         break;
         
@@ -603,27 +538,20 @@ function handleControllerNavigation(type, value) {
         break;
     }
   } else {
-    // Handle navigation in grid view
     switch (type) {
       case 'navigate':
-        // Left stick - grid navigation
         if (!dependencies || !dependencies.state.gridNavigationEnabled) {
           enableGridNavigation();
         }
         moveGridSelection(value);
         break;
-        
+
       default:
-        // Other navigation types handled by raw navigation
         break;
     }
   }
 }
 
-// Handle raw controller navigation (for grid scrolling)
-/**
- * Handle raw analog navigation values.
- */
 function handleControllerRawNavigation(type, value) {
   if (!dependencies || !dependencies.playerOverlay) return;
   const isPlayerActive = dependencies.playerOverlay.style.display === "block";
@@ -650,10 +578,6 @@ function handleControllerRawNavigation(type, value) {
   }
 }
 
-// Handle controller connection/disconnection
-/**
- * Handle gamepad connect/disconnect updates.
- */
 function handleControllerConnection(connected, gamepadId) {
   if (!dependencies || !dependencies.playerOverlay) return;
   const indicator = document.getElementById('controller-indicator');
@@ -700,9 +624,6 @@ function handleControllerConnection(connected, gamepadId) {
   }
 }
 
-/**
- * Initialize the gamepad manager and wire dependencies.
- */
 async function init(deps) {
   dependencies = deps;
 
@@ -759,14 +680,11 @@ async function init(deps) {
   }
 }
 
-/**
- * Backwards-compatible init wrapper.
- */
+// back-compat alias
 async function initializeGamepadManager(deps) {
   return init(deps);
 }
 
-// Export for use in renderer
 module.exports = {
   GamepadManager,
   handleControllerAction,

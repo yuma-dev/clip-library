@@ -1,8 +1,7 @@
 import { createContext, useContext, type MouseEvent } from "react";
 import type { LocalClip } from "./types";
 
-// Selection is applied imperatively (class toggles on the card DOM) to avoid
-// re-rendering the whole grid on every click; this API is a stable context value.
+// selection toggles classes on the card DOM directly, avoiding a re-render of the whole grid per click
 export interface SelectionApi {
   isSelected(name: string): boolean;
   onCardClick(e: MouseEvent, clip: LocalClip): void;

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "logs-api": {
-      "type": "http",
-      "url": "http://homeserver:5092/mcp"
-    }
-  }
-}

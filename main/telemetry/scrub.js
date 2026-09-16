@@ -1,27 +1,8 @@
-// Path scrubbing for anything free-text that leaves the machine.
-//
-// TWO rules, and the second one matters more than the first.
-//
-// `scrubUserPaths` is the port of clipdip's scrub_user_paths
-// (clipdip/crates/diagnostics/src/lib.rs:827). It masks ONLY the segment after
-// `C:\Users\`, which is nowhere near enough on its own: a user whose clips live
-// at `D:\Games\Clips\...` has nothing masked, and Node fs errors embed the full
-// operand path, so `ENOENT: ... open 'D:\Games\Clips\Valorant 2026-07-28.mp4'`
-// would ship the game name and the clip name intact.
-//
-// `redactPaths` therefore replaces every absolute path with `<drive>:\<path>`,
-// keeping the drive letter (useful, and not identifying) and discarding every
-// folder and file name. It is applied to all outgoing messages and to log tails.
-// TELEMETRY.md documents what survives it: bare file names written without a
-// directory, and tag text, neither of which a regex can safely remove.
-//
-// Rewrites `C:\Users\<name>` to `C:\Users\<home>`, preserving the drive letter,
-// the separator style and the casing of "Users". The segment after the
-// separator is dropped up to the next path separator, whitespace or quote.
-//
-// cliplib applies this to every outgoing `message` AND to log tails before they
-// are compressed. clipdip does not scrub its tails; that difference is
-// deliberate (see docs/telemetry-cliplib-api.md).
+// Path scrubbing for anything free-text that leaves the machine, two passes.
+// scrubUserPaths ports clipdip's scrub_user_paths (clipdip/crates/diagnostics/src/lib.rs:827) but only masks
+// after C:\Users\, so redactPaths below also strips every other absolute path (fs errors embed full paths).
+// Applied to outgoing messages and log tails; clipdip does not scrub its tails
+// (docs/telemetry-cliplib-api.md).
 
 const TERMINATORS = new Set(['\\', '/', '"', "'", ' ', '\t', '\n', '\r']);
 
@@ -56,21 +37,14 @@ function scrubUserPaths(input) {
   return out;
 }
 
-// Windows paths contain spaces constantly ("Counter-Strike 2", "Apex Legends"),
-// so a run that stops at whitespace leaks most of the interesting part. Consume
-// to a quote, a closing paren, or end of line instead. fs errors quote their
-// operand and stack frames parenthesise theirs, so those terminate precisely;
-// an unquoted path consumes the rest of the line, which over-redacts and is the
-// correct direction to err in.
+// Windows paths contain spaces ("Counter-Strike 2"), so stopping at whitespace would leak most of it.
+// Consume to a quote/paren/EOL instead; an unquoted path over-redacts the rest of the line, which is fine.
 const PATH_TAIL = "[^'\"\\r\\n)|>]*";
 const DRIVE_PATH = new RegExp(`([A-Za-z]):[\\\\/]${PATH_TAIL}`, 'g');
 const UNC_PATH = new RegExp(`\\\\\\\\${PATH_TAIL}`, 'g');
 
-/**
- * Replace absolute paths with `<drive>:\<path>`, keeping the drive letter
- * (useful for correlating disk problems, not identifying) and discarding every
- * folder and file name after it. UNC paths lose the host and share too.
- */
+/** Replaces absolute paths with `<drive>:\<path>`: keeps the drive letter, drops every folder/file name.
+ * UNC paths lose the host and share too. */
 function redactPaths(input) {
   if (typeof input !== 'string' || input.length < 3) return input;
   return input
@@ -78,11 +52,8 @@ function redactPaths(input) {
     .replace(DRIVE_PATH, (_match, drive) => `${drive}:\\<path>`);
 }
 
-/**
- * Both rules. redactPaths runs FIRST: running the user-path rule first would
- * insert a `<home>` marker that the path rule then terminates on, leaving the
- * rest of the path exposed.
- */
+/** redactPaths runs first: doing it after scrubUserPaths would terminate on the `<home>` marker it inserts,
+ * leaving the rest of the path exposed. */
 function scrubText(input) {
   return scrubUserPaths(redactPaths(input));
 }

@@ -1,4 +1,4 @@
-// IntersectionObserver sentinel — fires onLoadMore when scrolled near the end.
+// IntersectionObserver sentinel, fires onLoadMore when scrolled near the end.
 // Ported from the reference website's InfiniteScroll (600px rootMargin).
 
 import { useEffect, useRef } from "react";
@@ -18,12 +18,8 @@ export default function InfiniteScroll({ onLoadMore, hasMore, loading }: Infinit
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        // Fire when near the sentinel OR already past it — the skeleton block
-        // gives the scrollbar its full length, so the user can jump straight
-        // to the bottom, far below the sentinel. Cursor pagination can't seek,
-        // so keep chain-loading (this effect re-runs on every loading flip,
-        // and the fresh observer fires an initial callback) until the loaded
-        // content catches up and the sentinel drops below the viewport again.
+        // fires near the sentinel or already past it (skeleton gives the scrollbar full
+        // length); cursor pagination can't seek, so chain-load until the sentinel is below the viewport again
         const scrolledPast = entry.boundingClientRect.top < 0;
         if ((entry.isIntersecting || scrolledPast) && !loading) {
           onLoadMore();

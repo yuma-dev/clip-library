@@ -1,12 +1,10 @@
 import { useSyncExternalStore } from "react";
 
-// App-update state shared by the rail pill and Settings → About. Main pushes
-// `show-update-notification` from its background check on startup (non-silent,
-// main.js did-finish-load → updater.js), then `download-progress` (bare 0-100
-// number), `update-download-complete` ({path}) and `update-download-error`
-// ({message, manualUpdateUrl}) once a download is started via `start-update`.
-// Main launches the installer and quits itself after completion, so the
-// "downloaded" phase is a short-lived "Launching installer…" state.
+// shared by the rail pill and Settings > About; main events: show-update-notification (background
+// check), download-progress (0-100), update-download-complete ({path}), update-download-error
+// ({message, manualUpdateUrl})
+// main launches the installer and quits after completion; "downloaded" is a short-lived "Launching
+// installer" state
 
 export type UpdaterPhase = "idle" | "available" | "downloading" | "downloaded" | "error";
 
@@ -47,7 +45,7 @@ function wire(): void {
   window.clips.onUpdateDownloadError(() => setState({ phase: "error" }));
 }
 
-/** Feed a manual Settings → About check result into the shared state so the pill appears. */
+/** Feed a manual Settings > About check result into the shared state so the pill appears. */
 export function reportUpdateAvailable(latestVersion: string | null, changelog?: string | null): void {
   if (state.phase === "downloading" || state.phase === "downloaded") return;
   setState({ phase: "available", latestVersion, changelog: changelog ?? state.changelog });
@@ -78,9 +76,8 @@ export function useUpdater(): UpdaterState {
   return useSyncExternalStore(subscribe, () => state);
 }
 
-// Dev-only visual test hook: __fakeUpdate() shows the pill; clicking it then
-// runs a simulated download instead of the real start-update invoke.
-// __clearFakeUpdate() resets. Mirrors the Game Launcher harness.
+// dev-only: __fakeUpdate() shows the pill and simulates a download instead of calling start-update
+// __clearFakeUpdate() resets; mirrors the Game Launcher harness
 let fakeDownload: (() => void) | null = null;
 if (import.meta.env.DEV) {
   let fakeTimer: ReturnType<typeof setInterval> | null = null;

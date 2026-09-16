@@ -37,7 +37,7 @@ pub fn build_zip(install_id: &str, app_version: &str) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Add a file if it exists; a missing log/config is not an error (fresh install,
+/// Add a file if it exists; a missing log/config is not an error (fresh install
 /// no rotation yet), we just omit it.
 fn add_file<W: Write + std::io::Seek>(
     zw: &mut zip::ZipWriter<W>,

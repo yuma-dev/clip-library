@@ -12,13 +12,8 @@ interface PopoverProps {
   gap?: number;
 }
 
-/**
- * Anchored, viewport-aware popover (positioning generalized from Hynite's
- * GameContextMenu). Clamps to the viewport with an 8px margin and flips above
- * the anchor if it would overflow the bottom. Dismisses on Escape, outside
- * pointer-down, scroll, and resize. Render menu content (e.g. <MenuList/>) as
- * children.
- */
+/** Anchored popover, positioning generalized from Hynite's GameContextMenu; clamps
+ * to viewport, flips above anchor if it'd overflow bottom. Closes on Escape/outside click/scroll/resize. */
 export default function Popover({ open, onClose, anchorRef, children, align = "start", gap = 6 }: PopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
@@ -49,8 +44,7 @@ export default function Popover({ open, onClose, anchorRef, children, align = "s
   useEffect(() => {
     if (!open) return;
     const close = () => onClose();
-    // Scrolling the page dismisses; scrolling a list INSIDE the popover
-    // (e.g. a long <Select> menu) must not.
+    // page scroll dismisses; scrolling a list inside the popover (e.g. a long <Select> menu) must not
     const onScroll = (event: Event) => {
       if (event.target instanceof Node && ref.current?.contains(event.target)) return;
       onClose();

@@ -9,11 +9,7 @@ import { hideExportProgress, showExportProgress } from "../player/exportToast";
 import type { LocalClip } from "./types";
 
 export interface ContextMenuHandle {
-  /**
-   * Open the menu for a clip. When `selection` holds more than one clip (the
-   * right-clicked card is part of a multi-selection), the menu switches to
-   * bulk mode and every action applies to all of them.
-   */
+  /** With `selection` > 1 clip, menu switches to bulk mode: actions apply to all. */
   open(x: number, y: number, clip: LocalClip, selection?: LocalClip[]): void;
 }
 
@@ -30,14 +26,8 @@ interface ContextMenuHostProps {
 type View = "root" | "tags";
 
 /**
- * Isolated context-menu host: holds its own open/position/clip state so that
- * opening the menu does NOT re-render the (2000-card) grid. Cards trigger it
- * imperatively via the ref handle. "Manage tags" swaps the menu in place for a
- * searchable tag panel; "Export to clipboard" copies the clip's saved trim.
- *
- * Single vs. multi: the host always works on a `clips` array. With one clip it
- * renders the classic per-clip menu; with several, actions loop over all of
- * them and the tag panel's checkmark means "every selected clip has this tag".
+ * Isolated context-menu host: own open/position/clip state so opening it does
+ * NOT re-render the (2000-card) grid; cards trigger it via the ref handle.
  */
 const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(function ContextMenuHost(
   { onDeleted, setClipTags, globalTags, addGlobalTag },
@@ -45,8 +35,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
 ) {
   const [state, setState] = useState<{ x: number; y: number; clips: LocalClip[] } | null>(null);
   const [view, setView] = useState<View>("root");
-  // Live per-clip tag sets, seeded on open — gives instant checkbox feedback
-  // without waiting for the grid's clip list to re-flow down.
+  // Seeded on open for instant checkbox feedback, without waiting on the grid.
   const [tagMap, setTagMap] = useState<Map<string, Set<string>>>(new Map());
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -76,8 +65,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     if (clip) window.clips.revealClip(clip.originalName);
     close();
   };
-  // Export the current trim to the clipboard (legacy behaviour). Clipboard
-  // exports are single-clip only, so this is offered outside multi-select.
+  // Clipboard export is single-clip only, so it's offered outside multi-select.
   const exportClip = async () => {
     if (!clip) return;
     close();
@@ -146,7 +134,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     else toast.show(`Failed to delete ${failed} of ${targets.length} clips`, "error");
   };
 
-  // --- Tag panel ---
+  // tag panel
   const q = query.trim().toLowerCase();
   const shownTags = useMemo(() => {
     const list = globalTags.filter((t) => t.toLowerCase().includes(q));
@@ -258,9 +246,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
                     else setView("root");
                   } else if (e.key === "Enter") {
                     e.preventDefault();
-                    // Shift+Enter always creates; plain Enter toggles the
-                    // closest existing match, falling back to create when there
-                    // is no match at all.
+                    // Shift+Enter always creates; plain Enter toggles the closest match, else creates.
                     if (e.shiftKey) {
                       createTag();
                       return;

@@ -20,10 +20,8 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
-  // Only the notification overlay is built and embedded in the binary. The
-  // old React settings app (index.html + src/App.tsx) is retired — ClipLib's
-  // Settings → Clipdip page owns configuration now. The source stays in the
-  // repo as reference, excluded from the build.
+  // only the overlay is built into the binary; the old React settings app
+  // (index.html/App.tsx) is retired, ClipLib's Settings > Clipdip page owns config now
   build: {
     rollupOptions: {
       input: {

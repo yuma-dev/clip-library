@@ -1,17 +1,15 @@
-// Tiny module-scope bus decoupling clip grids from the feed player. The
-// player mounts ONCE at App level and registers via `setFeedOpenHandler`;
-// any grid (feed page, profile page tabs) opens a clip with `openFeedClip`,
-// passing its own optimistic mutators so reactions/favorites made inside the
-// player stay in sync with whichever list launched it.
+// Module-scope bus decoupling clip grids from the feed player. Player mounts
+// once at App level via setFeedOpenHandler; any grid opens a clip with
+// openFeedClip, passing mutators so reactions/favorites stay in sync with it.
 
 import type { Clip } from "./types";
 
 export interface FeedListSync {
   onReactionUpdate?: (clipId: string, emoji: string, action: "added" | "removed") => void;
   onFavoriteUpdate?: (clipId: string, action: "added" | "removed") => void;
-  /** Owner deleted the clip in the player — drop it from the launching list. */
+  /** Owner deleted the clip in the player, drop it from the launching list. */
   onClipDeleted?: (clipId: string) => void;
-  /** Owner edited title/mentions — patch the launching list's copy. */
+  /** Owner edited title/mentions, patch the launching list's copy. */
   onClipUpdated?: (clipId: string, patch: Partial<Clip>) => void;
 }
 

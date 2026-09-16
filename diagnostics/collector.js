@@ -66,7 +66,6 @@ async function collectLatestLogs(userDataPath, archive, manifest) {
             const stat = await fsp.stat(fullPath);
             logFiles.push({ fullPath, mtime: stat.mtimeMs, size: stat.size });
         } catch {
-            // Skip unreadable files
         }
     }
 
@@ -170,7 +169,7 @@ async function collectSettingsSnapshot(userDataPath, archive, manifest) {
         const parsed = JSON.parse(raw);
         const sanitized = {
             ...parsed,
-            // Ensure secrets or tokens would be redacted here if added in future
+            // redact secrets/tokens here if added in future
         };
         const json = JSON.stringify(sanitized, null, 2);
         archive.append(json, { name: 'settings/settings-inline.json' });
@@ -186,9 +185,8 @@ async function collectSettingsSnapshot(userDataPath, archive, manifest) {
     }
 }
 
-// Console output only exists in memory (main: patched console ring buffer;
-// renderer: webContents 'console-message' capture) — dump both so the zip
-// carries what never reached the log file.
+// console output only lives in memory (main: ring buffer; renderer: webContents
+// console-message capture); dump both so the zip has what never hit the log file
 function collectConsoleBuffers(archive, manifest) {
     const buffers = [
         {
@@ -215,10 +213,8 @@ function collectConsoleBuffers(archive, manifest) {
     }
 }
 
-// Clipdip (the integrated recorder) keeps its own logs and state under
-// %LOCALAPPDATA%\clipdip and %APPDATA%\clipdip — a recording bug report is
-// useless without them. Secrets (control.json token, discord_tokens.json)
-// are excluded by the bridge's candidate list.
+// clipdip keeps its own logs/state under %LOCALAPPDATA%\clipdip and %APPDATA%\clipdip;
+// secrets (control.json token, discord_tokens.json) are excluded by the bridge's candidate list
 async function collectClipdipData(archive, manifest) {
     try {
         const files = await clipdipModule.collectDiagnosticFiles();
@@ -253,9 +249,8 @@ async function collectClipdipData(archive, manifest) {
     }
 }
 
-// Crashpad minidumps are the only trace of a native crash; nothing reaches
-// the app log. Metadata only (dumps can be tens of MB); the JSON tells us
-// whether crashes happened and where support can ask the user to fetch them.
+// crashpad minidumps are the only trace of a native crash; metadata only here
+// (dumps can be tens of MB) so support knows whether/where to fetch them
 async function collectCrashDumps(archive, manifest) {
     const report = {
         crashDumpsPath: null,
@@ -267,7 +262,6 @@ async function collectCrashDumps(archive, manifest) {
     try {
         report.crashDumpsPath = app.getPath('crashDumps');
     } catch {
-        // crashDumps path unavailable on this platform/build; still emit the JSON
     }
 
     try {
@@ -277,12 +271,10 @@ async function collectCrashDumps(archive, manifest) {
             report.lastCrashReport = { id: last.id, date: last.date };
         }
     } catch {
-        // crashReporter not started; nothing to report
     }
 
     if (report.crashDumpsPath && (await pathExists(report.crashDumpsPath))) {
-        // Windows Crashpad puts .dmp files under reports\; macOS/Linux use
-        // completed/new/pending. Scan all so the collector is layout-agnostic.
+        // Windows puts .dmp under reports\, macOS/Linux under completed/new/pending
         for (const sub of ['reports', 'completed', 'new', 'pending']) {
             const dir = path.join(report.crashDumpsPath, sub);
             if (!(await pathExists(dir))) continue;
@@ -297,11 +289,9 @@ async function collectCrashDumps(archive, manifest) {
                             modifiedAt: stat.mtime.toISOString()
                         });
                     } catch {
-                        // Skip unreadable dump
                     }
                 }
             } catch {
-                // Skip unreadable directory
             }
         }
         report.dumps.sort((a, b) => (a.modifiedAt < b.modifiedAt ? 1 : -1));
@@ -416,10 +406,9 @@ async function createDiagnosticsBundle(options = {}) {
 }
 
 /**
- * Generate diagnostics zip with IPC integration
- * @param {string} targetPath - Path where to save the diagnostics zip
- * @param {Object} eventSender - Event sender for progress updates
- * @returns {Promise<Object>} Result object with success status
+ * @param {string} targetPath
+ * @param {Object} eventSender
+ * @returns {Promise<Object>}
  */
 async function generateDiagnosticsZip(targetPath, eventSender, options = {}) {
     if (!targetPath) {

@@ -1,21 +1,6 @@
-// Hover profile popover — in-app port of the ClipLib website's UserPopover
-// (cliplib share/src/components/UserPopover.tsx). Same behavior contract:
-// 120ms open / 60ms close hover intent, placed above the anchor with viewport
-// flip + clamp, portaled to <body>. No floating-ui dependency — the grid is the
-// only scroller, so we measure once per open and close on any scroll/resize.
-//
-// Two ways to identify the person:
-//   1. `participant` (Discord call participant, used by ParticipantAvatars):
-//      the ClipLib registration is resolved via shareIdentity's discord-id map,
-//      then the rich online profile is fetched by the matched ShareUser.id.
-//   2. `cliplibUserId` (used by the feed, where the ClipLib user id is already
-//      known): the discord-id lookup is skipped and the profile is fetched
-//      directly. `displayName` / `avatarUrl` overrides seed the head row so it
-//      renders immediately, before the profile resolves.
-//
-// When the hovered person is a REGISTERED ClipLib user, the card shows the real
-// online profile (bio, stats, badges, join date) like the website popover and
-// the head row links to the full profile page via useAppNav().openProfile.
+// Hover profile popover, in-app port of ClipLib website's UserPopover (same
+// component, share/src/components/UserPopover.tsx): 120ms open/60ms close hover
+// intent, positioned above anchor with viewport flip+clamp, portaled to body.
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -38,7 +23,7 @@ export function discordAvatarUrl(p: DiscordParticipant): string {
   try {
     index = Number((BigInt(p.id) >> 22n) % 6n);
   } catch {
-    /* non-numeric id — bucket 0 */
+    /* non-numeric id, bucket 0 */
   }
   return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
 }
@@ -59,13 +44,13 @@ interface CommonProps {
   children: ReactNode;
 }
 
-// Discord-participant variant (ParticipantAvatars — backward compatible).
+// Discord-participant variant (ParticipantAvatars, backward compatible).
 interface ParticipantVariantProps extends CommonProps {
   participant: DiscordParticipant;
   cliplibUserId?: undefined;
 }
 
-// ClipLib-user variant (feed) — id is already known, seed head row with overrides.
+// ClipLib-user variant (feed): id already known, seed head row with overrides.
 interface CliplibVariantProps extends CommonProps {
   cliplibUserId: string;
   participant?: undefined;
@@ -87,13 +72,12 @@ export default function UserPopover(props: UserPopoverProps) {
   const { openProfile } = useAppNav();
 
   const [visible, setVisible] = useState(false);
-  // Set the instant the pointer enters the anchor — the profile fetch starts
-  // during the open-intent delay instead of after the popover appears, so the
-  // card usually renders with data already resolved.
+  // set the instant hover starts: profile fetch begins during the open delay
+  // not after the popover appears, so data is usually ready by then
   const [wanted, setWanted] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  // ClipLib registration match (participant variant). For the direct variant we
-  // synthesize a minimal ShareUser so the fetch path is shared.
+  // ClipLib match (participant variant); direct variant synthesizes a minimal
+  // ShareUser so the fetch path is shared
   const [shareUser, setShareUser] = useState<ShareUser | null>(() =>
     directUserId
       ? {
@@ -132,8 +116,7 @@ export default function UserPopover(props: UserPopoverProps) {
 
   useEffect(() => clearTimer, []);
 
-  // Resolve the ClipLib registration match lazily (participant variant only),
-  // as soon as hover intent starts.
+  // resolve the ClipLib match lazily (participant variant), once hover intent starts
   useEffect(() => {
     if (!wanted || shareUser || !participant) return;
     let alive = true;
@@ -145,8 +128,7 @@ export default function UserPopover(props: UserPopoverProps) {
     };
   }, [wanted, shareUser, participant]);
 
-  // Fetch the rich online profile once we have a ClipLib user id and hover
-  // intent has started (don't wait for the popover to become visible).
+  // fetch profile once we have a ClipLib id and hover intent started, don't wait for visible
   useEffect(() => {
     if (!wanted || !cliplibUserId || profile) return;
     let alive = true;
@@ -155,15 +137,15 @@ export default function UserPopover(props: UserPopoverProps) {
         if (alive) setProfile(p);
       })
       .catch(() => {
-        /* registered but profile failed — keep minimal card */
+        /* registered but profile failed, keep minimal card */
       });
     return () => {
       alive = false;
     };
   }, [wanted, cliplibUserId, profile]);
 
-  // Position after render (popup size is content-dependent): centered above
-  // the anchor, flipped below when clipped, clamped to the viewport.
+  // position after render (size is content-dependent): centered above anchor
+  // flips below if clipped, clamped to viewport
   useLayoutEffect(() => {
     if (!visible) {
       setPos(null);
@@ -184,7 +166,7 @@ export default function UserPopover(props: UserPopoverProps) {
     setPos({ left, top });
   }, [visible, shareUser, profile]);
 
-  // Anchored to a fixed measurement — bail out if anything moves under us.
+  // anchored to a fixed measurement, bail out if anything moves under us
   useEffect(() => {
     if (!visible) return;
     const close = () => {
@@ -199,7 +181,7 @@ export default function UserPopover(props: UserPopoverProps) {
     };
   }, [visible]);
 
-  // Head-row identity: profile > shareUser overrides > participant snapshot.
+  // head-row identity: profile > shareUser overrides > participant snapshot
   const headName =
     profile?.displayName ||
     shareUser?.displayName ||
@@ -211,7 +193,7 @@ export default function UserPopover(props: UserPopoverProps) {
     shareUser?.avatarUrl ||
     (participant ? discordAvatarUrl(participant) : "");
 
-  // Registered (has a ClipLib id) → head row links to the full profile page.
+  // registered (has a ClipLib id): head row links to the full profile page
   const linkable = Boolean(cliplibUserId);
   const goToProfile = () => {
     if (cliplibUserId) openProfile(cliplibUserId);
@@ -292,7 +274,7 @@ export default function UserPopover(props: UserPopoverProps) {
                   <div className="user-popover-joined">{formatJoinDate(profile.createdAt)}</div>
                 </>
               ) : shareUser ? (
-                // Registered but profile not yet fetched / fetch failed.
+                // registered but profile not yet fetched / fetch failed
                 <div className="user-popover-cliplib">
                   <span className="user-popover-cliplib-dot" aria-hidden="true" />
                   On ClipLib{headHandle ? ` as @${headHandle}` : ""}

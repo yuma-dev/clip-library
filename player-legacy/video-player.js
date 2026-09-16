@@ -1,16 +1,6 @@
 /**
- * Video Player Module
- *
- * Handles all video playback functionality including:
- * - Playback controls (play/pause, seek)
- * - Speed and volume controls
- * - Trim controls
- * - Fullscreen handling
- * - Ambient glow effects
- * - Keyboard/frame navigation
- * - Video loading and initialization
- * - Volume range controls
- * - Clip preview functionality
+ * Video playback: controls, trim, fullscreen, ambient glow, frame stepping
+ * volume ranges, clip preview.
  */
 
 const { ipcRenderer } = require('electron');
@@ -19,16 +9,12 @@ const logger = require('./logger');
 const state = require('./state');
 const { AudioTracksManager } = require('./audio-tracks-manager');
 
-// Module-level handle for the currently active multi-track manager (if any).
+// active multi-track manager, if any
 let activeAudioTracksManager = null;
-// Monotonically incremented on each openClip call AND on closePlayer. Async
-// multi-track setup uses this token to detect when a newer openClip (or a
-// closePlayer) has superseded it and bail.
+// bumped on every openClip/closePlayer; async multi-track init checks this
+// to bail if a newer open or close has superseded it
 let clipOpenGeneration = 0;
 
-// ============================================================================
-// DOM ELEMENT REFERENCES
-// ============================================================================
 let elements = {
   videoPlayer: null,
   clipTitle: null,
@@ -57,7 +43,6 @@ let elements = {
   tempVideo: null,
 };
 
-// Volume icons SVG
 const volumeIcons = {
   normal: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-481q0-83-44-151.5T598-735q-15-7-22-21.5t-2-29.5q6-16 21.5-23t31.5 0q97 43 155 131.5T840-481q0 108-58 196.5T627-153q-16 7-31.5 0T574-176q-5-15 2-29.5t22-21.5q74-34 118-102.5T760-481ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm380-120q0 42-19 79.5T591-339q-10 6-20.5.5T560-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
   muted: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="m720-424-76 76q-11 11-28 11t-28-11q-11-11-11-28t11-28l76-76-76-76q-11-11-11-28t11-28q11-11 28-11t28 11l76 76 76-76q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76 76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11l-76-76Zm-440 64H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`,
@@ -65,9 +50,6 @@ const volumeIcons = {
   high: `<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-440h-80q-17 0-28.5-11.5T640-480q0-17 11.5-28.5T680-520h80q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440ZM584-288q10-14 26-16t30 8l64 48q14 10 16 26t-8 30q-10 14-26 16t-30-8l-64-48q-14-10-16-26t8-30Zm120-424-64 48q-14 10-30 8t-26-16q-10-14-8-30t16-26l64-48q14-10 30-8t26 16q10 14 8 30t-16 26ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>`
 };
 
-// ============================================================================
-// MANAGERS
-// ============================================================================
 let ambientGlowManager = null;
 let clipGlowManager = null;
 let saveTrimTimeout = null;
@@ -97,23 +79,14 @@ function isIntentionalSourceResetError(errorCode, errorMessage) {
   return isReleasingVideoElement || hasNoSource;
 }
 
-/**
- * Get the ambient glow manager for grid clip previews.
- */
 function getClipGlowManager() {
   return clipGlowManager;
 }
 
-/**
- * Get the ambient glow manager for the fullscreen player.
- */
 function getAmbientGlowManager() {
   return ambientGlowManager;
 }
 
-// ============================================================================
-// AMBIENT GLOW MANAGER CLASS
-// ============================================================================
 class AmbientGlowManager {
   constructor(videoElement, canvasElement) {
     this.video = videoElement;
@@ -122,13 +95,12 @@ class AmbientGlowManager {
     this.animationFrameId = null;
     this.isActive = false;
     this.lastDrawTime = 0;
-    this.frameInterval = 1000 / 30; // Cap at 30fps for performance
+    this.frameInterval = 1000 / 30; // cap 30fps
     this.prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // Temporal smoothing - blend factor (0.1 = very smooth, 0.5 = responsive, 1.0 = no smoothing)
+    // blend factor: 0.1 smooth, 1.0 no smoothing
     this.blendFactor = 0.15;
 
-    // Bind methods
     this.draw = this.draw.bind(this);
     this.drawLoop = this.drawLoop.bind(this);
     this.handlePlay = this.handlePlay.bind(this);
@@ -146,11 +118,9 @@ class AmbientGlowManager {
       willReadFrequently: false
     });
 
-    // Set low-resolution for performance (glow is heavily blurred anyway)
+    // low-res is fine, glow is heavily blurred anyway
     this.canvas.width = 16;
     this.canvas.height = 9;
-
-    // Small blur on canvas for smoother color sampling
     this.ctx.filter = 'blur(1px)';
   }
 
@@ -159,24 +129,22 @@ class AmbientGlowManager {
 
     try {
       if (forceFullDraw) {
-        // Full draw without blending (used on seek/initial load)
         this.ctx.globalAlpha = 1.0;
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
       } else {
-        // Temporal smoothing: blend new frame with existing content
         this.ctx.globalAlpha = this.blendFactor;
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
         this.ctx.globalAlpha = 1.0;
       }
     } catch (e) {
-      // Silently handle cross-origin or video not ready errors
+      // cross-origin or video-not-ready draw fails silently
     }
   }
 
   drawLoop(timestamp) {
     if (!this.isActive) return;
 
-    // Throttle to target framerate for performance
+    // throttle to target fps
     const elapsed = timestamp - this.lastDrawTime;
     if (elapsed >= this.frameInterval) {
       this.draw();
@@ -192,17 +160,14 @@ class AmbientGlowManager {
     this.isActive = true;
     this.canvas.classList.remove('hidden');
 
-    // Draw initial frame
     this.draw();
 
-    // Add event listeners
     this.video.addEventListener('play', this.handlePlay);
     this.video.addEventListener('pause', this.handlePause);
     this.video.addEventListener('ended', this.handlePause);
     this.video.addEventListener('seeked', this.handleSeeked);
     this.video.addEventListener('loadeddata', this.handleSeeked);
 
-    // Start loop if video is already playing
     if (!this.video.paused) {
       this.handlePlay();
     }
@@ -212,13 +177,11 @@ class AmbientGlowManager {
     this.isActive = false;
     this.canvas.classList.add('hidden');
 
-    // Cancel animation frame
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
 
-    // Remove event listeners
     this.video.removeEventListener('play', this.handlePlay);
     this.video.removeEventListener('pause', this.handlePause);
     this.video.removeEventListener('ended', this.handlePause);
@@ -237,16 +200,15 @@ class AmbientGlowManager {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
-    // Draw one final frame when paused
+    // one final frame when paused
     this.draw();
   }
 
   handleSeeked() {
-    // Update canvas immediately when video seeks (no smoothing)
+    // no smoothing on seek
     this.draw(true);
   }
 
-  // Hide during fullscreen mode
   setFullscreen(isFullscreen) {
     if (isFullscreen) {
       this.canvas.classList.add('hidden');
@@ -265,9 +227,6 @@ class AmbientGlowManager {
   }
 }
 
-// ============================================================================
-// CLIP GLOW MANAGER CLASS
-// ============================================================================
 class ClipGlowManager {
   constructor() {
     this.canvas = null;
@@ -293,7 +252,7 @@ class ClipGlowManager {
     const grid = document.getElementById('clip-grid');
     if (!grid) return;
 
-    // Check if canvas exists AND is still in the DOM (innerHTML clearing removes it)
+    // innerHTML clearing removes the canvas from the DOM without clearing our ref
     if (this.canvas && this.canvas.isConnected) return;
 
     this.canvas = document.createElement('canvas');
@@ -384,7 +343,7 @@ class ClipGlowManager {
         this.ctx.globalAlpha = 1.0;
       }
     } catch (e) {
-      // Silently handle errors
+      // ignore
     }
   }
 
@@ -402,10 +361,6 @@ class ClipGlowManager {
     this.animationFrameId = requestAnimationFrame(this.drawLoop);
   }
 }
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
 
 function debounce(func, delay) {
   let timeoutId = null;
@@ -445,9 +400,6 @@ function debounce(func, delay) {
   return debouncedFn;
 }
 
-/**
- * Format seconds into mm:ss or hh:mm:ss.
- */
 function formatTime(seconds) {
   if (isNaN(seconds)) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -455,9 +407,6 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-/**
- * Format a duration for UI display.
- */
 function formatDuration(seconds) {
   if (isNaN(seconds)) return "0:00";
   const hours = Math.floor(seconds / 3600);
@@ -468,10 +417,6 @@ function formatDuration(seconds) {
   }
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
-
-// ============================================================================
-// SPEED CONTROLS
-// ============================================================================
 
 function changeSpeed(speed) {
   elements.videoPlayer.playbackRate = speed;
@@ -484,18 +429,12 @@ function changeSpeed(speed) {
   }
 }
 
-/**
- * Sync the speed slider with current playback speed.
- */
 function updateSpeedSlider(speed) {
   if (elements.speedSlider) {
     elements.speedSlider.value = speed;
   }
 }
 
-/**
- * Update speed label text.
- */
 function updateSpeedText(speed) {
   let displaySpeed;
   if (Number.isInteger(speed)) {
@@ -508,9 +447,6 @@ function updateSpeedText(speed) {
   elements.speedText.textContent = displaySpeed;
 }
 
-/**
- * Reveal the speed control container temporarily.
- */
 function showSpeedContainer() {
   elements.speedSlider.classList.remove("collapsed");
 
@@ -529,9 +465,6 @@ const debouncedSaveSpeed = debounce(async (clipName, speed) => {
   }
 }, 300);
 
-/**
- * Load saved speed for the current clip.
- */
 async function loadSpeed(clipName) {
   try {
     const speed = await ipcRenderer.invoke("get-speed", clipName);
@@ -543,10 +476,6 @@ async function loadSpeed(clipName) {
   }
 }
 
-// ============================================================================
-// VOLUME CONTROLS
-// ============================================================================
-
 function setupAudioContext() {
   if (state.audioContext) return;
   state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -556,9 +485,6 @@ function setupAudioContext() {
   state.gainNode.connect(state.audioContext.destination);
 }
 
-/**
- * Nudge playback volume up/down.
- */
 function changeVolume(delta) {
   if (!state.audioContext) setupAudioContext();
 
@@ -579,9 +505,6 @@ function changeVolume(delta) {
   showVolumeContainer();
 }
 
-/**
- * Sync the volume slider with current playback volume.
- */
 function updateVolumeSlider(volume) {
   elements.volumeSlider.value = volume;
 
@@ -594,9 +517,6 @@ function updateVolumeSlider(volume) {
   updateVolumeIcon(volume);
 }
 
-/**
- * Update the volume icon based on the current level.
- */
 function updateVolumeIcon(volume) {
   if (volume === 0) {
     elements.volumeButton.innerHTML = volumeIcons.muted;
@@ -618,9 +538,6 @@ const debouncedSaveVolume = debounce(async (clipName, volume) => {
   }
 }, 300);
 
-/**
- * Load saved volume for the current clip.
- */
 async function loadVolume(clipName) {
   try {
     const volume = await ipcRenderer.invoke("get-volume", clipName);
@@ -632,9 +549,6 @@ async function loadVolume(clipName) {
   }
 }
 
-/**
- * Reveal the volume control container temporarily.
- */
 function showVolumeContainer() {
   elements.volumeSlider.classList.remove("collapsed");
 
@@ -643,10 +557,6 @@ function showVolumeContainer() {
     elements.volumeSlider.classList.add("collapsed");
   }, 2000);
 }
-
-// ============================================================================
-// PLAYBACK CONTROLS
-// ============================================================================
 
 function togglePlayPause() {
   if (!isVideoInFullscreen(elements.videoPlayer)) {
@@ -661,17 +571,11 @@ function togglePlayPause() {
   }
 }
 
-/**
- * Show player controls (auto-hide later).
- */
 function showControls() {
   elements.videoControls.style.transition = 'none';
   elements.videoControls.classList.add('visible');
 }
 
-/**
- * Hide player controls if not hovered.
- */
 function hideControls() {
   if (state.isGamepadActive) return;
   if (!elements.videoPlayer.paused && !state.isMouseOverControls && !document.activeElement.closest('#video-controls')) {
@@ -680,17 +584,11 @@ function hideControls() {
   }
 }
 
-/**
- * Hide player controls immediately.
- */
 function hideControlsInstantly() {
   elements.videoControls.classList.remove("visible");
   clearTimeout(state.controlsTimeout);
 }
 
-/**
- * Reset the auto-hide timer for controls.
- */
 function resetControlsTimeout() {
   showControls();
   clearTimeout(state.controlsTimeout);
@@ -700,32 +598,18 @@ function resetControlsTimeout() {
   }, 3000);
 }
 
-/**
- * Show the video loading overlay.
- */
 function showLoadingOverlay() {
   elements.loadingOverlay.style.display = "flex";
 }
 
-/**
- * Hide the video loading overlay.
- */
 function hideLoadingOverlay() {
   elements.loadingOverlay.style.display = "none";
 }
-
-// ============================================================================
-// TIME DISPLAY
-// ============================================================================
 
 function updateTimeDisplay() {
   elements.currentTimeDisplay.textContent = formatDuration(elements.videoPlayer.currentTime);
   elements.totalTimeDisplay.textContent = formatDuration(elements.videoPlayer.duration);
 }
-
-// ============================================================================
-// TRIM CONTROLS
-// ============================================================================
 
 function setTrimPoint(point) {
   if (point === "start") {
@@ -738,14 +622,9 @@ function setTrimPoint(point) {
   state.wasLastSeekManual = true;
 
   updateTrimControls();
-
-  // Save trim changes directly
   saveTrimChanges();
 }
 
-/**
- * Update trim handle positions based on trim times.
- */
 function updateTrimControls() {
   const duration = elements.videoPlayer.duration;
   const startPercent = (state.trimStartTime / duration) * 100;
@@ -802,9 +681,6 @@ function updatePlayhead() {
   requestAnimationFrame(updatePlayhead);
 }
 
-/**
- * Handle drag updates for trim handles.
- */
 function handleTrimDrag(e) {
   const dragDistance = Math.abs(e.clientX - state.dragStartX);
 
@@ -836,14 +712,10 @@ function handleTrimDrag(e) {
     state.isAutoResetDisabled = false;
     elements.videoPlayer.currentTime = newTime;
 
-    // Save trim changes directly
     saveTrimChanges();
   }
 }
 
-/**
- * Finalize trim drag and persist changes.
- */
 function endTrimDrag(e) {
   if (!state.isDraggingTrim) {
     const clickPercent = (state.dragStartX - elements.progressBarContainer.getBoundingClientRect().left) / elements.progressBarContainer.offsetWidth;
@@ -864,9 +736,6 @@ function endTrimDrag(e) {
   }, 100);
 }
 
-/**
- * Clear drag state if mouse is released unexpectedly.
- */
 function checkDragState() {
   if ((state.isDragging || state.isDraggingTrim) && !state.isMouseDown) {
     const rect = elements.progressBarContainer.getBoundingClientRect();
@@ -883,10 +752,6 @@ function checkDragState() {
     }
   }
 }
-
-// ============================================================================
-// FULLSCREEN
-// ============================================================================
 
 function toggleFullscreen() {
   try {
@@ -919,9 +784,6 @@ function toggleFullscreen() {
   resetControlsTimeout();
 }
 
-/**
- * Handle entering/exiting fullscreen for the player.
- */
 function handleFullscreenChange() {
   if (!elements.fullscreenPlayer) {
     logger.warn('Fullscreen player element not found');
@@ -955,9 +817,6 @@ function handleFullscreenChange() {
   }
 }
 
-/**
- * Show controls while moving mouse in fullscreen.
- */
 function handleFullscreenMouseMove(e) {
   try {
     if (e.clientY >= window.innerHeight - 1) {
@@ -970,18 +829,12 @@ function handleFullscreenMouseMove(e) {
   }
 }
 
-/**
- * Hide controls after leaving fullscreen window.
- */
 function handleFullscreenMouseLeave() {
   if (document.fullscreenElement) {
     hideControls();
   }
 }
 
-/**
- * Check if the video element is currently fullscreen.
- */
 function isVideoInFullscreen(videoElement) {
   return (
     document.fullscreenElement === videoElement ||
@@ -990,10 +843,6 @@ function isVideoInFullscreen(videoElement) {
     document.msFullscreenElement === videoElement
   );
 }
-
-// ============================================================================
-// FRAME STEPPING
-// ============================================================================
 
 function moveFrame(direction) {
   state.isFrameStepping = true;
@@ -1005,17 +854,14 @@ function moveFrame(direction) {
   }
 }
 
-/**
- * Step frames while a key is held.
- */
 function frameStep(timestamp) {
   if (!state.isFrameStepping) {
     state.pendingFrameStep = false;
     return;
   }
 
-  const frameTime = 1 / 30; // Assume 30fps
-  const minFrameInterval = 50; // Minimum 50ms between steps
+  const frameTime = 1 / 30; // assume 30fps
+  const minFrameInterval = 50; // min ms between steps
 
   if (timestamp - state.lastFrameStepTime >= minFrameInterval) {
     const newTime = elements.videoPlayer.currentTime + (state.frameStepDirection * frameTime);
@@ -1030,44 +876,30 @@ function frameStep(timestamp) {
   }
 }
 
-// ============================================================================
-// SKIP / NAVIGATION
-// ============================================================================
-
 function updateVideoDisplay() {
   if (elements.videoPlayer.paused) {
     const canvas = document.createElement('canvas');
     canvas.width = elements.videoPlayer.videoWidth;
     canvas.height = elements.videoPlayer.videoHeight;
     canvas.getContext('2d').drawImage(elements.videoPlayer, 0, 0, canvas.width, canvas.height);
-    
-    // Force a repaint of the video element
+
+    // force a repaint
     elements.videoPlayer.style.display = 'none';
     // eslint-disable-next-line no-unused-expressions
-    elements.videoPlayer.offsetHeight; // Trigger a reflow
+    elements.videoPlayer.offsetHeight; // trigger reflow
     elements.videoPlayer.style.display = '';
   }
 }
 
-/**
- * Calculate skip amount based on duration.
- */
 function calculateSkipTime(videoDuration) {
   return Math.min(5, videoDuration * 0.05);
 }
 
-/**
- * Skip playback forward/back by a fixed amount.
- */
 function skipTime(direction) {
   const skipAmount = calculateSkipTime(elements.videoPlayer.duration);
   const newTime = elements.videoPlayer.currentTime + (direction * skipAmount);
   elements.videoPlayer.currentTime = Math.max(0, Math.min(newTime, elements.videoPlayer.duration));
 }
-
-// ============================================================================
-// AMBIENT GLOW SETTINGS
-// ============================================================================
 
 function applyAmbientGlowSettings(glowSettings) {
   if (!elements.ambientGlowCanvas) return;
@@ -1084,35 +916,19 @@ function applyAmbientGlowSettings(glowSettings) {
     ambientGlowManager.frameInterval = 1000 / (fps || 30);
   }
 
-  // Apply CSS properties
   elements.ambientGlowCanvas.style.filter = `blur(${blur || 100}px) saturate(${saturation || 1.5})`;
   elements.ambientGlowCanvas.style.opacity = opacity || 0.8;
 }
 
-// ============================================================================
-// ADDITIONAL VIDEO PLAYER FUNCTIONS
-// ============================================================================
-
-/**
- * Pause the video if it's currently playing
- */
 function pauseVideoIfPlaying() {
   if (!elements.videoPlayer.paused) {
     elements.videoPlayer.pause();
   }
 }
 
-/**
- * Video load handler - called when video metadata is loaded
- */
-
-/**
- * Handle video seeked event
- */
 function handleVideoSeeked() {
   if (state.currentClip) {
     state.elapsedTime = Math.floor(elements.videoPlayer.currentTime);
-    // Check if the clip is private before updating Discord presence
     logger.info('Current clip:', state.currentClip.tags);
     if (!state.currentClip.tags || !state.currentClip.tags.includes('Private')) {
       if (callbacks.updateDiscordPresenceForClip) {
@@ -1122,21 +938,14 @@ function handleVideoSeeked() {
   }
 }
 
-/**
- * Handle video canplay event - DO NOT hide thumbnail here!
- * Thumbnail should only be hidden when 'playing' event fires.
- */
 function handleVideoCanPlay() {
   if (state.isLoading) {
     state.isLoading = false;
     hideLoadingOverlay();
   }
-  // DO NOT show video or hide thumbnail here - wait for 'playing' event
+  // don't show video/hide thumbnail here, wait for 'playing' event
 }
 
-/**
- * Update loading progress display
- */
 function updateLoadingProgress() {
   if (elements.videoPlayer.buffered.length > 0) {
     const loadedPercentage =
@@ -1145,15 +954,11 @@ function updateLoadingProgress() {
   }
 }
 
-/**
- * End volume drag operation
- */
 function endVolumeDrag() {
   if (!state.isVolumeDragging) return;
 
   document.body.classList.remove('dragging');
-  
-  // Save the final position
+
   if (state.currentClip) {
     const volumeData = {
       start: state.volumeStartTime,
@@ -1164,24 +969,18 @@ function endVolumeDrag() {
       .catch(error => logger.error('Error saving volume data:', error));
   }
 
-  // Reset drag state but keep controls visible
   state.isVolumeDragging = null;
   document.removeEventListener('mousemove', handleVolumeDrag);
   document.removeEventListener('mouseup', endVolumeDrag);
 
-  // Don't hide the volume drag control, just update its position
   updateVolumeControlsPosition();
-  
-  // Make sure the input stays visible
+
   const volumeInput = state.volumeDragControl.querySelector('input');
   if (volumeInput) {
     volumeInput.style.display = 'block';
   }
 }
 
-/**
- * Load volume data for current clip
- */
 async function loadVolumeData(preloadedVolumeData) {
   if (!state.currentClip) {
     logger.warn('Attempted to load volume data without current clip');
@@ -1189,8 +988,7 @@ async function loadVolumeData(preloadedVolumeData) {
   }
 
   try {
-    // openClip passes the value from its batched open-state fetch; other
-    // callers (module export) still hit the IPC.
+    // openClip passes its batched open-state value; other callers hit IPC directly
     const volumeData = preloadedVolumeData !== undefined
       ? preloadedVolumeData
       : await ipcRenderer.invoke('get-volume-range', state.currentClip.originalName);
@@ -1210,8 +1008,7 @@ async function loadVolumeData(preloadedVolumeData) {
       });
     } else {
       logger.info('No valid volume data found for:', state.currentClip.originalName);
-      // No stored range -> nothing to remove; don't write a removal to disk
-      // (this path runs on every clip open).
+      // no stored range, don't write a removal (this path runs on every clip open)
       hideVolumeControls(false);
     }
   } catch (error) {
@@ -1220,18 +1017,12 @@ async function loadVolumeData(preloadedVolumeData) {
   }
 }
 
-/**
- * Hide the inline volume drag control.
- */
 function hideVolumeDragControl() {
   if (state.volumeDragControl) {
     state.volumeDragControl.style.display = 'none';
   }
 }
 
-/**
- * Hide volume controls
- */
 function hideVolumeControls(persistRemoval = true) {
   state.isVolumeControlsVisible = false;
   state.volumeStartTime = 0;
@@ -1242,14 +1033,13 @@ function hideVolumeControls(persistRemoval = true) {
   state.volumeRegionElement.style.display = 'none';
   hideVolumeDragControl();
 
-  // Prevent stale debounced writes from re-saving removed range data.
+  // avoid stale debounced writes re-saving removed range data
   if (debouncedSaveVolumeData.cancel) {
     debouncedSaveVolumeData.cancel();
   }
 
-  // Remove volume data from storage when the user turns the range off.
-  // Callers hiding the controls just because a clip HAS no range pass
-  // persistRemoval=false so opening a clip never writes to disk.
+  // callers hiding controls just because a clip has no range pass
+  // persistRemoval=false so opening a clip never writes to disk
   if (persistRemoval && state.currentClip) {
     ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, null)
       .catch(error => logger.error('Error removing volume data:', error));
@@ -1268,9 +1058,6 @@ const debouncedSaveVolumeData = debounce(async (clipName, volumeData) => {
   }
 }, 300);
 
-/**
- * Persist volume range data for the current clip.
- */
 function saveVolumeData() {
   if (!state.currentClip || !state.isVolumeControlsVisible) return;
 
@@ -1283,9 +1070,6 @@ function saveVolumeData() {
   debouncedSaveVolumeData(state.currentClip.originalName, volumeData);
 }
 
-/**
- * Show volume range controls on the timeline.
- */
 function showVolumeControls() {
   state.isVolumeControlsVisible = true;
   state.volumeStartElement.style.display = 'block';
@@ -1295,9 +1079,6 @@ function showVolumeControls() {
   showVolumeDragControl();
 }
 
-/**
- * Toggle volume range controls on/off.
- */
 function toggleVolumeControls() {
   if (!elements.videoPlayer || !elements.videoPlayer.duration) return;
 
@@ -1313,9 +1094,6 @@ function toggleVolumeControls() {
   }
 }
 
-/**
- * Position volume range handles based on current times.
- */
 function updateVolumeControlsPosition() {
   if (!elements.videoPlayer || !elements.videoPlayer.duration || !state.isVolumeControlsVisible) return;
 
@@ -1360,9 +1138,6 @@ function showVolumeDragControl(e) {
   }
 }
 
-/**
- * Handle drag updates for the volume range controls.
- */
 function handleVolumeDrag(e) {
   if (!state.isVolumeDragging || !elements.progressBarContainer || !elements.videoPlayer) return;
 
@@ -1389,7 +1164,6 @@ function handleVolumeDrag(e) {
   saveVolumeData();
 }
 
-// Update preview position and content
 function updatePreview(e, options = {}) {
   if (!elements.progressBarContainer || !elements.previewElement || !elements.tempVideo || !elements.videoPlayer) return;
   if (!e) return;
@@ -1414,9 +1188,6 @@ function updatePreview(e, options = {}) {
   }
 }
 
-/**
- * Handle key release events for playback controls.
- */
 function handleKeyRelease(e) {
   if (isShareModalOpen()) return;
 
@@ -1447,9 +1218,6 @@ function handleKeyRelease(e) {
   }
 }
 
-/**
- * Handle key press events for playback and editing.
- */
 function handleKeyPress(e) {
   if (isShareModalOpen()) return;
 
@@ -1585,17 +1353,11 @@ function handleKeyPress(e) {
   }
 }
 
-/**
- * Check whether the share modal is currently active.
- */
 function isShareModalOpen() {
   const shareModal = document.getElementById('clip-share-modal');
   return Boolean(shareModal && shareModal.classList.contains('is-open'));
 }
 
-/**
- * Flush pending debounced saves for a specific clip before switching/closing.
- */
 async function flushPendingClipEdits({ clipName, oldCustomName, titleValue, flushTitle = true }) {
   if (!clipName) return;
 
@@ -1652,16 +1414,12 @@ async function flushPendingClipEdits({ clipName, oldCustomName, titleValue, flus
   });
 }
 
-/**
- * Close the fullscreen player and reset UI state.
- */
 async function closePlayer() {
   if (window.justFinishedDragging) {
     return;
   }
 
-  // Dev profiler: label the whole close flow (backdrop click, Escape, delete
-  // all land here) so traces don't show it as "pointerdown:unknown".
+  // backdrop click, Escape, delete all land here; label for perf traces
   if (window.__perf && window.__perf.interaction) window.__perf.interaction('close-clip');
 
   if (callbacks.logCurrentWatchSession) {
@@ -1695,9 +1453,8 @@ async function closePlayer() {
   document.body.classList.remove('player-open');
   if (window.uiBlur) window.uiBlur.disable();
 
-  // Bumping the open-generation here signals any in-flight background
-  // multi-track init (started for the clip we're now closing) to discard
-  // itself when it finishes, instead of attaching to a closed player.
+  // signals any in-flight multi-track init for this clip to discard itself
+  // instead of attaching to a closed player
   clipOpenGeneration += 1;
 
   if (activeAudioTracksManager) {
@@ -1760,13 +1517,10 @@ async function closePlayer() {
 }
 
 /**
- * Preload clip data on hover for faster opening
- * 
- * @param {string} originalName - The original name of the clip
- * @returns {Promise<Object|null>} The preloaded clip data or null if failed
+ * @param {string} originalName
+ * @returns {Promise<Object|null>}
  */
 async function preloadClipData(originalName) {
-  // Check if already cached and not expired
   const cached = state.clipDataCache.get(originalName);
   if (cached && (Date.now() - cached.timestamp) < state.CACHE_EXPIRY_MS) {
     // Still kick off audio warming in case it wasn't done on the previous
@@ -1787,14 +1541,12 @@ async function preloadClipData(originalName) {
     const data = { clipInfo, trimData, clipTags, thumbnailPath };
     state.clipDataCache.set(originalName, { data, timestamp: Date.now() });
 
-    // Limit cache size
     if (state.clipDataCache.size > 50) {
       const oldestKey = state.clipDataCache.keys().next().value;
       state.clipDataCache.delete(oldestKey);
     }
 
-    // Fire-and-forget audio decoder warmup for multi-track clips. Has its own
-    // LRU cap + dedup, so calling on every hover is safe.
+    // fire-and-forget, has its own LRU cap + dedup so safe on every hover
     warmAudioTracksForHover(originalName, clipInfo).catch(() => {});
 
     return data;
@@ -1804,20 +1556,13 @@ async function preloadClipData(originalName) {
   }
 }
 
-// ============================================================================
-// AUDIO TRACK HOVER PRELOAD
-// ============================================================================
-// For multi-track clips (>1 audio stream), the per-track AAC decoder warmup
-// is the biggest open-time cost — ~200ms of "wait for all <audio> elements
-// to reach readyState>=2". We hide that cost by warming the decoders during
-// hover: extract the tracks if needed, create hidden <audio preload="auto">
-// elements, let them load in the background, and adopt them in
-// AudioTracksManager.init when the user actually clicks. If the user moves
-// to a different clip, the LRU cap drops the oldest entry and stops its
-// decoders. Per-clip dedup prevents redundant work on repeated hovers.
+// Multi-track clips: per-track AAC decoder warmup is the biggest open-time
+// cost (~200ms waiting for all <audio> elements to reach readyState>=2).
+// Warmed during hover instead: extract tracks, create hidden <audio> elements
+// adopt them in AudioTracksManager.init on click. LRU cap evicts oldest clip.
 //
-// Entry shape: { audioEls: Map<ordinal, HTMLAudioElement>,
-//                trackMetas: Array, warmedAt: number,
+// Entry shape: { audioEls: Map<ordinal, HTMLAudioElement>
+//                trackMetas: Array, warmedAt: number
 //                pending: Promise<void> }
 
 const audioWarmCache = new Map();
@@ -1836,7 +1581,7 @@ function warmCacheEvict(originalName) {
 
 function warmCacheEnforceCap() {
   while (audioWarmCache.size > AUDIO_WARM_CAP) {
-    // Map iteration order is insertion order — oldest first.
+    // Map iteration order is insertion order, so oldest first
     const oldest = audioWarmCache.keys().next().value;
     if (!oldest) break;
     warmCacheEvict(oldest);
@@ -1844,22 +1589,21 @@ function warmCacheEnforceCap() {
 }
 
 /**
- * Kick off audio decoder warming for `originalName` if it's a multi-track
- * clip. Idempotent — repeated hovers don't re-warm. Returns the existing
- * entry's pending Promise if warming is in flight.
+ * Idempotent, repeated hovers don't re-warm; returns the pending promise if
+ * warming for this clip is already in flight.
  */
 async function warmAudioTracksForHover(originalName, clipInfo) {
   const tracks = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks : [];
   if (tracks.length <= 1) return;
   const existing = audioWarmCache.get(originalName);
   if (existing) {
-    // Refresh LRU position without retriggering work.
+    // refresh LRU position without retriggering work
     audioWarmCache.delete(originalName);
     audioWarmCache.set(originalName, existing);
     return existing.pending;
   }
 
-  // Reserve slot eagerly so concurrent hovers dedup.
+  // reserve slot eagerly so concurrent hovers dedup
   const entry = {
     audioEls: new Map(),
     trackMetas: [],
@@ -1876,7 +1620,7 @@ async function warmAudioTracksForHover(originalName, clipInfo) {
         warmCacheEvict(originalName);
         return;
       }
-      // The cache may have been evicted while extract was running.
+      // cache may have been evicted while extract was running
       if (!audioWarmCache.has(originalName)) return;
 
       entry.trackMetas = extracted.map((e) => {
@@ -1896,7 +1640,6 @@ async function warmAudioTracksForHover(originalName, clipInfo) {
         audioEl.src = `file://${m.path.replace(/\\/g, '/')}`;
         audioEl.style.display = 'none';
         audioEl.volume = 1;
-        // Tag so we can recognise warmed elements if we ever inspect the DOM.
         audioEl.dataset.warmedClip = originalName;
         audioEl.dataset.warmedOrdinal = String(m.ordinal);
         document.body.appendChild(audioEl);
@@ -1912,9 +1655,8 @@ async function warmAudioTracksForHover(originalName, clipInfo) {
 }
 
 /**
- * Consume the warm entry for `originalName` (removes from cache). Returns
- * `null` if there's nothing warm. The caller takes ownership of the audio
- * elements — they must be either adopted into a manager or torn down.
+ * Removes and returns the warm entry, or null. Caller takes ownership of the
+ * audio elements: adopt into a manager or tear down.
  */
 function takeWarmAudioTracks(originalName) {
   const entry = audioWarmCache.get(originalName);
@@ -1924,16 +1666,12 @@ function takeWarmAudioTracks(originalName) {
 }
 
 /**
- * Handle mouse enter event on clip elements
- * 
- * @param {Object} clip - The clip object
- * @param {HTMLElement} clipElement - The clip element
+ * @param {Object} clip
+ * @param {HTMLElement} clipElement
  */
 async function handleMouseEnter(clip, clipElement) {
-  // OPTIMIZATION: Preload clip data on hover for faster opening
   preloadClipData(clip.originalName).catch(() => {});
 
-  // Show ambient glow behind clip
   const clipGlowManager = getClipGlowManager();
   if (clipGlowManager) {
     clipGlowManager.show(clipElement);
@@ -1941,23 +1679,18 @@ async function handleMouseEnter(clip, clipElement) {
 
   if (clipElement.classList.contains("video-preview-disabled")) return;
 
-  // Clear any existing preview immediately
   cleanupVideoPreview();
 
-  // Store the current preview context
   const currentPreviewContext = {};
   state.activePreview = currentPreviewContext;
 
-  // Set a small delay before creating the preview
   state.previewCleanupTimeout = setTimeout(async () => {
-    // Check if this preview is still the active one
     if (state.activePreview !== currentPreviewContext) return;
 
     try {
       const trimData = await ipcRenderer.invoke("get-trim", clip.originalName);
       const clipInfo = await ipcRenderer.invoke("get-clip-info", clip.originalName);
-      
-      // Check again if this preview is still active
+
       if (state.activePreview !== currentPreviewContext) return;
 
       let startTime;
@@ -1967,10 +1700,8 @@ async function handleMouseEnter(clip, clipElement) {
         startTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
       }
 
-      // Final check before creating video element
       if (state.activePreview !== currentPreviewContext) return;
 
-      // Get the current preview volume setting
       const currentPreviewVolume = document.getElementById('previewVolumeSlider')?.value ?? state.settings?.previewVolume ?? 0.1;
 
       videoElement = document.createElement("video");
@@ -1982,17 +1713,13 @@ async function handleMouseEnter(clip, clipElement) {
 
       const mediaContainer = clipElement.querySelector(".clip-item-media-container");
       const imgElement = mediaContainer.querySelector("img");
-      
-      // Set the video poster to the current thumbnail
+
       videoElement.poster = imgElement.src;
 
-      // Store video element in the preview
       currentPreviewContext.videoElement = videoElement;
-      currentPreviewContext.imgElement = imgElement; // Store imgElement for restoration
+      currentPreviewContext.imgElement = imgElement;
 
-      // Add loadedmetadata event listener
       videoElement.addEventListener('loadedmetadata', () => {
-        // Final check before playing
         if (state.activePreview !== currentPreviewContext || !clipElement.matches(':hover')) {
           cleanupVideoPreview();
           return;
@@ -2001,7 +1728,7 @@ async function handleMouseEnter(clip, clipElement) {
         imgElement.style.display = "none";
         videoElement.currentTime = startTime;
         videoElement.play().then(() => {
-          // Update glow to sample from video instead of thumbnail
+          // glow samples the playing video instead of the static thumbnail
           const clipGlowManager = getClipGlowManager();
           if (clipGlowManager) {
             clipGlowManager.updateSource(videoElement);
@@ -2023,9 +1750,7 @@ async function handleMouseEnter(clip, clipElement) {
 }
 
 /**
- * Export clip from context menu
- * 
- * @param {Object} clip - The clip object to export
+ * @param {Object} clip
  */
 async function exportClipFromContextMenu(clip) {
   try {
@@ -2037,7 +1762,7 @@ async function exportClipFromContextMenu(clip) {
     const speed = await loadSpeed(clip.originalName);
 
     if (callbacks.showExportProgress) {
-      callbacks.showExportProgress(0, 100); // Show initial progress
+      callbacks.showExportProgress(0, 100);
     }
 
     const result = await ipcRenderer.invoke(
@@ -2051,7 +1776,7 @@ async function exportClipFromContextMenu(clip) {
     if (result.success) {
       logger.info("Clip exported successfully:", result.path);
       if (callbacks.showExportProgress) {
-        callbacks.showExportProgress(100, 100, true); // Always clipboard export for context menu
+        callbacks.showExportProgress(100, 100, true); // context menu export always goes to clipboard
       }
     } else {
       throw new Error(result.error);
@@ -2065,9 +1790,8 @@ async function exportClipFromContextMenu(clip) {
 }
 
 /**
- * Close the half-open player and tell the user the file itself is the problem.
- * Used when the clip probe came back empty: the old path let the open run on
- * and surfaced a null-property error the user could do nothing with.
+ * Used when the clip probe comes back empty; old path let the open run on
+ * and surfaced a null-property error instead.
  */
 function abortOpenUnreadable(originalName, customName) {
   elements.playerOverlay.style.display = "none";
@@ -2080,19 +1804,15 @@ function abortOpenUnreadable(originalName, customName) {
 }
 
 /**
- * Open a clip for playback
- *
- * @param {string} originalName - The original name of the clip
- * @param {string} customName - The custom name of the clip
+ * @param {string} originalName
+ * @param {string} customName
  */
 async function openClip(originalName, customName) {
-  // Capture this open's generation token; async work later verifies it is
-  // still the most recent open before mutating shared state.
+  // later async work checks this against clipOpenGeneration before mutating shared state
   clipOpenGeneration += 1;
   const openGen = clipOpenGeneration;
   logger.info(`Opening clip: ${originalName} (gen=${openGen})`);
-  
-  // Performance timing for benchmark mode
+
   const timings = {};
   const startTime = performance.now();
   const mark = (name) => {
@@ -2112,8 +1832,7 @@ async function openClip(originalName, customName) {
       flushTitle: true
     });
   }
-  
-  // Cleanup any active preview
+
   cleanupVideoPreview();
 
   // Ensure grid glow is cleared when opening a clip
@@ -2124,11 +1843,9 @@ async function openClip(originalName, customName) {
   
   state.elapsedTime = 0;
 
-  // Reset auto-seek behavior for new clip
   state.isAutoResetDisabled = false;
   state.wasLastSeekManual = false;
 
-  // Log the previous session if one was active
   if (callbacks.logCurrentWatchSession) {
     await callbacks.logCurrentWatchSession();
   }
@@ -2139,7 +1856,6 @@ async function openClip(originalName, customName) {
     state.currentCleanup = null;
   }
 
-  // Always tear down any previous multi-track manager before opening a new clip.
   if (activeAudioTracksManager) {
     try { activeAudioTracksManager.dispose(); } catch (err) { logger.warn(`[audio-tracks] dispose failed: ${err.message}`); }
     activeAudioTracksManager = null;
@@ -2151,7 +1867,6 @@ async function openClip(originalName, customName) {
     elements.volumeSlider.style.display = '';
   }
 
-  // Remove last-opened class from any previously highlighted clip
   document.querySelectorAll('.clip-item.last-opened').forEach(clip => {
     clip.classList.remove('last-opened');
   });
@@ -2160,10 +1875,9 @@ async function openClip(originalName, customName) {
     callbacks.initializeVolumeControls();
   }
   elements.loadingOverlay.style.display = "none";
-  // Clear a lingering darkener state from a clip closed before it played.
+  // clear a lingering darkener state from a clip closed before it played
   elements.loadingOverlay.classList.remove('thumbnail-backdrop');
 
-  // Create or get thumbnail overlay
   let thumbnailOverlay = document.getElementById('thumbnail-overlay');
   if (!thumbnailOverlay) {
     thumbnailOverlay = document.createElement('img');
@@ -2178,11 +1892,9 @@ async function openClip(originalName, customName) {
   }
 
   logger.info(`[${originalName}] Setting up thumbnail overlay`);
-  // Hide video and show thumbnail
   elements.videoPlayer.style.opacity = '0';
-  
-  // OPTIMIZATION: Show player overlay IMMEDIATELY with thumbnail
-  // This gives instant visual feedback while video loads in background
+
+  // show player overlay immediately with thumbnail while video loads in the background
   const wasPlayerAlreadyOpen =
     elements.playerOverlay.style.display === "block" ||
     document.body.classList.contains('player-open');
@@ -2193,16 +1905,14 @@ async function openClip(originalName, customName) {
     window.uiBlur.enable();
   }
   mark('playerVisibleEarly');
-  
-  // OPTIMIZATION: Check if data was preloaded on hover
+
   let clipInfo, trimData, clipTags, thumbnailPath;
-  // Everything the later stages read (volume/speed/volume-range/track state)
-  // arrives in the same round trip, so those stages never touch IPC again.
+  // volume/speed/volume-range/track state all arrive in the same round trip
+  // so later stages never touch IPC again
   let openState = null;
   const cachedData = callbacks.getCachedClipData ? await callbacks.getCachedClipData(originalName) : null;
 
   if (cachedData) {
-    // Use cached data - much faster!
     clipInfo = cachedData.clipInfo;
     trimData = cachedData.trimData;
     clipTags = cachedData.clipTags;
@@ -2210,16 +1920,13 @@ async function openClip(originalName, customName) {
     mark('usedCachedData');
     logger.info(`[${originalName}] Using preloaded cached data`);
   } else {
-    // No cache - load fresh (single batched IPC: one round trip instead of
-    // ~9 handles spread over several await waves)
+    // single batched IPC: one round trip instead of ~9 handles over several await waves
     logger.info(`[${originalName}] Loading clip data (not cached)...`);
     try {
       const openStatePromise = ipcRenderer.invoke("get-clip-open-state", originalName);
-      // The batch can include a first-time ffprobe (~250ms). The thumbnail
-      // lookup is just an fs.access, so run it separately and put the low-res
-      // placeholder on screen right away instead of gating it on the probe —
-      // otherwise the video (pre-warmed by the hover preview) starts before
-      // the placeholder ever paints.
+      // batch can include a first-time ffprobe (~250ms); thumbnail lookup is just
+      // fs.access, so run separately and paint the low-res placeholder right away
+      // instead of waiting on the probe (else the hover-warmed video starts first)
       try {
         const earlyThumb = await (callbacks.getThumbnailPath
           ? callbacks.getThumbnailPath(originalName)
@@ -2227,10 +1934,8 @@ async function openClip(originalName, customName) {
         if (earlyThumb && openGen === clipOpenGeneration) {
           thumbnailOverlay.src = `file://${earlyThumb}`;
           thumbnailOverlay.style.display = 'block';
-          // While the placeholder is up, the loading overlay is a plain
-          // darkener (no spinner) — see #loading-overlay.thumbnail-backdrop.
-          // Shown explicitly: the updatePlayhead loop that normally raises it
-          // isn't running before the first clip of the session loads.
+          // plain darkener, no spinner, see #loading-overlay.thumbnail-backdrop;
+          // shown explicitly since updatePlayhead isn't running yet for the first clip
           elements.loadingOverlay.classList.add('thumbnail-backdrop');
           elements.loadingOverlay.style.display = 'flex';
         }
@@ -2250,21 +1955,16 @@ async function openClip(originalName, customName) {
   }
   mark('getClipData');
 
-  // The cached (hover-preloaded) path can carry a null clipInfo too: main
-  // swallows a failed probe and returns null rather than rejecting. Without
-  // this the open ran on and blew up later with a "cannot read properties of
-  // null" alert, which told the user nothing.
+  // hover-preloaded path can carry a null clipInfo too (main swallows a failed
+  // probe); without this check the open blew up later with an opaque null-property error
   if (!clipInfo || !clipInfo.format) {
     logger.error(`[${originalName}] No clip info available, aborting open`);
     abortOpenUnreadable(originalName, customName);
     return;
   }
 
-  // Multi-track clips: kick off track extraction NOW so the one-time ffmpeg
-  // stream-copy (~200-350ms on first open of a clip) overlaps the video
-  // load/seek below instead of running after it. The multi-track init block
-  // awaits this same promise later. Harmless if the open is superseded —
-  // it just warms the extraction cache.
+  // kick off track extraction now so the one-time ffmpeg stream-copy (~200-350ms)
+  // overlaps the video load/seek below; multi-track init awaits this same promise later
   let earlyExtractPromise = null;
   if (Array.isArray(clipInfo?.audioTracks) && clipInfo.audioTracks.length > 1
       && !audioWarmCache.has(originalName)) {
@@ -2272,7 +1972,6 @@ async function openClip(originalName, customName) {
     earlyExtractPromise.catch(() => {}); // observed where awaited
   }
 
-  // Set up thumbnail
   if (thumbnailPath) {
     thumbnailOverlay.src = `file://${thumbnailPath}`;
     thumbnailOverlay.style.display = 'block';
@@ -2283,21 +1982,18 @@ async function openClip(originalName, customName) {
     logger.warn(`[${originalName}] No thumbnail path found`);
   }
 
-  // Add cleanup for previous video element
   if(elements.videoPlayer.src) {
     logger.info(`[${originalName}] Cleaning up previous video`);
     elements.videoPlayer.pause();
-    // Don't call load() after removing src - it causes MEDIA_ERR_SRC_NOT_SUPPORTED
-    // Just remove the src, we'll set a new one below
+    // load() after removing src causes MEDIA_ERR_SRC_NOT_SUPPORTED, new src set below
     elements.videoPlayer.removeAttribute('src');
   }
   mark('cleanupPrevious');
-  
+
   logger.info(`[${originalName}] Clip data ready. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
 
   state.currentClip = { originalName, customName, tags: clipTags };
 
-  // Set clip title
   if (elements.clipTitle) {
     elements.clipTitle.value = customName || path.basename(originalName, path.extname(originalName));
     elements.clipTitle.dataset.originalName = originalName;
@@ -2317,7 +2013,6 @@ async function openClip(originalName, customName) {
   }
 
   logger.info(`[${originalName}] Setting up video load promise...`);
-  // Create a promise to handle video loading and seeking
   const videoLoadPromise = new Promise((resolve, reject) => {
     let isMetadataLoaded = false;
     let isSeeked = false;
@@ -2341,8 +2036,7 @@ async function openClip(originalName, customName) {
       logger.info(`[${originalName}] Attempting to seek to time: ${state.initialPlaybackTime} (duration: ${elements.videoPlayer.duration})`);
       const oldTime = elements.videoPlayer.currentTime;
       elements.videoPlayer.currentTime = state.initialPlaybackTime;
-      
-      // Log if the time actually changed
+
       setTimeout(() => {
         logger.info(`[${originalName}] After seek attempt - oldTime: ${oldTime}, currentTime: ${elements.videoPlayer.currentTime}, target: ${state.initialPlaybackTime}`);
       }, 50);
@@ -2359,13 +2053,11 @@ async function openClip(originalName, customName) {
     };
 
     const errorHandler = (e) => {
-      // Get actual error from the video element
       const mediaError = elements.videoPlayer.error;
       const errorCode = mediaError ? mediaError.code : 'unknown';
       const errorMessage = mediaError ? mediaError.message : 'Unknown error';
 
-      // Ignore MEDIA_ERR_ABORTED (code 1) - this happens when we intentionally abort loading
-      // e.g., when switching clips or closing the player
+      // code 1 (MEDIA_ERR_ABORTED): we intentionally aborted (clip switch/close)
       if (errorCode === 1) {
         logger.info(`[${originalName}] Video loading aborted (intentional)`);
         if (timeoutId) {
@@ -2400,7 +2092,6 @@ async function openClip(originalName, customName) {
       reject(new Error(`Video error (code ${errorCode}): ${errorMessage}`));
     };
 
-    // Add timeout to catch hung promises
     timeoutId = setTimeout(() => {
       logger.error(`[${originalName}] Video load timeout after 15 seconds`);
       elements.videoPlayer.removeEventListener('loadedmetadata', loadHandler);
@@ -2410,39 +2101,35 @@ async function openClip(originalName, customName) {
       reject(new Error('Video load timeout'));
     }, 15000);
 
-    // Set up event listeners
     elements.videoPlayer.addEventListener('loadedmetadata', loadHandler);
     elements.videoPlayer.addEventListener('seeked', seekHandler);
     elements.videoPlayer.addEventListener('error', errorHandler);
 
-    // Set video source
     logger.info(`[${originalName}] Setting video source: ${path.join(state.clipLocation, originalName)}`);
     elements.videoPlayer.src = `file://${path.join(state.clipLocation, originalName)}`;
-    
-    // Check if video is already ready (if loaded from cache or fast load)
+
     if (elements.videoPlayer.readyState >= 2) {
        logger.info(`[${originalName}] Video ready state is ${elements.videoPlayer.readyState}, forcing events manually`);
-       // Manually trigger load handler if metadata is already there
+       // metadata event won't refire if readyState is already past it
        if (!isMetadataLoaded) loadHandler();
     }
-    
+
   });
 
   try {
     mark('beforeLoadPromise');
     await videoLoadPromise;
     mark('afterLoadPromise');
-    
-    // Load volume and speed (already fetched in the open-state batch when
-    // this open wasn't served from the hover cache)
+
+    // already fetched in the open-state batch unless served from the hover cache
     const [loadedVolume, loadedSpeed] = openState
       ? [openState.volume, openState.speed]
       : await Promise.all([
           loadVolume(originalName),
           loadSpeed(originalName)
         ]);
-    
-    // Always apply clip-specific volume/speed so prior clip state does not leak.
+
+    // apply clip-specific volume/speed so prior clip's state does not leak
     const volumeMin = elements.volumeSlider ? Number(elements.volumeSlider.min) : 0;
     const volumeMax = elements.volumeSlider ? Number(elements.volumeSlider.max) : 2;
     const normalizedVolume = Number.isFinite(Number(loadedVolume)) ? Number(loadedVolume) : 1;
@@ -2465,24 +2152,19 @@ async function openClip(originalName, customName) {
     
     mark('afterVolumeSpeed');
     
-    // Check for volume range data to show volume controls
     await loadVolumeData(openState ? openState.volumeRange : undefined);
     mark('afterVolumeData');
 
-    // Multi-track audio support: if this clip has >1 audio stream, extract each
-    // track to its own .m4a, mute the <video>, and build a per-track audio
-    // graph. We await this before play() — a brief load-delay is preferable
-    // to playing the wrong audio (the native default-track) for the first
-    // second or two and then swapping it out.
+    // multi-track clips: extract each stream to its own .m4a, mute the <video>
+    // build a per-track audio graph. Awaited before play(), a brief delay beats
+    // playing the wrong (native default) track for a second then swapping it out
     const audioTracks = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks : [];
     if (audioTracks.length > 1) {
       try {
         setupAudioContext();
-        // Adopt the hover-warmed entry if present — its trackMetas + audio
-        // elements are already in flight, so we skip the extract IPC and the
-        // <audio> creation cost. _waitForReady on warm elements typically
-        // resolves immediately because their AAC decoders are already past
-        // readyState>=2.
+        // adopt hover-warmed entry if present: skips the extract IPC and <audio>
+        // creation, and _waitForReady resolves near-instantly since decoders are
+        // already past readyState>=2
         const warm = takeWarmAudioTracks(originalName);
         const extractedPromise = warm && warm.trackMetas.length > 0
           ? Promise.resolve(warm.trackMetas.map((m) => ({
@@ -2498,7 +2180,7 @@ async function openClip(originalName, customName) {
         ]);
         if (openGen !== clipOpenGeneration) {
           logger.info(`[${originalName}] Multi-track init aborted (stale gen ${openGen} vs ${clipOpenGeneration})`);
-          // The warm entry was consumed but won't be used — drop its elements.
+          // warm entry was consumed but won't be used, drop its elements
           if (warm) {
             for (const el of warm.audioEls.values()) {
               try { el.pause(); el.removeAttribute('src'); el.load(); } catch (_) {}
@@ -2553,17 +2235,14 @@ async function openClip(originalName, customName) {
       }
     }
     mark('afterAudioTracks');
-    
-    // Start playhead updates
+
     requestAnimationFrame(updatePlayhead);
 
-    // Apply ambient glow if enabled
     if (state.settings?.ambientGlow?.enabled && ambientGlowManager) {
       logger.info(`[${originalName}] Starting ambient glow`);
       ambientGlowManager.start();
     }
 
-    // Update Discord presence
     logger.info('Clip tags before Discord update:', clipTags);
     if (!clipTags || !clipTags.includes('Private')) {
       if (callbacks.updateDiscordPresenceForClip) {
@@ -2571,10 +2250,8 @@ async function openClip(originalName, customName) {
       }
     }
 
-    // Update last opened clip and navigation buttons
     const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === originalName);
     if (currentIndex !== -1) {
-      // Add a special class to the last-opened clip
       const lastOpenedElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
       if (lastOpenedElement) {
         lastOpenedElement.classList.add('last-opened');
@@ -2585,16 +2262,13 @@ async function openClip(originalName, customName) {
       }
     }
 
-    // Handle initial playback time for trim data
     if (trimData && !isNaN(state.initialPlaybackTime)) {
       elements.videoPlayer.currentTime = state.initialPlaybackTime;
     }
-    
-    // Show video and play when ready
+
     mark('beforePlayPromise');
     logger.info(`[${originalName}] Calling videoPlayer.play()`);
-    
-    // Create a promise for playing
+
     const playPromise = new Promise((resolve, reject) => {
         let playTimeoutId = setTimeout(() => {
             logger.error(`[${originalName}] Play promise timeout - video did not start playing`);
@@ -2604,15 +2278,13 @@ async function openClip(originalName, customName) {
         }, 5000);
 
         const playHandler = () => {
-            // NOW show the video and hide thumbnail when playing actually starts
-            // This prevents seeing the first frame before jumping to the trim start
+            // wait for 'playing' so we don't flash the first frame before the trim-start jump
             elements.videoPlayer.style.opacity = '1';
             const thumbnailOverlay = document.getElementById('thumbnail-overlay');
             if (thumbnailOverlay) {
                 thumbnailOverlay.style.display = 'none';
             }
-            // Placeholder gone — restore the normal spinner behavior for
-            // any later mid-playback buffering.
+            // placeholder gone, restore normal spinner for later mid-playback buffering
             elements.loadingOverlay.classList.remove('thumbnail-backdrop');
 
             elements.videoPlayer.removeEventListener('playing', playHandler);
@@ -2623,12 +2295,11 @@ async function openClip(originalName, customName) {
         };
 
         const errorHandlerPlay = (e) => {
-             // Get actual error from the video element
              const mediaError = elements.videoPlayer.error;
              const errorCode = mediaError ? mediaError.code : 'unknown';
              const errorMessage = mediaError ? mediaError.message : 'Unknown error';
 
-             // Ignore MEDIA_ERR_ABORTED (code 1) - this happens when we intentionally abort
+             // code 1 = intentional abort
              if (errorCode === 1) {
                  logger.info(`[${originalName}] Video play aborted (intentional)`);
                  elements.videoPlayer.removeEventListener('playing', playHandler);
@@ -2656,29 +2327,25 @@ async function openClip(originalName, customName) {
 
         elements.videoPlayer.addEventListener('playing', playHandler);
         elements.videoPlayer.addEventListener('error', errorHandlerPlay);
-        
-        // Actually call play
+
         elements.videoPlayer.play().catch(e => {
-            // Handle promise rejection from .play() itself (e.g. AbortError)
+            // rejection from .play() itself; let the timeout/error event handle
+            // it unless AbortError, main promise isn't rejected here
             if (e.name !== 'AbortError') {
                  logger.error(`[${originalName}] videoPlayer.play() rejected:`, e);
-                 // We don't reject the main promise here, we let the timeout or error event handle it
-                 // unless it's a fatal error
             }
         });
     });
 
     await playPromise;
     mark('afterPlayPromise');
-    
+
     logger.info(`[${originalName}] Clip opened successfully!`);
     mark('end');
 
     if (callbacks.isBenchmarkMode) {
       logger.info(`[PERF] Total: ${timings.end.toFixed(1)}ms`);
-      // Expose a side-channel for the benchmark harness so it can read
-      // per-phase timings + the audio track count of the just-opened clip
-      // without having to plumb anything through openClip's return value.
+      // side-channel for the benchmark harness instead of plumbing through the return value
       try {
         const audioTrackCount = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks.length : 0;
         window.__benchmarkLastOpenTimings = {
@@ -2695,8 +2362,7 @@ async function openClip(originalName, customName) {
     }
 
     logger.error(`[${originalName}] Error during clip opening:`, error);
-    
-    // Hide player overlay on error
+
     elements.playerOverlay.style.display = "none";
     elements.fullscreenPlayer.style.display = "none";
     document.body.classList.remove('player-open');
@@ -2710,9 +2376,6 @@ async function openClip(originalName, customName) {
   }
 }
 
-/**
- * Save trim changes for current clip
- */
 async function persistTrimSave(trimSave) {
   await ipcRenderer.invoke(
     "save-trim",
@@ -2722,10 +2385,8 @@ async function persistTrimSave(trimSave) {
   );
   logger.info(`Trim data saved successfully for ${trimSave.clipName}`);
 
-  // Invalidate cache so next open gets fresh data
   state.clipDataCache.delete(trimSave.clipName);
 
-  // Regenerate thumbnail at new start point
   const result = await ipcRenderer.invoke(
     "regenerate-thumbnail-for-trim",
     trimSave.clipName,
@@ -2791,9 +2452,7 @@ async function saveTrimChanges() {
 }
 
 /**
- * Reset clip trim times
- * 
- * @param {Object} clip - The clip object to reset trim times for
+ * @param {Object} clip
  */
 async function resetClipTrimTimes(clip) {
   try {
@@ -2803,21 +2462,17 @@ async function resetClipTrimTimes(clip) {
 
     if (!isConfirmed) return;
 
-    // Delete trim data for the clip
     await ipcRenderer.invoke("delete-trim", clip.originalName);
     logger.info("Trim data reset successfully for:", clip.originalName);
 
-    // Invalidate cache so next open gets fresh data
     state.clipDataCache.delete(clip.originalName);
 
-    // If this is the currently playing clip, reset the UI trim times
     if (state.currentClip && state.currentClip.originalName === clip.originalName) {
       state.trimStartTime = 0;
       state.trimEndTime = elements.videoPlayer.duration;
       updateTrimControls();
     }
 
-    // Regenerate thumbnail to default (start of video)
     const result = await ipcRenderer.invoke(
       "regenerate-thumbnail-for-trim",
       clip.originalName,
@@ -2825,15 +2480,13 @@ async function resetClipTrimTimes(clip) {
     );
 
     if (result.success) {
-      // Update the thumbnail image
       const clipElement = document.querySelector(
         `.clip-item[data-original-name="${clip.originalName}"]`
       );
-      
+
       if (clipElement) {
         const imgElement = clipElement.querySelector(".clip-item-media-container img");
         if (imgElement) {
-          // Update the thumbnail source with cache busting
           imgElement.src = `file://${result.thumbnailPath}?t=${Date.now()}`;
         }
       }
@@ -2850,50 +2503,43 @@ async function resetClipTrimTimes(clip) {
   }
 }
 
-// ============================================================================
-// CALLBACKS
-// ============================================================================
+// callback hooks wired up by init()
 let callbacks = {
-  onPlayerClose: null,                   // Called when player should close
-  logCurrentWatchSession: null,          // Called to log watch session
-  initializeVolumeControls: null,        // Called to initialize volume controls
-  getCachedClipData: null,               // Called to get cached clip data
-  getThumbnailPath: null,                // Called to get thumbnail path
-  updateDiscordPresenceForClip: null,    // Called to update Discord presence
-  updateNavigationButtons: null,         // Called to update navigation buttons
-  showCustomAlert: null,                 // Called to show custom alert
-  showExportProgress: null,              // Called to show export progress
-  showCustomConfirm: null,               // Called to show custom confirm dialog
-  isBenchmarkMode: false,                // Whether benchmark mode is enabled
-  updateDiscordPresence: null,           // Called to update Discord presence (generic)
-  getActionFromEvent: null,              // Called to resolve keybinding action
-  navigateToVideo: null,                 // Called to navigate between clips
+  onPlayerClose: null,
+  logCurrentWatchSession: null,
+  initializeVolumeControls: null,
+  getCachedClipData: null,
+  getThumbnailPath: null,
+  updateDiscordPresenceForClip: null,
+  updateNavigationButtons: null,
+  showCustomAlert: null,
+  showExportProgress: null,
+  showCustomConfirm: null,
+  isBenchmarkMode: false,
+  updateDiscordPresence: null,
+  getActionFromEvent: null,
+  navigateToVideo: null,
   exportAudioWithFileSelection: null,    // Called to export audio with file picker
   exportVideoWithFileSelection: null,    // Called to export video with file picker
   exportAudioToClipboard: null,          // Called to export audio to clipboard
   exportDefault: null,                   // Called to export using default settings
   confirmAndDeleteClip: null,            // Called to delete current clip
   enableGridNavigation: null,            // Called to enable grid navigation
-  disableGridNavigation: null,           // Called to disable grid navigation
-  openCurrentGridSelection: null,        // Called to open selected clip in grid
-  moveGridSelection: null,               // Called to move grid selection
-  saveTitleChange: null,                 // Called to save clip title changes
-  clearSaveTitleTimeout: null,           // Called to clear pending title save timeout
-  removeClipTitleEditingListeners: null, // Called to remove clip title listeners
-  updateClipDisplay: null,               // Called to update clip display in grid
-  smoothScrollToElement: null,           // Called to scroll to a clip element
-  getVisibleClips: null                  // Called to get visible clips
+  disableGridNavigation: null,
+  openCurrentGridSelection: null,
+  moveGridSelection: null,
+  saveTitleChange: null,
+  clearSaveTitleTimeout: null,
+  removeClipTitleEditingListeners: null,
+  updateClipDisplay: null,
+  smoothScrollToElement: null,
+  getVisibleClips: null
 };
-
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
 
 function init(domElements, callbackOptions = {}) {
   elements = { ...elements, ...domElements };
   callbacks = { ...callbacks, ...callbackOptions };
 
-  // Create managers
   if (elements.videoPlayer && elements.ambientGlowCanvas) {
     ambientGlowManager = new AmbientGlowManager(elements.videoPlayer, elements.ambientGlowCanvas);
   }
@@ -2901,20 +2547,13 @@ function init(domElements, callbackOptions = {}) {
   clipGlowManager = new ClipGlowManager();
   clipGlowManager.init();
 
-  // Set up event listeners
   setupEventListeners();
-
-  // Start drag state check interval
   setInterval(checkDragState, 100);
 
   logger.info('[VideoPlayer] Module initialized');
 }
 
-/**
- * Register video player DOM event listeners.
- */
 function setupEventListeners() {
-  // Speed controls
   if (elements.speedSlider) {
     elements.speedSlider.addEventListener("input", (e) => {
       const newSpeed = parseFloat(e.target.value);
@@ -2929,9 +2568,7 @@ function setupEventListeners() {
     });
   }
 
-  // Speed slider is click-to-expand only (hover-expand removed per design).
-
-  // Volume controls
+  // speed slider is click-to-expand only, hover-expand removed per design
   if (elements.volumeSlider) {
     elements.volumeSlider.addEventListener("input", (e) => {
       const newVolume = parseFloat(e.target.value);
@@ -2965,8 +2602,8 @@ function setupEventListeners() {
     });
 
     elements.volumeContainer.addEventListener("mouseleave", () => {
-      // Multi-track popout stays open until an outside click — auto-hide on
-      // mouseleave was too aggressive to interact with (drag handles, palette).
+      // multi-track popout stays open until an outside click; mouseleave
+      // auto-hide was too aggressive for drag handles/palette interaction
       if (activeAudioTracksManager) return;
       elements.volumeContainer.timeout = setTimeout(() => {
         elements.volumeSlider.classList.add("collapsed");
@@ -2974,10 +2611,8 @@ function setupEventListeners() {
     });
   }
 
-  // Outside-click closer for the multi-track audio panel. Installed once;
-  // no-ops unless the panel is open. Fires on mousedown (not click) so it
-  // takes effect before the player-overlay's own close logic runs on the
-  // same gesture.
+  // closes the multi-track panel; mousedown (not click) so it runs before
+  // the player-overlay's own close logic on the same gesture
   document.addEventListener('mousedown', (e) => {
     if (!activeAudioTracksManager) return;
     const panel = elements.audioTracksPanel;
@@ -2986,7 +2621,6 @@ function setupEventListeners() {
     panel.classList.add('hidden');
   });
 
-  // Video events
   if (elements.videoPlayer) {
     elements.videoPlayer.addEventListener("loadedmetadata", () => {
       requestAnimationFrame(updatePlayhead);
@@ -3004,7 +2638,6 @@ function setupEventListeners() {
     });
   }
 
-  // Progress bar / trim controls
   if (elements.progressBarContainer) {
     elements.progressBarContainer.addEventListener("mousedown", (e) => {
       const rect = elements.progressBarContainer.getBoundingClientRect();
@@ -3038,11 +2671,9 @@ function setupEventListeners() {
     });
   }
 
-  // Fullscreen events
   document.addEventListener('fullscreenchange', handleFullscreenChange);
   document.addEventListener('mouseleave', handleFullscreenMouseLeave);
 
-  // Mouse tracking for drag state
   document.addEventListener("mousedown", () => {
     state.isMouseDown = true;
   });
@@ -3053,13 +2684,11 @@ function setupEventListeners() {
     state.isDraggingTrim = false;
   });
 
-  // Fullscreen button
   const fullscreenButton = document.getElementById("fullscreen-button");
   if (fullscreenButton) {
     fullscreenButton.addEventListener("click", toggleFullscreen);
   }
 
-  // Video click target for play/pause
   if (elements.videoClickTarget) {
     elements.videoClickTarget.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -3067,20 +2696,18 @@ function setupEventListeners() {
     });
   }
 
-  // Mouse movement to show controls
   if (elements.playerOverlay) {
     elements.playerOverlay.addEventListener("mousemove", resetControlsTimeout);
   }
   if (elements.videoControls) {
     elements.videoControls.addEventListener("mousemove", resetControlsTimeout);
-    
-    // Prevent hiding when interacting with controls
+
     elements.videoControls.addEventListener("mouseenter", () => {
       state.isMouseOverControls = true;
       showControls();
       clearTimeout(state.controlsTimeout);
     });
-    
+
     elements.videoControls.addEventListener("mouseleave", () => {
       state.isMouseOverControls = false;
       resetControlsTimeout();
@@ -3088,43 +2715,27 @@ function setupEventListeners() {
   }
 }
 
-// ============================================================================
-// CLEANUP
-// ============================================================================
-
-/**
- * Cleanup function for video preview
- */
 function cleanupVideoPreview() {
-  // Use state.activePreview to access the current preview context
   if (state.previewCleanupTimeout) {
     clearTimeout(state.previewCleanupTimeout);
     state.previewCleanupTimeout = null;
   }
 
-  // Check if we have an active preview with a video element
   if (state.activePreview && state.activePreview.videoElement) {
     const videoElement = state.activePreview.videoElement;
     videoElement.pause();
     videoElement.removeAttribute('src');
     videoElement.load();
     videoElement.remove();
-    
-    // Restore thumbnail visibility if we can find the image element
-    // Note: We'd need reference to the image element too if we want to restore it here
-    // or rely on the fact that removing video reveals what's behind
+
     if (state.activePreview.imgElement) {
        state.activePreview.imgElement.style.display = "";
     }
   }
 
-  // Reset active preview
   state.activePreview = null;
 }
 
-/**
- * Force release of the main video element's file handle.
- */
 async function releaseVideoElement() {
   if (!elements.videoPlayer) return;
 
@@ -3175,10 +2786,6 @@ async function releaseVideoElement() {
     isReleasingVideoElement = false;
   }
 }
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
 
 module.exports = {
   // Initialization

@@ -13,9 +13,7 @@ const clipdipModule = require('./clipdip');
 const DEFAULT_ENDPOINT = 'https://logs.yuma-homeserver.online/api/logs';
 const HARD_CODED_API_KEY = 'db3ca26bdfa8e080866b54ec533d9828f4cfe96cee8ff3bba44ced6f26885cfe';
 
-// Tail caps keep a single upload sane: the current-session main log is
-// usually small (one file per launch) but clipdip's rolling log can hit its
-// 10 MB rotation limit mid-session.
+// tail caps keep an upload sane: clipdip's rolling log can hit its 10 MB rotation limit mid-session
 const MAIN_LOG_TAIL_BYTES = 8 * 1024 * 1024;
 const CLIPDIP_LOG_TAIL_BYTES = 2 * 1024 * 1024;
 const CLIPDIP_OLD_LOG_TAIL_BYTES = 512 * 1024;
@@ -47,9 +45,8 @@ async function tailFileSafe(filePath, maxBytes) {
   }
 }
 
-// diag-queue.jsonl holds clipdip's unflushed crash/capture-failure events;
-// each line carries a base64-gzipped log tail we already upload separately,
-// so strip that field and keep the event metadata.
+// diag-queue.jsonl events carry a base64-gzipped log tail already uploaded separately; strip it,
+// keep the rest
 function summarizeDiagQueue(raw) {
   if (!raw) return '';
   const lines = raw.split(/\r?\n/).filter(Boolean).slice(-DIAG_QUEUE_MAX_EVENTS);
@@ -100,8 +97,7 @@ function buildPayload({
   return parts.join('\n');
 }
 
-// Gather everything clipdip-side that belongs in a text upload. Never throws:
-// a machine without clipdip just gets empty sections.
+// never throws: a machine without clipdip just gets empty sections
 async function collectClipdipSections() {
   const sections = [];
   let statusText = '';
@@ -224,8 +220,7 @@ async function uploadSessionLogs({ rendererConsoleLogs, note } = {}) {
   }
 
   const mainConsoleText = consoleBuffer.getBufferText();
-  // Captured main-side via webContents 'console-message'; the payload field
-  // stays as a fallback for callers that still pass their own buffer.
+  // captured main-side via webContents 'console-message'; payload field is a fallback
   const rendererConsoleText = rendererConsole.getBufferText() || rendererConsoleLogs || '';
   const { statusText: clipdipStatus, sections: clipdipSections } = await collectClipdipSections();
 
@@ -256,16 +251,11 @@ async function uploadSessionLogs({ rendererConsoleLogs, note } = {}) {
   }
 }
 
-// ---------- full bundle upload (zip → /v1/bundles) ---------------------------
-// Same server contract clipdip's Rust uploader speaks (see
-// clipdip/crates/diagnostics/src/client.rs::upload_bundle): multipart with
-// install_id/app_version/source/user_note fields plus the zip, authenticated
-// by X-Clipdip-Key. The key is build-time injected (scripts/gen-ingest-key.mjs
-// writes the gitignored ingest-key.generated.json); without it we fall back
-// to the text log upload so the button never dead-ends.
+// full bundle upload (zip -> /v1/bundles), same contract as clipdip's Rust uploader
+// (client.rs::upload_bundle). key is build-time injected; missing it falls back to text upload
 
 const DEFAULT_BUNDLE_BASE = 'https://logs.yuma-homeserver.online';
-// Server rejects bundles over ~50 MB; stop earlier with a clear message.
+// server rejects bundles over ~50 MB; stop earlier with a clear message
 const MAX_BUNDLE_BYTES = 45 * 1024 * 1024;
 
 function resolveIngestKey() {
@@ -279,9 +269,7 @@ function resolveIngestKey() {
   return null;
 }
 
-// Bundles are correlated server-side by install id. Prefer clipdip's (so
-// manual bundles line up with its automatic crash reports); machines without
-// clipdip get a cliplib-local one.
+// prefer clipdip's install id so manual bundles line up with its crash reports
 async function getInstallId() {
   try {
     const entry = (await clipdipModule.collectDiagnosticFiles()).find((f) => f.name === 'install_id');
@@ -312,8 +300,7 @@ function postBundle({ base, key, zip, installId, appVersion, note }) {
     parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
   textField('install_id', installId);
   textField('app_version', appVersion);
-  // "manual" is the value the server already accepts from clipdip's own
-  // uploader; cliplib bundles are distinguishable by filename + app_version.
+  // "manual" is already accepted from clipdip's uploader
   textField('source', 'manual');
   if (note) textField('user_note', note);
   parts.push(Buffer.from(
@@ -373,7 +360,7 @@ async function uploadDiagnosticsBundle({ note, progressCallback } = {}) {
     return { ...result, mode: 'text' };
   }
 
-  // Lazy: pulls in archiver, which is deliberately kept off the startup path.
+  // lazy require: archiver is deliberately kept off the startup path
   const { createDiagnosticsBundle } = require('../diagnostics/collector');
   const tmpPath = path.join(app.getPath('temp'), `cliplib-diagnostics-${Date.now()}.zip`);
   try {

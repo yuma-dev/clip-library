@@ -1,4 +1,3 @@
-// Imports
 const { promises: fs, statSync } = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -6,9 +5,8 @@ const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
 const telemetry = require('./telemetry');
 
-// These spawns use a bare `ffprobe`/`ffmpeg` from PATH instead of the bundled
-// binaries the rest of the app uses, so on a stock machine every one of them is
-// ENOENT and the import quietly does nothing. Instrumented here, not fixed.
+// spawns a bare `ffprobe`/`ffmpeg` from PATH, not the app's bundled binaries
+// so on a stock machine this is ENOENT and import quietly does nothing
 function reportBinaryMissing(binary, err) {
     telemetry.event('steelseries_binary_missing', {
         kind: telemetry.KIND.SILENT_FAILURE,
@@ -17,7 +15,6 @@ function reportBinaryMissing(binary, err) {
     });
 }
 
-// SteelSeries import processor
 class SteelSeriesProcessor {
     constructor(inputFolder, exportFolder, progressCallback, logCallback) {
         this.inputFolder = inputFolder;
@@ -25,7 +22,7 @@ class SteelSeriesProcessor {
         this.metadataFolder = path.join(exportFolder, '.clip_metadata');
         this.progressCallback = progressCallback;
         this.logCallback = logCallback;
-        // Counted for the import summary event; nothing else reads these.
+        // for the import summary event only
         this.stats = { total: 0, failed: 0, skipped: 0 };
     }
 
@@ -106,18 +103,18 @@ class SteelSeriesProcessor {
                 try {
                     const mediaInfo = JSON.parse(outputData);
                     const tags = mediaInfo.format.tags || {};
-                    
-                    // Combine all STEELSERIES_META tags
+
+                    // STEELSERIES_META tags are numbered (0000, 0001, ...) and split across
+                    // multiple keys; concatenate in sorted order to get the full JSON
                     let fullMeta = '';
                     const metaKeys = Object.keys(tags).filter(key => key.startsWith('STEELSERIES_META'));
-                    metaKeys.sort(); // Ensure correct order (0000, 0001, etc.)
-                    
+                    metaKeys.sort();
+
                     for (const key of metaKeys) {
                         fullMeta += tags[key];
                     }
 
                     try {
-                        // Parse the combined JSON
                         const metadata = JSON.parse(fullMeta);
                         resolve({
                             name: metadata.name,
@@ -196,7 +193,7 @@ class SteelSeriesProcessor {
                     outputFile
                 ];
             } else {
-                // For multiple audio streams, mix them together
+                // mix multiple audio streams together
                 const filterInputs = Array.from({ length: audioStreams }, (_, i) => `[0:a:${i}]`).join('');
                 const filterString = `${filterInputs}amix=inputs=${audioStreams}:duration=longest[aout]`;
                 
@@ -247,38 +244,34 @@ class SteelSeriesProcessor {
         const trimFile = path.join(this.metadataFolder, `${fileName}.trim`);
 
         try {
-            // Check if all files exist
             await Promise.all([
                 fs.access(outputFile),
                 fs.access(nameFile),
                 fs.access(trimFile)
             ]);
 
-            // Compare timestamps
             const inputStat = statSync(inputFile);
             const outputStat = statSync(outputFile);
             const nameStat = statSync(nameFile);
             const trimStat = statSync(trimFile);
 
-            // Check if any timestamps don't match
             const timestampsDiffer = [outputStat, nameStat, trimStat].some(
                 stat => Math.abs(stat.mtimeMs - inputStat.mtimeMs) > 1000
             );
 
             return timestampsDiffer;
         } catch (err) {
-            // If any file doesn't exist or there's an error, we should process
             return true;
         }
     }
 
     async isFileReady(filePath) {
         try {
-            // Try to open the file for writing - if it's locked, it's probably still being written
+            // opening for write fails if the recorder still has it locked
             const fileHandle = await fs.open(filePath, 'r+');
             await fileHandle.close();
-            
-            // Check if file size is stable (hasn't changed in 1 second)
+
+            // stable size over 1s means the write is done
             const size1 = (await fs.stat(filePath)).size;
             await new Promise(resolve => setTimeout(resolve, 1000));
             const size2 = (await fs.stat(filePath)).size;
@@ -297,7 +290,6 @@ class SteelSeriesProcessor {
                 return;
               }
 
-              // Check if file is ready before processing
               if (!await this.isFileReady(inputFile)) {
                 this.log(`File ${path.basename(inputFile)} is still being written, skipping...`);
                 this.stats.skipped++;
@@ -306,7 +298,6 @@ class SteelSeriesProcessor {
           
               this.log(`Processing ${path.basename(inputFile)}`);
 
-            // Debug: First print all metadata
             this.log('Analyzing metadata for:', inputFile);
             await this.getAllMetadata(inputFile);
 
@@ -330,18 +321,15 @@ class SteelSeriesProcessor {
             };
 
             if (await this.combineAudioAndCopy(inputFile, outputFile)) {
-                // Save metadata files
                 await fs.writeFile(nameFile, metadata.name, 'utf8');
                 await this.copyFileTimestamps(inputFile, nameFile);
-    
+
                 await fs.writeFile(trimFile, JSON.stringify(trimData, null, 2), 'utf8');
                 await this.copyFileTimestamps(inputFile, trimFile);
-    
-                // Add the "Imported" tag
+
                 await fs.writeFile(tagsFile, JSON.stringify(["Imported"]), 'utf8');
                 await this.copyFileTimestamps(inputFile, tagsFile);
 
-                // Save recording timestamp if available
                 if (metadata.recording_timestamp) {
                     await fs.writeFile(dateFile, metadata.recording_timestamp, 'utf8');
                     await this.copyFileTimestamps(inputFile, dateFile);
@@ -359,12 +347,11 @@ class SteelSeriesProcessor {
         } catch (err) {
             this.log(`Error processing ${inputFile}: ${err.message}`);
             this.stats.failed++;
-            // this.log only reaches a renderer IPC channel, so this never made
-            // it to the log file either.
+            // this.log only reaches a renderer IPC channel, never the log file
             telemetry.event('steelseries_import_failed', {
                 kind: telemetry.KIND.ERROR,
                 severity: telemetry.SEVERITY.ERROR,
-                // No `error:` — fs messages here carry the clip's own filename.
+                // no `error:`: fs messages here carry the clip's own filename
                 context: { stage: 'process_file', errno: err?.code, error_name: err?.name }
             });
             return false;
@@ -402,12 +389,11 @@ class SteelSeriesProcessor {
 }
 
 /**
- * Import SteelSeries clips from a source folder
- * @param {string} sourcePath - Source folder containing SteelSeries clips
- * @param {Function} getSettings - Function to get current settings
- * @param {Function} getAppPath - Function to get app path (app.getPath.bind(app))
- * @param {Object} eventSender - Event sender for progress updates
- * @returns {Promise<Object>} Result object with success status
+ * @param {string} sourcePath
+ * @param {Function} getSettings
+ * @param {Function} getAppPath
+ * @param {Object} eventSender
+ * @returns {Promise<Object>}
  */
 async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, eventSender) {
   const startedAt = Date.now();
@@ -433,7 +419,6 @@ async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, event
     const settings = await getSettings();
     const clipLocation = settings.clipLocation;
 
-    // Add "Imported" to global tags if it doesn't exist
     let globalTags = [];
     try {
       const tagsFilePath = path.join(getAppPath("userData"), "global_tags.json");
@@ -444,7 +429,6 @@ async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, event
         if (error.code !== "ENOENT") {
           throw error;
         }
-        // File doesn't exist yet, use empty array
       }
 
       if (!globalTags.includes("Imported")) {
@@ -470,7 +454,6 @@ async function importSteelSeriesClips(sourcePath, getSettings, getAppPath, event
       }
     );
 
-    // Log import start
     logActivity('import_start', { source: 'steelseries', sourcePath });
 
     await processor.processFolder();

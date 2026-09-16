@@ -1,13 +1,13 @@
 import { Library, Rss, Settings, type LucideIcon } from "lucide-react";
 
-// State-driven routing (plan D7) — no react-router in the core shell.
+// state-driven routing, no react-router in the core shell
 export type Route = "library" | "feed" | "settings";
 
 export interface RouteDef {
   id: Route;
   label: string;
   icon: LucideIcon;
-  /** Disabled entries are shown but not navigable yet (e.g. Feed — plan D3/Phase 8). */
+  /** disabled entries are shown but not navigable yet */
   disabled?: boolean;
 }
 

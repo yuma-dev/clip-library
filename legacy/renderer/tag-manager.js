@@ -1,25 +1,11 @@
-/**
- * Tag Manager Module
- *
- * Handles tag management operations:
- * - Loading and saving tags
- * - Adding/removing/updating tags
- * - Filtering clips by tags
- * - Tag UI management (filter dropdown, etc.)
- */
+// tag crud, filtering, and the tag filter dropdown ui
 
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
-// ============================================================================
-// STATE
-// ============================================================================
 let globalTags = [];
 
-// ============================================================================
-// TAG MANAGEMENT OPERATIONS
-// ============================================================================
 
 async function loadGlobalTags() {
   try {
@@ -32,9 +18,6 @@ async function loadGlobalTags() {
   }
 }
 
-/**
- * Persist the current global tags list.
- */
 async function saveGlobalTags() {
   try {
     const result = await ipcRenderer.invoke("save-global-tags", globalTags);
@@ -46,28 +29,22 @@ async function saveGlobalTags() {
   }
 }
 
-/**
- * Add a global tag and enable it in filters.
- */
+// adds tag and enables it in both saved and active tag filters
 async function addGlobalTag(tag) {
   if (!globalTags.includes(tag)) {
     globalTags.push(tag);
     await saveGlobalTags();
     
-    // Automatically enable and persist the new tag in both selection states
     state.savedTagSelections.add(tag);
     state.selectedTags.add(tag);
     await saveTagPreferences();
     
     updateFilterDropdown();
     updateTagSelectionUI();
-    // Re-filter to show clips with the new tag - handled by caller or callback
+    // caller re-filters after this
   }
 }
 
-/**
- * Delete a tag globally and from all clips.
- */
 async function deleteTag(tag) {
   logger.info(`deleteTag called for: "${tag}"`);
   const index = globalTags.indexOf(tag);
@@ -79,14 +56,13 @@ async function deleteTag(tag) {
     await saveGlobalTags();
     logger.info(`Global tags saved, current count: ${globalTags.length}`);
 
-    // Remove the tag from all clips by reading files directly from disk
     logger.info(`Starting to remove tag "${tag}" from all .tags files on disk...`);
     const result = await ipcRenderer.invoke("remove-tag-from-all-clips", tag);
     
     if (result.success) {
       logger.info(`Successfully removed tag "${tag}" from ${result.modifiedCount} clips on disk`);
       
-      // Also update any clips in memory
+      // ipc call above only touched disk, sync in-memory clips too
       let memoryClipsModified = 0;
       state.allClips.forEach(clip => {
         const tagIndex = clip.tags.indexOf(tag);
@@ -110,11 +86,8 @@ async function deleteTag(tag) {
   }
 }
 
-/**
- * Rename a tag globally and on all clips.
- */
 async function updateTag(originalTag, newTag) {
-  if (originalTag === newTag) return; // No change, skip update
+  if (originalTag === newTag) return;
 
   const index = globalTags.indexOf(originalTag);
   if (index > -1) {
@@ -122,14 +95,13 @@ async function updateTag(originalTag, newTag) {
     globalTags[index] = newTag;
     await saveGlobalTags();
 
-    // Update the tag in all clips by reading files directly from disk
     logger.info(`Starting to update tag "${originalTag}" to "${newTag}" in all .tags files on disk...`);
     const result = await ipcRenderer.invoke("update-tag-in-all-clips", originalTag, newTag);
     
     if (result.success) {
       logger.info(`Successfully updated tag in ${result.modifiedCount} clips on disk`);
       
-      // Also update any clips in memory
+      // ipc call above only touched disk, sync in-memory clips too
       let memoryClipsModified = 0;
       state.allClips.forEach(clip => {
         const tagIndex = clip.tags.indexOf(originalTag);
@@ -147,15 +119,12 @@ async function updateTag(originalTag, newTag) {
       logger.error(`Failed to update tag in clips: ${result.error}`);
     }
 
-    // Update the filter dropdown
     updateFilterDropdown();
 
-    // If the current filter is the original tag, update it to the new tag
-    // Note: DOM manipulation should be handled by caller or via callback
+    // caller/callback still owns triggering the actual re-filter
     const filterDropdown = document.getElementById("filter-dropdown");
     if (filterDropdown && filterDropdown.value === originalTag) {
       filterDropdown.value = newTag;
-      // Trigger re-filter
     }
 
     logger.info(`Tag "${originalTag}" updated to "${newTag}"`);
@@ -180,37 +149,28 @@ async function toggleClipTag(clip, tag, callbacks = {}) {
   updateClipTags(clip);
   await saveClipTags(clip);
 
-  // If we're in a filtered view and this tag change would affect visibility,
-  // re-filter and re-render the entire view
+  // re-render whole view if this change could hide the clip under current filters
   if (state.selectedTags.size > 0 && callbacks.onFilterNeeded) {
-    // Check if this clip would be filtered out based on current tag selection
     const shouldBeVisible = () => {
       const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
 
-      // Check if clip is unnamed
       const baseFileName = clip.originalName.replace(/\.[^/.]+$/, '');
       const isUnnamed = clip.customName === baseFileName;
       
-      // Check if clip is untagged
       const isUntagged = clipTags.length === 0;
 
-      // If clip is untagged and "Untagged" is not selected, exclude it
       if (isUntagged && !state.selectedTags.has('Untagged')) {
         return false;
       }
 
-      // If clip is unnamed and "Unnamed" is not selected, exclude it
       if (isUnnamed && !state.selectedTags.has('Unnamed')) {
         return false;
       }
 
-      // For clips with tags, check regular tag filtering
       if (clipTags.length > 0) {
         if (state.isInTemporaryMode) {
-          // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
           return clipTags.some(tag => state.temporaryTagSelections.has(tag));
         } else {
-          // In normal mode, clips must have ALL their tags selected to be shown
           return clipTags.every(tag => state.selectedTags.has(tag));
         }
       }
@@ -218,7 +178,6 @@ async function toggleClipTag(clip, tag, callbacks = {}) {
       return state.selectedTags.has('Untagged');
     };
 
-    // If tag change would affect visibility, re-filter everything
     const nowVisible = shouldBeVisible();
     if (nowVisible === false) {
       callbacks.onFilterNeeded();
@@ -228,39 +187,30 @@ async function toggleClipTag(clip, tag, callbacks = {}) {
   updateFilterDropdown();
 }
 
-/**
- * Save tags for a specific clip.
- */
 async function saveClipTags(clip) {
   try {
     await ipcRenderer.invoke("save-clip-tags", clip.originalName, clip.tags);
-    // Invalidate cache so next open gets fresh data
-    state.clipDataCache.delete(clip.originalName);
+    state.clipDataCache.delete(clip.originalName); // stale entry would serve old tags on next open
   } catch (error) {
     logger.error("Error saving clip tags:", error);
   }
 }
 
-/**
- * Load tag selection preferences from disk.
- */
 async function loadTagPreferences() {
   try {
     const savedTags = await ipcRenderer.invoke('get-tag-preferences');
     if (savedTags && savedTags.length > 0) {
       state.savedTagSelections = new Set(savedTags);
       
-      // If "Unnamed" is not in saved preferences, add it automatically (first time feature introduction)
+      // migrate: "Unnamed" was added after this pref existed, backfill it in
       if (!state.savedTagSelections.has('Unnamed')) {
         state.savedTagSelections.add('Unnamed');
-        // Save the updated preferences
         await ipcRenderer.invoke('save-tag-preferences', Array.from(state.savedTagSelections));
       }
     } else {
-      // Default to all tags visible, including system tags
       state.savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
     }
-    state.selectedTags = new Set(state.savedTagSelections); // Initialize global state.selectedTags
+    state.selectedTags = new Set(state.savedTagSelections);
   } catch (error) {
     logger.error('Error loading tag preferences:', error);
     state.savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
@@ -270,9 +220,6 @@ async function loadTagPreferences() {
   updateFilterDropdown();
 }
 
-/**
- * Persist current tag selection preferences.
- */
 async function saveTagPreferences() {
   try {
     await ipcRenderer.invoke('save-tag-preferences', Array.from(state.savedTagSelections));
@@ -281,9 +228,7 @@ async function saveTagPreferences() {
   }
 }
 
-// ============================================================================
-// UI HELPERS
-// ============================================================================
+// ui helpers
 
 function updateTagList() {
   const tagList = document.getElementById("tag-list");
@@ -295,14 +240,14 @@ function updateTagList() {
   
   let tagsToShow = globalTags.filter(tag => tag.toLowerCase().includes(searchTerm));
   
-  // Sort tags by how closely they match the search term
+  // closer matches to the search term sort first
   tagsToShow.sort((a, b) => {
     const aIndex = a.toLowerCase().indexOf(searchTerm);
     const bIndex = b.toLowerCase().indexOf(searchTerm);
     if (aIndex === bIndex) {
-      return a.localeCompare(b); // Alphabetical order if match position is the same
+      return a.localeCompare(b);
     }
-    return aIndex - bIndex; // Earlier match comes first
+    return aIndex - bIndex;
   });
 
   tagList.innerHTML = "";
@@ -336,29 +281,23 @@ function updateTagList() {
   });
 }
 
-/**
- * Truncate a tag label for display.
- */
 function truncateTag(tag, maxLength = 15) {
   if (tag.length <= maxLength) return tag;
   return tag.slice(0, maxLength - 1) + '..';
 }
 
-/**
- * Update tag list on a clip object and UI.
- */
 function updateClipTags(clip) {
   const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(clip.originalName)}"]`);
   if (clipElement) {
     const tagContainer = clipElement.querySelector(".tag-container");
     tagContainer.innerHTML = "";
     
-    const visibleTags = clip.tags.slice(0, 3);  // Show only first 3 tags
+    const visibleTags = clip.tags.slice(0, 3);
     visibleTags.forEach(tag => {
       const tagElement = document.createElement("span");
       tagElement.className = "tag";
       tagElement.textContent = truncateTag(tag);
-      tagElement.title = tag; // Show full tag on hover
+      tagElement.title = tag;
       tagContainer.appendChild(tagElement);
     });
     
@@ -367,11 +306,9 @@ function updateClipTags(clip) {
       moreTagsElement.className = "tag more-tags";
       moreTagsElement.textContent = `+${clip.tags.length - 3}`;
       
-      // Create a tooltip element
       const tooltip = document.createElement("div");
       tooltip.className = "tags-tooltip";
       
-      // Add remaining tags to the tooltip
       clip.tags.slice(3).forEach(tag => {
         const tooltipTag = document.createElement("span");
         tooltipTag.className = "tooltip-tag";
@@ -382,25 +319,21 @@ function updateClipTags(clip) {
       moreTagsElement.appendChild(tooltip);
       tagContainer.appendChild(moreTagsElement);
 
-      // Add event listeners
       moreTagsElement.addEventListener('mouseenter', (e) => showTooltip(e, tooltip));
       moreTagsElement.addEventListener('mouseleave', () => hideTooltip(tooltip));
     }
   }
 }
 
-/**
- * Show a tooltip for truncated tags.
- */
 function showTooltip(event, tooltip) {
   const rect = event.target.getBoundingClientRect();
   tooltip.style.display = 'flex';
   tooltip.style.position = 'fixed';
-  tooltip.style.zIndex = '10000';  // Ensure this is higher than any other z-index in your app
+  tooltip.style.zIndex = '10000'; // above everything else in the app
   tooltip.style.left = `${rect.left}px`;
-  tooltip.style.top = `${rect.bottom + 5}px`; // 5px below the tag
+  tooltip.style.top = `${rect.bottom + 5}px`;
 
-  // Ensure the tooltip doesn't go off-screen
+  // clamp into viewport
   const tooltipRect = tooltip.getBoundingClientRect();
   if (tooltipRect.right > window.innerWidth) {
     tooltip.style.left = `${window.innerWidth - tooltipRect.width}px`;
@@ -409,16 +342,12 @@ function showTooltip(event, tooltip) {
     tooltip.style.top = `${rect.top - tooltipRect.height - 5}px`;
   }
 
-  // Move the tooltip to the body to ensure it's not constrained by any parent elements
+  // reparent to body so an ancestor with overflow:hidden can't clip it
   document.body.appendChild(tooltip);
 }
 
-/**
- * Hide a tag tooltip if present.
- */
 function hideTooltip(tooltip) {
   tooltip.style.display = 'none';
-  // Move the tooltip back to its original parent
   if (tooltip.parentElement === document.body) {
     const moreTagsElement = tooltip.previousElementSibling;
     if (moreTagsElement) {
@@ -427,9 +356,6 @@ function hideTooltip(tooltip) {
   }
 }
 
-/**
- * Wire tag tooltip handlers for a clip element.
- */
 function setupTagTooltips(clipElement) {
   const moreTags = clipElement.querySelector('.more-tags');
   if (moreTags) {
@@ -441,9 +367,6 @@ function setupTagTooltips(clipElement) {
   }
 }
 
-/**
- * Initialize global tooltip handlers.
- */
 function setupTooltips() {
   document.querySelectorAll('.more-tags').forEach(moreTags => {
     const tooltip = moreTags.querySelector('.tags-tooltip');
@@ -458,9 +381,7 @@ function setupTooltips() {
   });
 }
 
-// ============================================================================
-// FILTER DROPDOWN UI
-// ============================================================================
+// filter dropdown
 
 function updateFilterDropdown() {
   const tagList = document.getElementById('tagv2-list');
@@ -468,38 +389,29 @@ function updateFilterDropdown() {
   
   if (!tagList || !tagCount) return;
   
-  // Clear existing list
   tagList.innerHTML = '';
   
-  // Get all unique tags and add system tags
   const allTags = new Set(['Untagged', 'Unnamed', ...globalTags]);
   
-  // Update count
   tagCount.textContent = `(${state.selectedTags.size}/${allTags.size})`;
 
-  // Create and add the "Untagged" option first
+  // Untagged/Unnamed are system tags, always shown first
   const untaggedItem = createTagItem('Untagged');
   tagList.appendChild(untaggedItem);
   
-  // Create and add the "Unnamed" option
   const unnamedItem = createTagItem('Unnamed');
   tagList.appendChild(unnamedItem);
   
-  // Add a separator
   const separator = document.createElement('div');
   separator.className = 'tagv2-separator';
   tagList.appendChild(separator);
   
-  // Add all other tags
   globalTags.forEach(tag => {
     const tagItem = createTagItem(tag);
     tagList.appendChild(tagItem);
   });
 }
 
-/**
- * Build a tag filter UI item.
- */
 function createTagItem(tag) {
   const tagItem = document.createElement('div');
   tagItem.className = `tagv2-item ${state.savedTagSelections.has(tag) ? 'selected' : ''}`;
@@ -514,14 +426,12 @@ function createTagItem(tag) {
   tagItem.appendChild(label);
   tagItem.appendChild(indicator);
   
-  // Separate click handlers for indicator and general tag area
   indicator.addEventListener('click', (e) => {
-    e.stopPropagation(); // Prevent the click from triggering the tag click
-    handleCtrlClickTag(tag, tagItem); // Reuse the ctrl+click logic for single tag focus
+    e.stopPropagation(); // indicator has its own click meaning, don't fall through to tagItem's
+    handleCtrlClickTag(tag, tagItem); // clicking the indicator = focusing on just this tag
   });
 
   tagItem.addEventListener('click', (e) => {
-    // Only handle clicks on the tag area, not the indicator
     if (!e.target.classList.contains('tagv2-indicator')) {
       if (e.ctrlKey || e.metaKey) {
         handleCtrlClickTag(tag, tagItem);
@@ -534,25 +444,16 @@ function createTagItem(tag) {
   return tagItem;
 }
 
-// Callbacks for filter updates (to be set by renderer.js)
-let onFilterUpdate = () => {};
+let onFilterUpdate = () => {}; // set by renderer.js
 
-/**
- * Register a callback to refresh filtering on tag changes.
- */
 function setFilterUpdateCallback(callback) {
   onFilterUpdate = callback;
 }
 
-/**
- * Toggle temporary tag selection (Ctrl mode).
- */
 function handleCtrlClickTag(tag, tagItem) {
   if (!state.isInTemporaryMode || !state.temporaryTagSelections.has(tag)) {
-    // Enter temporary mode or add to temporary selections
     enterTemporaryMode(tag);
   } else {
-    // If ctrl-clicking a temporary selected tag, revert to saved selections
     exitTemporaryMode();
   }
   
@@ -560,16 +461,11 @@ function handleCtrlClickTag(tag, tagItem) {
   onFilterUpdate();
 }
 
-/**
- * Toggle normal tag selection.
- */
 function handleRegularClickTag(tag, tagItem) {
   if (state.isInTemporaryMode) {
-    // If in temporary mode, regular click exits it
     exitTemporaryMode();
   } 
   
-  // Toggle the tag selection
   if (state.savedTagSelections.has(tag)) {
     state.savedTagSelections.delete(tag);
   } else {
@@ -582,39 +478,29 @@ function handleRegularClickTag(tag, tagItem) {
   onFilterUpdate();
 }
 
-/**
- * Enter temporary (focus) tag selection mode.
- */
 function enterTemporaryMode(tag) {
   state.isInTemporaryMode = true;
   state.temporaryTagSelections.clear();
   state.temporaryTagSelections.add(tag);
-  state.selectedTags = state.temporaryTagSelections; // Update the global state.selectedTags
+  state.selectedTags = state.temporaryTagSelections;
 }
 
-/**
- * Exit temporary tag selection mode.
- */
 function exitTemporaryMode() {
   state.isInTemporaryMode = false;
   state.temporaryTagSelections.clear();
-  state.selectedTags = new Set(state.savedTagSelections); // Restore saved selections
+  state.selectedTags = new Set(state.savedTagSelections);
 }
 
-/**
- * Refresh tag filter UI selection state.
- */
 function updateTagSelectionUI() {
   const tagItems = document.querySelectorAll('.tagv2-item');
   tagItems.forEach(item => {
     const label = item.querySelector('.tagv2-item-label').textContent;
-    const isSelected = state.isInTemporaryMode ? 
-      state.temporaryTagSelections.has(label) : 
+    const isSelected = state.isInTemporaryMode ?
+      state.temporaryTagSelections.has(label) :
       state.savedTagSelections.has(label);
     
     item.classList.toggle('selected', isSelected);
     
-    // Add visual indicator for temporary mode
     if (state.isInTemporaryMode && state.temporaryTagSelections.has(label)) {
       item.classList.add('temp-selected');
     } else {
@@ -625,9 +511,7 @@ function updateTagSelectionUI() {
   updateTagCount();
 }
 
-/**
- * Update tag selection sets from UI state.
- */
+// like updateTagSelectionUI but keys off state.selectedTags, not saved/temporary
 function updateTagSelectionStates() {
   const tagItems = document.querySelectorAll('.tagv2-item');
   tagItems.forEach(item => {
@@ -636,26 +520,18 @@ function updateTagSelectionStates() {
   });
 }
 
-/**
- * Update the selected tag count display.
- */
 function updateTagCount() {
   const tagCount = document.getElementById('tagv2-count');
   const allTags = new Set(['Untagged', 'Unnamed', ...globalTags]);
   tagCount.textContent = `(${state.selectedTags.size}/${allTags.size})`;
 }
 
-/**
- * Build the tag filter UI container.
- */
 function createTagFilterUI() {
-  // First remove old filter dropdown if it exists
   const oldDropdown = document.getElementById('filter-dropdown');
   if (oldDropdown) {
     oldDropdown.remove();
   }
 
-  // Create the new tag filter structure
   const tagFilter = document.createElement('div');
   tagFilter.id = 'tagv2-filter';
   tagFilter.className = 'tagv2-filter';
@@ -674,11 +550,9 @@ function createTagFilterUI() {
     </div>
   `;
 
-  // Find the search container and insert after it
   const searchContainer = document.getElementById('search-container');
   if (searchContainer) {
     const searchFilterPill = document.getElementById('search-filter-pill');
-    // Look for any existing tag filters and remove them
     const existingFilters = document.querySelectorAll('.tagv2-filter');
     existingFilters.forEach(filter => filter.remove());
 
@@ -692,9 +566,6 @@ function createTagFilterUI() {
   setupTagFilterEventListeners();
 }
 
-/**
- * Wire tag filter UI event listeners.
- */
 function setupTagFilterEventListeners() {
   const tagButton = document.getElementById('tagv2-button');
   const tagDropdown = document.getElementById('tagv2-dropdown');
@@ -703,14 +574,12 @@ function setupTagFilterEventListeners() {
   const deselectAllBtn = document.getElementById('tagv2-deselect-all');
 
   if (tagButton && tagDropdown) {
-    // Toggle dropdown
     tagButton.addEventListener('click', (e) => {
       e.stopPropagation();
       tagDropdown.classList.toggle('show');
     });
   }
 
-  // Close dropdown when clicking outside
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.tagv2-filter')) {
       tagDropdown?.classList.remove('show');
@@ -718,7 +587,6 @@ function setupTagFilterEventListeners() {
   });
 
   if (tagSearch) {
-    // Search functionality
     tagSearch.addEventListener('input', debounce(() => {
       const searchTerm = tagSearch.value.toLowerCase();
       const tagItems = document.querySelectorAll('.tagv2-item');
@@ -732,7 +600,7 @@ function setupTagFilterEventListeners() {
 
   if (selectAllBtn) {
     selectAllBtn.addEventListener('click', (e) => {
-      e.stopPropagation(); // Prevent event from bubbling up
+      e.stopPropagation();
       exitTemporaryMode();
       state.savedTagSelections = new Set(['Untagged', 'Unnamed', ...globalTags]);
       state.selectedTags = new Set(state.savedTagSelections);
@@ -745,7 +613,7 @@ function setupTagFilterEventListeners() {
   
   if (deselectAllBtn) {
     deselectAllBtn.addEventListener('click', (e) => {
-      e.stopPropagation(); // Prevent event from bubbling up
+      e.stopPropagation();
       exitTemporaryMode();
       state.savedTagSelections.clear();
       state.selectedTags.clear();
@@ -756,10 +624,6 @@ function setupTagFilterEventListeners() {
     });
   }
 }
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
 
 module.exports = {
   // Constants

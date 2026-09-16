@@ -1,13 +1,6 @@
-// Frame + main-thread monitor (dev-only).
-//
-// Two sources of "the UI hitched":
-//   1. a RAF loop measuring frame-to-frame delta — a long gap means a frame was
-//      dropped (something blocked between paints);
-//   2. PerformanceObserver for longtask / event-timing / layout-shift / paint —
-//      attributes *why* (a long JS task, a slow event handler, layout thrash).
-//
-// Long frames and long tasks refresh the interaction watchdog so a slow chain
-// stays attributed to the interaction that kicked it off.
+// dev-only frame + main-thread monitor: a RAF loop flags dropped frames (delta too big)
+// PerformanceObserver attributes why (longtask/event-timing/layout-shift/paint)
+// both refresh the interaction watchdog so a slow chain stays attributed to what kicked it off
 
 import { span, instant, counter, reportFps, reportDroppedFrame, reportLongTask, TID, wallMs } from "./trace";
 import { noteActivity, currentInteraction } from "./interactions";
@@ -59,12 +52,12 @@ function observe(type: string, init: PerformanceObserverInit, cb: (entry: Perfor
     obs.observe({ type, ...init } as PerformanceObserverInit);
     observers.push(obs);
   } catch {
-    /* observer type unsupported in this Chromium — skip */
+    /* observer type unsupported in this Chromium, skip */
   }
 }
 
 function startObservers(): void {
-  // Long tasks: >50ms of blocked main thread. The single biggest "where's my lag".
+  // longtask: >50ms blocked main thread, the biggest "where's my lag" source
   observe("longtask", { buffered: true }, (e) => {
     reportLongTask(e.duration);
     span(`longtask ${Math.round(e.duration)}ms`, TID.longtask, wallMs() - e.duration, e.duration, {
@@ -74,7 +67,7 @@ function startObservers(): void {
     noteActivity();
   });
 
-  // Event Timing: real input→handler→paint latency (click, keydown, etc.).
+  // real input->handler->paint latency
   observe("event", { durationThreshold: 16, buffered: true } as PerformanceObserverInit, (e) => {
     const ev = e as PerformanceEventTiming;
     span(`event:${ev.name} ${Math.round(ev.duration)}ms`, TID.interaction, wallMs() - ev.duration, ev.duration, {
@@ -84,14 +77,14 @@ function startObservers(): void {
     });
   });
 
-  // Layout shifts: unexpected reflow/jank (CLS-style, minus input-driven ones).
+  // unexpected reflow/jank, CLS-style, minus input-driven shifts
   observe("layout-shift", { buffered: true }, (e) => {
     const ls = e as unknown as { value: number; hadRecentInput: boolean };
     if (ls.hadRecentInput) return;
     counter("layout-shift", { value: Number(ls.value.toFixed(4)) }, TID.layout);
   });
 
-  // Paints (first-paint / first-contentful-paint) — startup + route changes.
+  // first-paint / first-contentful-paint, startup + route changes
   observe("paint", { buffered: true }, (e) => {
     instant(e.name, TID.frames);
   });

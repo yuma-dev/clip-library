@@ -1,8 +1,6 @@
-// Publish-to-ClipLib modal, opened from the player's upload button. Collects
-// title + "featuring" mentions (registered ClipLib users), then hands the
-// export+upload to the existing share-clip IPC (main/share.js) and renders
-// its progress events. Payload mirrors the legacy buildSharePayload
-// (legacy/renderer.js:1942): current trim window, per-clip volume, live speed.
+// publish-to-ClipLib modal from the player's upload button; hands export+upload to the
+// share-clip IPC (main/share.js). payload mirrors legacy buildSharePayload
+// (legacy/renderer.js:1942): trim window, per-clip volume, live speed
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -15,7 +13,7 @@ interface ShareUser {
   username: string;
   displayName: string;
   avatarUrl: string;
-  /** Linked Discord user id, if the ClipLib account is connected to one. */
+  /** linked discord user id, if the account is connected to one */
   discordId?: string | null;
 }
 
@@ -44,15 +42,13 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
   const [progress, setProgress] = useState<ShareProgress | null>(null);
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  // Discord ids of the people recorded in this clip's .gameinfo — used to
-  // preselect the matching ClipLib accounts in the "Featuring" list.
+  // discord ids from this clip's .gameinfo, preselects matching accounts in "Featuring"
   const [clipDiscordIds, setClipDiscordIds] = useState<Set<string> | null>(null);
-  // The upload keeps running main-side if the modal unmounts; guard state sets.
+  // upload keeps running main-side if the modal unmounts; guards state sets
   const aliveRef = useRef(true);
-  // Guards the one-time auto-preselect so it can't clobber manual edits.
+  // one-time auto-preselect guard, so it can't clobber manual edits
   const preselectedRef = useRef(false);
 
-  // Reset per open, seeding the title from the player's live title input.
   useEffect(() => {
     if (!open) return;
     aliveRef.current = true;
@@ -70,8 +66,6 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
     setClipDiscordIds(null);
     preselectedRef.current = false;
 
-    // Load the Discord participants recorded in this clip so we can preselect
-    // the ClipLib accounts linked to them.
     const clipName = current?.originalName;
     if (clipName) {
       void window.clips
@@ -93,7 +87,6 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
     };
   }, [open]);
 
-  // Load mentionable users when the form shows.
   useEffect(() => {
     if (!open || users) return;
     void window.clips
@@ -108,9 +101,7 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       });
   }, [open, users]);
 
-  // Once both the user list and the clip's participants have loaded, preselect
-  // every ClipLib account whose linked Discord id appears in the clip. Runs
-  // once per open (preselectedRef) so it never overrides manual toggles.
+  // preselects accounts whose linked discord id appears in the clip, once per open
   useEffect(() => {
     if (!open || preselectedRef.current || !users || !clipDiscordIds) return;
     preselectedRef.current = true;
@@ -171,9 +162,7 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       /* default volume */
     }
 
-    // Per-track mix snapshot (null for single-track clips). Without this the
-    // uploaded clip ignores individually-adjusted track volumes — see the
-    // normal export path in playerExport.ts, which passes the same mix.
+    // null for single-track clips; without it uploads ignore per-track volume (see playerExport.ts)
     let audioMix: unknown = null;
     try {
       audioMix = player.getActiveAudioTracksManager?.()?.getExportMix?.() ?? null;
@@ -205,9 +194,7 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       } | null;
       if (!aliveRef.current) return;
       if (result?.success) {
-        // The feed caches its list per filter in sessionStorage with a 30s
-        // fresh-skip; drop it so opening the feed after this upload refetches
-        // and shows the new clip instead of the stale cached list.
+        // feed caches its list per filter (30s fresh-skip); drop it so it refetches and shows this clip
         invalidateFeedListCache();
         setStage("done");
         setClipUrl(result.clipUrl ?? null);

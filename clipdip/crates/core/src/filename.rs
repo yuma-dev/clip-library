@@ -1,32 +1,17 @@
-//! Filename templating for saved clips.
-//!
-//! The user's `output.filename_stem` is a template with `[token]`
-//! placeholders, e.g. the default `[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]`
-//! → `VALORANT 14.05.09 - 11.06.2026`.
-//!
-//! Tokens are short and case-sensitive, and repetition controls padding /
-//! length (moment.js convention): `[s]` → `7`, `[ss]` → `07`, `[M]` → `6`,
-//! `[MMM]` → `Jun`, `[MMMM]` → `June`. Unknown tokens are left in the
-//! output verbatim so typos are visible instead of silently vanishing.
-//!
-//! Every substituted value is sanitized for use in a Windows filename,
-//! and the final string gets a second pass (the template literal itself
-//! may contain `:` etc.). Collisions are handled by [`unique_stem`],
-//! which appends ` (2)`, ` (3)`, … only when a file with the same name
-//! already exists.
+//! Filename templating for saved clips. `output.filename_stem` uses `[token]` placeholders
+//! moment.js-style repetition for padding (`[s]`=7, `[ss]`=07, `[MMM]`=Jun); unknown tokens
+//! stay literal so typos are visible. Sanitized twice: substituted values, then whole string.
 
 use chrono::{DateTime, Datelike, Local, Timelike};
 use std::path::Path;
 
-/// Values that can't be derived from the clock — who was on screen and
+/// Values that can't be derived from the clock: who was on screen and
 /// what kind of save this is.
 #[derive(Clone, Debug)]
 pub struct FilenameVars {
-    /// Focused application's name at hotkey time (exe stem, e.g.
-    /// `VALORANT`). `None` falls back to `Desktop`.
+    /// Focused app at hotkey time (exe stem, e.g. `VALORANT`); `None` -> `Desktop`.
     pub app_name: Option<String>,
-    /// Focused window's title at hotkey time. `None` falls back to the
-    /// app name.
+    /// Focused window title at hotkey time; `None` falls back to app name.
     pub window_title: Option<String>,
     /// `"Clip"` or `"Recording"`.
     pub kind: &'static str,
@@ -114,7 +99,7 @@ pub fn expand_at(template: &str, vars: &FilenameVars, now: DateTime<Local>) -> S
                 rest = &after[end + 1..];
             }
             None => {
-                // Unmatched '[' — emit the remainder as-is.
+                // unmatched '[': emit the remainder as-is
                 out.push_str(&rest[start..]);
                 rest = "";
             }
@@ -183,21 +168,16 @@ fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// Sanitize one substituted value: keep word characters and a small set
-/// of filename-safe punctuation, drop everything else (including `[`/`]`
-/// so values can't fake template tokens).
+/// Keeps word chars plus filename-safe punctuation; drops `[`/`]` too so a
+/// value can't fake a template token.
 fn sanitize_component(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_alphanumeric() || " _-.,()&'+!#=@".contains(*c))
         .collect()
 }
 
-/// Final pass over the whole stem: the template literal itself may carry
-/// characters Windows forbids. `:` becomes `.` (people write [HH]:[mm]),
-/// other forbidden characters become `-`. Whitespace is collapsed, edges
-/// are trimmed of spaces/dots (Windows strips trailing dots itself, and
-/// leading dots make hidden files), length is capped, and an empty
-/// result falls back to `"Clip"`.
+/// `:` -> `.` (people write [HH]:[mm]), other forbidden chars -> `-`. Collapses
+/// whitespace, trims edge spaces/dots (leading dots make hidden files), caps length, empty -> `"Clip"`.
 fn finalize(s: &str) -> String {
     let mapped: String = s
         .chars()
@@ -225,9 +205,7 @@ fn finalize(s: &str) -> String {
     }
 }
 
-/// Return `stem` if `{stem}.mp4` doesn't exist in `dir`, otherwise the
-/// first free `{stem} (2)`, `{stem} (3)`, … — the numbered suffix only
-/// appears on an actual collision.
+/// `stem` if free, else first free `{stem} (2)`, `{stem} (3)`, etc.
 pub fn unique_stem(dir: &Path, stem: &str) -> String {
     if !dir.join(format!("{stem}.mp4")).exists() {
         return stem.to_string();
@@ -238,7 +216,7 @@ pub fn unique_stem(dir: &Path, stem: &str) -> String {
             return candidate;
         }
     }
-    // Pathological directory — fall back to something certain to be fresh.
+    // pathological directory: fall back to something certain to be fresh
     format!("{stem} {}", Local::now().timestamp())
 }
 
@@ -296,8 +274,7 @@ mod tests {
             window_title: None,
             kind: "Clip",
         };
-        // Forbidden chars are stripped from the value; the literal ':' in
-        // the template maps to '.'.
+        // chars stripped from value; template's literal ':' maps to '.'
         assert_eq!(expand_at("[app] at [HH]:[mm]", &v, at()), "WeirdAppName at 14.05");
     }
 

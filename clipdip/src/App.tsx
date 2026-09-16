@@ -1,8 +1,7 @@
 import MainWindow from "./windows/Main";
 
-// The overlay window has its own entry point (`overlay.html` ->
-// `src/overlay-entry.tsx`) so it doesn't pay the cost of loading the
-// settings UI bundle. This file is only used by the settings window.
+// overlay.html/overlay-entry.tsx is a separate entry point so the overlay
+// doesn't load the settings UI bundle; this file is only for the settings window
 export default function App() {
   return <MainWindow />;
 }

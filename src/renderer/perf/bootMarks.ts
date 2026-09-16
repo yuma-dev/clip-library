@@ -1,9 +1,6 @@
-// Boot timeline marks for benchmark/cold-start.js.
-//
-// `window.__bootTrace` exists only when the app was launched with
-// CLIPLIB_BOOT_TRACE=1 (preload.js installs it). Every helper here is a no-op
-// otherwise, so call sites cost nothing in normal launches. Unlike the rest
-// of src/renderer/perf this must work in packaged builds.
+// boot timeline marks for benchmark/cold-start.js
+// window.__bootTrace exists only under CLIPLIB_BOOT_TRACE=1 (preload.js); otherwise every
+// helper here is a no-op. unlike the rest of perf/, this must work in packaged builds
 
 declare global {
   interface Window {
@@ -14,8 +11,7 @@ declare global {
 export function bootMark(name: string, t?: number): void {
   if (!window.__bootTrace) return;
   window.__bootTrace.mark(name, t);
-  // Also a user-timing mark, so a Chromium trace of the launch carries the
-  // same names (benchmark/analyze-trace.js aligns its windows on them).
+  // also a user-timing mark so a Chromium trace shares names with benchmark/analyze-trace.js
   try {
     performance.mark(name);
   } catch {
@@ -39,8 +35,7 @@ export function initBootMarks(): void {
     /* paint timing unsupported */
   }
 
-  // First card in the DOM, then the first real (cached, decoded) thumbnail.
-  // Placeholder art is a bundled asset; real thumbnails live in thumbnail-cache.
+  // first card in the DOM, then the first real thumbnail (placeholder art is a bundled asset)
   let sawCard = false;
   const poll = () => {
     const imgs = document.querySelectorAll<HTMLImageElement>(".clip-item img");

@@ -1,7 +1,5 @@
-// Player keybindings — ported from the legacy renderer/keybinding-manager.js.
-// Maps KeyboardEvents to action names the wrapped legacy player switches on
-// (playPause, frameForward, fullscreen, …). Loaded from settings with a
-// fallback to defaults; rebinding UI lands with Settings (Phase 7).
+// ported from legacy renderer/keybinding-manager.js. maps KeyboardEvents to action names the
+// wrapped legacy player switches on; loaded from settings with a fallback to these defaults
 
 export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   playPause: "Space",
@@ -27,21 +25,21 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
 
 let keybindings: Record<string, string> = { ...DEFAULT_KEYBINDINGS };
 
-/** Normalize a combo string ("ctrl+shift+E" -> "Ctrl+Shift+e") for comparison. */
+/** normalizes a combo string ("ctrl+shift+E" -> "Ctrl+Shift+e") for comparison */
 function normaliseCombo(str: string): string {
   return str
     .split("+")
     .map((part) => {
       const p = part.trim();
       if (!p) return "";
-      // Single-character keys compare case-insensitively — store lowercase.
+      // single-character keys compare case-insensitively, store lowercase
       if (p.length === 1) return p.toLowerCase();
       return p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
     })
     .join("+");
 }
 
-/** Build a normalized combo string from a KeyboardEvent. */
+/** builds a normalized combo string from a KeyboardEvent */
 function buildEventCombo(e: KeyboardEvent): string {
   const parts: string[] = [];
   if (e.ctrlKey || e.metaKey) parts.push("Ctrl");
@@ -54,7 +52,7 @@ function buildEventCombo(e: KeyboardEvent): string {
   return normaliseCombo(parts.join("+"));
 }
 
-/** Map a key event to the configured action name (or null). */
+/** maps a key event to the configured action name, or null */
 export function getActionFromEvent(e: KeyboardEvent): string | null {
   const combo = buildEventCombo(e);
   for (const [action, binding] of Object.entries(keybindings)) {
@@ -63,17 +61,17 @@ export function getActionFromEvent(e: KeyboardEvent): string | null {
   return null;
 }
 
-/** Current bindings (copy) — drives the settings Shortcuts tab. */
+/** current bindings (copy); drives the settings Shortcuts tab */
 export function getAllKeybindings(): Record<string, string> {
   return { ...keybindings };
 }
 
-/** Replace the live bindings (settings Shortcuts tab persists separately). */
+/** replaces the live bindings; settings Shortcuts tab persists separately */
 export function applyKeybindings(map: Record<string, string>): void {
   keybindings = { ...DEFAULT_KEYBINDINGS, ...map };
 }
 
-/** Load keybindings from settings (merged over defaults). */
+/** loads keybindings from settings, merged over defaults */
 export async function initKeybindings(): Promise<void> {
   try {
     const settings = await window.clips.getSettings();

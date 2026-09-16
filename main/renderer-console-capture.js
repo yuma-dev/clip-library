@@ -1,10 +1,7 @@
-// Renderer console capture — main-process side.
-//
-// The renderer's console.* output only exists in DevTools; nothing persists
-// it. Diagnostics (log upload + zip) need it, and the old approach — the
-// renderer passing its own buffer over IPC — broke silently when the React
-// UI stopped filling it in. Capturing via webContents 'console-message'
-// works for every window without renderer cooperation.
+// renderer console.* only exists in DevTools; diagnostics needs it persisted.
+// old approach (renderer pushing its buffer over IPC) broke silently when the
+// React UI stopped filling it in. webContents 'console-message' works for
+// every window without renderer cooperation.
 const DEFAULT_MAX_ENTRIES = 2000;
 const MAX_ENTRIES = Number(process.env.CONSOLE_LOG_BUFFER_MAX) || DEFAULT_MAX_ENTRIES;
 
@@ -24,8 +21,7 @@ function pushEntry(level, message, line, sourceId) {
 function attach(webContents, label = 'renderer') {
   webContents.on('console-message', (event, legacyLevel, legacyMessage, legacyLine, legacySourceId) => {
     try {
-      // Electron is migrating this event from positional args to a params
-      // object on `event`; accept both shapes.
+      // Electron is migrating this event from positional args to a params object
       const details = event && typeof event === 'object' && 'message' in event ? event : null;
       const rawLevel = details ? details.level : legacyLevel;
       const message = details ? details.message : legacyMessage;
@@ -36,7 +32,7 @@ function attach(webContents, label = 'renderer') {
         : String(rawLevel || 'log').toUpperCase();
       pushEntry(`[${label}] ${level}`, String(message ?? ''), line, sourceId);
     } catch (_) {
-      // Never let diagnostics capture break the window
+      // never let diagnostics capture break the window
     }
   });
 }

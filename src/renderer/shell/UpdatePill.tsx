@@ -11,9 +11,8 @@ function StarSvg() {
   );
 }
 
-// Update pill — sits between the stat cards and the profile card in the rail.
-// Visual style copied from the Game Launcher rail updater: purple accent,
-// progress fill while downloading, star burst on hover while available.
+// sits between the stat cards and profile card in the rail
+// style copied from the Game Launcher rail updater: purple accent, progress fill, hover star burst
 function UpdatePill() {
   const { phase, latestVersion, percent } = useUpdater();
   if (phase === "idle") return null;
@@ -32,8 +31,8 @@ function UpdatePill() {
     phase === "downloaded" ? RotateCcw : phase === "downloading" ? Loader2 : phase === "error" ? RefreshCw : Download;
 
   const handleClick = () => {
-    // available → download; error → retry. Downloading/downloaded do nothing —
-    // main launches the installer and quits on its own after the download.
+    // available triggers download, error retries; downloading/downloaded do nothing
+    // main launches the installer and quits on its own after the download
     if (phase === "available" || phase === "error") void startUpdateDownload();
   };
 

@@ -7,9 +7,8 @@ import { useToast } from "../../../ui/Toast";
 import { clipdipBridge, useClipdip, usePoll } from "./ClipdipContext";
 import { ClipdipStatusBadge } from "./controls";
 
-// Clipdip's own settings live in its TOML config; only enabled/binaryPath are
-// library settings. Autostart's source of truth is the bridge (registry via
-// getStatus().autostart), not settings.json.
+// clipdip's own settings live in its TOML config; only enabled/binaryPath live here
+// autostart's source of truth is the bridge (getStatus().autostart), not settings.json
 export default function ClipdipGeneralSection() {
   const { settings, set } = useSettings();
   const toast = useToast();
@@ -151,12 +150,9 @@ export default function ClipdipGeneralSection() {
   );
 }
 
-// Anonymous, opt-out diagnostics. Reads/writes its own state via the control
-// server (deliberately outside the config round-trip, so toggling never
-// restarts the pipeline). Requires a running clipdip.
-//
-// Manual diagnostic sharing lives in Settings → About → Diagnostics: one
-// universal bundle covering both the library and clipdip.
+// opt-out diagnostics toggle goes through the control server, not settings.json, so it never
+// restarts the pipeline
+// manual bundle export lives in Settings > About > Diagnostics (covers library + clipdip)
 function TelemetryGroup() {
   const { running } = useClipdip();
   const [telemetry, setTelemetry] = useState<{ enabled: boolean; configured: boolean } | null>(null);

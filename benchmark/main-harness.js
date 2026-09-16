@@ -1,11 +1,6 @@
 /**
- * Main Process Benchmark Harness
- * 
- * Instruments the main process for benchmarking:
- * - Startup timing
- * - IPC call timing
- * - FFmpeg operations
- * - File system operations
+ * Instruments the main process for benchmarking: startup timing, IPC call
+ * timing, FFmpeg operations, file system operations.
  */
 
 'use strict';
@@ -20,8 +15,7 @@ class MainHarness {
     this.startupMarks = {};
     this.isEnabled = process.env.CLIPS_BENCHMARK === '1';
     this.verbose = process.env.CLIPS_BENCHMARK_VERBOSE === '1';
-    
-    // Record process start time
+
     this.processStartTime = Date.now();
     
     if (this.isEnabled) {
@@ -42,10 +36,7 @@ class MainHarness {
     }
   }
 
-  /**
-   * Mark a startup phase
-   * @param {string} phase - Phase name
-   */
+  /** @param {string} phase */
   markStartup(phase) {
     if (!this.isEnabled) return;
     
@@ -54,9 +45,8 @@ class MainHarness {
   }
 
   /**
-   * End a startup phase mark
-   * @param {string} phase - Phase name
-   * @returns {Object|null} Measurement result
+   * @param {string} phase
+   * @returns {Object|null}
    */
   endStartup(phase) {
     if (!this.isEnabled) return null;
@@ -69,9 +59,6 @@ class MainHarness {
     return result;
   }
 
-  /**
-   * Record app ready time
-   */
   recordAppReady() {
     if (!this.isEnabled) return;
     
@@ -80,14 +67,10 @@ class MainHarness {
     this.log(`App ready in ${formatters.duration(appReadyTime)}`);
   }
 
-  /**
-   * Setup IPC handler interception for timing
-   */
   setupIPCInterception() {
     const originalHandle = ipcMain.handle.bind(ipcMain);
     const self = this;
 
-    // Intercept ipcMain.handle to wrap handlers with timing
     ipcMain.handle = function(channel, handler) {
       const wrappedHandler = async (event, ...args) => {
         const startTime = performance.now();
@@ -98,8 +81,7 @@ class MainHarness {
           
           const duration = performance.now() - startTime;
           const memoryDelta = process.memoryUsage().heapUsed - startMemory;
-          
-          // Record IPC timing
+
           self.recordIPCTiming(channel, duration, memoryDelta);
           
           return result;
@@ -114,9 +96,6 @@ class MainHarness {
     };
   }
 
-  /**
-   * Record IPC call timing
-   */
   recordIPCTiming(channel, duration, memoryDelta, isError = false) {
     if (!this.ipcTimings.has(channel)) {
       this.ipcTimings.set(channel, []);
@@ -129,7 +108,6 @@ class MainHarness {
       timestamp: Date.now()
     });
 
-    // Also record to metrics for aggregation
     this.metrics.recordManual(`ipc:${channel}`, duration, {
       memory: { heapUsedDelta: memoryDelta },
       isError
@@ -140,11 +118,7 @@ class MainHarness {
     }
   }
 
-  /**
-   * Setup benchmark-specific IPC handlers
-   */
   setupBenchmarkIPC() {
-    // Handler to get current metrics from main process
     ipcMain.handle('benchmark:getMainMetrics', () => {
       return {
         summary: this.metrics.getSummary(),
@@ -153,47 +127,39 @@ class MainHarness {
       };
     });
 
-    // Handler to mark phases from renderer
     ipcMain.handle('benchmark:markPhase', (event, phase) => {
       this.metrics.startMark(`phase:${phase}`);
       return true;
     });
 
-    // Handler to end phase marks from renderer
     ipcMain.handle('benchmark:endPhase', (event, phase) => {
       return this.metrics.endMark(`phase:${phase}`);
     });
 
-    // Handler to get final benchmark results
     ipcMain.handle('benchmark:getResults', () => {
       return this.getResults();
     });
 
-    // Handler to reset metrics
     ipcMain.handle('benchmark:reset', () => {
       this.metrics.reset();
       this.ipcTimings.clear();
       return true;
     });
 
-    // Handler to output result to stdout (for runner to capture)
+    // for runner to capture
     ipcMain.handle('benchmark:outputResult', (event, result) => {
-      // Write directly to stdout so runner can capture it
       process.stdout.write(`BENCHMARK_RESULT:${JSON.stringify(result)}\n`);
       this.log(`Result output: ${result.scenario}`);
       return true;
     });
 
-    // Handler to output openClip timing breakdown to stdout
     ipcMain.handle('benchmark:outputTiming', (event, timing) => {
       process.stdout.write(`OPENCLIP_TIMING:${JSON.stringify(timing)}\n`);
       return true;
     });
 
-    // Generic marker forwarder. Renderer-side console.log doesn't reach the
-    // spawned Electron's stdout, so anything that needs to be picked up by
-    // the runner's line parser (e.g. AUDIO_TRACK_COMPARE) has to round-trip
-    // through this handler.
+    // renderer console.log doesn't reach the spawned Electron's stdout; anything the
+    // runner's line parser needs (e.g. AUDIO_TRACK_COMPARE) round-trips through here
     ipcMain.handle('benchmark:outputMarker', (event, marker, payload) => {
       const safeMarker = String(marker || '').replace(/[^A-Z0-9_]/gi, '');
       if (!safeMarker) return false;
@@ -201,14 +167,12 @@ class MainHarness {
       return true;
     });
 
-    // Handler to output complete signal to stdout
     ipcMain.handle('benchmark:outputComplete', (event, data) => {
       process.stdout.write(`BENCHMARK_COMPLETE:${JSON.stringify(data)}\n`);
       this.log('Benchmark complete signal sent');
       return true;
     });
 
-    // Handler to quit the app after benchmarks complete
     ipcMain.handle('benchmark:quit', () => {
       this.log('Quitting app after benchmark');
       setTimeout(() => {
@@ -217,7 +181,7 @@ class MainHarness {
       return true;
     });
 
-    // Handler to trigger garbage collection if exposed
+    // global.gc only exists if node started with --expose-gc
     ipcMain.handle('benchmark:gc', () => {
       if (global.gc) {
         global.gc();
@@ -227,9 +191,6 @@ class MainHarness {
     });
   }
 
-  /**
-   * Get IPC statistics
-   */
   getIPCStats() {
     const stats = {};
     
@@ -256,9 +217,6 @@ class MainHarness {
     return stats;
   }
 
-  /**
-   * Get complete benchmark results
-   */
   getResults() {
     return {
       startup: this.getStartupMetrics(),
@@ -269,9 +227,6 @@ class MainHarness {
     };
   }
 
-  /**
-   * Get startup-specific metrics
-   */
   getStartupMetrics() {
     const summary = this.metrics.getSummary();
     const startupMetrics = {};
@@ -286,10 +241,9 @@ class MainHarness {
   }
 
   /**
-   * Instrument a function for benchmarking
-   * @param {string} name - Measurement name
-   * @param {Function} fn - Function to instrument
-   * @returns {Function} Wrapped function
+   * @param {string} name
+   * @param {Function} fn
+   * @returns {Function}
    */
   instrument(name, fn) {
     if (!this.isEnabled) return fn;
@@ -310,9 +264,8 @@ class MainHarness {
   }
 
   /**
-   * Create a wrapper for FFmpeg operations
-   * @param {string} operationName - Name of the FFmpeg operation
-   * @returns {Object} Start and end functions
+   * @param {string} operationName
+   * @returns {Object} start/end/error functions
    */
   ffmpegTimer(operationName) {
     if (!this.isEnabled) {
@@ -347,7 +300,6 @@ class MainHarness {
   }
 }
 
-// Create singleton instance
 let instance = null;
 
 function getMainHarness() {

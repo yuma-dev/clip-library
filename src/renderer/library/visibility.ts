@@ -9,14 +9,8 @@ export function useObserve(): ObserveFn | null {
   return useContext(ObserveContext);
 }
 
-/**
- * Shared offscreen-culling observer (hard-won §4.2): toggles `.cv-offscreen`
- * (content-visibility: hidden via styles.css) on registered cards as they
- * leave/enter the viewport, so far-offscreen cards stop costing layout/paint.
- * Provide the returned fn through ObserveContext; cards register on mount.
- * Root is the viewport — the app's scroll containers fill it, so this matches
- * the library grid's container-rooted observer behavior.
- */
+/** toggles `.cv-offscreen` (content-visibility: hidden, styles.css) on cards leaving/entering
+ * the viewport so far-offscreen ones stop costing layout/paint (plan section 4.2) */
 export function useVisibilityObserver(): ObserveFn {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const observe = useCallback<ObserveFn>((el) => {

@@ -1,14 +1,6 @@
 //! One-shot hardware profile for the telemetry heartbeat's `machine` block.
-//!
-//! Collected once at startup (before the diagnostics client spawns) and sent
-//! on the first heartbeat of each session; the server retains the last known
-//! profile. Every field degrades to omission on failure — a partial profile
-//! is fine, a blocked startup is not.
-//!
-//! Privacy shape: hardware class data only. GPU/CPU model strings, OS build,
-//! RAM, display modes, locale. No serial numbers, no MachineGuid, no user
-//! paths (the clips volume appears only as free GB + a drive-type category),
-//! no monitor EDID names, no timezone.
+//! Every field degrades to omission on failure. Hardware class data only:
+//! no serial numbers, MachineGuid, user paths, EDID names, or timezone.
 
 use clipdip_core::config::Config;
 use clipdip_core::diskinfo;
@@ -57,8 +49,8 @@ pub fn collect(cfg: &Config) -> Value {
     Value::Object(m)
 }
 
-/// "11 26100" style: marketing major (10 vs 11 by the 22000 build cutoff) plus
-/// the build number, which is what actually identifies the OS revision.
+/// "11 26100": marketing major (10 vs 11 at the 22000 build cutoff) plus the
+/// build number, which is what actually identifies the OS revision.
 fn os_version() -> Option<String> {
     let v = windows_version::OsVersion::current();
     let marketing = if v.build >= 22000 { 11 } else { v.major };
@@ -83,9 +75,8 @@ struct GpuInfo {
     driver: Option<String>,
 }
 
-/// The hardware adapter with the most dedicated VRAM (skipping software
-/// renderers like WARP). One-shot DXGI enumeration, independent of the
-/// capture pipeline.
+/// Hardware adapter with the most dedicated VRAM, skipping software renderers
+/// like WARP. One-shot DXGI enumeration, independent of the capture pipeline.
 fn primary_gpu() -> Option<GpuInfo> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 
@@ -122,9 +113,8 @@ fn primary_gpu() -> Option<GpuInfo> {
             0x8086 => "intel",
             _ => "other",
         };
-        // UMD driver version via CheckInterfaceSupport (the canonical trick:
-        // it reports the driver version even though 3D interface support
-        // itself is a D3D10+ relic).
+        // UMD driver version via CheckInterfaceSupport, the canonical trick even
+        // though 3D interface support itself is a D3D10+ relic.
         use windows::core::Interface;
         let driver = unsafe {
             adapter.CheckInterfaceSupport(&windows::Win32::Graphics::Dxgi::IDXGIDevice::IID)
@@ -160,8 +150,7 @@ fn user_locale() -> Option<String> {
     Some(String::from_utf16_lossy(&buf[..(len as usize - 1)]))
 }
 
-/// "2560x1440*,1920x1080" — resolutions only, primary starred. Uses the same
-/// enumeration the `--list-monitors` CLI query exposes.
+/// "2560x1440*,1920x1080": resolutions only, primary starred, same enumeration as --list-monitors.
 fn monitor_summary(monitors: &[Value]) -> String {
     monitors
         .iter()

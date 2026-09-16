@@ -1,27 +1,7 @@
-// Boot reveal: the hand-over from the native launcher's splash to the library.
-//
-// Main shows the window at opacity 0 once the compositor has framed the grid,
-// then asks the renderer (boot-reveal) to put the library into the animation's
-// first frame: the launcher's logo drawn at the exact same screen spot over a
-// dark, far-away library. The renderer replies (boot-reveal-armed) once that
-// frame is composited and main makes the window opaque. From there the camera
-// flies through the logo: the logo grows past the viewport and fades inside a
-// bloom of the accent colour, the whole library body pushes in from 1.5x to
-// rest while the rail, the group headers and the cards land from their own
-// depths, every card's colour glow blooms and settles, a vignette lifts and a
-// few motes of light drift across the library for a moment. Transform and
-// opacity only, on layers that all exist before the reveal; nothing repaints.
-// Hover is off on the body meanwhile (a hover style would repaint a card tile
-// inside the moving body); any press, wheel or key ends the intro at once and
-// lands on the library at rest.
-//
-// Everything the animation moves exists before the window is revealed
-// (prepareBootReveal, called right before renderer-ready): the body and the
-// visible cards are promoted to their own layers, the glow is baked into a
-// canvas and the overlay is mounted while the window is still at OS opacity 0,
-// so the pre-reveal compositor frames rasterise every texture the animation
-// needs. Creating those layers at the first animated frame was a measured
-// 67 ms stall (benchmark/analyze-reveal.js).
+// Boot reveal: hand-over from the native launcher's splash to the library. Main shows
+// the window at opacity 0, arms the intro (logo frozen over a dark grid), then the
+// camera flies through the logo into the grid at rest; transform/opacity only, so
+// nothing repaints, and any press/wheel/key ends it early and lands at rest.
 import { bootMark } from "../perf/bootMarks";
 import type { BootRevealPayload } from "../../types/clips";
 import titleUrl from "../../../assets/title.png";
@@ -37,13 +17,11 @@ const MEASURE_MS = 1200;
 const MEASURE_TAIL_MS = 6000;
 // The body, cards and glow are back to normal here; the hold lifts.
 const SETTLE_MS = 1300;
-// The motes drift on a little longer, on their own overlay layers; the
-// overlay leaves when their animations finish, or at this cap at the latest.
+// motes drift on after the intro; overlay leaves when they finish or at this cap
 const OVERLAY_CAP_MS = 5000;
 const MAX_CARDS = 64;
 const MOTES = 30;
-// The motes live exactly as long as the chimes: the sound starts at +0.6 s
-// and runs 3.8 s, so every mote, whatever its delay, fades out at +4.4 s.
+// motes fade out exactly when the chimes do (start +0.6s, run 3.8s, ends +4.4s)
 const MOTES_END_MS = 4400;
 // Parallax: rail first, then headers, then rows from the top down.
 const RAIL_MS = 60;
@@ -127,9 +105,8 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   vignette.style.cssText = `--boot-ox:${origin.x}px;--boot-oy:${origin.y}px;`;
   el.appendChild(vignette);
 
-  // Afterglow: a bloom that expands with the logo. Mounted at its starting
-  // scale: a will-change layer keeps the raster scale it was created with,
-  // so the 4.5x bloom is the GPU upscaling a small texture.
+  // afterglow bloom; mounted at its starting scale so the will-change layer keeps
+  // that raster scale, the 4.5x growth is just the GPU upscaling a small texture
   const flashSize = logoSize * 3.2;
   const flash = document.createElement("div");
   flash.className = "boot-flash";
@@ -137,9 +114,8 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   flash.style.cssText = `left:${origin.x - flashSize / 2}px;top:${origin.y - flashSize / 2}px;width:${flashSize}px;height:${flashSize}px;`;
   el.appendChild(flash);
 
-  // Motes: points of light drifting up from the clips after the library
-  // lands. Created here (their layers must exist before the reveal), placed
-  // over the cards by placeMotes.
+  // motes: light drifting up from the clips; created here (layer must exist
+  // before the reveal), placed over the cards by placeMotes
   const rnd = seeded(0x5eed);
   const motesLayer = document.createElement("div");
   motesLayer.className = "boot-motes";
@@ -167,14 +143,8 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   return el;
 }
 
-/**
- * Offscreen groups are skipped by the browser from their intersection with
- * the viewport (content-visibility: auto). The push scales the body from
- * 1.5x to rest, so that intersection changes every frame and groups at the
- * edge got laid out and painted mid-animation (a 250 ms compositor stall).
- * For the intro, the groups near the viewport are marked live and every
- * other group is hidden outright (styles.css); settleGrid lifts it.
- */
+/** content-visibility groups near the intro's 1.5x-to-1x push get laid out/painted
+ * mid-animation (250ms stall); mark them live, hide the rest, settleGrid lifts it. */
 function markLiveGroups(): void {
   const vh = window.innerHeight;
   for (const el of document.querySelectorAll<HTMLElement>(".clip-group-content")) {
@@ -183,13 +153,8 @@ function markLiveGroups(): void {
   }
 }
 
-/**
- * Grid glow: every visible card's thumbnail drawn, blurred and saturated,
- * into one canvas behind the cards (the look of the shared hover glow,
- * `.clip-glow-canvas`, for the whole viewport at once). The blur is baked
- * into the pixels here, once, so the intro only animates the canvas's
- * opacity: a CSS filter would be applied by the compositor every frame.
- */
+/** every visible card's thumbnail drawn blurred+saturated into one canvas behind the
+ * cards (like the shared hover glow); baked in once so the intro only animates opacity. */
 function buildGlowCanvas(list: HTMLElement[]): HTMLCanvasElement | null {
   const grid = document.querySelector<HTMLElement>(".clip-grid");
   const scroller = document.querySelector<HTMLElement>(".clip-scroll");
@@ -206,11 +171,8 @@ function buildGlowCanvas(list: HTMLElement[]): HTMLCanvasElement | null {
   return canvas;
 }
 
-/**
- * (Re)draw the glow for `list` at the cards' current positions. Called at
- * prepare and again at the reveal: a fresh clip list can land in between and
- * shift the rows, and a glow left at an old position reads as a ghost card.
- */
+/** redraws the glow at cards' current positions; a fresh clip list can land between
+ * prepare and reveal and shift the rows, so a stale glow reads as a ghost card. */
 function drawGlow(canvas: HTMLCanvasElement, list: HTMLElement[]): boolean {
   const grid = document.querySelector<HTMLElement>(".clip-grid");
   const ctx = canvas.getContext("2d");
@@ -232,8 +194,7 @@ function drawGlow(canvas: HTMLCanvasElement, list: HTMLElement[]): boolean {
     const y = (r.top - gridRect.top) * GLOW_SCALE;
     const w = r.width * GLOW_SCALE;
     const h = r.height * GLOW_SCALE;
-    // A card with no saved thumbnail yet (a new clip, still generating) glows
-    // in the accent colour instead of a thumbnail's.
+    // no thumbnail yet (still generating): glow in accent colour instead
     if (!img.complete || !img.naturalWidth || !img.src.includes("thumbnail-cache")) {
       ctx.fillStyle = "rgba(199, 116, 224, 0.85)";
       ctx.fillRect(x, y, w, h);
@@ -275,11 +236,8 @@ function placeBody(logo: BootRevealPayload["logo"]): void {
   body.style.transformOrigin = `${origin.x - r.left}px ${origin.y - r.top}px`;
 }
 
-/**
- * Promote and mount everything the intro moves, and hold the background
- * streaming, before renderer-ready. The window is at OS opacity 0 until the
- * reveal, so none of this is visible yet.
- */
+/** promotes/mounts everything the intro moves and holds streaming, before
+ * renderer-ready; creating those layers at the first frame cost 67ms (analyze-reveal.js). */
 export async function prepareBootReveal(): Promise<void> {
   if (reducedMotion()) return;
   holdStreaming();
@@ -311,17 +269,11 @@ export async function prepareBootReveal(): Promise<void> {
 }
 
 /** The body, the grid and the rail back to normal (the overlay may stay). */
-// Elements still promoted (will-change) after the visuals settled; they are
-// de-promoted later, a few per frame (see depromote).
+// still will-change promoted after settling; depromote() clears a few per frame
 let promoted: HTMLElement[] = [];
 
-/**
- * The visuals have settled: hover comes back, the animation classes go
- * (their end state is the natural one, so nothing changes on screen) and
- * the glow canvas leaves. The will-change promotions stay for now: dropping
- * forty layers plus the body at once re-rasterises all of them into the
- * page in one frame (a 120 ms frame measured at this very moment).
- */
+/** visuals settled: hover back, animation classes off (end state = natural, no visual
+ * change), glow canvas removed. will-change stays: dropping 40+ layers at once cost 120ms. */
 function settleGrid(): void {
   if (body) {
     body.classList.remove("boot-nohover", "boot-dolly");
@@ -361,9 +313,8 @@ function clearAll(): void {
   overlay = null;
 }
 
-// The motes sit in a fixed overlay; while the library scrolls they follow
-// the content one to one (their layer is translated by the scroll offset,
-// one transform write per scroll event on a promoted layer).
+// motes sit in a fixed overlay; follow scroll via one transform write per scroll
+// event on their promoted layer, so they track the content 1:1
 let windOff: (() => void) | null = null;
 
 function attachWind(layer: HTMLElement): void {
@@ -391,9 +342,8 @@ function detachWind(): void {
   windOff = null;
 }
 
-// Bench mode only (CLIPLIB_BOOT_TRACE): a requestAnimationFrame loop forces a
-// main-thread lifecycle every frame, which a compositor-only animation does
-// not otherwise need; in normal launches the main thread stays idle instead.
+// bench only (CLIPLIB_BOOT_TRACE): forces a main-thread rAF loop every frame that a
+// compositor-only animation wouldn't otherwise need; normal launches stay idle
 function measureFrames(): void {
   if (!window.__bootTrace) return;
   let visChanges = 0;
@@ -401,9 +351,8 @@ function measureFrames(): void {
     visChanges += 1;
     if (visChanges <= 4) bootMark(`visibility_${document.visibilityState}_${visChanges}`);
   });
-  // Two windows: the animation itself (first 1.2 s, guarded by the bench)
-  // and the tail after it (to 6 s), where the held work resumes and must
-  // not be felt either.
+  // two windows: the animation itself (1.2s) and the tail to 6s where held
+  // work resumes and must not be felt either
   const deltas: number[] = [];
   const tail: number[] = [];
   let last = performance.now();
@@ -454,9 +403,8 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   shell = shell ?? document.querySelector<HTMLElement>(".app-shell");
   const logo = payload.logo;
 
-  // Overlay: mounted at prepare time; rebuilt only if the launcher's logo rect
-  // differs from what main reported then (maximize can shift the content
-  // area by a few pixels) or if prepare never ran.
+  // overlay mounted at prepare time; rebuilt only if the logo rect differs (maximize
+  // can shift it a few px) or if prepare never ran
   const same = (a: BootRevealPayload["logo"], b: BootRevealPayload["logo"]) =>
     (!a && !b) || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
   if (!overlay || !same(preparedLogo, logo)) {
@@ -475,9 +423,8 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     }
   }
 
-  // The layout may have changed since prepare (a fresh list landing in
-  // between): pick the cards and headers on screen now, promote any that
-  // were not, and redraw the glow where the cards are.
+  // layout may have changed since prepare (fresh list landed): repick cards/headers
+  // promote new ones, redraw glow at the new positions
   const before = new Set([...cards, ...heads]);
   cards = visibleCards();
   heads = visibleHeaders();
@@ -504,8 +451,8 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   for (const el of layer.querySelectorAll(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")) el.classList.add("run");
   attachWind(layer);
 
-  // Hold every animation at its first frame until main confirms the window is
-  // opaque: the pause runs on the compositor, so releasing it costs nothing.
+  // hold every animation at its first frame til main confirms the window is opaque;
+  // the pause runs on the compositor so releasing it costs nothing
   const animated = [body, rail, ...heads, ...cards, glowCanvas, ...layer.querySelectorAll<HTMLElement>(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")];
   const held = animated.flatMap((el) => (el ? el.getAnimations() : []));
   for (const a of held) a.pause();
@@ -515,10 +462,9 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   startBootSound({ woosh: prefs.sound && prefs.woosh, chimes: prefs.sound && prefs.chimes, motes: prefs.sound && prefs.motesSound, wind: prefs.sound && prefs.wind });
   measureFrames();
 
-  // The hold lifts at settle time, or at once on any input: then the intro
-  // jumps to its end state so the user's action lands on a library at rest.
+  // hold lifts at settle time or at once on input, then jumps to end state
   let over = false; // everything torn down
-  let settledNormally = false; // the settle timer released the hold (not input)
+  let settledNormally = false; // settle timer released the hold (not input)
   const cutShort = () => {
     if (over || settledNormally) return;
     over = true;
@@ -530,12 +476,11 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
       }
     }
     clearAll();
-    // The sound plays on: it is the one part of the intro that does not
-    // get in the way of what the user is doing.
+    // sound plays on: the one part of the intro that doesn't block the user
     disposeBootSound();
   };
   onBootRelease(cutShort);
-  // A scroll only needs the library to respond: hover back, holds lifted,
+  // A scroll only needs the library to respond: hover back, holds lifted
   // the visuals and sound continue.
   onScrollInput(() => {
     body?.classList.remove("boot-nohover");
@@ -544,15 +489,13 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   window.setTimeout(() => {
     if (over) return;
     settledNormally = true;
-    // Streaming resumes (adaptively paced) once the visuals settle; the
-    // whole-grid commits wait for the overlay, so nothing heavy lands while
-    // the tail still plays. The re-hover in settleGrid only needs the
-    // streaming hold off.
+    // streaming resumes (adaptively paced) once visuals settle; whole-grid commits
+    // wait for the overlay so nothing heavy lands while the tail plays
     releaseStreaming();
     settleGrid();
   }, SETTLE_MS);
-  // The overlay comes down once its last animation (the latest mote) has
-  // finished, never on a fixed timer: a cut mid-fade reads as a pop.
+  // overlay comes down once its last animation finishes, never on a fixed
+  // timer: a cut mid-fade reads as a pop
   const overlayAnims = [...layer.querySelectorAll<HTMLElement>(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")].flatMap((el) => el.getAnimations());
   const finished = Promise.allSettled(overlayAnims.map((a) => a.finished));
   const cap = new Promise<void>((resolve) => window.setTimeout(resolve, OVERLAY_CAP_MS));

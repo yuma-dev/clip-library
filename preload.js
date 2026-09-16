@@ -1,14 +1,6 @@
-// Preload for the new React renderer (plan D2/D9).
-//
-// The main window runs with contextIsolation:false + nodeIntegration:true
-// (unchanged from the legacy renderer), so this preload shares the renderer's
-// `window` object and can attach the facade directly. New React code talks to
-// the main process ONLY through `window.clips.*`; wrapped legacy modules keep
-// using `require('electron')` directly (Phase 4).
-//
-// Method names are camelCase wrappers over the kebab-case IPC channels verified
-// in plan §5. Argument forwarding is transparent — whatever the caller passes is
-// handed to the channel, so payload shapes live with the caller + clips.d.ts.
+// Preload for the React renderer (plan D2/D9). contextIsolation:false +
+// nodeIntegration:true, so window.clips.* is a direct facade; legacy modules
+// still require('electron') themselves. camelCase wraps kebab-case IPC (section 5).
 
 const { ipcRenderer } = require("electron");
 
@@ -33,13 +25,8 @@ const bootTrace = (() => {
   }
 })();
 
-// --- Telemetry bridge -------------------------------------------------------
-//
-// Fire-and-forget onto the `telemetry-report` channel (main/telemetry does the
-// coalescing, queueing and upload). Preload owns a small batcher of its own
-// because the invoke wrapper below records a metric on EVERY IPC call, and
-// because preload emits before the renderer bundle exists. Nothing here may
-// throw into a call site.
+// telemetry bridge: fire-and-forget onto `telemetry-report` (main coalesces
+// queues, uploads); preload batches its own since invoke() below meters every call.
 
 const TELEMETRY_CHANNEL = "telemetry-report";
 const TELEMETRY_FLUSH_MS = 5000;
@@ -113,16 +100,11 @@ const telemetryHash = (input) => {
 try {
   window.addEventListener("beforeunload", flushTelemetry);
 } catch (_) {
-  /* no window yet — the interval flush still covers us */
+  /* no window yet, interval flush still covers us */
 }
 
-/**
- * Build a request/response wrapper for an ipcMain.handle channel.
- *
- * Every channel is timed and every rejection is reported. The channel list is
- * our own fixed enum, so it is safe as a metric dim. The original rejection is
- * rethrown untouched: callers must see exactly what they saw before.
- */
+/** wraps an ipcMain.handle channel: times it, reports rejections
+ * (channel is a fixed enum, safe as a metric dim), rethrows untouched. */
 const invoke = (channel) => (...args) => {
   const startedAt = Date.now();
   return ipcRenderer.invoke(channel, ...args).then(
@@ -138,8 +120,7 @@ const invoke = (channel) => (...args) => {
         kind: "silent_failure",
         severity: "warning",
         surface: "preload",
-        // Per-channel fingerprint, otherwise main's coalescer would hide every
-        // channel but the first one to fail in a 60s window.
+        // per-channel, else main's coalescer hides all but the first to fail in 60s
         fingerprint: telemetryHash(`ipc_call_rejected|${channel}`),
         context: { channel, ms },
       });
@@ -148,7 +129,7 @@ const invoke = (channel) => (...args) => {
   );
 };
 
-/** Subscribe to a main->renderer event; returns an unsubscribe function. */
+/** Subscribe to a main-to-renderer event; returns an unsubscribe function. */
 const subscribe = (channel) => (callback) => {
   const listener = (_event, ...args) => callback(...args);
   ipcRenderer.on(channel, listener);
@@ -156,7 +137,7 @@ const subscribe = (channel) => (callback) => {
 };
 
 const api = {
-  // --- Clips ---
+  // clips
   getClips: invoke("get-clips"),
   getNewClipInfo: invoke("get-new-clip-info"),
   getNewClipsInfo: invoke("get-new-clips-info"),
@@ -170,13 +151,12 @@ const api = {
   getGameIconsBatch: invoke("get-game-icons-batch"),
   getClipParticipants: invoke("get-clip-participants"),
 
-  // --- Per-clip metadata ---
+  // per-clip metadata
   saveCustomName: invoke("save-custom-name"),
   getClipInfo: invoke("get-clip-info"),
-  // Hover-preview start time (trim.start or cached-duration midpoint) in one
-  // cheap round trip — never triggers ffprobe.
+  // hover-preview start time (trim.start or cached-duration midpoint); never triggers ffprobe
   getPreviewStartTime: invoke("get-preview-start-time"),
-  // One-round-trip bundle of everything the player reads on clip open.
+  // one round trip, everything the player reads on clip open
   getClipOpenState: invoke("get-clip-open-state"),
   warmClipOpen: invoke("warm-clip-open"),
   getTrim: invoke("get-trim"),
@@ -192,14 +172,14 @@ const api = {
   getClipTagsBatch: invoke("get-clip-tags-batch"),
   saveClipTags: invoke("save-clip-tags"),
 
-  // --- Audio tracks ---
+  // audio tracks
   extractAudioTracks: invoke("extract-audio-tracks"),
   getTrackState: invoke("get-track-state"),
   saveTrackState: invoke("save-track-state"),
   getTrackPreferences: invoke("get-track-preferences"),
   saveTrackPreferences: invoke("save-track-preferences"),
 
-  // --- Global tags ---
+  // global tags
   loadGlobalTags: invoke("load-global-tags"),
   saveGlobalTags: invoke("save-global-tags"),
   restoreMissingGlobalTags: invoke("restore-missing-global-tags"),
@@ -208,17 +188,15 @@ const api = {
   getTagPreferences: invoke("get-tag-preferences"),
   saveTagPreferences: invoke("save-tag-preferences"),
 
-  // --- Thumbnails ---
+  // thumbnails
   getThumbnailPath: invoke("get-thumbnail-path"),
   getThumbnailPathsBatch: invoke("get-thumbnail-paths-batch"),
-  // NOTE: no wrapper for "generate-thumbnail" (singular) — that main handler
-  // predates generate-thumbnails-progressively and no renderer ever called it.
+  // no wrapper for "generate-thumbnail" (singular): predates this, unused
   generateThumbnailsProgressively: invoke("generate-thumbnails-progressively"),
-  // Called by the wrapped legacy player directly via ipcRenderer today; the
-  // wrapper exists so future React code can trigger trim-thumbnail regen.
+  // legacy player calls this via ipcRenderer today; wrapper is for future React code
   regenerateThumbnailForTrim: invoke("regenerate-thumbnail-for-trim"),
 
-  // --- Export / files ---
+  // export / files
   exportVideo: invoke("export-video"),
   exportTrimmedVideo: invoke("export-trimmed-video"),
   exportAudio: invoke("export-audio"),
@@ -226,10 +204,7 @@ const api = {
   revealClip: invoke("reveal-clip"),
   resetClipCache: invoke("reset-clip-cache"),
 
-  // --- Settings ---
-  // Concurrent-call dedupe: several modules request settings at startup in
-  // the same tick; share the in-flight promise instead of 4+ parallel IPCs.
-  // No caching — once resolved, the next call hits the channel again.
+  // settings: dedupe concurrent startup calls (share in-flight promise, not cached)
   getSettings: (() => {
     const call = invoke("get-settings");
     let inflight = null;
@@ -245,17 +220,17 @@ const api = {
   saveSettings: invoke("save-settings"),
   getDefaultKeybindings: invoke("get-default-keybindings"),
 
-  // --- Dialogs ---
+  // dialogs
   openFolderDialog: invoke("open-folder-dialog"),
   openFolderDialogSteelseries: invoke("open-folder-dialog-steelseries"),
   showDiagnosticsSaveDialog: invoke("show-diagnostics-save-dialog"),
 
-  // --- Discord RPC ---
+  // discord rpc
   updateDiscordPresence: invoke("update-discord-presence"),
   toggleDiscordRpc: invoke("toggle-discord-rpc"),
   clearDiscordPresence: invoke("clear-discord-presence"),
 
-  // --- Share / ClipLib ---
+  // share / cliplib
   testShareConnection: invoke("test-share-connection"),
   startCliplibAuth: invoke("start-cliplib-auth"),
   disconnectCliplibAuth: invoke("disconnect-cliplib-auth"),
@@ -264,13 +239,13 @@ const api = {
   shareApiRequest: invoke("share-api-request"),
   shareUploadBanner: invoke("share-upload-banner"),
 
-  // --- Updates ---
+  // updates
   checkForUpdates: invoke("check-for-updates"),
   startUpdate: invoke("start-update"),
   openUpdatePage: invoke("open-update-page"),
   getAppVersion: invoke("get-app-version"),
 
-  // --- Diagnostics / misc ---
+  // diagnostics / misc
   generateDiagnosticsZip: invoke("generate-diagnostics-zip"),
   uploadSessionLogs: invoke("upload-session-logs"),
   uploadDiagnosticsBundle: invoke("upload-diagnostics-bundle"),
@@ -280,16 +255,14 @@ const api = {
   importSteelseriesClips: invoke("import-steelseries-clips"),
   quitApp: invoke("quit-app"),
 
-  // --- Source benchmark runner ---
-  // These handlers only exist when CLIPS_BENCHMARK=1. The React benchmark
-  // runtime is loaded under the same guard and is the only caller.
+  // benchmark runner: handlers only exist under CLIPS_BENCHMARK=1, same guard as the caller
   benchmarkGetResults: invoke("benchmark:getResults"),
   benchmarkOutputResult: invoke("benchmark:outputResult"),
   benchmarkOutputMarker: invoke("benchmark:outputMarker"),
   benchmarkOutputComplete: invoke("benchmark:outputComplete"),
   benchmarkQuit: invoke("benchmark:quit"),
 
-  // --- Integrated clipdip ---
+  // integrated clipdip
   clipdip: (() => {
     const controlInvoke = invoke("clipdip-control");
     const control = (cmd, args) => controlInvoke({ cmd, args });
@@ -302,13 +275,12 @@ const api = {
       restart: invoke("clipdip-restart"),
       setAutostart: invoke("clipdip-set-autostart"),
       setEnabled: invoke("clipdip-set-enabled"),
-      // Stateless CLI queries (work without a running instance).
+      // stateless CLI queries, work without a running instance
       listAudioDevices: invoke("clipdip-list-audio-devices"),
       listMonitors: invoke("clipdip-list-monitors"),
       getFilenameVariables: invoke("clipdip-filename-variables"),
       previewFilename: invoke("clipdip-preview-filename"),
-      // Control server on the running instance; {ok:false,error:"not_running"}
-      // when it isn't up.
+      // control server on the running instance; {ok:false,error:"not_running"} when down
       control,
       getLiveStatus: () => control("status"),
       testOverlay: (stage) => control("test_overlay", { stage }),
@@ -321,15 +293,13 @@ const api = {
     };
   })(),
 
-  // --- Signal to main (fire-and-forget) ---
+  // signal to main (fire-and-forget)
   rendererReady: () => ipcRenderer.send("renderer-ready"),
 
-  // --- Telemetry (fire-and-forget) ---
-  // The renderer bundle is ESM and can't reach ipcRenderer itself, so the
-  // renderer client (src/renderer/telemetry) posts its batches through here.
+  // telemetry (fire-and-forget): ESM renderer bundle can't reach ipcRenderer directly
   telemetryReport: (payload) => sendTelemetry(payload),
 
-  // --- Events (main -> renderer); each returns an unsubscribe fn ---
+  // events, main to renderer; each returns an unsubscribe fn
   onLog: subscribe("log"),
   onNewClipAdded: subscribe("new-clip-added"),
   onCheckActivityState: subscribe("check-activity-state"),
@@ -353,7 +323,7 @@ const api = {
   onShareUploadProgress: subscribe("share-upload-progress"),
   onDiagnosticsProgress: subscribe("diagnostics-progress"),
 
-  // --- Boot reveal (src/renderer/boot/bootReveal.ts) ---
+  // boot reveal (src/renderer/boot/bootReveal.ts)
   getBootLogoRect: invoke("get-boot-logo-rect"),
   onBootReveal: subscribe("boot-reveal"),
   bootRevealArmed: () => ipcRenderer.send("boot-reveal-armed"),
@@ -364,10 +334,8 @@ const api = {
 window.clips = api;
 if (bootTrace) window.__bootTrace = bootTrace;
 
-// Source-level benchmark configuration. The Vite bundle cannot reliably read
-// Electron's process environment, so preload hands it the parsed values. Keep
-// the old audio comparison implementation available while its public contract
-// is still useful; the React runtime supplies current player/grid functions.
+// Vite bundle can't reliably read process.env, so preload parses CLIPS_BENCHMARK*
+// and hands over the values; old audio-compare impl kept alongside the React runtime.
 try {
   if (process.env.CLIPS_BENCHMARK === "1") {
     let scenarios = [];
@@ -395,12 +363,8 @@ try {
   console.error("[benchmark] failed to initialize preload bridge", error);
 }
 
-// Bridge for the performance profiler (src/renderer/perf) — ONLY when launched
-// via `npm run dev:trace` (which sets CLIPS_PERF_STARTUP=1, inherited by this
-// renderer process). Not in normal `npm run dev`, not in packaged builds. The
-// renderer checks `window.__perfEnabled` before loading any profiler code; the
-// bundled ESM renderer can't reach ipcRenderer itself, so the preload provides
-// the channel here.
+// perf profiler bridge (src/renderer/perf): only under npm run dev:trace (sets
+// CLIPS_PERF_STARTUP=1), never in dev or packaged; ESM renderer can't reach ipcRenderer itself.
 try {
   if (process.env.CLIPS_PERF_STARTUP === "1") {
     window.__perfEnabled = true;
@@ -410,14 +374,11 @@ try {
     };
   }
 } catch (_) {
-  /* env unavailable — skip; profiler stays off */
+  /* env unavailable, skip; profiler stays off */
 }
 
-// Legacy video player (plan D1/Phase 4): run the crown-jewel player + audio
-// engine VERBATIM. Required here (preload has Node + a real __dirname) and
-// exposed on window; contextIsolation is off so these modules share the
-// renderer's window/document once init() is called from React. Copied under
-// player-legacy/ (only patch: `../utils/logger` -> `./logger`).
+// legacy player (plan D1/Phase 4) runs verbatim; preload has Node + real __dirname to
+// require it and expose on window, shared once React calls init() (contextIsolation off).
 let legacyModuleIndex = 0;
 try {
   window.legacyState = require("./player-legacy/state.js");
@@ -426,10 +387,10 @@ try {
   legacyModuleIndex = 2;
   window.legacyVolumeRange = require("./player-legacy/volume-range-controls.js");
 } catch (err) {
-  // Non-fatal: the library still works; the player just won't open.
+  // non-fatal: the library still works; the player just won't open
   console.error("[preload] failed to load legacy player:", err);
-  // Which is a total feature outage that used to reach the console only. Sent
-  // straight out rather than batched: the renderer client isn't loaded yet.
+  // total feature outage that used to only hit the console; sent straight
+  // out (not batched) since the renderer client isn't loaded yet
   sendTelemetry({
     events: [
       {

@@ -1,25 +1,14 @@
 #!/usr/bin/env node
-// Export the ClipDip clip-saved overlay notification as a transparent frozen PNG
-// and a transparent animated WebP.
-//
-// Renders the REAL overlay (clipdip/overlay.html) — not the design playground —
-// by stubbing window.__TAURI_INTERNALS__ so the overlay runs its genuine
-// saving -> saved flow (slide-in, comet border, flash, sheen, sparkles) with
-// zero changes to the production file. A tiny static server maps the overlay's
-// `/logo250x250.png` to clipdip/assets (Vite's publicDir).
-//
-// Two tricks make the animated WebP correct and smooth:
-//   * node-webpmux muxes each frame with blend:false + dispose:true, so every
-//     transparent frame fully REPLACES the previous one (ffmpeg's WebP encoder
-//     composites them, which leaves ghost trails).
-//   * The in-page animations are slowed (playbackRate) so real-time transparent
-//     screenshots sample the motion densely; the WebP is then timed to play back
-//     at true speed — high effective fps without a fast screenshotter.
+// Export the ClipDip clip-saved overlay notification as a transparent frozen
+// PNG and animated WebP, from the real overlay (clipdip/overlay.html) via a
+// window.__TAURI_INTERNALS__ stub. Frames mux with blend:false + dispose:true
+// so each replaces (not composites over, which ghosts) the last; animations
+// run slowed via playbackRate, then the WebP is timed back to real speed.
 //
 //   node scripts/export-overlay.mjs [options]
 //     --scale <n>     frozen still supersample (default 3)
 //     --anim-scale <n>  animation pass scale (default 2)
-//     --saving <s>    logical "Saving clip…" duration before the payoff (default 1.6)
+//     --saving <s>    logical "Saving clip..." duration before the payoff (default 1.6)
 //     --slow <f>      capture slow-mo factor, lower = more fps/bigger (default 0.4)
 //     --lossy         smaller WebP (lossy per-frame) instead of lossless alpha
 //     --out <dir>     output dir (default: export-out/overlay)
@@ -63,7 +52,7 @@ if (!fs.existsSync(overlayHtml)) {
   process.exit(1);
 }
 
-// --- static server: /overlay.html -> source; else -> assets/ -----------------
+// static server: /overlay.html serves the source file, else assets/
 const mime = { ".html": "text/html", ".png": "image/png", ".css": "text/css", ".js": "text/javascript", ".woff2": "font/woff2" };
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent((req.url || "/").split("?")[0]);
@@ -81,10 +70,8 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const overlayUrl = `http://127.0.0.1:${server.address().port}/overlay.html`;
 
-// --- init script: Tauri stub + slow-mo + auto-fire of clip-saved -------------
-// `overlay_get_pending` returns a `saving` payload only; a MutationObserver
-// schedules the `clip-saved` event `savingSeconds` (logical) after the card
-// enters, so the saving phase lasts exactly as long as we want. A 25ms timer
+// Tauri stub + slow-mo + auto-fire of clip-saved: a MutationObserver fires
+// clip-saved `savingSeconds` (logical) after the card enters; a 25ms timer
 // pins every running animation to `slow` so screenshots sample motion densely.
 const initScript = ({ slow, savingMs }) => {
   const listeners = {};
@@ -133,9 +120,7 @@ const initScript = ({ slow, savingMs }) => {
       }, 25);
     }
 
-    // Fire the payoff `savingMs` (logical) after the card enters. Real delay is
-    // scaled by 1/slow because the animations (and our perception of time) run
-    // slow during capture.
+    // fires `savingMs` (logical) after entry; real delay scaled by 1/slow since capture runs slow
     const card = document.getElementById("card");
     let fired = false;
     const obs = new MutationObserver(() => {
@@ -152,7 +137,7 @@ const initScript = ({ slow, savingMs }) => {
 
 const browser = await chromium.launch({ args: ["--force-color-profile=srgb"] });
 
-// --- pass 1: frozen still (full speed, short saving) --------------------------
+// pass 1: frozen still, full speed, short saving
 const ctx1 = await browser.newContext({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: scale });
 await ctx1.addInitScript(initScript, { slow: 1, savingMs: 900 });
 const page = await ctx1.newPage();
@@ -173,7 +158,7 @@ await page.screenshot({ path: frozen, clip: box, omitBackground: true });
 await ctx1.close();
 console.log("frozen:  ", path.relative(process.cwd(), frozen), `(${box.width}x${box.height} @ ${scale}x)`);
 
-// --- pass 2: slow-mo capture of slide-in -> saving -> payoff ------------------
+// pass 2: slow-mo capture, slide-in then saving then payoff
 const ctx2 = await browser.newContext({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: animScale });
 await ctx2.addInitScript(initScript, { slow, savingMs: savingSeconds * 1000 });
 const page2 = await ctx2.newPage();
@@ -197,7 +182,7 @@ const frameCount = i;
 const fps = Math.max(1, Math.round(frameCount / (realElapsed * slow))); // logical fps
 console.log(`frames:   ${frameCount} over ${realElapsed.toFixed(1)}s real -> ${fps}fps effective`);
 
-// --- per-frame PNG -> WebP (ffmpeg), then mux with node-webpmux --------------
+// per-frame PNG to WebP (ffmpeg), then mux with node-webpmux
 // blend:false makes each frame OVERWRITE the canvas (alpha included), so
 // transparent regions clear the previous frame instead of trailing.
 execFileSync(

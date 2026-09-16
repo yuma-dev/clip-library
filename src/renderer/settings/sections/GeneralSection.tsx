@@ -15,8 +15,8 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
   const toast = useToast();
   const [changingLocation, setChangingLocation] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
-  // Startup sound switches live with the intro's other preferences
-  // (localStorage, read at launch), not in settings.json.
+  // startup sound switches live with the intro's other preferences (localStorage, read at launch),
+  // not settings.json
   const [boot, setBootState] = useState<BootPrefs>(() => getBootPrefs());
   const setBoot = (patch: Partial<BootPrefs>) => setBootState(setBootPrefs(patch));
 
@@ -26,8 +26,8 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
       const newLocation = await window.clips.openFolderDialog();
       if (!newLocation) return;
       await window.clips.setClipLocation(newLocation);
-      // The whole library (clips, thumbnails, watchers) keys off the location —
-      // a clean reload is the reliable way to swing everything over.
+      // whole library (clips, thumbnails, watchers) keys off the location; a clean reload swings
+      // everything over
       window.location.reload();
     } catch (err) {
       toast.show(`Failed to change clip location: ${(err as Error).message}`, "error");
@@ -43,7 +43,7 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
     } catch {
       /* RPC connection issues are non-fatal; the saved setting still applies next launch */
     }
-    // Flip the renderer-side gate + re-assert presence when re-enabled.
+    // flips the renderer-side gate + re-asserts presence when re-enabled
     setDiscordPresenceEnabled(enabled);
     if (!ok) toast.show("Failed to save setting", "error");
   };
@@ -61,8 +61,7 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         </SetRow>
       </SetGroup>
 
-      {/* The sound group is tall: the left column's groups stack on their own
-          so the sound group's height cannot push them down. */}
+      {/* sound group is tall; left column groups stack on their own so its height can't push them down */}
       <div className="set-col">
         <SetGroup title="Integration">
           <SetRow title="Discord Rich Presence" description="Show what you're watching in your Discord status">

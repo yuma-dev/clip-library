@@ -1,27 +1,14 @@
-// Hover glow + hover preview for feed/profile card grids.
-//
-// Glow reuses the library's ClipGlow (shared 16×9 canvas repositioned over the
-// hovered card). The library wires it through its LibraryHover controller
-// (which also runs preview videos); here the same pair — glow + preview — is
-// driven by one delegated mouseover/out on the grid, reading the clip id and
-// duration from the card's data attributes.
-//
-// Preview differences vs. the library (local files): the clip streams from the
-// share server, so the hover delay is longer (don't hit the network for a
-// drive-by hover) and a spinner overlays the thumbnail until playback starts.
-//
-// The grid/canvas are callback refs backed by state, NOT plain useRefs: these
-// grids mount conditionally (profile shows a spinner first, feed can show an
-// empty state), so a run-once effect reading ref.current would fire before
-// the grid exists and never attach. State-backed refs re-run the effect when
-// the nodes actually appear.
+// Hover glow + preview for feed/profile grids via one delegated mouseover/out
+// (ClipGlow), reading clip id/duration from data attributes. Streams from the
+// share server, unlike the library's local files: longer hover delay + spinner.
+// Refs are state-backed, not useRef, since these grids mount conditionally.
 
 import { useEffect, useRef, useState } from "react";
 import { ClipGlow } from "../library/ClipGlow";
 import { useSettings } from "../settings/SettingsContext";
 import { previewStreamUrl } from "./types";
 
-/** Remote stream — hover longer than the library's 100ms before fetching. */
+/** Remote stream, hover longer than the library's 100ms before fetching. */
 const PREVIEW_DELAY_MS = 450;
 
 interface ActivePreview {
@@ -100,7 +87,7 @@ export function useCardGlow() {
           }
         }
         video.play().catch(() => {
-          // Autoplay rejection / stream error — drop back to the thumbnail.
+          // Autoplay rejection / stream error, drop back to the thumbnail.
           if (card === currentCard) cleanupPreview();
         });
       });

@@ -9,13 +9,13 @@ type AudioSourceKind = "system_loopback" | "microphone" | "process_loopback";
 interface AudioSource {
   kind: AudioSourceKind;
   device_id?: string;
-  /** Ordered device ids tried when the entry above doesn't start; the
-   *  literal "default" means the system default endpoint. */
+  /** ordered device ids tried when the entry above doesn't start; "default" means the system
+   *  default endpoint */
   fallbacks?: string[];
 }
 
 const DEFAULT_DEVICE_VALUE = "__default__";
-/** Sentinel the engine accepts inside `fallbacks` for "system default". */
+/** sentinel the engine accepts inside `fallbacks` for "system default" */
 const FALLBACK_DEFAULT = "default";
 const DEFAULT_SOURCES: AudioSource[] = [{ kind: "system_loopback" }, { kind: "microphone" }];
 
@@ -48,9 +48,8 @@ function deviceOptionsFor(kind: AudioSourceKind, devices: AudioDeviceInfo[], def
   ];
 }
 
-/** Append a "(disconnected device)" entry when `value` is a device id that
- *  isn't currently connected, so the select shows the truth instead of a
- *  raw id. */
+/** appends a "(disconnected device)" entry when value is a device id no longer connected, so
+ *  the select shows the truth instead of a raw id */
 function withStaleOption(
   opts: { value: string; label: string; hint?: string }[],
   value: string | undefined,
@@ -64,7 +63,7 @@ export default function ClipdipAudioSection() {
   const { config, patch, devices, devicesLoading, ensureDevices, refreshDevices, live, running } =
     useClipdip();
 
-  // Device list: lazy fetch on mount, re-scan when the window regains focus.
+  // device list: lazy fetch on mount, re-scan when the window regains focus
   useEffect(() => {
     ensureDevices();
     const onFocus = () => refreshDevices();
@@ -97,8 +96,7 @@ export default function ClipdipAudioSection() {
 
   const mixDisabled = sources.length < 2;
 
-  // Live engine truth: sources that aren't recording what the user asked
-  // for. Only meaningful while the pipeline is up.
+  // live engine truth: sources not recording what was asked; only meaningful while the pipeline is up
   const degraded = running
     ? (live?.audio_sources ?? []).filter((s) => s.missing || s.on_fallback)
     : [];

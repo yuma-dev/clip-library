@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Assembles the distributable folder and zip from the already-built binary
-// and cached ffmpeg.exe.
+// Assembles the dist folder + zip from the built binary and cached ffmpeg.exe.
 //
 //   dist/clipdip-<version>/
 //     clipdip.exe
@@ -26,7 +25,7 @@ const CLIP_EXE   = path.join(ROOT, 'target', 'release', 'clipdip.exe');
 const FFMPEG_EXE = path.join(DIST_ROOT, 'ffmpeg-cache', 'ffmpeg.exe');
 const ATTR_TXT   = path.join(DIST_ROOT, 'ATTRIBUTION.txt');
 
-// ── Pre-flight checks ──────────────────────────────────────────────────────
+// pre-flight checks
 for (const [label, p] of [
   ['clipdip.exe (run npm run build first)', CLIP_EXE],
   ['ffmpeg.exe  (run npm run fetch-ffmpeg first)', FFMPEG_EXE],
@@ -35,7 +34,7 @@ for (const [label, p] of [
   if (!fs.existsSync(p)) throw new Error(`Missing ${label}: ${p}`);
 }
 
-// ── Assemble dist folder ───────────────────────────────────────────────────
+// assemble dist folder
 console.log(`Assembling dist/clipdip-${version}/`);
 if (fs.existsSync(DIST_DIR)) fs.rmSync(DIST_DIR, { recursive: true, force: true });
 fs.mkdirSync(DIST_DIR, { recursive: true });
@@ -49,11 +48,11 @@ for (const f of fs.readdirSync(DIST_DIR)) {
   console.log(`  ${f.padEnd(20)} ${size} MB`);
 }
 
-// ── Zip via Windows built-in tar ───────────────────────────────────────────
+// zip via windows built-in tar
 if (fs.existsSync(ZIP_PATH)) fs.rmSync(ZIP_PATH);
 console.log(`Creating ${path.relative(ROOT, ZIP_PATH)}`);
 
-// tar -a = auto format from extension (.zip → zip), -c = create, -f = file
+// tar -a = auto format from extension (.zip to zip), -c = create, -f = file
 execSync(`tar -a -c -f "${ZIP_PATH}" -C "${DIST_ROOT}" "clipdip-${version}"`, {
   stdio: 'inherit',
 });

@@ -114,12 +114,10 @@ export default function ClipdipNotificationsSection() {
   );
 }
 
-// Recent notifications (health alerts, saves, errors) with timestamps, so
-// what an auto-dismissing overlay toast said can be read back later.
+// lets you read back what an auto-dismissing overlay toast said
 function NotificationHistory({ running }: { running: boolean }) {
   const [items, setItems] = useState<NotificationRecord[] | null>(null);
-  // An older clipdip binary answers the history command with "unknown
-  // command" — show a version hint instead of an eternally empty group.
+  // older clipdip binaries answer with "unknown command"; show a version hint instead of an empty list
   const [unsupported, setUnsupported] = useState(false);
 
   const load = useCallback(() => {

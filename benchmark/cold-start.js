@@ -15,14 +15,14 @@
 //   npm run bench:startup                              build + 5 runs + regression check against benchmark/startup-thresholds.json
 //
 // Flags: --runs N (7), --exe PATH, --timeout MS (60000), --keep (leave scratch
-// profiles), --reuse (seed once, keep the same profile for every run),
-// --benchmark-mode (also set CLIPS_BENCHMARK=1: no updater, no discord),
-// --trace (also record a Chromium content trace; analyze with benchmark/analyze-trace.js),
-// --cpu (also record a V8 CPU profile of the main process; analyze with benchmark/analyze-cpuprofile.js),
-// --settle MS (keep the app alive that long after the last mark, e.g. to let deferred services log),
-// --pixel-probe (sample three screen points during launch and report white/dark/content runs),
-// --env KEY=VAL (extra environment for the app, repeatable),
-// --app-args "--flag --other" (extra Chromium/Electron switches for the app),
+// profiles), --reuse (seed once, keep the same profile for every run)
+// --benchmark-mode (also set CLIPS_BENCHMARK=1: no updater, no discord)
+// --trace (also record a Chromium content trace; analyze with benchmark/analyze-trace.js)
+// --cpu (also record a V8 CPU profile of the main process; analyze with benchmark/analyze-cpuprofile.js)
+// --settle MS (keep the app alive that long after the last mark, e.g. to let deferred services log)
+// --pixel-probe (sample three screen points during launch and report white/dark/content runs)
+// --env KEY=VAL (extra environment for the app, repeatable)
+// --app-args "--flag --other" (extra Chromium/Electron switches for the app)
 // --park-cursor (move the mouse to the right screen edge before each launch, so a
 //   card under the cursor never starts a hover preview during the reveal).
 
@@ -105,10 +105,9 @@ function makeProfile() {
   // launch recompiles what a real user already has on disk.
   for (const name of ['thumbnail-cache', 'Local Storage', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'global_tags.json', 'tagPreferences.json',
     'trackPreferences.json', 'watched-clips.json', 'last-clips.json']) copy(name);
-  // Benchmark runs must never talk to the user's Discord, spawn clipdip or
-  // pollute real telemetry. The clip folder stays the real library: it is
-  // only read during boot, and thumbnails are keyed by absolute path so a
-  // copy would invalidate the whole warm cache.
+  // benchmark runs must never talk to the user's Discord, spawn clipdip, or pollute telemetry.
+  // clip folder stays the real library (only read during boot); thumbnails are keyed by
+  // absolute path so copying it would invalidate the warm cache
   const settings = JSON.parse(fs.readFileSync(path.join(src, 'settings.json'), 'utf8'));
   settings.enableDiscordRPC = false;
   settings.clipdip = { ...(settings.clipdip || {}), enabled: false, autostart: false };
@@ -140,8 +139,8 @@ function readTrace(file) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function runOnce(opts, index, exe) {
-  // --reuse keeps one profile across runs (what a returning user has: a
-  // settled Chromium profile); the default seeds a fresh copy per run.
+  // --reuse keeps one profile across runs (a settled Chromium profile, like a returning
+  // user); default reseeds a fresh copy each run
   const profileDir = opts.reuse
     ? path.join(scratchRoot, `${opts.label}-${opts.profile}`)
     : path.join(scratchRoot, `${opts.label}-${opts.profile}-${index}`);
@@ -158,9 +157,8 @@ async function runOnce(opts, index, exe) {
   if (opts.benchmarkMode) env.CLIPS_BENCHMARK = '1';
   Object.assign(env, opts.extraEnv);
 
-  // Screen-pixel probe: samples the centre of the primary screen every
-  // ~25 ms so a white (or otherwise wrong) frame between the window
-  // appearing and the library painting shows up as data.
+  // samples the primary screen center every ~25 ms so a bad frame between window-appear
+  // and library-paint shows up as data
   let probe = null;
   let probeOut = '';
   if (opts.pixelProbe) {
@@ -181,14 +179,12 @@ async function runOnce(opts, index, exe) {
     await sleep(50);
     trace = readTrace(traceFile) || trace;
     if (trace && DONE_MARKS.every((m) => trace.marks[m] !== undefined) && (!opts.trace || fs.existsSync(chromiumTrace)) && (!opts.cpu || fs.existsSync(cpuProfile))) {
-      // The reveal animation and its frame statistics land up to ~1.5 s after
-      // the window is opaque; wait for them (bounded) so they reach the trace.
+      // reveal animation stats land up to ~1.5s after window_opaque; wait (bounded) so they reach the trace
       const animDeadline = Date.now() + 7500;
       while (Date.now() < animDeadline) {
         trace = readTrace(traceFile) || trace;
         const notes = trace?.notes || {};
-        // Both notes exist only on a run that animated; a plain reveal has
-        // neither, so that case waits out the deadline.
+        // both notes only exist if the run animated; a plain reveal waits out the deadline
         if (trace.marks.window_opaque !== undefined && notes.reveal_raf && notes.reveal_compositor) break;
         await sleep(50);
       }
@@ -204,8 +200,7 @@ async function runOnce(opts, index, exe) {
       if (!appAlive) break;
     }
   }
-  // ClipLib.exe is the native launcher and exits once the app is on screen;
-  // the app's own pid is in the trace it wrote.
+  // ClipLib.exe (the launcher) exits once the app is on screen; the app's own pid is in the trace it wrote
   for (const pid of new Set([trace?.pid, child.pid].filter(Boolean))) {
     try {
       execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
@@ -282,7 +277,6 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.makeProfile) return makeProfile();
 
-  // The user path: through the native splash launcher.
   const builtExe = path.join(root, 'dist', 'win-unpacked', 'ClipLib Launcher.exe');
   const baseExe = opts.exe ? path.resolve(opts.exe) : builtExe;
   if (!fs.existsSync(baseExe)) throw new Error(`No packaged app at ${baseExe} (run npm run bench:build)`);
@@ -335,9 +329,8 @@ async function main() {
       failed += 1;
       console.log(`FAIL  asar ${asarBytes} bytes (limit ${thresholds.asar_bytes})`);
     }
-    // Reveal animation guard: median frames over 25 ms in its first 1.2 s,
-    // renderer (requestAnimationFrame) and compositor (screencast), from the
-    // boot-trace notes; only runs that animated count.
+    // median frames over 25ms in the first 1.2s, renderer (rAF) and compositor (screencast);
+    // only animated runs count
     for (const [key, note] of [['reveal_renderer_over_25ms', 'reveal_raf'], ['reveal_compositor_over_25ms', 'reveal_compositor']]) {
       if (thresholds[key] === undefined) continue;
       const values = pool.map((r) => r.notes?.[note]?.over_25ms).filter((v) => typeof v === 'number');

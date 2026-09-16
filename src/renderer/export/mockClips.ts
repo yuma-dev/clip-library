@@ -1,9 +1,6 @@
-// Stub `window.clips` that replays a captured fixture, so any component reaching
-// into the IPC facade renders exactly as in the live app — with no Electron main
-// process behind it. Unknown methods resolve to empty values; `on*` event
-// subscriptions are no-ops that return a no-op unsubscribe. This is the seam that
-// makes the exporter component-agnostic: the harness never needs to know WHICH
-// component it renders, only which fixture to serve.
+// Stub window.clips that replays a captured fixture, so any component reaching into
+// the IPC facade renders as in the live app with no Electron main process. Unknown
+// methods resolve empty; on* subscriptions are no-op unsubscribes.
 
 import type { ClipFixture } from "./types";
 
@@ -30,7 +27,7 @@ export function installMockClips(fixtures: ClipFixture[]): void {
     get(target, prop: string) {
       if (prop in target) return target[prop];
       if (prop === "clipdip") return new Proxy({}, handler);
-      if (prop.startsWith("on")) return () => () => {}; // event sub -> no-op unsub
+      if (prop.startsWith("on")) return () => () => {}; // event sub, no-op unsub
       return async () => undefined; // any other IPC call resolves empty
     },
   };

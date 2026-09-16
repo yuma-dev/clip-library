@@ -1,10 +1,7 @@
-// Debug-only UI helpers ported from the legacy renderer's debug-tools.js:
-//   • window.loadingScreenTest.{show,hide,toggle}() + Ctrl/Cmd+Shift+L — previews
-//     the startup loading screen in-renderer (the real splash is a separate
-//     main-process window, splash.html, so this mirrors its look for eyeballing).
-//   • F6 — toggles the secret easter-egg overlay.
-// Registered once from App on mount; returns a disposer that removes listeners
-// and any injected overlays.
+// ported from the legacy renderer's debug-tools.js
+// window.loadingScreenTest.{show,hide,toggle}() + ctrl/cmd+shift+l previews the startup screen
+// (real splash is a separate main-process window, splash.html)
+// F6 toggles the secret easter-egg overlay
 import titleUrl from "../../../assets/title.png";
 
 const LOADING_ID = "loading-screen-test";
@@ -14,8 +11,7 @@ const SECRET_IMG = "https://i.pinimg.com/736x/db/95/e1/db95e1ed08f7009ee11afbe79
 function buildLoadingScreen(): HTMLElement {
   const el = document.createElement("div");
   el.id = LOADING_ID;
-  // Mirrors splash.html: centered title logo above a sweeping progress bar on a
-  // near-opaque backdrop. Inline styles keep this self-contained (no CSS file).
+  // mirrors splash.html; inline styles keep this self-contained, no CSS file
   Object.assign(el.style, {
     position: "fixed",
     inset: "0",

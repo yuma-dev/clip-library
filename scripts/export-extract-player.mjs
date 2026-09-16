@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Extract a clip into a `videoPlayer` export spec: a hi-res middle-frame
-// thumbnail (stands in for the <video>) + the clip's real title and duration,
-// with the playhead at the middle and no trim. Reads the same on-disk files the
-// app reads (settings.json -> clipLocation, .clip_metadata/<clip>.customname)
-// and grabs a full-resolution frame with the bundled ffmpeg.
+// thumbnail (stands in for the <video>) + the clip's real title and duration
+// playhead at the middle, no trim. Reads the same on-disk files the app reads
+// (settings.json for clipLocation, .clip_metadata/<clip>.customname).
 //
 //   node scripts/export-extract-player.mjs "<clip filename>" [options]
 //     --time <sec>          playhead/frame timestamp (default: middle, duration/2)

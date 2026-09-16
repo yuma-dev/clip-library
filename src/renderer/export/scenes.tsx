@@ -1,10 +1,6 @@
-// Scene registry for the exporter. A "scene" mounts one real app component (with
-// whatever wrapper chrome it needs) into a fixed export frame, tagging sub-parts
-// with `data-layer` so the capture script can peel them into separate PNGs.
-//
-// Scenes are the DISPOSABLE, per-component part of the pipeline — add one when you
-// want to export a new component; the harness + capture script stay untouched.
-// The `clipCard` scene below doubles as the reference implementation.
+// Scene registry for the exporter. A scene mounts one app component into a fixed
+// export frame, tagging sub-parts with data-layer so the capture script can peel
+// them into separate PNGs. Disposable per-component; clipCard is the reference.
 
 import type { CSSProperties, ReactElement } from "react";
 import { Copy, Maximize, Trash2, Upload } from "lucide-react";
@@ -13,9 +9,8 @@ import type { ExportSpec, ClipFixture } from "./types";
 
 export type Scene = (spec: ExportSpec) => ReactElement;
 
-// Static copy of the hover glow (ClipGlow.ts): the thumbnail, blurred +
-// screen-blended, bleeding `overflow`px around the 16:9 media box. Its own layer
-// so it can be exported alone (drop it onto "Screen" blend in an editor).
+// Static copy of the hover glow (ClipGlow.ts): thumbnail blurred + screen-blended
+// bleeding `overflow`px around the media box, on its own layer for separate export.
 function StaticGlow({ thumb, width, overflow }: { thumb: string | null; width: number; overflow: number }) {
   if (!thumb) return null;
   const mediaH = (width * 9) / 16;
@@ -74,12 +69,8 @@ function ClipCardScene(spec: ExportSpec): ReactElement {
   );
 }
 
-// ---------------------------------------------------------------------------
-// audioMixer — the multi audio-track panel (player-legacy/audio-tracks-manager.js).
-// Rendered statically from track data instead of a live Web Audio graph; the
-// row visuals mirror _paintRow() exactly (fill = clamp(v/2,0,1), boosted colour
-// when v > 1, value = round(v*100)%). Data comes from spec.props.tracks.
-// ---------------------------------------------------------------------------
+// audioMixer: multi audio-track panel (player-legacy/audio-tracks-manager.js), rendered
+// statically from track data; row visuals mirror _paintRow() (fill=clamp(v/2,0,1)).
 
 const BOOSTED_COLOR = "#f59e0b"; // matches audio-tracks-manager.js
 const ICON_X =
@@ -91,7 +82,7 @@ interface MixerTrack {
   volume: number; // 1 == 100%; range 0..2
   color: string; // #rrggbb
   muted?: boolean; // right-click soft mute (stays in mix, strikethrough)
-  hidden?: boolean; // removed from mix -> floats in the hidden tray as a pill
+  hidden?: boolean; // removed from mix, floats in the hidden tray as a pill
 }
 
 // Hidden/disabled track: a "pill" chip in the tray above the panel (_buildChip).
@@ -177,16 +168,11 @@ function AudioMixerScene(spec: ExportSpec): ReactElement {
   );
 }
 
-// ---------------------------------------------------------------------------
-// videoPlayer — the clip player overlay (player/VideoPlayer.tsx) rendered as a
-// still: the <video> is replaced by a hi-res thumbnail, controls are forced
-// visible (#video-controls.visible), the playhead sits at currentSeconds, and
-// trim markers stay at the edges (transparent = no trim). Purely presentational,
-// none of the legacy imperative wiring. Data comes from spec.props.
-// ---------------------------------------------------------------------------
+// videoPlayer: clip player overlay (player/VideoPlayer.tsx) as a still; <video>
+// replaced by a hi-res thumbnail, controls forced visible, playhead at currentSeconds.
 
-// Exact app volume glyph (player-legacy/video-player.js volumeIcons.normal —
-// the state shown at default volume 1). Material Symbols speaker-with-waves.
+// Exact app volume glyph (player-legacy/video-player.js volumeIcons.normal, default
+// volume 1). Material Symbols speaker-with-waves.
 const VOLUME_ICON_NORMAL =
   '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-481q0-83-44-151.5T598-735q-15-7-22-21.5t-2-29.5q6-16 21.5-23t31.5 0q97 43 155 131.5T840-481q0 108-58 196.5T627-153q-16 7-31.5 0T574-176q-5-15 2-29.5t22-21.5q74-34 118-102.5T760-481ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm380-120q0 42-19 79.5T591-339q-10 6-20.5.5T560-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>';
 
@@ -229,7 +215,6 @@ function VideoPlayerScene(spec: ExportSpec): ReactElement {
             style={{ contain: "none" } as CSSProperties}
           />
           <div id="video-controls" className="visible" data-layer="controls">
-            {/* TOP: title + action buttons */}
             <div id="top-controls">
               <input type="text" id="clip-title" data-layer="title" defaultValue={props.title ?? ""} readOnly />
               <div className="player-actions" data-layer="actions">
@@ -246,7 +231,6 @@ function VideoPlayerScene(spec: ExportSpec): ReactElement {
                 </button>
               </div>
             </div>
-            {/* BOTTOM: playback controls, progress bar, time */}
             <div id="bottom-controls">
               <div className="playback-row">
                 <div id="volume-container">

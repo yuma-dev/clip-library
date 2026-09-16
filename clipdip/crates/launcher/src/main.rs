@@ -1,15 +1,8 @@
-//! ClipLib launcher: `ClipLib Launcher.exe`, what shortcuts and taskbar pins
-//! point at. It draws the splash (logo with a breathing halo and a sweep bar,
-//! per-pixel alpha, no window frame) within a few tens of milliseconds of the
-//! click, starts the Electron app (`ClipLib.exe` next to it) with the same
-//! arguments plus `--splash-logo=x,y,w,h` (where the logo sits, in physical
-//! screen pixels, so the app can take it over in place), and fades out as
-//! soon as the app's window is visible and opaque. Electron itself needs
-//! about 1.5 s to put the library on screen; this covers that wait with
-//! immediate feedback and costs the app nothing (no extra renderer process).
-//!
-//! If the app is already running, the spawned instance hands over to it and
-//! exits at once, so the splash disappears again right away.
+//! ClipLib launcher, what shortcuts/taskbar pins point at. Draws the splash
+//! within tens of ms of the click, starts `ClipLib.exe` with the same args
+//! plus `--splash-logo=x,y,w,h` (physical pixels, so the app can take the
+//! logo over in place), fades out once the app window is visible and opaque.
+//! Covers Electron's ~1.5s startup at no renderer cost.
 
 #![windows_subsystem = "windows"]
 
@@ -44,7 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const APP_EXE: &str = "ClipLib.exe";
 const LOGO_PNG: &[u8] = include_bytes!("../../../../assets/title.png");
 
-// Logical layout, matching the old in-app splash.
+// matches the old in-app splash layout
 const WIN_W: i32 = 480;
 const WIN_H: i32 = 360;
 const LOGO_W: i32 = 140;
@@ -53,23 +46,19 @@ const BAR_H: i32 = 2;
 const GAP: i32 = 28;
 
 const FADE_IN: Duration = Duration::from_millis(260);
-// Short: the app draws the same logo at the same spot the moment it is opaque
-// and animates from there, so the launcher only has to get out of the way.
+// short: the app draws the same logo at the same spot once opaque and animates from there
 const FADE_OUT: Duration = Duration::from_millis(120);
 const SWEEP_PERIOD: Duration = Duration::from_millis(1800);
-// Accent halo behind the logo, breathing with the same period as the sweep.
+// accent halo behind the logo, breathes on the same period as the sweep
 const HALO_RADIUS: i32 = 87;
 const HALO_PERIOD: Duration = Duration::from_millis(1800);
-// Give up covering for the app after this long; it will show up by itself.
-// Longer than the app's own 30 s never-ready fallback, so the splash never
-// leaves a gap before that fallback reveals the window.
+// longer than the app's own 30s never-ready fallback, so no gap before it reveals the window
 const MAX_WAIT: Duration = Duration::from_secs(35);
 
 struct Rgba {
     width: usize,
     height: usize,
-    // Straight (non-premultiplied) RGBA.
-    pixels: Vec<u8>,
+    pixels: Vec<u8>, // straight (non-premultiplied) RGBA
 }
 
 fn decode_logo() -> Option<Rgba> {
@@ -89,7 +78,7 @@ fn decode_logo() -> Option<Rgba> {
     Some(Rgba { width, height, pixels })
 }
 
-/// Box-filter downscale (the logo is 1024 px, drawn at ~140 px).
+/// box-filter downscale, logo is 1024px drawn at ~140px
 fn downscale(src: &Rgba, dst_w: usize, dst_h: usize) -> Rgba {
     let mut out = vec![0u8; dst_w * dst_h * 4];
     for y in 0..dst_h {
@@ -103,7 +92,7 @@ fn downscale(src: &Rgba, dst_w: usize, dst_h: usize) -> Rgba {
                 for sx in sx0..sx1 {
                     let i = (sy * src.width + sx) * 4;
                     let pa = src.pixels[i + 3] as u64;
-                    // Weight color by alpha so transparent pixels do not darken edges.
+                    // weight by alpha so transparent pixels don't darken edges
                     r += src.pixels[i] as u64 * pa;
                     g += src.pixels[i + 1] as u64 * pa;
                     b += src.pixels[i + 2] as u64 * pa;
@@ -159,7 +148,7 @@ impl Canvas {
         unsafe { std::ptr::write_bytes(self.pixels, 0, (self.width * self.height * 4) as usize) };
     }
 
-    /// Premultiplied BGRA write with source-over blending.
+    /// premultiplied BGRA write, source-over blending
     fn blend(&mut self, x: i32, y: i32, r: u8, g: u8, b: u8, a: u8) {
         if x < 0 || y < 0 || x >= self.width || y >= self.height || a == 0 {
             return;
@@ -234,7 +223,7 @@ unsafe extern "system" fn enum_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if GetWindowRect(hwnd, &mut rect).is_err() || rect.right - rect.left < 200 || rect.bottom - rect.top < 200 {
         return BOOL(1);
     }
-    // A cloaked window (DWM has not composed it yet) is not on screen.
+    // cloaked = DWM hasn't composed it yet, not actually on screen
     let mut cloaked: u32 = 0;
     let _ = DwmGetWindowAttribute(
         hwnd,
@@ -245,8 +234,7 @@ unsafe extern "system" fn enum_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if cloaked != 0 {
         return BOOL(1);
     }
-    // The app shows its window at opacity 0 and switches to opaque one frame
-    // later (that hides Windows' first white frame); wait for the opaque one.
+    // app shows at opacity 0 then opaque one frame later (hides Windows' first white frame)
     let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
     if ex & WS_EX_LAYERED.0 != 0 {
         let mut key = COLORREF(0);
@@ -275,8 +263,7 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// Halo colour and alpha at normalised distance `d` from the centre (0 at the
-/// centre, 1 at the radius): accent core fading to a deeper purple, then out.
+/// halo color/alpha at normalized distance `d` from center (0..1): accent core fading to purple, then out
 fn halo_at(d: f32) -> Option<(u8, u8, u8, f32)> {
     if d < 0.4 {
         let t = d / 0.4;
@@ -290,9 +277,7 @@ fn halo_at(d: f32) -> Option<(u8, u8, u8, f32)> {
 }
 
 fn main() {
-    // The app starts first: the splash only covers its startup and must never
-    // delay it. Only the window geometry is computed before the spawn (a few
-    // microseconds) because the app needs to know where the logo will be.
+    // splash must never delay the app; only geometry is computed before spawn
     let Some(app) = app_exe_path() else { return };
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -311,13 +296,13 @@ fn main() {
     }
     let x = work.left + (work.right - work.left - width) / 2;
     let y = work.top + (work.bottom - work.top - height) / 2;
-    // The logo is square (title.png is 1024 x 1024); the layout below assumes so.
+    // title.png is 1024x1024, layout below assumes a square logo
     let logo_w = px(LOGO_W);
     let logo_y = (height - (logo_w + px(GAP) + px(BAR_H))) / 2;
     let logo_x = (width - logo_w) / 2;
     let splash_logo = format!("--splash-logo={},{},{},{}", x + logo_x, y + logo_y, logo_w, logo_w);
 
-    // Arguments (deep links, flags) pass straight through.
+    // deep links, flags pass straight through
     let child: Option<Child> = Command::new(&app)
         .args(env::args_os().skip(1))
         .arg(&splash_logo)
@@ -393,7 +378,7 @@ fn main() {
                 }
             }
 
-            // Frame: breathing halo, logo, sweep bar.
+            // frame: breathing halo, logo, sweep bar
             canvas.clear();
             {
                 let phase = (now.duration_since(started).as_secs_f32() / HALO_PERIOD.as_secs_f32()).fract();
@@ -417,7 +402,7 @@ fn main() {
                 canvas.draw_image(l, logo_x, logo_y);
             }
             let t = (now.duration_since(started).as_secs_f32() / SWEEP_PERIOD.as_secs_f32()).fract();
-            // Sweep across in the first 72% of the period, then rest (as the CSS did).
+            // sweeps across the first 72% of the period, then rests (as the CSS did)
             let sweep = if t < 0.72 { ease_out(t / 0.72) } else { 1.0 };
             let head = -1.15 + sweep * 2.3; // in bar widths
             for yy in 0..bar_h {

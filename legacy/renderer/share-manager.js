@@ -1,10 +1,6 @@
 /**
- * Share Manager Module
- *
- * Handles:
- * - Sharing auth status verification
- * - ClipLib one-click connect/disconnect flow
- * - Clip publish flow with share modal + featuring picker
+ * ClipLib sharing: auth status, one-click connect/disconnect, publish flow
+ * with share modal + featuring picker
  */
 
 const { ipcRenderer, shell } = require('electron');

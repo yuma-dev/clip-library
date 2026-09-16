@@ -1,20 +1,17 @@
-// Player export actions. Reimplements the thin arg-gathering of the legacy
-// export-manager against window.clips.* — the fragile encoder-fallback /
-// benchmark / clipboard logic lives in the main process, not here.
-//
-// savePath === null means "export to clipboard".
+// reimplements the legacy export-manager's arg-gathering against window.clips.*; the fragile
+// encoder-fallback/benchmark/clipboard logic lives in the main process. savePath === null means clipboard
 
-/** (current, total, isClipboard) — mirrors the legacy showExportProgress. */
+/** (current, total, isClipboard); mirrors the legacy showExportProgress */
 export type ProgressFn = (current: number, total: number, clipboard: boolean) => void;
 
-/** Current playback rate drives export speed (>0, else 1×). */
+/** current playback rate drives export speed (>0, else 1x) */
 function speed(): number {
   const v = document.getElementById("video-player") as HTMLVideoElement | null;
   const r = Number(v?.playbackRate);
   return Number.isFinite(r) && r > 0 ? r : 1;
 }
 
-/** Per-clip saved volume (master gain applied to the export). */
+/** per-clip saved volume, master gain applied to the export */
 async function loadVolume(name: string): Promise<number> {
   const p = window.legacyPlayer;
   if (p?.loadVolume) {
@@ -27,7 +24,7 @@ async function loadVolume(name: string): Promise<number> {
   return 1;
 }
 
-/** Multi-track mix snapshot, or null for single-track clips. */
+/** multi-track mix snapshot, or null for single-track clips */
 function audioMix(): unknown {
   const mgr = window.legacyPlayer?.getActiveAudioTracksManager?.();
   if (mgr?.getExportMix) {
@@ -53,12 +50,12 @@ function ctx(): ExportCtx | null {
   return { name: clip.originalName as string, start: s?.trimStartTime ?? 0, end: s?.trimEndTime ?? 0 };
 }
 
-/** Export the current trim as video to the clipboard (default action). */
+/** exports the current trim as video to the clipboard (default action) */
 export async function exportTrimmedVideo(onProgress?: ProgressFn): Promise<void> {
   const c = ctx();
   if (!c) return;
-  // Legacy parity: surfaces the FFmpeg version in main's log right before an
-  // export, so failed-export diagnostics always carry it. Result unused.
+  // surfaces the ffmpeg version in main's log before export, so failed-export diagnostics always
+  // carry it (result unused)
   window.clips.getFfmpegVersion().catch(() => {});
   onProgress?.(0, 100, true);
   const res = await window.clips.exportTrimmedVideo(
@@ -73,7 +70,7 @@ export async function exportTrimmedVideo(onProgress?: ProgressFn): Promise<void>
   else throw new Error(res?.error || "Export failed");
 }
 
-/** Export the current trim as a video file at savePath. */
+/** exports the current trim as a video file at savePath */
 export async function exportVideoToFile(savePath: string, onProgress?: ProgressFn): Promise<void> {
   const c = ctx();
   if (!c) return;
@@ -91,7 +88,7 @@ export async function exportVideoToFile(savePath: string, onProgress?: ProgressF
   else throw new Error(res?.error || "Export failed");
 }
 
-/** Export the current trim's audio — to a file (savePath) or the clipboard (null). */
+/** exports the current trim's audio, to a file (savePath) or the clipboard (null) */
 export async function exportAudio(savePath: string | null, onProgress?: ProgressFn): Promise<void> {
   const c = ctx();
   if (!c) return;
@@ -110,7 +107,7 @@ export async function exportAudio(savePath: string | null, onProgress?: Progress
   else throw new Error(res?.error || "Audio export failed");
 }
 
-/** Prompt for a path, then export video there. */
+/** prompts for a path, then exports video there */
 export async function exportVideoWithFileSelection(onProgress?: ProgressFn): Promise<void> {
   const clip = window.legacyState?.currentClip;
   if (!clip) return;
@@ -118,7 +115,7 @@ export async function exportVideoWithFileSelection(onProgress?: ProgressFn): Pro
   if (savePath) await exportVideoToFile(savePath, onProgress);
 }
 
-/** Prompt for a path, then export audio there. */
+/** prompts for a path, then exports audio there */
 export async function exportAudioWithFileSelection(onProgress?: ProgressFn): Promise<void> {
   const clip = window.legacyState?.currentClip;
   if (!clip) return;
@@ -126,12 +123,8 @@ export async function exportAudioWithFileSelection(onProgress?: ProgressFn): Pro
   if (savePath) await exportAudio(savePath, onProgress);
 }
 
-/**
- * Export a clip that is NOT open in the player (grid right-click menu) to the
- * clipboard. Loads the saved trim/volume/speed from disk — the clip has no live
- * player state or multi-track mix to read — mirroring the legacy
- * exportClipFromContextMenu (always a clipboard export).
- */
+/** exports a clip not open in the player (grid right-click) to the clipboard; loads saved
+ * trim/volume/speed from disk since there's no live player state, mirrors legacy exportClipFromContextMenu */
 export async function exportClipToClipboard(originalName: string, onProgress?: ProgressFn): Promise<void> {
   const info = await window.clips.getClipInfo(originalName);
   const trim = await window.clips.getTrim(originalName);

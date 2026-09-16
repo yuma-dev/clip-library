@@ -8,14 +8,9 @@ import {
   type GridDirection,
 } from "../library/gridNavigation";
 
-// Gamepad support — port of legacy/renderer/gamepad-manager.js.
-//
-// A 16ms poll loop reads connected pads. Buttons are edge-triggered and mapped
-// through `controller.buttonMappings` (settings) over the Xbox-layout default
-// below. Context routing matches legacy: player overlay open → playback
-// controls; grid view → d-pad drives grid navigation, A opens, B/Start-combo
-// raise a quit confirm. Right stick seeks/changes volume in the player and
-// scrolls the grid outside it.
+// port of legacy/renderer/gamepad-manager.js. 16ms poll loop, buttons edge-triggered and mapped
+// through controller.buttonMappings (settings) over the Xbox layout default below. player open:
+// playback controls; grid: d-pad navigates, A opens, B/Start-combo asks to quit
 
 type GamepadAction =
   | "playPause"
@@ -35,7 +30,7 @@ type GamepadAction =
   | "quitApp"
   | null;
 
-// Xbox layout: A B X Y LB RB LT RT Back Start LS RS DUp DDown DLeft DRight.
+// Xbox layout: A B X Y LB RB LT RT Back Start LS RS DUp DDown DLeft DRight
 const DEFAULT_BUTTON_MAPPINGS: Record<number, GamepadAction> = {
   0: "playPause",
   1: "closePlayer",
@@ -55,9 +50,9 @@ const DEFAULT_BUTTON_MAPPINGS: Record<number, GamepadAction> = {
   15: "skipForward",
 };
 
-// Left stick: discrete grid nav (must re-cross the deadzone to repeat).
-// Right stick: continuous seek / volume. Deadzones are the effective legacy
-// runtime values (the settings analogMappings block was never applied).
+// left stick: discrete grid nav, must re-cross the deadzone to repeat. right stick: continuous
+// seek/volume. deadzones are the effective legacy runtime values (settings analogMappings block was
+// never applied)
 const LEFT_STICK = { x: 0, y: 1, deadzone: 0.4 };
 const RIGHT_STICK = { x: 2, y: 3, deadzone: 0.2 };
 
@@ -65,7 +60,7 @@ interface GamepadDeps {
   navigateToVideo(direction: number): void;
   exportDefault(): void;
   exportVideo(): void;
-  /** React confirm dialog (quit prompt). Resolves true to quit. */
+  /** resolves true to quit */
   confirm(options: {
     title?: string;
     message: string;
@@ -76,13 +71,13 @@ interface GamepadDeps {
 
 let deps: GamepadDeps | null = null;
 
-// Tunables (overridden by settings.controller).
-let seekSensitivity = 0.5; // seconds of video per second of full stick deflection… × stick value
+// tunables, overridden by settings.controller
+let seekSensitivity = 0.5; // seconds of video per second of full stick deflection, times stick value
 let volumeSensitivity = 0.1;
 let buttonMappings: Record<number, GamepadAction> = { ...DEFAULT_BUTTON_MAPPINGS };
 let managerEnabled = true;
 
-// --- Connection store (drives the React indicator chip) ---
+// connection store, drives the React indicator chip
 interface ConnectionState {
   connected: boolean;
   id: string | null;
@@ -104,7 +99,7 @@ export function useGamepadConnection(): ConnectionState {
   );
 }
 
-// --- Poll state ---
+// poll state
 const connectedPads = new Set<number>();
 const lastButtons = new Map<number, boolean[]>();
 const lastSticks = new Map<number, { x: number; y: number }>();
@@ -125,7 +120,7 @@ function gridScroller(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".route-host:not(.hidden) .clip-scroll");
 }
 
-// --- Quit confirm (React dialog; A confirms, B cancels while open) ---
+// quit confirm: A confirms, B cancels while open
 let quitConfirmOpen = false;
 async function showQuitConfirm(): Promise<void> {
   if (quitConfirmOpen || !deps) return;
@@ -146,7 +141,7 @@ function clickModalButton(selector: string): void {
   document.querySelector<HTMLButtonElement>(`.modal-backdrop ${selector}`)?.click();
 }
 
-// --- Action routing (edge-triggered button presses) ---
+// action routing, edge-triggered button presses
 function handleAction(action: Exclude<GamepadAction, null>): void {
   const lp = window.legacyPlayer;
 
@@ -163,7 +158,7 @@ function handleAction(action: Exclude<GamepadAction, null>): void {
         if (videoEl()?.src) lp.togglePlayPause?.();
         break;
       case "closePlayer":
-        // Exit fullscreen first; a second press closes (legacy behavior).
+        // exit fullscreen first, a second press closes (legacy behavior)
         if (lp.isVideoInFullscreen?.(videoEl())) lp.toggleFullscreen?.();
         else void lp.closePlayer?.();
         break;
@@ -209,7 +204,7 @@ function handleAction(action: Exclude<GamepadAction, null>): void {
     return;
   }
 
-  // Grid context.
+  // grid context
   switch (action) {
     case "closePlayer":
     case "quitApp":
@@ -217,7 +212,7 @@ function handleAction(action: Exclude<GamepadAction, null>): void {
       break;
     case "playPause":
     case "exportDefault":
-      // First press summons the focus ring; the next one opens the selection.
+      // first press summons the focus ring, the next opens the selection
       if (!isGridNavigationEnabled()) enableGridNavigation();
       else openCurrentGridSelection();
       break;
@@ -243,11 +238,9 @@ function gridMove(direction: GridDirection): void {
   else moveGridSelection(direction);
 }
 
-// --- Analog routing ---
-// NOTE: the legacy per-tick amounts (x * sensitivity * dt ≈ 0.008) could never
-// pass legacy's own >0.1 apply-gate, so stick seek/volume were dead in the old
-// renderer. Implemented usably here: full deflection ≈ sensitivity × 10 per
-// second (default 5 s/s seek, 1.0/s volume), still scaled by the settings keys.
+// analog routing
+// NOTE: legacy's per-tick amounts (x * sensitivity * dt ~= 0.008) never passed its own >0.1
+// apply-gate, so stick seek/volume were dead there. here: full deflection ~= sensitivity * 10/s
 function handleSeek(amount: number): void {
   const video = videoEl();
   if (!video || !Number.isFinite(video.duration)) return;
@@ -264,7 +257,7 @@ function processAnalog(pad: Gamepad): void {
   const ry = pad.axes[RIGHT_STICK.y] ?? 0;
   const inPlayer = playerActive();
 
-  // Right stick: seek / volume in the player, scroll in the grid.
+  // right stick: seek/volume in the player, scroll in the grid
   if (Math.abs(rx) > RIGHT_STICK.deadzone) {
     if (inPlayer) handleSeek(rx * seekSensitivity * 10 * dt);
     else if (Math.abs(rx) > 0.3) gridScroller()?.scrollBy({ left: rx * 15 });
@@ -277,8 +270,8 @@ function processAnalog(pad: Gamepad): void {
     }
   }
 
-  // Left stick: discrete grid navigation, edge-triggered on deadzone crossing
-  // (must return inside the deadzone before it fires again — legacy behavior).
+  // left stick: discrete grid nav, edge-triggered on deadzone crossing (must return inside the
+  // deadzone before it fires again, legacy behavior)
   const lx = pad.axes[LEFT_STICK.x] ?? 0;
   const ly = pad.axes[LEFT_STICK.y] ?? 0;
   const last = lastSticks.get(pad.index) ?? { x: 0, y: 0 };
@@ -290,14 +283,14 @@ function processAnalog(pad: Gamepad): void {
   lastSticks.set(pad.index, { x: lx, y: ly });
 }
 
-// --- Poll loop ---
+// poll loop
 function pollPads(): void {
   const pads = navigator.getGamepads();
   for (const index of connectedPads) {
     const pad = pads[index];
     if (!pad) continue;
 
-    // Quit combo: Back + Start together.
+    // quit combo: Back + Start together
     const combo = Boolean(pad.buttons[8]?.pressed && pad.buttons[9]?.pressed);
     if (combo && !lastQuitCombo) handleAction("quitApp");
     lastQuitCombo = combo;
@@ -336,7 +329,7 @@ function onConnected(pad: Gamepad): void {
   if (playerActive()) {
     window.legacyPlayer?.showControls?.();
   } else if (getVisibleCards().length > 0 && !isGridNavigationEnabled()) {
-    // Grid view: summon the focus ring shortly after connecting (legacy 500ms).
+    // grid view: summon the focus ring shortly after connecting (legacy 500ms)
     setTimeout(() => {
       if (connection.connected && !playerActive()) enableGridNavigation();
     }, 500);
@@ -360,14 +353,13 @@ export function isGamepadConnected(): boolean {
 
 let initialized = false;
 
-/** One-time wiring; applies `settings.controller` and starts listening. */
+/** one-time wiring; applies settings.controller and starts listening */
 export function initGamepad(dependencies: GamepadDeps): void {
   if (initialized) return;
   initialized = true;
   deps = dependencies;
 
-  // The legacy player re-enables grid navigation on close via
-  // state.gamepadManager.isGamepadConnected() — hand it a live shim.
+  // legacy re-enables grid nav on close via state.gamepadManager.isGamepadConnected(); shim it
   if (window.legacyState) {
     window.legacyState.gamepadManager = { isGamepadConnected };
   }
@@ -394,8 +386,8 @@ export function initGamepad(dependencies: GamepadDeps): void {
   window.addEventListener("gamepadconnected", (e) => onConnected((e as GamepadEvent).gamepad));
   window.addEventListener("gamepaddisconnected", (e) => onDisconnected((e as GamepadEvent).gamepad));
 
-  // Pads connected before this ran (Chromium only reports them after input,
-  // but a reload mid-session sees them immediately).
+  // pads connected before this ran (Chromium only reports them after input; a reload mid-session
+  // sees them immediately)
   for (const pad of navigator.getGamepads()) {
     if (pad) onConnected(pad);
   }
