@@ -180,6 +180,11 @@ const lazyModule = (modulePath) =>
 
 const updaterModule = lazyModule('./main/updater');
 const isDev = !app.isPackaged;
+// Unpackaged Electron is used by both the Vite development workflow and the
+// source benchmark runner. Only the former has a dev server. The benchmark
+// explicitly selects the built renderer so `electron .` never silently loads
+// (or waits for) an unrelated server on port 5173.
+const useViteRenderer = isDev && process.env.CLIPLIB_RENDERER_MODE !== 'built';
 const path = require("path");
 const fs = require("fs").promises;
 const { loadSettings, saveSettings, updateSettings, getDefaultKeybindings, getClipLocation, setClipLocation } = require("./utils/settings-manager");
@@ -1132,7 +1137,7 @@ async function createWindow() {
       // Dev serves the renderer from http://127.0.0.1:5173, so file:// thumbnails
       // /videos would be blocked as cross-origin. Relax only in dev; the packaged
       // app loads from file:// where same-scheme access already works.
-      webSecurity: !isDev,
+      webSecurity: !useViteRenderer,
     },
   });
 
@@ -1145,8 +1150,8 @@ async function createWindow() {
   // window controls come from `titleBarOverlay` above. custom-electron-titlebar
   // is no longer used (its renderer-side Titlebar went away with the legacy UI).
   // Renderer rewrite (plan D9): plain Vite serves the React renderer.
-  // Dev -> Vite dev server; packaged -> the built bundle in dist/.
-  if (isDev) {
+  // Dev -> Vite dev server; packaged/source-benchmark -> the built bundle.
+  if (useViteRenderer) {
     mainWindow.loadURL("http://127.0.0.1:5173");
   } else {
     mainWindow.loadFile(path.join(__dirname, "renderer-dist", "index.html"));
@@ -1308,7 +1313,7 @@ async function createWindow() {
     });
   });
   
-  if (isDev) {
+  if (useViteRenderer) {
     try {
       require("electron-reloader")(module, {
         debug: process.env.CLIPS_RELOADER_DEBUG === '1',
@@ -2025,4 +2030,3 @@ ipcMain.handle('mark-clips-watched', async (event, clipNames) => {
 ipcMain.handle('save-clip-list-immediately', async () => {
   await clipsModule.saveCurrentClipList(getSettings);
 });
-

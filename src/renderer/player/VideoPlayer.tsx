@@ -298,7 +298,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         return window.alert(text);
       },
       showCustomConfirm: (msg: unknown) => window.confirm(String(msg)),
-      isBenchmarkMode: false,
+      isBenchmarkMode: window.__benchmarkConfig?.enabled === true,
       updateDiscordPresence: (details: string, state?: string | null) =>
         updateDiscordPresence(details, state ?? null),
       getActionFromEvent: (e: KeyboardEvent) => getActionFromEvent(e),

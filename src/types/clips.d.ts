@@ -340,6 +340,13 @@ export interface ClipsApi {
   importSteelseriesClips(...args: any[]): Promise<any>;
   quitApp(): Promise<any>;
 
+  // --- Source benchmark runner (handlers exist only in benchmark mode) ---
+  benchmarkGetResults(): Promise<any>;
+  benchmarkOutputResult(result: any): Promise<boolean>;
+  benchmarkOutputMarker(marker: string, payload: any): Promise<boolean>;
+  benchmarkOutputComplete(data: any): Promise<boolean>;
+  benchmarkQuit(): Promise<boolean>;
+
   // --- Integrated clipdip (clipdip binary; config lives in its TOML) ---
   clipdip: {
     getConfig(): Promise<{ exists: boolean; config: ClipdipConfig }>;
@@ -443,6 +450,13 @@ export interface LegacyPlayerModule {
 declare global {
   interface Window {
     clips: ClipsApi;
+    __benchmarkConfig?: { enabled: boolean; scenarios: string[] };
+    __runAudioBenchmark?: (scenario: string, harness: unknown) => Promise<unknown>;
+    __benchmarkLastOpenTimings?: {
+      clipName: string;
+      audioTrackCount: number;
+      timings: Record<string, number>;
+    };
     legacyPlayer?: LegacyPlayerModule;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     legacyState?: Record<string, any>;

@@ -280,6 +280,15 @@ const api = {
   importSteelseriesClips: invoke("import-steelseries-clips"),
   quitApp: invoke("quit-app"),
 
+  // --- Source benchmark runner ---
+  // These handlers only exist when CLIPS_BENCHMARK=1. The React benchmark
+  // runtime is loaded under the same guard and is the only caller.
+  benchmarkGetResults: invoke("benchmark:getResults"),
+  benchmarkOutputResult: invoke("benchmark:outputResult"),
+  benchmarkOutputMarker: invoke("benchmark:outputMarker"),
+  benchmarkOutputComplete: invoke("benchmark:outputComplete"),
+  benchmarkQuit: invoke("benchmark:quit"),
+
   // --- Integrated clipdip ---
   clipdip: (() => {
     const controlInvoke = invoke("clipdip-control");
@@ -354,6 +363,37 @@ const api = {
 // contextIsolation is OFF, so a direct assignment is visible to the renderer.
 window.clips = api;
 if (bootTrace) window.__bootTrace = bootTrace;
+
+// Source-level benchmark configuration. The Vite bundle cannot reliably read
+// Electron's process environment, so preload hands it the parsed values. Keep
+// the old audio comparison implementation available while its public contract
+// is still useful; the React runtime supplies current player/grid functions.
+try {
+  if (process.env.CLIPS_BENCHMARK === "1") {
+    let scenarios = [];
+    try {
+      const parsed = JSON.parse(process.env.CLIPS_BENCHMARK_SCENARIOS || "[]");
+      if (Array.isArray(parsed)) scenarios = parsed.map(String);
+    } catch (_) {
+      /* runtime reports an empty scenario list as a fatal benchmark error */
+    }
+    window.__benchmarkConfig = { enabled: true, scenarios };
+    const audioBench = require("./benchmark/audio-track-bench");
+    const audioScenarios = {
+      playback_cpu_compare: audioBench.benchmarkPlaybackCPUCompare,
+      open_phases_compare: audioBench.benchmarkOpenPhasesCompare,
+      seek_burst_compare: audioBench.benchmarkSeekBurstCompare,
+      memory_footprint_compare: audioBench.benchmarkMemoryFootprintCompare,
+    };
+    window.__runAudioBenchmark = (scenario, harness) => {
+      const run = audioScenarios[scenario];
+      if (!run) throw new Error(`Unknown audio benchmark scenario: ${scenario}`);
+      return run(harness);
+    };
+  }
+} catch (error) {
+  console.error("[benchmark] failed to initialize preload bridge", error);
+}
 
 // Bridge for the performance profiler (src/renderer/perf) — ONLY when launched
 // via `npm run dev:trace` (which sets CLIPS_PERF_STARTUP=1, inherited by this
