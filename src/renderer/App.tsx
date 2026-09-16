@@ -16,6 +16,7 @@ import { reportMetric, setTelemetryRoute } from "./telemetry";
 import { bootMark } from "./perf/bootMarks";
 import { installBootReveal, prepareBootReveal } from "./boot/bootReveal";
 import type { Route } from "./routes";
+import { setBenchmarkContext } from "./benchmark/context";
 
 // Surfaces that are not on screen at launch load as their own chunks, so the
 // boot bundle is the library and its shell only.
@@ -67,6 +68,17 @@ export default function App() {
   const lib = useClips();
   const filter = useLibraryFilter(lib.clips);
   const readySent = useRef(false);
+
+  // A small current-state bridge for the source benchmark runtime. Getters
+  // keep the runtime out of React's ownership while ensuring every scenario
+  // observes the latest hook state rather than the first render's snapshot.
+  setBenchmarkContext({
+    getClips: () => lib.clips,
+    getFilteredClips: () => filter.filteredClips,
+    isLoading: () => lib.loading,
+    getQuery: () => filter.query,
+    setQuery: filter.setQuery,
+  });
 
   // Post-silent-update confirmation ("Updated to vX") — main fires this once
   // when the version we're running matches the update marker it wrote before

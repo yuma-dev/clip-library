@@ -19,8 +19,40 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { getSuite, getScenario, listScenarios, listSuites, SUITES } = require('./scenarios');
 const { generateConsoleReport, generateJSONReport, generateHTMLReport } = require('./report');
+
+function createIsolatedProfile() {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cliplib-source-benchmark-'));
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const candidates = [path.join(appData, 'Clips'), path.join(appData, 'clips')];
+  const source = candidates.find((dir) => fs.existsSync(path.join(dir, 'settings.json')));
+  if (!source) throw new Error('Could not find ClipLib settings.json to seed the benchmark profile');
+
+  const settings = JSON.parse(fs.readFileSync(path.join(source, 'settings.json'), 'utf8'));
+  settings.enableDiscordRPC = false;
+  settings.clipdip = { ...(settings.clipdip || {}), enabled: false, autostart: false };
+  settings.telemetry = { ...(settings.telemetry || {}), enabled: false };
+  settings.sharing = { ...(settings.sharing || {}), apiToken: '' };
+  fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify(settings, null, 2));
+
+  // Preserve renderer preferences/onboarding state without sharing a live
+  // Chromium profile or its single-instance lock with the developer's app.
+  for (const name of ['Local Storage', 'global_tags.json', 'tagPreferences.json', 'trackPreferences.json']) {
+    const from = path.join(source, name);
+    if (fs.existsSync(from)) fs.cpSync(from, path.join(profile, name), { recursive: true });
+  }
+  return profile;
+}
+
+function removeIsolatedProfile(profile) {
+  try {
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    console.warn(`Could not remove benchmark profile ${profile}: ${error.message}`);
+  }
+}
 
 // Parse command line arguments
 function parseArgs() {
@@ -362,6 +394,10 @@ class BenchmarkRunner {
     // Generate report
     this.generateReport();
 
+    if (this.results.summary?.failed > 0) {
+      throw new Error(`${this.results.summary.failed} benchmark scenario(s) failed`);
+    }
+
     return this.results;
   }
 
@@ -369,6 +405,7 @@ class BenchmarkRunner {
     return new Promise((resolve, reject) => {
       const electronPath = require('electron');
       const appPath = path.join(__dirname, '..');
+      const profileDir = createIsolatedProfile();
       
       // Environment for benchmark mode
       const env = {
@@ -378,9 +415,15 @@ class BenchmarkRunner {
         CLIPS_BENCHMARK_SCENARIOS: JSON.stringify(scenarios.map(s => s.id)),
         CLIPS_BENCHMARK_WARMUP: isWarmup ? '1' : '0',
         CLIPS_BENCHMARK_ITERATION: String(iteration),
+        CLIPLIB_RENDERER_MODE: 'built',
+        CLIPLIB_PROFILE_DIR: profileDir,
         BENCH_SINGLE_CLIP: this.options.singleClip || '',
         BENCH_MULTI_CLIP: this.options.multiClip || ''
       };
+      // Codex/VS Code and some Electron parents export this for helper Node
+      // processes. Inheriting it would make the Electron binary execute
+      // main.js as plain Node (`require('electron').app` is then undefined).
+      delete env.ELECTRON_RUN_AS_NODE;
 
       this.log('Spawning Electron with benchmark mode');
       this.log('Scenarios:', scenarios.map(s => s.id).join(', '));
@@ -394,6 +437,8 @@ class BenchmarkRunner {
       let outputBuffer = '';
       let benchmarkData = null;
       let resultsReceived = 0;
+      let benchmarkFatal = null;
+      let timedOut = false;
 
       // Parse output line by line for better marker detection
       const processOutput = (output) => {
@@ -528,6 +573,17 @@ class BenchmarkRunner {
             }
           }
 
+          if (line.includes('BENCHMARK_FATAL:')) {
+            const match = line.match(/BENCHMARK_FATAL:(.+)/);
+            if (match) {
+              try {
+                benchmarkFatal = JSON.parse(match[1]).error || 'unknown renderer benchmark failure';
+              } catch (_) {
+                benchmarkFatal = match[1];
+              }
+            }
+          }
+
           if (this.options.verbose) {
             console.log(line);
           }
@@ -576,22 +632,37 @@ class BenchmarkRunner {
         }
         
         if (benchmarkData && !isWarmup) {
+          const mainData = benchmarkData.main || benchmarkData;
           // Merge any additional data from the app
-          if (benchmarkData.ipc) {
-            this.results.ipc = benchmarkData.ipc;
+          if (mainData.ipc) {
+            this.results.ipc = mainData.ipc;
           }
-          if (benchmarkData.startup) {
-            this.results.startup = benchmarkData.startup;
+          if (mainData.startup) {
+            this.results.startup = mainData.startup;
           }
           if (benchmarkData.main) {
             this.results.main = benchmarkData.main;
           }
         }
-        
-        resolve(benchmarkData);
+
+        removeIsolatedProfile(profileDir);
+        if (benchmarkFatal) {
+          reject(new Error(`Renderer benchmark failed: ${benchmarkFatal}`));
+        } else if (timedOut) {
+          reject(new Error(`Benchmark timed out after ${this.options.timeout}ms (${resultsReceived}/${scenarios.length} results)`));
+        } else if (code !== 0) {
+          reject(new Error(`Electron benchmark exited with code ${code}`));
+        } else if (resultsReceived !== scenarios.length) {
+          reject(new Error(`Expected ${scenarios.length} benchmark result(s), received ${resultsReceived}`));
+        } else if (!benchmarkData) {
+          reject(new Error('Benchmark renderer did not send BENCHMARK_COMPLETE'));
+        } else {
+          resolve(benchmarkData);
+        }
       });
 
       electronProcess.on('error', (error) => {
+        removeIsolatedProfile(profileDir);
         console.error('Failed to start Electron:', error.message);
         reject(error);
       });
@@ -600,6 +671,7 @@ class BenchmarkRunner {
       const timeout = this.options.timeout;
       const timeoutId = setTimeout(() => {
         if (electronProcess && !electronProcess.killed) {
+          timedOut = true;
           console.warn(`\nBenchmark timeout after ${timeout}ms - killing Electron process`);
           console.warn(`Results received so far: ${resultsReceived}/${scenarios.length}`);
           electronProcess.kill('SIGTERM');

@@ -30,6 +30,13 @@ initTelemetry();
 initGridDensity();
 initGlowTuner();
 
+// Source-level benchmarks run against the same React renderer as development.
+// Dynamic loading keeps the harness out of normal startup execution while
+// still including it in renderer-dist for `npm run benchmark`.
+if (window.__benchmarkConfig?.enabled) {
+  void import("./benchmark/runtime").then(({ runBenchmarks }) => runBenchmarks());
+}
+
 // Mirror main-process log lines into the renderer console (legacy `log` IPC).
 window.clips?.onLog?.(({ type, message }: { type: string; message: string }) => {
   const fn = (console as unknown as Record<string, (...a: unknown[]) => void>)[type];
