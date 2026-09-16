@@ -21,10 +21,8 @@ interface SelectProps {
   "aria-label"?: string;
 }
 
-/**
- * Custom select built on Popover — dark, keyboard-navigable (arrows + Enter +
- * Escape via Popover), with per-option styling native <select> can't do.
- */
+/** Custom select on Popover: dark, keyboard-nav (arrows/Enter/Escape), and
+ * per-option styling native <select> can't do. */
 export default function Select({ value, options, onChange, disabled, width = 230, ...aria }: SelectProps) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -37,7 +35,6 @@ export default function Select({ value, options, onChange, disabled, width = 230
     if (!open) return;
     const idx = options.findIndex((o) => o.value === value);
     setActive(idx < 0 ? 0 : idx);
-    // Scroll the selected option into view once the menu mounts.
     requestAnimationFrame(() => {
       listRef.current
         ?.querySelector<HTMLElement>(`[data-idx="${idx < 0 ? 0 : idx}"]`)

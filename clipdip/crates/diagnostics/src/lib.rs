@@ -1,28 +1,6 @@
-//! Anonymous, opt-out diagnostics + telemetry client for Clipdip.
-//!
-//! Talks to a self-hosted ingest server (`https://logs.yuma-homeserver.online`)
-//! so failures on machines we don't own become visible. Three things flow:
-//!
-//! - **Heartbeat** every ~15 min → doubles as a config pull: the server can
-//!   raise this install's log level (debug/trace, until an expiry) to debug a
-//!   hard case, and advertise a `min_supported_version`.
-//! - **Events** — `error` / `crash` / `capture_failure` / `custom`, queued to
-//!   disk and flushed in batches with backoff. Idempotent on a client-generated
-//!   `event_id`, so retries after ambiguous failures are safe no-ops.
-//! - **Bundles** — a manual "export & upload diagnostics" zip.
-//!
-//! Identity is a random per-install UUID; no accounts, no PII. Telemetry is
-//! opt-out: when the user disables it we simply stop calling the endpoints.
-//!
-//! The ingest key is injected at build time via `CLIPDIP_INGEST_KEY` (mirroring
-//! the Discord client secret), with a runtime env fallback for local testing.
-//! Without a key the client is inert — it never touches the network.
-//!
-//! ## Design
-//! One dedicated manager thread owns all I/O (blocking `ureq`), mirroring the
-//! Discord crate. A process-global handle lets deep call sites (the health
-//! monitor, the panic hook) report without threading a handle through every
-//! struct — the same "global switch" precedent [`clipdip_profile`] sets.
+//! Anonymous, opt-out diagnostics client: heartbeat/config-pull, queued events
+//! deduped on `event_id`, manual bundle uploads. Random per-install UUID, no PII.
+//! Gated by `CLIPDIP_INGEST_KEY`; one manager thread owns all I/O.
 
 mod bundle;
 mod client;
@@ -42,19 +20,16 @@ use std::time::{Duration, Instant};
 const DEFAULT_BASE_URL: &str = "https://logs.yuma-homeserver.online";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(900); // 15 min
 const HEARTBEAT_RETRY: Duration = Duration::from_secs(60);
-const FLUSH_MIN_INTERVAL: Duration = Duration::from_secs(2); // rate limit: events ≤1/s
+const FLUSH_MIN_INTERVAL: Duration = Duration::from_secs(2); // rate limit: events <=1/s
 const FLUSH_MAX_BACKOFF: Duration = Duration::from_secs(300);
 const TICK: Duration = Duration::from_secs(2);
 const MAX_BATCH: usize = 100;
-/// Read at most this many bytes off the tail of the log to attach to an event.
-/// Well under the server's 1 MB decompressed cap, and plenty of context.
+/// Tail bytes attached per event; well under the server's 1 MB decompressed cap.
 const LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_MESSAGE_LEN: usize = 4_000;
 const MAX_CONTEXT_BYTES: usize = 60_000; // server caps context at 64 KB
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
+// public types
 
 /// Log verbosity the server can request for this install.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +38,7 @@ pub enum LogLevel {
     Trace,
 }
 
-/// Event category — matches the server's `kind` enum.
+/// Event category, matches the server's `kind` enum.
 #[derive(Clone, Copy, Debug)]
 pub enum EventKind {
     Error,
@@ -83,7 +58,7 @@ impl EventKind {
     }
 }
 
-/// Event severity — matches the server's `severity` enum (v2).
+/// Event severity, matches the server's `severity` enum (v2).
 #[derive(Clone, Copy, Debug)]
 pub enum Severity {
     Debug,
@@ -115,9 +90,8 @@ pub struct Event {
     /// Attach a gzipped tail of the app log. On for failures/crashes.
     pub attach_log: bool,
     pub severity: Severity,
-    /// Custom grouping key. Only set when we can group better than the
-    /// server's message normalization (e.g. a JS stack hash); when present it
-    /// wins server-side.
+    /// Set only when we can group better than server-side message
+    /// normalization (e.g. a JS stack hash); wins server-side when present.
     pub fingerprint: Option<String>,
 }
 
@@ -127,14 +101,12 @@ pub struct InitOptions {
     pub app_version: String,
     /// Current opt-out state (`true` = telemetry on).
     pub enabled: bool,
-    /// Applied when the server changes this install's log level. `None` means
-    /// "restore the default". Wired to the tracing reload handle in the app.
+    /// Applied when the server changes the log level; `None` restores default.
     pub on_log_level: Option<Box<dyn Fn(Option<LogLevel>) + Send + Sync>>,
     /// Override the ingest base URL (tests). Production uses the default.
     pub base_url: Option<String>,
-    /// One-shot hardware profile (`machine` block), collected by the app at
-    /// startup. Sent on the first heartbeat of the session; the server retains
-    /// the last known profile, so omitting it never erases anything.
+    /// Hardware profile, sent on the first heartbeat only; server retains the
+    /// last known profile, so omitting it never erases anything.
     pub machine: Option<serde_json::Value>,
 }
 
@@ -149,15 +121,12 @@ pub struct ServerConfig {
     pub min_supported_version: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Handle
-// ---------------------------------------------------------------------------
+// handle
 
 enum Cmd {
     Report(Event),
     SetEnabled(bool),
-    /// Replace the heartbeat's `app` block (current config / pipeline state).
-    /// The manager re-sends it only when the value actually changed.
+    /// Replace the heartbeat's `app` block; manager re-sends only on change.
     UpdateAppInfo(serde_json::Value),
     UploadBundle {
         note: Option<String>,
@@ -182,14 +151,12 @@ impl Diagnostics {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    /// Whether an ingest key was compiled into this build. When `false` the
-    /// client is inert regardless of the opt-out toggle — nothing is sent.
+    /// When `false` the client is inert regardless of the opt-out toggle.
     pub fn is_configured(&self) -> bool {
         self.has_key
     }
 
-    /// Queue an event. Cheap and non-blocking — the manager thread stamps,
-    /// persists and ships it. No-op when telemetry is disabled.
+    /// Cheap, non-blocking; manager thread stamps, persists, ships it.
     pub fn report(&self, event: Event) {
         if !self.is_enabled() {
             return;
@@ -203,9 +170,8 @@ impl Diagnostics {
         let _ = self.tx.send(Cmd::SetEnabled(on));
     }
 
-    /// Build and upload a diagnostic bundle now, blocking until the server
-    /// responds. Backed by the manager thread so it respects the same client /
-    /// rate limits.
+    /// Blocks until the server responds; backed by the manager thread so it
+    /// respects the same rate limits.
     pub fn upload_bundle_manual(&self, note: Option<String>) -> Result<i64, String> {
         if !self.has_key {
             return Err("diagnostics is not configured in this build".to_string());
@@ -219,23 +185,19 @@ impl Diagnostics {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Global singleton + free-function reporters
-// ---------------------------------------------------------------------------
+// global singleton + free-function reporters
 
 static GLOBAL: OnceLock<Arc<Diagnostics>> = OnceLock::new();
 static APP_VERSION: OnceLock<String> = OnceLock::new();
 /// `(session_id, session_started_at)` for this process, minted in [`init`].
 static SESSION: OnceLock<(String, String)> = OnceLock::new();
-/// `(base_url, ingest_key)` so [`session_end`] can post from any thread
-/// without going through the manager (which may be mid-backoff at exit).
+/// So [`session_end`] can post without the manager, which may be mid-backoff at exit.
 static ENDPOINT: OnceLock<(String, String)> = OnceLock::new();
 /// First session-end reason wins; every later call is a no-op.
 static SESSION_END_ONCE: Once = Once::new();
 
-/// Start the diagnostics client and install the process-global handle. Returns
-/// the handle for the app to stash in its state (bundle uploads, toggle).
-/// Idempotent: a second call returns the first handle.
+/// Installs the process-global handle. Idempotent: a second call returns the
+/// first handle.
 pub fn init(opts: InitOptions) -> Arc<Diagnostics> {
     if let Some(existing) = GLOBAL.get() {
         return existing.clone();
@@ -266,10 +228,7 @@ pub fn init(opts: InitOptions) -> Arc<Diagnostics> {
         let _ = ENDPOINT.set((base.clone(), k.clone()));
     }
 
-    // A dirty marker left by the previous run means it died without any
-    // shutdown path executing (hard crash, taskkill, power loss). Queue the
-    // crash event directly (network-independent) before claiming the marker
-    // for this session.
+    // a dirty marker means the previous run died without a shutdown path (crash, taskkill, power loss)
     if opts.enabled {
         report_previous_unclean_shutdown(&install_id);
     }
@@ -308,11 +267,8 @@ pub fn init(opts: InitOptions) -> Arc<Diagnostics> {
     handle
 }
 
-/// Report the end of this session to the server and remove the dirty marker.
-/// Safe to call from any thread and from multiple exit paths — only the first
-/// reason wins. Bounded at ~2 s; never blocks shutdown longer.
-///
-/// Reasons (server vocabulary): `quit`, `update`, `shutdown`, `crash`.
+/// Safe from any thread/exit path, only the first reason wins, bounded ~2s.
+/// Reasons: `quit`, `update`, `shutdown`, `crash`.
 pub fn session_end(reason: &str) {
     let reason = reason.to_string();
     SESSION_END_ONCE.call_once(move || {
@@ -339,8 +295,7 @@ pub fn global() -> Option<Arc<Diagnostics>> {
     GLOBAL.get().cloned()
 }
 
-/// Replace the heartbeat's `app` block. Cheap; the manager only re-sends when
-/// the value changed. No-op when diagnostics isn't initialized or disabled.
+/// Cheap; manager only re-sends when the value changed. No-op if disabled.
 pub fn update_app_info(app: serde_json::Value) {
     if let Some(d) = GLOBAL.get() {
         if d.is_enabled() {
@@ -364,9 +319,8 @@ fn write_dirty_marker(session_id: &str, started_at: &str) {
     let _ = std::fs::write(path, body.to_string());
 }
 
-/// If the previous run left a dirty marker, queue an `unclean_shutdown` crash
-/// event carrying that session's identity so the dashboard can pair it with
-/// the `died` session row.
+/// Queues an `unclean_shutdown` crash event carrying the dead session's
+/// identity so the dashboard can pair it with the `died` row.
 fn report_previous_unclean_shutdown(install_id: &str) {
     let Some(path) = paths::dirty_marker_path() else {
         return;
@@ -394,8 +348,7 @@ fn report_previous_unclean_shutdown(install_id: &str) {
     let _ = queue::append(&event);
 }
 
-/// Report a capture failure (health monitor, recovery paths). Attaches the log
-/// tail. No-op if diagnostics isn't initialized or is disabled.
+/// Attaches the log tail. No-op if diagnostics isn't initialized/enabled.
 pub fn report_capture_failure(code: &str, message: impl Into<String>, context: serde_json::Value) {
     if let Some(d) = GLOBAL.get() {
         d.report(Event {
@@ -410,7 +363,6 @@ pub fn report_capture_failure(code: &str, message: impl Into<String>, context: s
     }
 }
 
-/// Report a capture failure with an explicit severity.
 pub fn report_capture_failure_with(
     code: &str,
     severity: Severity,
@@ -430,12 +382,10 @@ pub fn report_capture_failure_with(
     }
 }
 
-/// Report a generic error.
 pub fn report_error(code: &str, message: impl Into<String>, context: Option<serde_json::Value>) {
     report_error_with(code, Severity::Error, message, context);
 }
 
-/// Report a generic error with an explicit severity.
 pub fn report_error_with(
     code: &str,
     severity: Severity,
@@ -455,8 +405,7 @@ pub fn report_error_with(
     }
 }
 
-/// Report a `custom`-kind event (success metrics, lifecycle beacons). No log
-/// tail — custom events are informational, not failures.
+/// No log tail; custom events are informational, not failures.
 pub fn report_custom(
     code: &str,
     severity: Severity,
@@ -476,8 +425,7 @@ pub fn report_custom(
     }
 }
 
-/// Report a crash-kind event from a live (non-aborting) context, e.g. a
-/// panicked worker thread that the app survives.
+/// For a live (non-aborting) context, e.g. a panicked worker the app survives.
 pub fn report_crash_event(code: &str, message: impl Into<String>, context: Option<serde_json::Value>) {
     if let Some(d) = GLOBAL.get() {
         d.report(Event {
@@ -492,10 +440,8 @@ pub fn report_crash_event(code: &str, message: impl Into<String>, context: Optio
     }
 }
 
-/// Synchronous crash reporter for the panic hook. The release build aborts on
-/// panic (no unwinding), so we can't rely on the async manager flushing in
-/// time — instead we stamp and append straight to the durable queue, and it
-/// ships on the next launch. Safe and quick (a short file append).
+/// For the panic hook: release aborts on panic (no unwinding), so this stamps
+/// and appends straight to the durable queue instead of relying on the async manager.
 pub fn report_crash(message: &str) {
     let Some(d) = GLOBAL.get() else {
         return;
@@ -517,9 +463,7 @@ pub fn report_crash(message: &str) {
     let _ = queue::append(&event);
 }
 
-// ---------------------------------------------------------------------------
-// Manager thread
-// ---------------------------------------------------------------------------
+// manager thread
 
 #[allow(clippy::too_many_arguments)]
 fn run_manager(
@@ -551,8 +495,7 @@ fn run_manager(
     let mut next_flush = Instant::now();
     let mut backoff = FLUSH_MIN_INTERVAL;
     let mut current_override: Option<LogLevel> = None;
-    // v2 blocks: `machine` rides on the first successful beat of the session;
-    // `app` whenever its value changed since the last successful send.
+    // `machine` rides the first successful beat; `app` sends whenever changed
     let mut machine_pending = machine;
     let mut app_current: Option<serde_json::Value> = None;
     let mut app_last_sent: Option<serde_json::Value> = None;
@@ -579,9 +522,7 @@ fn run_manager(
             Ok(Cmd::UpdateAppInfo(app)) => {
                 if app_current.as_ref() != Some(&app) {
                     app_current = Some(app);
-                    // Pull the next beat forward so the change ships soon,
-                    // debounced to stay inside the heartbeat rate limit
-                    // (burst 5, refill 1 per 30 s).
+                    // pull the next beat forward, debounced inside the rate limit (burst 5, refill 1/30s)
                     if let Some(t) = last_heartbeat {
                         let debounced = Instant::now() - HEARTBEAT_INTERVAL + Duration::from_secs(30);
                         if t > debounced {
@@ -593,8 +534,7 @@ fn run_manager(
             Ok(Cmd::SetEnabled(on)) => {
                 enabled.store(on, Ordering::Relaxed);
                 if !on {
-                    // Honor opt-out fully: forget queued events and drop any
-                    // active log-level override.
+                    // honor opt-out fully: forget queued events, drop log-level override
                     let _ = queue::rewrite(&[]);
                     if current_override.take().is_some() {
                         if let Some(cb) = &on_log_level {
@@ -621,7 +561,7 @@ fn run_manager(
         }
         let now = Instant::now();
 
-        // Heartbeat (also pulls config).
+        // heartbeat also pulls config
         let due = last_heartbeat.map_or(true, |t| now.duration_since(t) >= HEARTBEAT_INTERVAL);
         if due {
             let app_dirty = app_current.is_some() && app_current != app_last_sent;
@@ -637,13 +577,13 @@ fn run_manager(
                 }
                 Err(e) => {
                     tracing::debug!("diagnostics: heartbeat failed: {e}");
-                    // Retry sooner than the full interval.
+                    // retry sooner than the full interval
                     last_heartbeat = Some(now - HEARTBEAT_INTERVAL + HEARTBEAT_RETRY);
                 }
             }
         }
 
-        // Flush the event queue.
+        // flush the event queue
         if now >= next_flush {
             match flush_once(client) {
                 FlushStep::Empty | FlushStep::Progressed => {
@@ -666,8 +606,7 @@ enum FlushStep {
     Retry(Option<Duration>),
 }
 
-/// Send one batch off the head of the queue. On success (or permanent drop),
-/// rewrite the queue without those events.
+/// On success (or permanent drop), rewrites the queue without those events.
 fn flush_once(client: &HttpClient) -> FlushStep {
     let all = queue::read_all();
     if all.is_empty() {
@@ -731,9 +670,7 @@ fn apply_config(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Wire event construction
-// ---------------------------------------------------------------------------
+// wire event construction
 
 #[allow(clippy::too_many_arguments)]
 fn build_wire_event(
@@ -770,8 +707,7 @@ fn build_wire_event(
         map.insert("message".into(), truncate(msg, MAX_MESSAGE_LEN).into());
     }
     if let Some(ctx) = context {
-        // Drop context that would blow the server's 64 KB cap rather than have
-        // the whole event rejected 400.
+        // drop oversized context rather than have the whole event rejected 400
         if serde_json::to_string(&ctx).map(|s| s.len()).unwrap_or(0) <= MAX_CONTEXT_BYTES {
             map.insert("context".into(), ctx);
         } else {
@@ -789,8 +725,7 @@ fn build_wire_event(
     serde_json::Value::Object(map)
 }
 
-/// Read the tail of the app log, gzip it, base64-encode. `None` if there's no
-/// log yet or anything goes wrong (never fatal to an event).
+/// `None` if there's no log yet or anything goes wrong, never fatal to an event.
 fn log_tail_b64() -> Option<String> {
     use base64::Engine;
     use std::io::{Read, Seek, SeekFrom};
@@ -812,24 +747,20 @@ fn log_tail_b64() -> Option<String> {
     Some(base64::engine::general_purpose::STANDARD.encode(gz))
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// helpers
 
 fn app_version() -> &'static str {
     APP_VERSION.get().map(String::as_str).unwrap_or("unknown")
 }
 
-/// Replace `C:\Users\<name>` (any drive letter, either slash) with
-/// `<drive>:\Users\<home>` so panic messages, backtraces, and error chains
-/// never carry the Windows username. Best-effort; applied to every free-text
-/// message that could embed a path.
+/// Replaces `C:\Users\<name>` with `C:\Users\<home>` so panics/backtraces/error
+/// chains never carry the Windows username. Best-effort.
 pub fn scrub_user_paths(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < bytes.len() {
-        // Match `<alpha>:[\\/]Users[\\/]` case-insensitively.
+        // match `<alpha>:[\\/]Users[\\/]` case-insensitively
         let rest = &s[i..];
         let is_start = rest.len() >= 9
             && rest.as_bytes()[0].is_ascii_alphabetic()
@@ -838,10 +769,10 @@ pub fn scrub_user_paths(s: &str) -> String {
             && rest[3..8].eq_ignore_ascii_case("Users")
             && (rest.as_bytes()[8] == b'\\' || rest.as_bytes()[8] == b'/');
         if is_start {
-            // Keep the prefix exactly as written (drive, separators, casing).
+            // keep the prefix exactly as written (drive, separators, casing)
             out.push_str(&rest[..9]);
             out.push_str("<home>");
-            // Skip the username segment (up to the next separator or break char).
+            // skip the username segment up to the next separator/break char
             let mut j = i + 9;
             while j < bytes.len() {
                 let c = bytes[j];
@@ -860,7 +791,7 @@ pub fn scrub_user_paths(s: &str) -> String {
     out
 }
 
-/// Lifetime clips-saved counter (plain integer file). Returns the new total.
+/// Returns the new total.
 pub fn increment_clips_saved() -> u64 {
     let total = clips_saved_total().saturating_add(1);
     if let Some(path) = paths::clips_saved_path() {
@@ -879,8 +810,7 @@ pub fn clips_saved_total() -> u64 {
         .unwrap_or(0)
 }
 
-/// Build-time ingest key (mirrors the Discord client secret), with a runtime
-/// env fallback for local testing.
+/// Mirrors the Discord client secret; env fallback for local testing.
 fn ingest_key() -> Option<String> {
     option_env!("CLIPDIP_INGEST_KEY")
         .map(str::to_string)
@@ -924,8 +854,8 @@ fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-/// Best-effort `a < b` for dotted numeric versions (e.g. `0.1.0`). Non-numeric
-/// components compare as 0, and a parse miss yields `false` (don't nag on junk).
+/// Dotted numeric versions (e.g. `0.1.0`); non-numeric parts compare as 0
+/// a parse miss yields `false`.
 fn version_lt(a: &str, b: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
         v.split(['.', '-', '+'])

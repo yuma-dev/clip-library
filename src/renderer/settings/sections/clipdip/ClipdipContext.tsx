@@ -10,11 +10,8 @@ import {
 import { useToast } from "../../../ui/Toast";
 import type { ClipdipConfig } from "../../../../types/clips";
 
-// ---------------------------------------------------------------------------
-// Local shapes for the clipdip bridge (main/clipdip.js control surface). The
-// canonical types live in src/types/clips.d.ts; these stay structural so this
-// module compiles independently of that file's exact export names.
-// ---------------------------------------------------------------------------
+// local shapes for the clipdip bridge (main/clipdip.js control surface); canonical types live in
+// src/types/clips.d.ts, these stay structural so this module compiles independently of them
 
 export interface AudioDeviceInfo {
   id: string;
@@ -54,14 +51,14 @@ export interface BufferStats {
   mb_per_minute: number;
   clip_mb: number;
   buffered_secs: number;
-  /** True while the replay window is truncated by the ring's memory ceiling. */
+  /** true while the replay window is truncated by the ring's memory ceiling */
   memory_limited?: boolean;
   bytes_used_mb?: number;
   budget_mb?: number;
 }
 
 export interface NotificationRecord {
-  /** Unix epoch milliseconds when the notification was shown. */
+  /** unix epoch milliseconds when the notification was shown */
   at_ms: number;
   kind: "health" | "clip" | "recording" | "notice" | "error" | string;
   title: string;
@@ -91,7 +88,7 @@ export interface ProcessStatus {
   binaryFound: boolean;
   configExists: boolean;
   autostart: boolean;
-  /** false when the machine can't run clipdip (non-Windows / no NVIDIA GPU). */
+  /** false when the machine can't run clipdip (non-Windows / no NVIDIA GPU) */
   supported?: boolean;
   unsupportedReason?: string | null;
 }
@@ -126,10 +123,7 @@ export function clipdipBridge(): ClipdipBridge {
   return window.clips.clipdip as unknown as ClipdipBridge;
 }
 
-// ---------------------------------------------------------------------------
-// Polling helper: runs `fn` every `ms` while `active`, pauses while the
-// document is hidden, cleans up on unmount.
-// ---------------------------------------------------------------------------
+// runs fn every ms while active, pauses while the document is hidden, cleans up on unmount
 
 export function usePoll(fn: () => void, ms: number, active: boolean) {
   useEffect(() => {
@@ -156,11 +150,8 @@ export function usePoll(fn: () => void, ms: number, active: boolean) {
   }, [fn, ms, active]);
 }
 
-// ---------------------------------------------------------------------------
-// Shared clipdip state: TOML config (optimistic patch), process status poll,
-// live control-server status poll, and lazily fetched device / monitor /
-// filename-variable lists.
-// ---------------------------------------------------------------------------
+// shared clipdip state: TOML config (optimistic patch), process status poll, live control-server
+// status poll, lazily fetched device/monitor/filename-variable lists
 
 interface ClipdipCtx {
   config: ClipdipConfig | null;
@@ -168,7 +159,7 @@ interface ClipdipCtx {
   status: ProcessStatus | null;
   refreshStatus: () => void;
   setStatus: (s: ProcessStatus) => void;
-  /** Live control-server status; null when clipdip is not reachable. */
+  /** live control-server status; null when clipdip is not reachable */
   live: LiveStatus | null;
   running: boolean;
   devices: AudioDeviceInfo[];
@@ -204,7 +195,7 @@ export function ClipdipProvider({ active, children }: { active: boolean; childre
   const loadedMonitors = useRef(false);
   const loadedVars = useRef(false);
 
-  // Config: loaded once on first activation.
+  // config: loaded once on first activation
   useEffect(() => {
     if (!active || loadedConfig.current) return;
     loadedConfig.current = true;
@@ -214,9 +205,8 @@ export function ClipdipProvider({ active, children }: { active: boolean; childre
       .catch(() => setConfigState({}));
   }, [active]);
 
-  // Optimistic local update + persisted patch. Tagged-enum tables
-  // (rate_control, recording_quality — objects with a `mode` key) are
-  // replaced whole, mirroring main's deepMerge guard.
+  // optimistic local update + persisted patch; tagged-enum tables (rate_control, recording_quality
+  // objects with a `mode` key) are replaced whole, mirroring main's deepMerge guard
   const patch = useCallback(
     (p: Partial<ClipdipConfig>) => {
       setConfigState((prev) => {
@@ -243,7 +233,7 @@ export function ClipdipProvider({ active, children }: { active: boolean; childre
     [toast],
   );
 
-  // Process status: 4 s poll while a clipdip section is visible.
+  // process status: 4s poll while a clipdip section is visible
   const pollStatus = useCallback(() => {
     clipdipBridge().getStatus().then(setStatus).catch(() => {});
   }, []);
@@ -251,7 +241,7 @@ export function ClipdipProvider({ active, children }: { active: boolean; childre
 
   const running = Boolean(status?.running);
 
-  // Live status via the control server: 2 s poll while visible and running.
+  // live status via the control server: 2s poll while visible and running
   const pollLive = useCallback(() => {
     clipdipBridge()
       .getLiveStatus()

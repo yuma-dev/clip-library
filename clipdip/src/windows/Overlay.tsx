@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listen, invoke } from "@/lib/tauri";
 
-// ---------- types -----------------------------------------------------------
+// types
 
 interface ClipSavingPayload {
   thumbnail: string | null;
@@ -23,22 +23,18 @@ interface ClipThumbnailPayload {
 
 type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
 
-// ---------- helpers ---------------------------------------------------------
+// helpers
 
 const TEAL = "oklch(0.74 0.13 195)";
 
-// The overlay window is now small (480x140), so CSS `vh` units resolve
-// to the window height — not the screen. Multiply by the actual screen
-// height instead so the notification renders at the same physical size
-// as before regardless of window size.
+// overlay window is small (480x140), so CSS vh resolves to window height; scale
+// by actual screen height for a consistent physical size
 const SCREEN_VH_PX =
   typeof window !== "undefined" ? window.screen.height / 100 : 10.8;
 const vh = (n: number) => `${n * SCREEN_VH_PX}px`;
 
-// Inner offset of the notification card from the window edge. Combined
-// with the small overlay window's screen position (which sits flush at
-// the screen corner), this is the visible distance from the screen edge
-// to the card.
+// inset of the card from the window edge; window sits flush at the screen
+// corner, so this is also the visible distance from the screen edge
 const CARD_INSET_PX = 24;
 
 function cornerStyle(corner: Corner): React.CSSProperties {
@@ -50,7 +46,7 @@ function cornerStyle(corner: Corner): React.CSSProperties {
   }
 }
 
-// ---------- sub-components --------------------------------------------------
+// sub-components
 
 const NOTIF_SANS = '"Geist", Inter, system-ui, sans-serif';
 const NOTIF_MONO = '"Geist Mono", "JetBrains Mono", ui-monospace, monospace';
@@ -99,15 +95,15 @@ function Spinner({ size = vh(1.1) }: { size?: string }) {
   );
 }
 
-// ---------- notification card -----------------------------------------------
+// notification card
 
 type Phase = "saving" | "saved";
 
 interface NotifState {
   phase: Phase;
-  /// `null` until phase=saved. The rename input is hidden until then.
+  /// null until phase=saved; rename input hidden until then
   path: string | null;
-  /// Filename stem. `null` until phase=saved.
+  /// filename stem, null until phase=saved
   title: string | null;
   thumbnail: string | null;
   rename_hotkey: string;
@@ -128,10 +124,8 @@ function NotificationCard({
   const [entered, setEntered] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Fly-in animation. We wait for two RAFs (and document.fonts.ready) so
-  // the webview has actually painted the offscreen initial state before
-  // the transition kicks in — otherwise the animation gets eaten by the
-  // WebView2 startup flicker and the user sees the card already on-screen.
+  // two RAFs + document.fonts.ready ensure the offscreen initial state actually
+  // painted first, else WebView2 startup flicker eats the fly-in transition
   useEffect(() => {
     let cancelled = false;
     const start = () => {
@@ -152,8 +146,7 @@ function NotificationCard({
   const isRight = notif.corner === "top_right" || notif.corner === "bottom_right";
   const offX = isRight ? "120%" : "-120%";
 
-  // Auto-dismiss countdown — only runs in the saved phase. Saving phase
-  // can't dismiss because we don't yet know the clip succeeded.
+  // only runs once saved; saving phase can't dismiss since the clip may still fail
   useEffect(() => {
     if (notif.phase !== "saved") return;
     if (!notif.auto_dismiss_secs || focused) return;
@@ -163,15 +156,13 @@ function NotificationCard({
     return () => clearTimeout(t);
   }, [notif.phase, notif.auto_dismiss_secs, focused, renamed, onDismiss]);
 
-  // Listen for global rename-activate event from backend
   useEffect(() => {
     const unlisten = listen("activate-rename", () => activateRename());
     return () => { unlisten.then(f => f()); };
   }, []);
 
   const activateRename = useCallback(() => {
-    // Backend already gates this on active_clip being set, but double-check
-    // here so an in-flight saving notification never grabs focus.
+    // backend gates this on active_clip; double-check so a saving notification never grabs focus
     if (notif.phase !== "saved" || focused) return;
     invoke("set_overlay_input_mode", { enabled: true }).catch(console.error);
     setTimeout(() => inputRef.current?.focus(), 50);
@@ -205,7 +196,7 @@ function NotificationCard({
     if (e.key === "Escape") inputRef.current?.blur();
   };
 
-  // Hint shown below the title — Ctrl+F10 chips inline, matching the mockup.
+  // hint below the title: hotkey chips inline, matching the mockup
   const parsedHotkey = (notif.rename_hotkey || "")
     .replace(/^Press\s+/i, "")
     .replace(/\s+to\s+rename$/i, "")
@@ -316,14 +307,13 @@ function NotificationCard({
   );
 }
 
-// ---------- overlay root ----------------------------------------------------
+// overlay root
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window &&
   (window as unknown as { __TAURI_INTERNALS__: { invoke?: unknown } }).__TAURI_INTERNALS__.invoke !== undefined;
 
-// Corner read from the URL params Rust set when it created the window.
-// Used as the initial value before the first clip-saving payload arrives
-// so the card lands at the right edge of the window without a flicker.
+// corner read from the URL params Rust set when creating the window, used as the
+// initial value before the first clip-saving payload arrives
 const URL_CORNER: Corner = (() => {
   if (typeof window === "undefined") return "bottom_right";
   const c = new URLSearchParams(window.location.search).get("corner");
@@ -335,20 +325,17 @@ const URL_CORNER: Corner = (() => {
 
 export default function OverlayWindow() {
   const [notif, setNotif] = useState<NotifState | null>(null);
-  // Bumped on every clip-saving event; used as a React `key` on the card
-  // so its local state (renamed, focused, rename input value) resets
-  // cleanly when a new clip arrives — otherwise the second clip would
-  // inherit "Renamed!" from the first.
+  // bumped on every clip-saving event, used as the card's React key so local
+  // state resets per clip (else clip 2 would inherit "Renamed!" from clip 1)
   const [clipSeq, setClipSeq] = useState(0);
 
-  // Startup diagnostics — remove once overlay is confirmed working
+  // startup diagnostics, remove once overlay is confirmed working
   useEffect(() => {
     console.log("[overlay] mounted, isTauri=", isTauri, "href=", window.location.href);
   }, []);
 
-  // The overlay window is now created on demand per-notification, so the
-  // backend's `clip-saving` emit races with React attaching its listener
-  // below. Read the stashed payload on mount as a safety net.
+  // window is created on demand per-notification, so the backend's clip-saving
+  // emit can race React's listener; read the stashed payload on mount as a fallback
   useEffect(() => {
     if (!isTauri) return;
     invoke<ClipSavingPayload | null>("overlay_get_pending")
@@ -376,7 +363,7 @@ export default function OverlayWindow() {
       .catch(err => console.error("[overlay] overlay_get_pending failed:", err));
   }, []);
 
-  // Show a demo notification in browser preview mode
+  // demo notification in browser preview mode
   useEffect(() => {
     if (!isTauri) {
       const t = setTimeout(() => {
@@ -390,7 +377,7 @@ export default function OverlayWindow() {
           corner: (new URLSearchParams(window.location.search).get("corner") as Corner) || "bottom_right",
         });
         setClipSeq(s => s + 1);
-        // Simulate phase 2 ~500ms later so the demo shows both states.
+        // simulate phase 2 ~500ms later so the demo shows both states
         const t2 = setTimeout(() => {
           setNotif(prev => prev ? {
             ...prev,
@@ -405,15 +392,12 @@ export default function OverlayWindow() {
     }
   }, []);
 
-  // Wall-clock anchor for one save flow. Set when clip-saving arrives,
-  // used to log "received" and "painted" deltas for both phases.
+  // wall-clock anchor for one save flow; used to log received/painted deltas
   const flowStartRef = useRef<number | null>(null);
-  // Tracks whether the current save flow opted in to profiling. The flag
-  // arrives in the saving payload; phase-2 + paint hooks read this ref.
+  // whether this save flow opted into profiling; set from the saving payload
   const profileRef = useRef(false);
 
-  // Phase 1 — clip-saving. Brand-new notification: reset everything,
-  // bump the seq so the card unmounts/remounts.
+  // phase 1, clip-saving: brand-new notification, bump seq so the card remounts
   useEffect(() => {
     console.log("[overlay] registering clip-saving listener");
     const unlisten = listen<ClipSavingPayload>("clip-saving", e => {
@@ -427,9 +411,8 @@ export default function OverlayWindow() {
           thumbnail: p.thumbnail ? `<${p.thumbnail.length} chars>` : null,
         });
       }
-      // Sound is now played from the Rust process via PlaySoundW —
-      // playing in the webview forced an extra layout/decode pass while
-      // WebView2 was already rendering the notification.
+      // sound now plays from Rust via PlaySoundW; doing it in the webview forced an
+      // extra layout/decode pass while WebView2 was already rendering
       setNotif({
         phase:             "saving",
         path:              null,
@@ -445,9 +428,8 @@ export default function OverlayWindow() {
     return () => { unlisten.then(f => f()); };
   }, []);
 
-  // Phase 2 — clip-saved. Merge the title + path into the existing
-  // notification; if (somehow) saving phase was missed, materialize the
-  // card directly into the saved state.
+  // phase 2, clip-saved: merge title+path into the existing notification, or
+  // materialize the card directly into saved state if phase 1 was somehow missed
   useEffect(() => {
     const unlisten = listen<ClipSavedPayload>("clip-saved", e => {
       const p = e.payload;
@@ -469,11 +451,7 @@ export default function OverlayWindow() {
     return () => { unlisten.then(f => f()); };
   }, []);
 
-  // First-paint timer per phase. useEffect fires after React commit but
-  // before the browser actually paints, so we hop one RAF to capture the
-  // post-paint moment. Logs `since clip-saving` so we can line it up
-  // against the backend's `save flow start` anchor. Only logs when this
-  // flow was started in profile mode.
+  // first-paint timer per phase, logged against the backend's save-flow-start anchor (profile mode only)
   useEffect(() => {
     if (!notif || !profileRef.current) return;
     const t_commit = performance.now();
@@ -490,8 +468,7 @@ export default function OverlayWindow() {
     });
   }, [notif?.phase, clipSeq]);
 
-  // Thumbnail arrives out-of-band — gdigrab can be slow (~1–2 s the first
-  // run), so it's no longer gated to phase 1. Merge whenever it lands.
+  // thumbnail arrives out-of-band (gdigrab can take ~1-2s first run); merge whenever it lands
   useEffect(() => {
     const unlisten = listen<ClipThumbnailPayload>("clip-thumbnail", e => {
       const p = e.payload;
@@ -506,13 +483,12 @@ export default function OverlayWindow() {
     return () => { unlisten.then(f => f()); };
   }, []);
 
-  // Error case — backend couldn't save the clip. Drop the notification
-  // immediately so the user isn't left staring at a spinner forever.
+  // backend failed to save; drop the notification instead of a spinner forever
   useEffect(() => {
     const unlisten = listen<string>("clip-error", e => {
       console.warn("[overlay] clip-error received:", e.payload);
       setNotif(null);
-      // Tear the webview down so WebView2 doesn't linger between sessions.
+      // tear the webview down so WebView2 doesn't linger between sessions
       invoke("dismiss_notification").catch(console.error);
     });
     return () => { unlisten.then(f => f()); };

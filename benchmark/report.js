@@ -1,10 +1,5 @@
 /**
- * Benchmark Report Generator
- * 
- * Generates formatted reports from benchmark results:
- * - Console table output
- * - JSON export
- * - HTML report with visualizations
+ * Formats benchmark results as console tables, JSON, or an HTML report with charts.
  */
 
 'use strict';
@@ -13,22 +8,19 @@ const { formatters } = require('./metrics');
 const { formatProfilerReport } = require('./open-clip-profiler');
 
 /**
- * Generate a console-friendly report with ASCII tables
- * @param {Object} results - Benchmark results
- * @returns {string} Formatted console output
+ * @param {Object} results
+ * @returns {string}
  */
 function generateConsoleReport(results) {
   const lines = [];
   const { summary, scenarios, system, startup, ipc } = results;
 
-  // Header
   lines.push('');
   lines.push('='.repeat(70));
   lines.push('                    CLIPS BENCHMARK RESULTS');
   lines.push('='.repeat(70));
   lines.push('');
 
-  // System info
   lines.push('System Information:');
   lines.push(`  Platform:    ${system.platform} ${system.arch}`);
   lines.push(`  CPU:         ${system.cpuModel}`);
@@ -36,7 +28,6 @@ function generateConsoleReport(results) {
   lines.push(`  Memory:      ${system.totalMemory}`);
   lines.push('');
 
-  // Summary
   if (summary) {
     lines.push('Summary:');
     lines.push(`  Total Scenarios: ${summary.totalScenarios}`);
@@ -46,14 +37,12 @@ function generateConsoleReport(results) {
     lines.push('');
   }
 
-  // Results by category
   if (summary && summary.byCategory) {
     for (const [category, data] of Object.entries(summary.byCategory)) {
       lines.push('');
       lines.push(`${category.toUpperCase()}`);
       lines.push('-'.repeat(70));
       
-      // Table header
       lines.push(formatTableRow(['Operation', 'Avg', 'Min', 'Max', 'Runs'], [30, 10, 10, 10, 6]));
       lines.push('-'.repeat(70));
       
@@ -72,7 +61,6 @@ function generateConsoleReport(results) {
     }
   }
 
-  // IPC Statistics
   if (ipc && Object.keys(ipc).length > 0) {
     lines.push('');
     lines.push('IPC CALL STATISTICS');
@@ -80,10 +68,10 @@ function generateConsoleReport(results) {
     lines.push(formatTableRow(['Channel', 'Calls', 'Avg', 'Total', 'P95'], [25, 8, 10, 12, 10]));
     lines.push('-'.repeat(70));
 
-    // Sort by total time (slowest first)
+    // slowest first, top 15
     const sortedIPC = Object.entries(ipc)
       .sort((a, b) => b[1].total - a[1].total)
-      .slice(0, 15); // Top 15
+      .slice(0, 15);
 
     for (const [channel, stats] of sortedIPC) {
       lines.push(formatTableRow([
@@ -96,7 +84,6 @@ function generateConsoleReport(results) {
     }
   }
 
-  // Startup metrics
   if (startup && Object.keys(startup).length > 0) {
     lines.push('');
     lines.push('STARTUP METRICS');
@@ -109,11 +96,9 @@ function generateConsoleReport(results) {
     }
   }
 
-  // Check for detailed open clip profiler results
   if (scenarios) {
     for (const [scenarioId, scenarioData] of Object.entries(scenarios)) {
       if (scenarioId === 'open_clip_detailed') {
-        // Find the first run with valid report data
         const runWithReport = scenarioData.runs?.find(r => r.details?.report);
         if (runWithReport?.details?.report) {
           lines.push('');
@@ -124,7 +109,6 @@ function generateConsoleReport(results) {
     }
   }
 
-  // Bottleneck Analysis
   lines.push('');
   lines.push('BOTTLENECK ANALYSIS');
   lines.push('-'.repeat(70));
@@ -143,9 +127,6 @@ function generateConsoleReport(results) {
   return lines.join('\n');
 }
 
-/**
- * Format a table row with fixed column widths
- */
 function formatTableRow(cells, widths) {
   return cells.map((cell, i) => {
     const width = widths[i] || 10;
@@ -153,17 +134,11 @@ function formatTableRow(cells, widths) {
   }).join(' ');
 }
 
-/**
- * Truncate string to max length
- */
 function truncate(str, maxLength) {
   if (str.length <= maxLength) return str;
   return str.slice(0, maxLength - 2) + '..';
 }
 
-/**
- * Format duration in human-readable form
- */
 function formatDuration(ms) {
   if (ms === undefined || ms === null) return '-';
   if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
@@ -172,9 +147,6 @@ function formatDuration(ms) {
   return `${(ms / 60000).toFixed(2)}min`;
 }
 
-/**
- * Format bytes in human-readable form
- */
 function formatBytes(bytes) {
   if (bytes === undefined || bytes === null) return '-';
   const sign = bytes < 0 ? '-' : '+';
@@ -185,16 +157,12 @@ function formatBytes(bytes) {
   return `${sign}${(abs / 1024 / 1024 / 1024).toFixed(2)}GB`;
 }
 
-/**
- * Analyze results for bottlenecks
- */
 function analyzeBottlenecks(results) {
   const issues = [];
   const { summary, ipc } = results;
 
   if (!summary) return issues;
 
-  // Find slowest operations
   const allScenarios = [];
   for (const category of Object.values(summary.byCategory || {})) {
     allScenarios.push(...category.scenarios);
@@ -212,7 +180,6 @@ function analyzeBottlenecks(results) {
     }
   }
 
-  // Check for high-frequency IPC calls
   if (ipc) {
     const highFrequency = Object.entries(ipc)
       .filter(([, stats]) => stats.count > 50 && stats.avg > 10);
@@ -225,7 +192,6 @@ function analyzeBottlenecks(results) {
     }
   }
 
-  // Check startup time
   if (results.startup) {
     const totalStartup = Object.values(results.startup)
       .reduce((sum, data) => sum + (data?.duration?.avg || 0), 0);
@@ -238,7 +204,6 @@ function analyzeBottlenecks(results) {
     }
   }
 
-  // Check for failed scenarios
   if (summary.failed > 0) {
     issues.push({
       severity: 'error',
@@ -246,7 +211,6 @@ function analyzeBottlenecks(results) {
     });
   }
 
-  // Add positive findings
   if (issues.filter(i => i.severity === 'warning').length === 0) {
     issues.push({
       severity: 'success',
@@ -258,9 +222,8 @@ function analyzeBottlenecks(results) {
 }
 
 /**
- * Generate JSON report
- * @param {Object} results - Benchmark results
- * @returns {string} JSON string
+ * @param {Object} results
+ * @returns {string}
  */
 function generateJSONReport(results) {
   return JSON.stringify({
@@ -271,14 +234,12 @@ function generateJSONReport(results) {
 }
 
 /**
- * Generate HTML report with charts
- * @param {Object} results - Benchmark results
- * @returns {string} HTML string
+ * @param {Object} results
+ * @returns {string}
  */
 function generateHTMLReport(results) {
   const { summary, scenarios, system, startup, ipc } = results;
 
-  // Prepare chart data
   const categoryData = [];
   const scenarioData = [];
   

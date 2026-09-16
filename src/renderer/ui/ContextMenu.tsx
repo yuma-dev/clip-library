@@ -10,11 +10,8 @@ interface ContextMenuProps {
   children: ReactNode;
 }
 
-/**
- * Right-click context menu anchored at a screen point (vs Popover which anchors
- * to an element). Clamps into the viewport; dismisses on Escape / outside
- * pointer-down / scroll / resize.
- */
+/** Right-click menu anchored at a point (vs Popover, which anchors to an element).
+ * Clamps to viewport; closes on Escape, outside pointerdown, scroll, resize. */
 export default function ContextMenu({ open, x, y, onClose, children }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
@@ -45,8 +42,7 @@ export default function ContextMenu({ open, x, y, onClose, children }: ContextMe
     const onPointerDown = (e: PointerEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose();
     };
-    // Page scroll dismisses the menu — but a scrollable panel *inside* it (the
-    // "Manage tags" list) must not, so ignore scrolls originating within.
+    // page scroll dismisses; a scrollable panel inside it (the "Manage tags" list) must not
     const onScroll = (e: Event) => {
       if (ref.current?.contains(e.target as Node)) return;
       onClose();

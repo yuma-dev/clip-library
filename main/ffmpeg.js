@@ -1,11 +1,7 @@
 /**
- * FFmpeg module - handles video/audio encoding and export
- *
- * Provides NVENC hardware encoding with automatic fallback to software encoding.
- * Handles progress tracking and clipboard integration.
+ * ffmpeg module: encoding/export, NVENC with software fallback.
  */
 
-// Imports
 const { execFile } = require('child_process');
 const { clipboard, ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
@@ -150,19 +146,13 @@ let decoderListCache = null;
 let hwAccelListCache = null;
 const preferredDecodeModeByCodec = new Map();
 
-// FFmpeg binary paths
-// Configure FFmpeg paths
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 
 const PROBE_FALLBACK_COALESCE_MS = 600000;
 
-/**
- * Split a child_process error into the two telemetry-safe fields it can carry.
- * `code` is a string errno when the spawn itself failed and a number when the
- * process ran and exited non-zero. Accepts both a raw Error and the
- * `{ error, stdout, stderr }` shape execFileAsync rejects with.
- */
+/** errno string when the spawn itself failed, number exit code otherwise.
+ * accepts a raw Error or execFileAsync's `{ error, stdout, stderr }` rejection. */
 function execErrorCodes(rejection) {
   const error = rejection && rejection.error ? rejection.error : rejection;
   const code = error?.code;
@@ -178,11 +168,8 @@ function parseFfmpegExitCode(error) {
   return match ? Number(match[1]) : undefined;
 }
 
-/**
- * Reduce raw NVENC failure text to a short enum. The raw text can contain the
- * input path, so it must never leave the machine.
- * @returns {'no_encoder'|'driver'|'device'|'other'}
- */
+/** raw text can contain the input path, so it must never leave the machine.
+ * @returns {'no_encoder'|'driver'|'device'|'other'} */
 function classifyNvencFailure(rawText) {
   const text = String(rawText || '').toLowerCase();
   if (/unknown encoder|encoder not found|no such encoder|cannot find encoder/.test(text)) {
@@ -197,10 +184,7 @@ function classifyNvencFailure(rawText) {
   return 'other';
 }
 
-/**
- * Promote the export benchmark that already gets built per export. Numbers and
- * enum strings only: `decodeErrors` holds raw ffmpeg stderr and is dropped.
- */
+/** numbers/enum strings only; decodeErrors holds raw ffmpeg stderr and is dropped. */
 function reportExportBenchmark(benchmark) {
   if (!benchmark || typeof benchmark !== 'object') return;
   const context = {};
@@ -223,11 +207,8 @@ function reportExportBenchmark(benchmark) {
   if (Number.isFinite(benchmark.elapsedMs)) {
     telemetry.metric('export_ms', benchmark.elapsedMs, { unit: 'ms', dims: { encoder } });
   }
-  // The realtime factor is an unbounded speedup (routinely 6x to 40x on a
-  // hardware encoder) and the ingest API's `ratio` unit is a 0..1 fraction, so
-  // it has no usable buckets above 1. Record the clip duration instead: paired
-  // with export_ms above, the fleet factor is sum(duration)/sum(elapsed) server
-  // side. The exact per-export value still rides on export_succeeded.
+  // ingest API's ratio unit is 0..1, unlike the unbounded realtime factor; record
+  // duration instead so fleet factor = sum(duration)/sum(elapsed) server side
   if (Number.isFinite(benchmark.clipDurationSeconds)) {
     telemetry.metric('export_source_ms', benchmark.clipDurationSeconds * 1000, {
       unit: 'ms',
@@ -242,10 +223,8 @@ function reportExportBenchmark(benchmark) {
   }
 }
 
-/**
- * Read the clipboard back after a write. `clipboard.writeBuffer` has no return
- * value and no error path, so a mismatch is the only failure signal available.
- */
+/** clipboard.writeBuffer has no return value or error path; a readback mismatch
+ * is the only failure signal available. */
 function verifyClipboardWrite(filePath) {
   let written = false;
   try {
@@ -272,16 +251,12 @@ function verifyClipboardWrite(filePath) {
   fs.stat(filePath).then((stats) => report(stats.size), () => report(undefined));
 }
 
-/**
- * Verify FFmpeg is working on startup
- */
 function initFFmpeg() {
   return new Promise((resolve, reject) => {
     execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
       if (error) {
         logger.error('Error getting ffmpeg version:', error);
-        // The app still boots fully after this rejects, with a broken ffmpeg.
-        // Every export and every thumbnail then fails one by one.
+        // app still boots with a broken ffmpeg; every export/thumbnail then fails one by one
         telemetry.event('ffmpeg_init_failed', {
           kind: telemetry.KIND.CRASH,
           severity: telemetry.SEVERITY.FATAL,
@@ -304,10 +279,7 @@ function initFFmpeg() {
   });
 }
 
-/**
- * Get FFmpeg version string
- * @returns {Promise<string>} FFmpeg version output
- */
+/** @returns {Promise<string>} */
 function getFFmpegVersion() {
   return new Promise((resolve, reject) => {
     execFile(ffmpegPath, ['-version'], (error, stdout, stderr) => {
@@ -823,9 +795,8 @@ async function buildExportBenchmark(payload) {
 }
 
 /**
- * Run ffprobe on a video file
- * @param {string} filePath - Path to the video file
- * @returns {Promise<object>} FFprobe metadata
+ * @param {string} filePath
+ * @returns {Promise<object>}
  */
 function ffprobeAsync(filePath) {
   return new Promise((resolve, reject) => {
@@ -836,28 +807,9 @@ function ffprobeAsync(filePath) {
   });
 }
 
-/**
- * Export video with NVENC hardware encoding, falling back to software encoding on failure.
- *
- * @param {object} options
- * @param {string} options.inputPath - Path to source video
- * @param {string} options.outputPath - Path for output video
- * @param {number} options.start - Start time in seconds
- * @param {number} options.end - End time in seconds
- * @param {number} options.volume - Volume multiplier (1 = 100%)
- * @param {number} options.speed - Playback speed multiplier
- * @param {string} options.quality - Quality preset: 'lossless', 'high', or 'discord'
- * @param {object|null} options.volumeData - Optional volume range data
- * @returns {Promise<{usingFallback: boolean, pipeline: object}>}
- */
-// Export helpers
-/**
- * Build an audio filter_complex graph that mixes a list of source streams with
- * per-track volumes, then layers the trim-time master volume / volume range /
- * speed (atempo) on top. Returns `null` when no mix is requested.
- *
- * Output label is always `[aout]` so the caller can `-map [aout]`.
- */
+// export helpers
+/** mixes per-track volumes then layers master volume/range/speed atempo on top;
+ * null if no mix requested. output is always labeled [aout] for -map [aout]. */
 function buildAudioMixFilterComplex({
   audioMix,
   effectiveVolume,
@@ -874,10 +826,8 @@ function buildAudioMixFilterComplex({
 
   const parts = [];
 
-  // If video filters are present we have to inline them into the complex
-  // graph too. Mixing `-vf` with `-filter_complex` on the same output stream
-  // is rejected by ffmpeg ("Filtergraph 'X' was specified through the -vf/-af
-  // option ... which is fed from a complex filtergraph").
+  // video filters must be inlined into the complex graph too: ffmpeg rejects
+  // mixing -vf with -filter_complex on the same output stream
   if (Array.isArray(videoFilters) && videoFilters.length > 0) {
     parts.push(`[0:v:0]${videoFilters.join(',')}[vout]`);
   }
@@ -888,12 +838,11 @@ function buildAudioMixFilterComplex({
     const vol = Number.isFinite(track.volume) ? Math.max(0, track.volume) : 1;
     const label = `mt${idx}`;
     inputLabels.push(label);
-    // Pre-stage volume per track so amix sees properly weighted inputs.
+    // pre-stage volume per track so amix sees weighted inputs
     parts.push(`[0:${streamIndex}]volume=${vol}[${label}]`);
   });
   if (inputLabels.length === 0) return null;
 
-  // Mix down to a single stream (or pass through for a single track).
   let mixedLabel;
   if (inputLabels.length === 1) {
     mixedLabel = inputLabels[0];
@@ -905,7 +854,7 @@ function buildAudioMixFilterComplex({
     );
   }
 
-  // Post-mix transforms (mirror the single-stream filter chain).
+  // post-mix transforms mirror the single-stream filter chain
   const postFilters = [];
   if (hasBaseVolumeChange) postFilters.push(`volume=${effectiveVolume}`);
   if (hasRangeVolumeChange) {
@@ -918,10 +867,10 @@ function buildAudioMixFilterComplex({
   if (postFilters.length > 0) {
     parts.push(`[${mixedLabel}]${postFilters.join(',')}[aout]`);
   } else if (inputLabels.length === 1) {
-    // Lone track, no transforms — pass through under the [aout] label.
+    // lone track, no transforms: pass through under [aout]
     parts.push(`[${mixedLabel}]anull[aout]`);
   } else {
-    // amix already produced [mt_mix]; rename to [aout].
+    // amix already produced [mt_mix]; rename to [aout]
     const last = parts.pop();
     parts.push(last.replace(`[${mixedLabel}]`, '[aout]'));
   }
@@ -1091,11 +1040,8 @@ async function exportVideoWithFallback(options) {
 
       const audioFilters = buildAudioFilter();
       const needsVideoFilter = videoFilters.length > 0;
-      // Multi-track audio export: when the renderer provided an explicit mix,
-      // we replace the single-stream audio filter chain with a filter_complex
-      // graph that mixes per-track volumes and re-applies master/range/speed.
-      // An *empty* mix means every track was muted/hidden — we silence the
-      // output entirely with `-an`.
+      // an explicit mix from the renderer replaces the single-stream filter chain
+      // with filter_complex; an *empty* mix means every track muted/hidden, so -an
       const audioMixProvided = Array.isArray(audioMix);
       const audioMixSilent = audioMixProvided && audioMix.length === 0;
       const audioFilterComplex = audioMixProvided && !audioMixSilent
@@ -1190,9 +1136,8 @@ async function exportVideoWithFallback(options) {
         }
 
         if (audioFilterComplex) {
-          // Multi-track mix path. Video filters (if any) were folded into the
-          // complex graph as [vout]; map that instead of 0:v:0. -filter_complex
-          // disables automatic mapping, so both outputs are explicit.
+          // video filters (if any) were folded into the graph as [vout]; -filter_complex
+          // disables automatic mapping so both outputs must be explicit
           const videoMap = needsVideoFilter ? '[vout]' : '0:v:0';
           command.outputOptions([
             '-filter_complex', audioFilterComplex,
@@ -1204,7 +1149,7 @@ async function exportVideoWithFallback(options) {
             command.videoFilters(videoFilters);
           }
           if (audioMixSilent) {
-            command.outputOptions(['-an']);
+            command.outputOptions(['-an']); // no audio output, codec choice irrelevant
           } else if (needsAudioFilter) {
             command.audioFilters(audioFilters);
           }
@@ -1260,7 +1205,7 @@ async function exportVideoWithFallback(options) {
 
         const shouldCopyAudio = !usingAudioMix && !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord';
         if (audioMixSilent) {
-          // No audio output at all — codec selection irrelevant.
+          // no audio output, codec choice irrelevant
         } else if (shouldCopyAudio) {
           softwareOptions.push('-c:a copy');
         } else {
@@ -1294,8 +1239,7 @@ async function exportVideoWithFallback(options) {
             logger.error('FFmpeg error:', ffmpegError.message);
             logger.error('FFmpeg stdout:', stdout);
             logger.error('FFmpeg stderr:', stderr);
-            // Terminal: software encode is the last resort, there is nothing
-            // left to fall back to.
+            // last resort, nothing left to fall back to
             telemetry.event('export_failed', {
               kind: telemetry.KIND.ERROR,
               severity: telemetry.SEVERITY.ERROR,
@@ -1321,8 +1265,7 @@ async function exportVideoWithFallback(options) {
         usingFallback = true;
         notifyFallback();
         logger.warn(`[ffmpeg] NVENC unavailable. Using software encode. Reason: ${nvencStatus.reason}`);
-        // The user is told nothing beyond a notice; the export just takes
-        // several times longer. reason is classified, never the raw stderr.
+        // export just takes several times longer; reason is classified, never raw stderr
         telemetry.event('nvenc_runtime_fallback', {
           kind: telemetry.KIND.DEGRADED,
           severity: telemetry.SEVERITY.WARNING,
@@ -1378,8 +1321,7 @@ async function exportVideoWithFallback(options) {
         }
       }
 
-      // Each cascade step is a full ffmpeg spawn that produces only a
-      // logger.warn line today, while the user just sees a slow export.
+      // each cascade step is a full ffmpeg spawn, only logged today; user just sees a slow export
       let cascadeReported = false;
       const reportDecodeCascade = (finalMode) => {
         if (cascadeReported || attemptedDecodeModes.length < 2) return;
@@ -1482,8 +1424,7 @@ async function exportVideoWithFallback(options) {
         if (!isCudaDecodeMode) {
           nvencQualityOptions.push('-pix_fmt yuv420p');
         }
-        // When the export is silent (all tracks muted/hidden), strip any audio
-        // codec/bitrate options that would otherwise fight with -an.
+        // silent export (all tracks muted): strip audio codec/bitrate opts that fight with -an
         const filteredNvencOptions = audioMixSilent
           ? nvencQualityOptions.filter((opt) => !/^-c:a |^-b:a /.test(opt))
           : nvencQualityOptions;
@@ -1565,16 +1506,12 @@ async function exportVideoWithFallback(options) {
   });
 }
 
-/**
- * Export video to file or clipboard
- */
 async function exportVideo(clipName, start, end, volume, speed, savePath, getSettings, progressCallbacks = null, extraOptions = {}) {
   const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${path.basename(clipName)}`);
 
-  // Load volume range data if it exists
   const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
   const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
@@ -1587,8 +1524,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
     if (error.code !== 'ENOENT') {
       logger.error('Error reading volume range data:', error);
     }
-    // The file was there but unparseable, so the range is dropped from the
-    // export and the output gets the wrong audio with no user-visible sign.
+    // unparseable file: range dropped silently, export gets wrong audio
     if (volumeDataRaw !== null) {
       telemetry.event('volume_range_dropped', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -1625,8 +1561,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       onProgress,
       onFallback,
       onDecodeFallback,
-      // Audio copy is incompatible with a custom mix — we have to re-encode
-      // when filter_complex builds [aout].
+      // audio copy incompatible with a custom mix, must re-encode when filter_complex builds [aout]
       allowAudioCopy: !savePath && quality !== 'discord' && !audioMix,
       emitGlobalProgress: !onProgress
     });
@@ -1635,12 +1570,10 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
     const elapsedSeconds = ((Date.now() - exportStartedAt) / 1000).toFixed(2);
     logger.info(`[ffmpeg] Video export finished in ${elapsedSeconds}s using ${usingFallback ? 'libx264' : 'h264_nvenc'}`);
 
-    // Copy to clipboard if no save path provided
     if (!savePath) {
       copyFileToClipboard(outputPath);
     }
 
-    // Log export activity
     logActivity('export', {
       clipName,
       format: 'video',
@@ -1700,16 +1633,12 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
   }
 }
 
-/**
- * Export trimmed video to clipboard
- */
 async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettings, progressCallbacks = null, extraOptions = {}) {
   const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${path.basename(clipName)}`);
 
-  // Load volume range data if it exists
   const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
   const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
 
@@ -1722,8 +1651,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
     if (error.code !== 'ENOENT') {
       logger.error('Error reading volume range data:', error);
     }
-    // The file was there but unparseable, so the range is dropped from the
-    // export and the output gets the wrong audio with no user-visible sign.
+    // unparseable file: range dropped silently, export gets wrong audio
     if (volumeDataRaw !== null) {
       telemetry.event('volume_range_dropped', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -1768,10 +1696,8 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
     const elapsedSeconds = ((Date.now() - exportStartedAt) / 1000).toFixed(2);
     logger.info(`[ffmpeg] Trimmed export finished in ${elapsedSeconds}s using ${usingFallback ? 'libx264' : 'h264_nvenc'}`);
 
-    // Copy to clipboard
     copyFileToClipboard(outputPath);
 
-    // Log export activity
     logActivity('export', {
       clipName,
       format: 'video',
@@ -1831,9 +1757,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
   }
 }
 
-/**
- * Export trimmed video for sharing uploads (no clipboard side effects).
- */
+/** unlike exportVideo/exportTrimmedVideo, this has no clipboard side effect. */
 async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, getSettings, onProgress = null, extraOptions = {}) {
   const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const settings = await getSettings();
@@ -1852,8 +1776,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
     if (error.code !== 'ENOENT') {
       logger.error('Error reading volume range data:', error);
     }
-    // The file was there but unparseable, so the range is dropped from the
-    // export and the output gets the wrong audio with no user-visible sign.
+    // unparseable file: range dropped silently, export gets wrong audio
     if (volumeDataRaw !== null) {
       telemetry.event('volume_range_dropped', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -1878,8 +1801,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       volumeData,
       audioMix,
       onProgress,
-      // Audio copy is incompatible with a custom mix — re-encode when
-      // filter_complex builds [aout].
+      // audio copy incompatible with a custom mix, re-encode when filter_complex builds [aout]
       allowAudioCopy: quality !== 'discord' && !audioMix,
       emitGlobalProgress: false
     });
@@ -1947,9 +1869,6 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
   }
 }
 
-/**
- * Export audio as MP3
- */
 async function exportAudio(clipName, start, end, volume, speed, savePath, getSettings, extraOptions = {}) {
   const settings = await getSettings();
   const inputPath = path.join(settings.clipLocation, clipName);
@@ -1987,8 +1906,7 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
         .output(outputPath);
 
       if (audioMixSilent) {
-        // Refuse to write an empty/silent mp3 — caller probably hid/muted
-        // every track by mistake. Surface as an error.
+        // refuse empty/silent mp3 export, caller probably hid/muted every track by mistake
         reject(new Error('All audio tracks are hidden or muted — nothing to export.'));
         return;
       }
@@ -2019,12 +1937,10 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
         .run();
     });
 
-    // Copy to clipboard if no save path provided
     if (!savePath) {
       copyFileToClipboard(outputPath);
     }
 
-    // Log export activity
     logActivity('export', {
       clipName,
       format: 'audio',
@@ -2073,10 +1989,7 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
   }
 }
 
-/**
- * Copy file path to clipboard (platform-specific)
- */
-// Clipboard helpers
+// clipboard helpers
 function copyFileToClipboard(filePath) {
   if (process.platform === 'win32') {
     clipboard.writeBuffer('FileNameW', Buffer.from(filePath + '\0', 'ucs2'));
@@ -2086,42 +1999,32 @@ function copyFileToClipboard(filePath) {
   verifyClipboardWrite(filePath);
 }
 
-/**
- * Emit progress to all renderer windows
- */
-// Progress events
+// progress events
 function emitProgress(percent) {
   BrowserWindow.getAllWindows().forEach((window) => {
     window.webContents.send('export-progress', percent);
   });
 }
 
-/**
- * Emit fallback notice to all renderer windows
- */
 function emitFallbackNotice() {
   BrowserWindow.getAllWindows().forEach((window) => {
     window.webContents.send('show-fallback-notice');
   });
 }
 
-/**
- * Emit decode fallback notice to all renderer windows
- */
 function emitDecodeFallbackNotice(payload = {}) {
   BrowserWindow.getAllWindows().forEach((window) => {
     window.webContents.send('show-decode-fallback-notice', payload);
   });
 }
 
+// screenshots
 /**
- * Generate a screenshot from a video at a specific timestamp
- * @param {string} videoPath - Path to the video file
- * @param {number} timestamp - Time in seconds
- * @param {string} outputPath - Full path for the output screenshot
+ * @param {string} videoPath
+ * @param {number} timestamp
+ * @param {string} outputPath
  * @returns {Promise<void>}
  */
-// Screenshots
 function generateScreenshot(videoPath, timestamp, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
@@ -2136,11 +2039,7 @@ function generateScreenshot(videoPath, timestamp, outputPath) {
   });
 }
 
-/**
- * Setup IPC event listeners for progress
- * Called once during app initialization
- */
-// IPC wiring
+// ipc wiring
 function setupProgressListeners() {
   ipcMain.on('ffmpeg-fallback', () => {
     emitFallbackNotice();
@@ -2151,14 +2050,7 @@ function setupProgressListeners() {
   });
 }
 
-/**
- * Get clip info (duration) with caching
- * @param {string} clipName - Name of the clip file
- * @param {Function} getSettings - Function that returns settings
- * @param {Object} thumbnailsModule - Thumbnails module for cache access
- * @returns {Promise<Object>} Clip info object with format.duration
- */
-// Metadata helpers
+// metadata helpers
 function buildAudioTracksFromStreams(streams) {
   if (!Array.isArray(streams)) return [];
   const audio = streams.filter((s) => s && s.codec_type === 'audio');
@@ -2168,14 +2060,8 @@ function buildAudioTracksFromStreams(streams) {
     const rawHandler = typeof tags.handler_name === 'string' ? tags.handler_name.trim() : '';
     const handlerIsGeneric = !rawHandler || /^sound\s*handler$/i.test(rawHandler);
     const resolvedName = rawTitle || (handlerIsGeneric ? '' : rawHandler) || `Track ${ordinal + 1}`;
-    // A stream's first packet PTS (start_time) is non-zero when the source
-    // has an mp4 edit-list (elst) that maps a leading slice of presentation
-    // time to nothing — i.e. the audio track starts late relative to the
-    // video. Stream-copying such a track preserves the elst and breaks
-    // seeking (Chrome's <audio> clamps currentTime up to the playable start),
-    // so we must re-encode to apply the elst and pad silence. Tracks with
-    // start_time == 0 have no such issue and can be stream-copied at near-
-    // zero cost.
+    // nonzero start_time means an mp4 edit-list (elst); stream-copy preserves it and
+    // breaks Chrome <audio> seeking, so re-encode instead. start_time==0 copies fine.
     const startTime = Number(s.start_time);
     const needsReencode = Number.isFinite(startTime) && Math.abs(startTime) > 0.0005;
     return {
@@ -2193,16 +2079,21 @@ function buildAudioTracksFromStreams(streams) {
   });
 }
 
-// Bump when the audioTracks parsing logic changes so cached entries are recomputed.
-// v3 added per-track startTime + needsReencode (elst detection).
+// bump when audioTracks parsing changes so cached entries recompute.
+// v3 added per-track startTime + needsReencode (elst detection)
 const AUDIO_TRACKS_CACHE_VERSION = 3;
 
-// Short-lived memo: opening a clip fires get-clip-info more than once
-// (player + audio-track extraction), so identical calls within a couple of
-// seconds share one promise instead of re-reading/probing.
+// opening a clip fires get-clip-info more than once (player + audio-track
+// extraction); share one promise for calls within the TTL instead of re-probing
 const clipInfoMemo = new Map();
 const CLIP_INFO_MEMO_TTL_MS = 2000;
 
+/**
+ * @param {string} clipName
+ * @param {Function} getSettings
+ * @param {Object} thumbnailsModule
+ * @returns {Promise<Object>} format.duration + audioTracks, TTL-memoized
+ */
 function getClipInfo(clipName, getSettings, thumbnailsModule) {
   const now = Date.now();
   const hit = clipInfoMemo.get(clipName);
@@ -2211,11 +2102,11 @@ function getClipInfo(clipName, getSettings, thumbnailsModule) {
   const promise = getClipInfoUncached(clipName, getSettings, thumbnailsModule);
   clipInfoMemo.set(clipName, { promise, ts: now });
   promise.catch(() => {
-    // Only evict if this rejection still owns the slot — a slow failure must
-    // not delete a newer entry that replaced it.
+    // evict only if this rejection still owns the slot, else a slow failure
+    // could delete a newer entry that replaced it
     if (clipInfoMemo.get(clipName)?.promise === promise) clipInfoMemo.delete(clipName);
   });
-  // Opportunistic sweep so the map doesn't grow with every opened clip.
+  // opportunistic sweep so the map doesn't grow with every opened clip
   if (clipInfoMemo.size > 64) {
     for (const [key, entry] of clipInfoMemo) {
       if (now - entry.ts >= CLIP_INFO_MEMO_TTL_MS) clipInfoMemo.delete(key);
@@ -2231,7 +2122,6 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
   const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
 
   try {
-    // Check if file exists first
     try {
       await fs.access(clipPath);
       logger.info(`[ffmpeg] Clip file exists: ${clipPath}`);
@@ -2245,7 +2135,6 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
       throw new Error(`Clip file not found: ${clipName}`);
     }
 
-    // Try to get metadata from cache first
     const metadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath);
     const cacheHasFreshAudio = metadata
       && metadata.duration
@@ -2264,10 +2153,8 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
     }
 
     logger.info(`[ffmpeg] No (complete) cached metadata, running ffprobe for: ${clipName}`);
-    // One direct ffprobe returns format + streams together with raw stream
-    // tags. (This used to be two spawns per cold clip: fluent-ffmpeg's probe
-    // for the format, then a second direct probe for reliable tags — ~2x the
-    // ~120ms process cost on the open path.)
+    // one direct ffprobe replaces the old two-spawn path (fluent probe + separate
+    // tag probe), saving ~120ms process cost per cold clip
     let info;
     let probeStdout = '';
     try {
@@ -2290,11 +2177,9 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
         audioTracks: buildAudioTracksFromStreams(streams)
       };
     } catch (directErr) {
-      // Fall back to fluent-ffmpeg's probe (its stream tags are sometimes
-      // filtered, but a generic track name beats failing the open).
+      // fluent probe's tags are sometimes filtered, but a generic name beats failing the open
       logger.warn(`[ffmpeg] direct ffprobe failed for ${clipName}, falling back to fluent probe: ${directErr?.error?.message || directErr.message || directErr}`);
-      // Costs a second probe spawn on the open path, and malformed JSON looks
-      // exactly like a failed spawn from the outside.
+      // second probe spawn on the open path; malformed JSON looks identical to a failed spawn
       telemetry.event('clip_probe_fallback', {
         kind: telemetry.KIND.DEGRADED,
         severity: telemetry.SEVERITY.INFO,
@@ -2325,24 +2210,19 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
   }
 }
 
-/**
- * Extract each audio track to its own .m4a file (stream-copy, no re-encode).
- * Cached under <clipLocation>/.clip_metadata/audio_tracks/<safe-clipname>/track_<ordinal>.m4a
- * Returns [{ ordinal, streamIndex, path }] for every audio track in the clip.
- */
+/** extracts each audio track to its own .m4a, cached under
+ * .clip_metadata/audio_tracks_v3/<safe-clipname>/track_<ordinal>.m4a
+ * @returns {Promise<Array<{ordinal, streamIndex, path}>>} */
 async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
 
-  // Reuse the cached audio-track metadata if present.
   const info = await getClipInfo(clipName, getSettings, thumbnailsModule);
   const tracks = Array.isArray(info?.audioTracks) ? info.audioTracks : [];
   if (tracks.length === 0) return [];
 
   const safeName = clipName.replace(/\//g, '--').replace(/\\/g, '--');
-  // v3 dir bump — extractor now branches per-track between stream-copy
-  // (fast, default for tracks with no edit-list offset) and re-encode (only
-  // for tracks where ffprobe reported a non-zero start_time). v2 always
+  // v3: branches per-track, stream-copy unless start_time != 0. v2 always
   // re-encoded; v1 always stream-copied and produced broken offset tracks.
   const outDir = path.join(settings.clipLocation, '.clip_metadata', 'audio_tracks_v3', safeName);
   await fs.mkdir(outDir, { recursive: true });
@@ -2353,8 +2233,8 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
     sourceMtimeMs = sourceStat.mtimeMs;
   } catch (error) {
     logger.warn(`[ffmpeg] extractAudioTracks: could not stat source ${clipPath}: ${error.message}`);
-    // mtime 0 makes every cached track compare as fresh forever, so a
-    // re-recorded clip keeps serving the old audio.
+    // mtime 0 makes every cached track compare as fresh forever, so a re-recorded
+    // clip keeps serving the old audio
     telemetry.event('audio_cache_stale_forever', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.WARNING,
@@ -2383,20 +2263,10 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
     return results;
   }
 
-  // Per-track extraction in parallel — one ffmpeg process per stream.
-  //
-  // Why not a single multi-output ffmpeg call? Multi-output shares a single
-  // decode pass across all outputs but serializes the encoders; for clips
-  // with several long tracks the encode phase dominates and benefits more
-  // from process-level parallelism than from a shared demuxer.
-  //
-  // Per-track branching:
-  //   - needsReencode === false → `-c:a copy` (stream copy, near-zero CPU).
-  //   - needsReencode === true  → re-encode with aresample to flatten the
-  //     edit-list offset. AAC @ 192k VBR-ish is well above transparent for
-  //     voice/desktop audio and ~25% faster than the previous 256k CBR.
-  //
-  // Both produce .m4a (audio-only mp4). Chrome plays both via <audio>.
+  // one ffmpeg process per stream, not a single multi-output call: multi-output
+  // shares the decode pass but serializes encoders, so per-process parallelism
+  // wins once several long tracks dominate the encode phase. needsReencode
+  // tracks get aresample to flatten the edit-list offset; others stream-copy.
   const reencodeCount = missing.filter(({ track }) => track.needsReencode).length;
   logger.info(`[ffmpeg] Extracting ${missing.length} audio track(s) for ${clipName} (${missing.length - reencodeCount} copy, ${reencodeCount} re-encode)`);
 
@@ -2421,8 +2291,8 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
 
   await Promise.all(missing.map((entry) => execFileAsync(ffmpegPath, buildArgsForTrack(entry))))
     .catch((error) => {
-      // The rejection keeps propagating exactly as before: main.js turns it
-      // into [] and the player shows zero audio tracks with no error anywhere.
+      // rejection propagates to main.js, which turns it into []: player shows
+      // zero audio tracks with no error surfaced anywhere
       telemetry.event('audio_track_extract_failed', {
         kind: telemetry.KIND.SILENT_FAILURE,
         severity: telemetry.SEVERITY.ERROR,
@@ -2437,19 +2307,10 @@ async function extractAudioTracks(clipName, getSettings, thumbnailsModule) {
   return results;
 }
 
-/**
- * Reset every cached artifact tied to a single clip: thumbnail jpg, thumbnail
- * .meta file (which holds duration + audioTracks), and every versioned
- * audio-track extraction dir (audio_tracks, audio_tracks_v2, audio_tracks_v3,
- * …). Does NOT touch user-owned data (trim, speed, volume, tags, trackstate)
- * — that's persisted under `.clip_metadata/<clip>.{trim,speed,volume,tags,
- * trackstate}` and survives a cache reset by design.
- *
- * Used by the right-click "Reset cache" entry to test first-show timings.
- */
+/** clears thumbnail/meta + audio-track extraction dirs; does not touch user data
+ * (trim/speed/volume/tags/trackstate persist by design). right-click "Reset cache". */
 async function resetClipCache(clipName, getSettings, thumbnailsModule) {
-  // Drop the in-memory memo too — a hit within its TTL would resurrect the
-  // just-deleted .meta contents.
+  // drop the in-memory memo too, else a TTL hit would resurrect the deleted .meta
   clipInfoMemo.delete(clipName);
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
@@ -2502,6 +2363,5 @@ module.exports = {
   getClipInfo,
   extractAudioTracks,
   resetClipCache,
-  // Re-export fluent-ffmpeg for thumbnail generation
-  ffmpeg
+  ffmpeg // re-exported for thumbnail generation
 };

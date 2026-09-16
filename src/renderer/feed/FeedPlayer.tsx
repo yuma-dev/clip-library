@@ -1,27 +1,14 @@
-// In-app ClipLib feed player. Renders THE SAME markup skeleton with THE SAME
-// IDs as the local crown-jewel player's #player-overlay (see
-// src/renderer/player/VideoPlayer.tsx + player.css) so the entire player.css
-// applies verbatim — same size, same hover-revealed controls, same volume
-// glyphs — then adds the feed-specific social layer as a BOTTOM SHEET:
+// In-app ClipLib feed player: same markup/IDs as the local player's #player-overlay
+// (player/VideoPlayer.tsx + player.css) so player.css applies verbatim, plus a
+// feed-specific bottom sheet below. Hard rules: React refs only, never
+// getElementById/querySelector or touch window.legacyPlayer/legacyState; never edit player/* or player.css.
 //
 //   ┌──────────────────────────────┐
-//   │            player            │  ← full-size stage, like the local player
+//   │            player            │ from full-size stage, like the local player
 //   │                              │
 //   ├──────────────────────────────┤
-//   │ ▒ uploader · 🔥3 💬2      ˄ │  ← sheet header peeks at the bottom
+//   │ ▒ uploader · 🔥3 💬2      ˄ │ from sheet header peeks at the bottom
 //   └──────────────────────────────┘
-//
-// The overlay is a scroll container with two snap regions: the stage and the
-// details sheet. Wheel/trackpad scrolls naturally; clicking the peeking header
-// glides down to the details (description, featuring, reactions, comments)
-// while the bottom of the still-playing video stays visible above the sheet.
-//
-// HARD RULES (unchanged):
-//  - never getElementById/querySelector our own elements — React refs only;
-//  - never touch window.legacyPlayer / window.legacyState;
-//  - do not edit player/* or player.css;
-//  - the `feed-player` class on #player-overlay scopes all overrides in
-//    feed-player.css; the portal mounts ONLY while a feed clip is open.
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -69,8 +56,8 @@ import {
 } from "./types";
 import "./feed-player.css";
 
-// Mounted once at App level; the launching grid passes its optimistic
-// mutators through the bus (openFeedClip's `sync` arg), so no props needed.
+// mounted once at App level; launching grid passes optimistic mutators through
+// the bus (openFeedClip's sync arg), so no props needed
 
 function fmtTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
@@ -86,8 +73,8 @@ const CONTROLS_HIDE_MS = 2400;
 /** Overlay scrollTop past which the details sheet counts as "open". */
 const SHEET_OPEN_THRESHOLD = 48;
 
-// The exact volume glyphs the crown-jewel player injects into #volume-button
-// (player-legacy/video-player.js `volumeIcons`) — Material Symbols paths.
+// exact volume glyphs the local player injects into #volume-button
+// (player-legacy/video-player.js volumeIcons), Material Symbols paths
 const VOLUME_PATHS = {
   muted:
     "m720-424-76 76q-11 11-28 11t-28-11q-11-11-11-28t11-28l76-76-76-76q-11-11-11-28t11-28q11-11 28-11t28 11l76 76 76-76q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76 76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11l-76-76Zm-440 64H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm120-246-86 86H200v80h114l86 86v-252ZM300-480Z",
@@ -132,14 +119,12 @@ export default function FeedPlayer() {
   );
   const toast = useToast();
 
-  // --- Open / clip state ---
   const [clip, setClip] = useState<Clip | null>(null);
   const [list, setList] = useState<Clip[]>([]);
   const [detail, setDetail] = useState<ClipDetail | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [me, setMe] = useState<Me | null>(null);
 
-  // --- Playback state (React-driven; no legacy involvement) ---
   const [playing, setPlaying] = useState(false);
   const [loadingVideo, setLoadingVideo] = useState(true);
   const [current, setCurrent] = useState(0);
@@ -155,18 +140,15 @@ export default function FeedPlayer() {
   // Details sheet (bottom): derived from the overlay scroll position.
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  // --- Reaction/favorite optimistic local state (per open clip) ---
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
   const [userReactions, setUserReactions] = useState<string[]>([]);
   const [favorited, setFavorited] = useState(false);
   const [reactionPending, setReactionPending] = useState<string | null>(null);
   const [favPending, setFavPending] = useState(false);
 
-  // --- Comment composer ---
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
 
-  // --- Owner actions: edit (title + mentions), share link, delete ---
   interface MentionUser {
     id: string;
     username: string;
@@ -198,7 +180,6 @@ export default function FeedPlayer() {
 
   const isOpen = clip !== null;
 
-  // ---- Registration on the feed bus ----
   const openClip = useCallback((next: Clip, nextList: Clip[], sync?: FeedListSync) => {
     syncRef.current = sync ?? {};
     setClip(next);
@@ -210,7 +191,6 @@ export default function FeedPlayer() {
     return () => setFeedOpenHandler(null);
   }, [openClip]);
 
-  // ---- Fetch me once (cached in me.ts) ----
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
@@ -224,7 +204,6 @@ export default function FeedPlayer() {
     };
   }, [isOpen]);
 
-  // ---- On clip switch: reset per-clip state + refetch detail & comments ----
   useEffect(() => {
     if (!clip) return;
     const token = ++openTokenRef.current;
@@ -246,8 +225,7 @@ export default function FeedPlayer() {
     setDuration(clip.duration ?? 0);
     setControlsVisible(true);
 
-    // Back to the stage (a prev/next while reading comments shouldn't strand
-    // the user inside the previous clip's sheet).
+    // back to the stage: a prev/next while reading comments shouldn't strand the user
     overlayRef.current?.scrollTo({ top: 0 });
 
     if (clip.status !== "processing") {
@@ -270,7 +248,6 @@ export default function FeedPlayer() {
     }
   }, [clip]);
 
-  // ---- Apply volume/mute/speed to the <video> imperatively ----
   useEffect(() => {
     const v = videoRef.current;
     if (v) {
@@ -284,7 +261,6 @@ export default function FeedPlayer() {
     if (v) v.playbackRate = speed;
   }, [speed, clip]);
 
-  // ---- Navigation ----
   const index = clip ? list.findIndex((c) => c.id === clip.id) : -1;
   const hasPrev = index > 0;
   const hasNext = index >= 0 && index < list.length - 1;
@@ -302,7 +278,6 @@ export default function FeedPlayer() {
     [list],
   );
 
-  // ---- Close ----
   const close = useCallback(() => {
     const v = videoRef.current;
     if (v) {
@@ -323,7 +298,6 @@ export default function FeedPlayer() {
     setComments([]);
   }, []);
 
-  // ---- Playback controls ----
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -349,7 +323,6 @@ export default function FeedPlayer() {
 
   const toggleFullscreen = useCallback(() => setFullscreen((f) => !f), []);
 
-  // ---- Hover controls: show on movement, fade after idle while playing ----
   const pokeControls = useCallback(() => {
     setControlsVisible(true);
     window.clearTimeout(hideTimerRef.current);
@@ -360,7 +333,7 @@ export default function FeedPlayer() {
 
   useEffect(() => () => window.clearTimeout(hideTimerRef.current), []);
 
-  // Paused → controls stay up (matches the local player's feel).
+  // paused: controls stay up (matches the local player's feel)
   useEffect(() => {
     if (!playing) {
       window.clearTimeout(hideTimerRef.current);
@@ -371,9 +344,8 @@ export default function FeedPlayer() {
   }, [playing, pokeControls]);
 
   // ---- Ambient glow: tiny canvas behind the player sampling the video ----
-  // Mirrors the local player's #ambient-glow-canvas (10×6 buffer, CSS scales
-  // + blurs it). Draws with temporal blending at the configured fps; remote
-  // frames taint the canvas but we never read pixels back, so that's fine.
+  // mirrors #ambient-glow-canvas (10x6 buffer, CSS scales+blurs); draws with temporal
+  // blending at the configured fps. Remote frames taint the canvas but pixels are never read back.
   const glow = (settings.ambientGlow ?? {}) as {
     enabled?: boolean;
     smoothing?: number;
@@ -414,7 +386,6 @@ export default function FeedPlayer() {
     return () => cancelAnimationFrame(raf);
   }, [isOpen, clip, glowEnabled, glow.fps, glow.smoothing]);
 
-  // ---- Details sheet scrolling ----
   const scrollToSheet = useCallback(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -435,7 +406,6 @@ export default function FeedPlayer() {
     if (el) setSheetOpen(el.scrollTop > SHEET_OPEN_THRESHOLD);
   }, []);
 
-  // ---- Progress bar seek (click + drag) ----
   const seekToClientX = useCallback((clientX: number) => {
     const bar = progressRef.current;
     const v = videoRef.current;
@@ -473,7 +443,6 @@ export default function FeedPlayer() {
     }
   }, []);
 
-  // ---- Keyboard (document listener while open ONLY) ----
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -516,7 +485,7 @@ export default function FeedPlayer() {
           break;
         case "Escape":
           e.preventDefault();
-          // Layered dismissal: fullscreen → details sheet → the player itself.
+          // layered dismissal: fullscreen, then details sheet, then the player itself
           if (fullscreen) setFullscreen(false);
           else if (sheetOpen) scrollToStage();
           else close();
@@ -538,7 +507,6 @@ export default function FeedPlayer() {
     close,
   ]);
 
-  // ---- Reactions ----
   const onToggleReaction = useCallback(
     async (emoji: string) => {
       if (!clip || reactionPending) return;
@@ -546,7 +514,6 @@ export default function FeedPlayer() {
       const removing = userReactions.includes(emoji);
       const action: "added" | "removed" = removing ? "removed" : "added";
 
-      // Optimistic local update.
       const prevCounts = reactionCounts;
       const prevUser = userReactions;
       const nextCounts = { ...reactionCounts };
@@ -560,7 +527,6 @@ export default function FeedPlayer() {
 
       try {
         const res = await toggleReaction(clip.id, emoji);
-        // Reconcile against server result if it disagrees with our guess.
         if (res.action !== action) {
           onReactionUpdate?.(clip.id, emoji, res.action);
           const fixCounts = { ...prevCounts };
@@ -573,7 +539,6 @@ export default function FeedPlayer() {
           );
         }
       } catch {
-        // Rollback.
         setReactionCounts(prevCounts);
         setUserReactions(prevUser);
         onReactionUpdate?.(clip.id, emoji, removing ? "added" : "removed");
@@ -584,7 +549,6 @@ export default function FeedPlayer() {
     [clip, reactionPending, reactionCounts, userReactions, onReactionUpdate],
   );
 
-  // ---- Favorite ----
   const onToggleFavorite = useCallback(async () => {
     if (!clip || favPending) return;
     setFavPending(true);
@@ -607,7 +571,6 @@ export default function FeedPlayer() {
     }
   }, [clip, favPending, favorited, onFavoriteUpdate]);
 
-  // ---- Comments ----
   const onPostComment = useCallback(async () => {
     if (!clip || posting) return;
     const content = draft.trim();
@@ -617,7 +580,6 @@ export default function FeedPlayer() {
       const comment = await postComment(clip.id, content);
       setComments((prev) => [...prev, comment]);
       setDraft("");
-      // Scroll to newest.
       requestAnimationFrame(() => {
         const el = commentsScrollRef.current;
         if (el) el.scrollTop = el.scrollHeight;
@@ -638,7 +600,6 @@ export default function FeedPlayer() {
     }
   }, []);
 
-  // ---- Owner actions: edit title/mentions ----
   const enterEdit = useCallback(async () => {
     if (!clip) return;
     setEditTitle(detail?.title ?? clip.title);
@@ -686,7 +647,6 @@ export default function FeedPlayer() {
     }
   }, [clip, savingEdit, editTitle, editMentions, onClipUpdatedSync, toast]);
 
-  // ---- Owner actions: share link ----
   const onCreateShareLink = useCallback(async () => {
     if (!clip || shareBusy) return;
     setShareBusy(true);
@@ -727,7 +687,6 @@ export default function FeedPlayer() {
     }
   }, [clip, shareBusy, toast]);
 
-  // ---- Owner actions: delete ----
   const onDeleteClip = useCallback(async () => {
     if (!clip || deleting) return;
     if (!window.confirm("Delete this clip? This cannot be undone.")) return;
@@ -754,7 +713,6 @@ export default function FeedPlayer() {
     }
   }, [clip, deleting, list, close, onClipDeletedSync, toast]);
 
-  // ---- Profile navigation (closes the player) ----
   const openProfile = useCallback(
     (userId: string) => {
       close();
@@ -772,7 +730,6 @@ export default function FeedPlayer() {
   const description = detail?.description ?? clip.description;
   const title = detail?.title ?? clip.title;
 
-  // Owner / admin affordances (edit, share link, delete).
   const isOwner = Boolean(me && clip.userId === me.id);
   const canModify = isOwner || Boolean(me?.isAdmin);
   const publicUrl = detail?.publicUrl ?? null;
@@ -800,14 +757,13 @@ export default function FeedPlayer() {
       ref={overlayRef}
       onScroll={onOverlayScroll}
       onClick={(e) => {
-        // Backdrop click closes: the stage area around the player AND the
-        // overlay background beside/below the sheet.
+        // backdrop click closes: the stage area around the player and beside/below the sheet
         const t = e.target as HTMLElement;
         if (t === e.currentTarget || t.classList.contains("fp-stage") || t.id === "player-container")
           close();
       }}
     >
-      {/* ================= STAGE — the player, full size ================= */}
+      {/* stage: the player, full size */}
       <div className="fp-stage">
         {glowEnabled && !processing && !fullscreen ? (
           <canvas
@@ -908,7 +864,6 @@ export default function FeedPlayer() {
               )}
 
               <div id="video-controls" className={controlsVisible ? "visible" : undefined}>
-                {/* TOP: title + actions */}
                 <div id="top-controls">
                   <div className="fp-title" title={clip.title}>
                     {clip.title}
@@ -953,7 +908,6 @@ export default function FeedPlayer() {
                   </div>
                 </div>
 
-                {/* BOTTOM: playback row -> progress -> time */}
                 <div id="bottom-controls">
                   <div className="playback-row">
                     <div
@@ -1030,9 +984,8 @@ export default function FeedPlayer() {
                   </div>
 
                   <div className="fp-progress-wrap">
-                    {/* No #progress-bar fill: the white bar is the local
-                        player's draggable trim region — feed clips only need
-                        the track + playhead. */}
+                    {/* no #progress-bar fill: that white bar is the local player's
+                        draggable trim region; feed clips only need track + playhead */}
                     <div
                       id="progress-bar-container"
                       ref={progressRef}
@@ -1055,7 +1008,7 @@ export default function FeedPlayer() {
         </div>
       </div>
 
-      {/* ============ DETAILS SHEET — peeks at the bottom of the stage ============ */}
+      {/* details sheet: peeks at the bottom of the stage */}
       <section className="fp-sheet" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="fp-sheet-head" onClick={toggleSheet}>
           <span className="fp-sheet-grip" aria-hidden="true" />
@@ -1088,7 +1041,7 @@ export default function FeedPlayer() {
         </button>
 
         <div className="fp-sheet-body">
-          {/* Left column — clip info + reactions */}
+          {/* left column: clip info + reactions */}
           <div className="fp-info-col">
             {editing ? (
               <input
@@ -1226,7 +1179,6 @@ export default function FeedPlayer() {
               })}
             </div>
 
-            {/* Owner / admin actions */}
             {editing ? (
               <div className="fp-owner-actions">
                 <button
@@ -1299,7 +1251,7 @@ export default function FeedPlayer() {
             )}
           </div>
 
-          {/* Right column — comments */}
+          {/* right column: comments */}
           <div className="fp-comments">
             <div className="fp-comments-header">Comments ({comments.length})</div>
             <div className="fp-comments-list" ref={commentsScrollRef}>

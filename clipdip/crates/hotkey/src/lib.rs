@@ -1,34 +1,6 @@
-//! Global hotkey listener that works inside games.
-//!
-//! Previously this used `RegisterHotKey`, which delivers `WM_HOTKEY` via
-//! the thread message queue. Fullscreen-exclusive games and any game
-//! that grabs the keyboard via DirectInput / RawInput swallow keys
-//! before that path fires — League of Legends being the test case that
-//! exposed it. So we switched to **Raw Input with `RIDEV_INPUTSINK`**:
-//! we create a hidden message-only window, register for raw keyboard
-//! events with the "inputsink" flag (input regardless of focus), and
-//! decode + match in the window procedure ourselves.
-//!
-//! **Single-window design**: `RegisterRawInputDevices` only allows one
-//! registration per device type per process. Spawning multiple listeners
-//! would cause each new registration to replace the previous one, so
-//! only the last-registered window would receive `WM_INPUT`. We therefore
-//! create exactly one window and one message pump, and handle all
-//! configured hotkey bindings inside that single thread.
-//!
-//! Trade-offs we accepted:
-//! - **Observe-only, not consume.** Raw input doesn't block the
-//!   foreground app from receiving the same key. Fine for our default
-//!   `Ctrl+Alt+F10` — no game claims that. If we later want to swallow
-//!   a key with a higher collision risk, we'd need a low-level keyboard
-//!   hook (`WH_KEYBOARD_LL`), which kernel anti-cheats (Vanguard / EAC)
-//!   may flag.
-//! - **No suppression of the OS hotkey conflict warning** — but there
-//!   shouldn't be one. We don't claim the hotkey system-wide; we just
-//!   listen.
-//! - **Anti-repeat is now our responsibility.** `MOD_NOREPEAT` from
-//!   `RegisterHotKey` is gone; we track whether the non-modifier key is
-//!   currently held and only fire on the down-transition.
+//! Global hotkey listener that works inside games. Switched from
+//! `RegisterHotKey` (`WM_HOTKEY` gets swallowed by fullscreen games grabbing
+//! input, e.g. League of Legends) to Raw Input + `RIDEV_INPUTSINK`.
 
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::{Receiver, Sender};
@@ -50,9 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RI_KEY_BREAK, WINDOW_EX_STYLE, WINDOW_STYLE, WM_INPUT, WM_QUIT, WNDCLASSEXW,
 };
 
-/// Mirrors the `MOD_*` constants from `winuser.h` — preserved for
-/// backwards-compatible parsing even though we no longer call
-/// `RegisterHotKey`.
+/// mirrors `MOD_*` from `winuser.h`, kept for parsing even though we no
+/// longer call `RegisterHotKey`
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Modifiers(pub u32);
 
@@ -82,24 +53,23 @@ pub struct HotkeyBinding {
 }
 
 impl HotkeyBinding {
-    /// Parse a human-readable shortcut like `"Ctrl+Shift+S"` or `"Alt+F9"`
-    /// into a binding. Case-insensitive, separator is `+`.
+    /// parses shortcuts like `"Ctrl+Shift+S"` or `"Alt+F9"`, case-insensitive
+    /// `+`-separated
     ///
     /// Supported tokens:
     /// - Modifiers: `ctrl`/`control`, `shift`, `alt`, `win`/`super`
-    /// - Letters: `a`–`z` (single ASCII char)
-    /// - Digits: `0`–`9`
-    /// - Function keys: `f1`–`f24`
-    /// - Named keys: `space`, `tab`, `enter`, `backspace`, `escape`,
-    ///   `insert`, `delete`, `home`, `end`, `pageup`, `pagedown`,
-    ///   arrows (`up`/`down`/`left`/`right`), `printscreen`,
+    /// - Letters: `a`-`z` (single ASCII char)
+    /// - Digits: `0`-`9`
+    /// - Function keys: `f1`-`f24`
+    /// - Named keys: `space`, `tab`, `enter`, `backspace`, `escape`
+    ///   `insert`, `delete`, `home`, `end`, `pageup`, `pagedown`
+    ///   arrows (`up`/`down`/`left`/`right`), `printscreen`
     ///   `scrolllock`, `pause`, `capslock`, `numlock`
-    /// - Numpad: `num0`–`num9`, `numplus`, `numminus`, `nummult`,
+    /// - Numpad: `num0`-`num9`, `numplus`, `numminus`, `nummult`
     ///   `numdiv`, `numdot`
     /// - Punctuation: `` ; = , - . / ` [ \ ] ' ``
     ///
-    /// The final non-modifier token is taken as the key. Exactly one key
-    /// token is required.
+    /// exactly one non-modifier key token required, taken as the key
     pub fn parse(s: &str) -> Result<Self> {
         let mut modifiers = Modifiers::default();
         let mut vk: Option<u32> = None;
@@ -129,14 +99,14 @@ impl HotkeyBinding {
     }
 }
 
-/// Parse a single non-modifier key token into a Windows VK code.
+/// parses a single non-modifier key token into a Windows VK code
 fn parse_vk(key: &str) -> Result<u32> {
     if key.len() == 1 {
         let c = key.chars().next().unwrap().to_ascii_uppercase();
         if c.is_ascii_alphabetic() || c.is_ascii_digit() {
             return Ok(c as u32);
         }
-        // OEM punctuation keys (US layout positions).
+        // OEM punctuation keys (US layout positions)
         let vk = match c {
             ';' => 0xBA, // VK_OEM_1
             '=' => 0xBB, // VK_OEM_PLUS
@@ -162,7 +132,7 @@ fn parse_vk(key: &str) -> Result<u32> {
             }
         }
     }
-    // Numpad: num0–num9 plus the operator keys.
+    // numpad: num0-num9 plus the operator keys
     if let Some(n_str) = key.strip_prefix("num") {
         if let Ok(n) = n_str.parse::<u32>() {
             if n <= 9 {
@@ -182,7 +152,7 @@ fn parse_vk(key: &str) -> Result<u32> {
             return Ok(vk);
         }
     }
-    // Named keys.
+    // named keys
     let vk = match key {
         "space" => 0x20,
         "tab" => 0x09,
@@ -213,22 +183,18 @@ fn parse_vk(key: &str) -> Result<u32> {
     ))
 }
 
-/// A handle to the message-pump thread. Drop to stop the listener.
+/// handle to the message-pump thread; drop to stop the listener
 pub struct HotkeyListener {
     thread_id: u32,
     join: Option<JoinHandle<()>>,
 }
 
 impl HotkeyListener {
-    /// Spawn a single thread that listens for all given hotkey bindings.
-    /// Returns one `Receiver<()>` per binding, in the same order.
-    /// Each receiver yields `()` every time its hotkey fires (key
-    /// transition only — no auto-repeat).
-    ///
-    /// Only one Raw Input registration exists for the whole process; this
-    /// design avoids the Windows limitation that a second
-    /// `RegisterRawInputDevices` call for the same device type replaces
-    /// the first one.
+    /// spawns one thread listening for all given bindings, returning one
+    /// `Receiver<()>` per binding (fires on key down-transition, no repeat).
+    /// Only one Raw Input registration exists per process: a second
+    /// `RegisterRawInputDevices` call for the same device type would
+    /// replace the first.
     pub fn spawn(bindings: &[HotkeyBinding]) -> Result<(Self, Vec<Receiver<()>>)> {
         assert!(!bindings.is_empty(), "need at least one binding");
 
@@ -261,8 +227,7 @@ impl HotkeyListener {
 
 impl Drop for HotkeyListener {
     fn drop(&mut self) {
-        // Post WM_QUIT to the listener's message queue so GetMessage
-        // returns zero and the thread exits cleanly.
+        // WM_QUIT makes GetMessage return zero so the thread exits cleanly
         unsafe {
             let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
         }
@@ -272,15 +237,15 @@ impl Drop for HotkeyListener {
     }
 }
 
-// ----- Thread-local listener state ------------------------------------
+// thread-local listener state
 
 struct ListenerState {
     bindings: Vec<HotkeyBinding>,
-    /// Per-binding: whether the non-modifier key is currently held.
-    /// Used to suppress OS auto-repeat.
+    /// per-binding: whether the non-modifier key is held, to suppress
+    /// OS auto-repeat
     key_pressed: Vec<bool>,
     event_txs: Vec<Sender<()>>,
-    /// Modifier-key bitmask currently held.
+    /// modifier-key bitmask currently held
     modifiers_held: u32,
 }
 
@@ -288,7 +253,7 @@ thread_local! {
     static LISTENER: RefCell<Option<ListenerState>> = const { RefCell::new(None) };
 }
 
-/// Lazily register the window class once per process.
+/// lazily registers the window class once per process
 fn window_class_name() -> PCWSTR {
     static CLASS: OnceLock<Vec<u16>> = OnceLock::new();
     let buf = CLASS.get_or_init(|| {
@@ -463,7 +428,7 @@ unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
             return;
         }
 
-        // Check every binding against this key event.
+        // check every binding against this key event
         for i in 0..state.bindings.len() {
             let binding = &state.bindings[i];
             if vk == binding.vk {

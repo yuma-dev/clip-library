@@ -1,7 +1,5 @@
-//! Runtime loader for nvEncodeAPI64.dll.
-//!
-//! `Library` and the function table are kept together so the DLL stays
-//! mapped for as long as we hold a reference to any function pointer in it.
+//! Runtime loader for nvEncodeAPI64.dll. `Library` and the function table
+//! are kept together so the DLL stays mapped while any function pointer is held.
 
 use anyhow::{anyhow, Context, Result};
 use libloading::Library;
@@ -14,19 +12,14 @@ use crate::sys::{
 };
 
 pub struct NvEncApi {
-    // Keep the library loaded for the lifetime of the function table.
-    _lib: Library,
+    _lib: Library, // keeps the DLL loaded for the function table's lifetime
     pub functions: NV_ENCODE_API_FUNCTION_LIST,
 }
 
 impl NvEncApi {
-    /// Load `nvEncodeAPI64.dll` from the standard Windows DLL search path
-    /// (System32 is where the NVIDIA driver installs it) and call
-    /// `NvEncodeAPICreateInstance` to populate the function pointer table.
+    /// Loads from the standard DLL search path (System32, where the driver installs it).
     pub fn load() -> Result<Arc<Self>> {
-        // SAFETY: libloading is inherently unsafe because DLL init code may
-        // run anything. nvEncodeAPI64.dll's init is well-behaved (it's part
-        // of the production NVIDIA driver).
+        // SAFETY: DLL init code may run anything, but this is the production NVIDIA driver.
         let lib = unsafe { Library::new(NVENC_DLL_NAME) }
             .with_context(|| format!("loading {NVENC_DLL_NAME} — is the NVIDIA driver installed?"))?;
 
@@ -39,9 +32,7 @@ impl NvEncApi {
         let mut functions = NV_ENCODE_API_FUNCTION_LIST::default();
         functions.version = NV_ENCODE_API_FUNCTION_LIST_VER;
 
-        // SAFETY: `functions` is a properly-sized #[repr(C)] struct with
-        // the correct version tag. NvEncodeAPICreateInstance writes function
-        // pointers into it.
+        // SAFETY: `functions` is a correctly sized/versioned #[repr(C)] struct.
         let status = unsafe { (create)(&mut functions) };
         if status != NV_ENC_SUCCESS {
             return Err(anyhow!(
@@ -51,9 +42,7 @@ impl NvEncApi {
             ));
         }
 
-        // Sanity check: the loader must have populated at least the entry
-        // points we plan to use. If any of these are still null after a
-        // successful return, something is very wrong with the driver.
+        // catches a driver that reports success but left entry points we need null
         if functions.nvEncOpenEncodeSessionEx.is_none() {
             return Err(anyhow!(
                 "function table populated but nvEncOpenEncodeSessionEx is null"
@@ -92,14 +81,11 @@ impl NvEncApi {
 mod tests {
     use super::*;
 
-    /// Run with `cargo test -p clipdip-encoder -- --ignored` on a machine
-    /// with a working NVIDIA driver. Ignored by default so CI / non-NVIDIA
-    /// dev machines don't fail.
+    /// `cargo test -p clipdip-encoder -- --ignored`, needs a real NVIDIA driver.
     #[test]
     #[ignore = "requires NVIDIA driver on host"]
     fn loads_real_driver_dll() {
         let api = NvEncApi::load().expect("load nvEncodeAPI64.dll");
-        // Every function pointer should be non-null after a successful call.
         assert!(!api.functions.nvEncOpenEncodeSession.is_null());
         assert!(api.functions.nvEncOpenEncodeSessionEx.is_some());
         assert!(api.functions.nvEncInitializeEncoder.is_some());

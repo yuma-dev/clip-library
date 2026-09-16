@@ -29,7 +29,6 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
   const [icon, setIcon] = useState<GameIcon | null>(() => getCachedGameIcon(clip.originalName) ?? null);
   const editRef = useRef<HTMLInputElement>(null);
 
-  // Focus + select the whole title when entering edit mode.
   useEffect(() => {
     if (editing && editRef.current) {
       editRef.current.focus();
@@ -51,8 +50,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
     if (icon) return;
     let alive = true;
     void loadGameIcon(clip.originalName).then((res) => {
-      // Most clips resolve to "no icon" — skip the state update (and the
-      // card re-render) unless there's actually something to show.
+      // Most clips resolve to "no icon", skip the state update/re-render unless there's something to show.
       if (alive && (res.path || res.title || res.discord)) setIcon(res);
     });
     return () => {
@@ -113,7 +111,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
                   e.currentTarget.blur();
                 } else if (e.key === "Escape") {
                   e.preventDefault();
-                  e.currentTarget.value = clip.customName; // revert -> blur skips save
+                  e.currentTarget.value = clip.customName; // revert so blur skips the save
                   e.currentTarget.blur();
                 }
               }}

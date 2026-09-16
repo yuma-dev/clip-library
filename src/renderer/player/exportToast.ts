@@ -1,12 +1,11 @@
-// Drives the shared #export-toast markup (rendered once, at document level, by
-// VideoPlayer). Both player exports and grid context-menu exports feed it, so
-// the imperative DOM logic lives here rather than inside the player component.
+// drives the shared #export-toast markup (rendered once by VideoPlayer); both player exports
+// and grid context-menu exports feed it, hence the imperative DOM logic living here
 import type { ProgressFn } from "./playerExport";
 
-// One toast, one dismiss timer — a module-level handle is enough.
+// one toast, one dismiss timer, a module-level handle is enough
 let exportTimer: number | undefined;
 
-/** (current, total, isClipboard) — mirrors the legacy showExportProgress. */
+/** (current, total, isClipboard); mirrors the legacy showExportProgress */
 export const showExportProgress: ProgressFn = (current, total, clipboard = false) => {
   const toastEl = document.getElementById("export-toast");
   const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;
@@ -38,7 +37,7 @@ export const showExportProgress: ProgressFn = (current, total, clipboard = false
   }
 };
 
-/** Hide + reset the export toast (on error). */
+/** hides + resets the export toast, used on error */
 export function hideExportProgress(): void {
   const toastEl = document.getElementById("export-toast");
   const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;

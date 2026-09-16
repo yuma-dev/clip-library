@@ -1,12 +1,8 @@
-/* ================= Feed player (FeedPlayer.tsx) =================
-   The overlay reuses the crown-jewel player's IDs so player.css provides the
-   entire base look (controls gradient, sliders, nav buttons, progress bar).
-   Everything here is scoped under .feed-player and covers only:
-     1. the overlay-as-scroll-container (stage + bottom details sheet),
-     2. re-anchoring #fullscreen-player from fixed to the scrollable stage,
-     3. the fp-* feed-specific pieces (title, actions, sheet, comments).   */
+/* Feed player (FeedPlayer.tsx): reuses the local player's IDs so player.css provides
+   the base look. Scoped under .feed-player: overlay-as-scroll-container (stage + sheet),
+   re-anchored #fullscreen-player, and the fp-* feed-specific pieces. */
 
-/* ---- 1. Overlay: vertical scroll container with two snap regions ---- */
+/* overlay: vertical scroll container with two snap regions */
 #player-overlay.feed-player {
   display: block;
   overflow-y: auto;
@@ -32,10 +28,8 @@
   height: 100%;
 }
 
-/* ---- 2. Player re-anchored inside the stage (player.css makes it fixed).
-   Same 90%-width 16:9 look as the local player, but capped so the whole
-   player fits the slightly shorter stage. Fullscreen keeps player.css's
-   fixed full-bleed rules. ---- */
+/* player re-anchored inside the stage (player.css makes it fixed); same 90%-width
+   16:9 look, capped to fit the shorter stage. Fullscreen keeps player.css's fixed rules. */
 .feed-player #fullscreen-player:not(.custom-fullscreen) {
   position: absolute;
   top: 50%;
@@ -50,9 +44,8 @@
   backface-visibility: hidden;
 }
 
-/* Nav chevrons: player.css positions #prev-video/#next-video by id at 3% —
-   the feed player is a touch narrower, so 7% keeps the buttons peeking out
-   from behind the player edges just like the local layout. */
+/* nav chevrons: player.css positions #prev-video/#next-video at 3%; feed player is
+   narrower so 7% keeps them peeking the same way */
 .feed-player .fp-nav-prev {
   left: 7%;
 }
@@ -60,9 +53,8 @@
   right: 7%;
 }
 
-/* Ambient glow behind the player — mirror of #ambient-glow-canvas (player.css):
-   10×6 buffer scaled to player-width + 200px, blurred + saturated via inline
-   style from settings.ambientGlow. */
+/* ambient glow behind the player, mirrors #ambient-glow-canvas (player.css): 10x6
+   buffer scaled to player-width+200px, blurred+saturated via inline style */
 .feed-player .fp-ambient-glow {
   position: absolute;
   top: 50%;
@@ -104,8 +96,7 @@
   pointer-events: none;
 }
 
-/* Action buttons in the top-right (favorite / details / close) — matches the
-   local player's export/delete button feel. */
+/* top-right action buttons (favorite/details/close), matches local player's export/delete feel */
 .feed-player .fp-action {
   display: grid;
   place-items: center;
@@ -134,9 +125,8 @@
   width: 100%;
 }
 
-/* ---- 3. Details sheet ----
-   Content-sized (no artificial min-height) and exactly as wide as the player
-   above it (same width formula as #fullscreen-player). */
+/* details sheet: content-sized (no artificial min-height), same width as
+   #fullscreen-player above it */
 .feed-player .fp-sheet {
   scroll-snap-align: end;
   display: flex;
@@ -153,7 +143,7 @@
   box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.45);
 }
 
-/* Header — the part that peeks below the stage. */
+/* header: the part that peeks below the stage */
 .feed-player .fp-sheet-head {
   display: flex;
   flex-direction: column;
@@ -227,7 +217,7 @@
   transform: rotate(180deg);
 }
 
-/* Body — two columns: clip info | comments. */
+/* body: two columns, clip info | comments */
 .feed-player .fp-sheet-body {
   display: grid;
   grid-template-columns: minmax(300px, 400px) 1fr;
@@ -241,7 +231,7 @@
   }
 }
 
-/* Left column — info. */
+/* left column: info */
 .feed-player .fp-info-title {
   margin: 0 0 14px;
   font-size: 17px;
@@ -382,7 +372,7 @@
   line-height: 1;
 }
 
-/* Right column — comments. */
+/* right column: comments */
 .feed-player .fp-comments {
   display: flex;
   flex-direction: column;
@@ -470,7 +460,6 @@
   white-space: pre-wrap;
 }
 
-/* Composer. */
 .feed-player .fp-composer {
   display: flex;
   gap: 8px;
@@ -511,7 +500,7 @@
   cursor: default;
 }
 
-/* ---- Owner / admin actions (edit, share link, delete) ---- */
+/* owner/admin actions: edit, share link, delete */
 .fp-owner-actions {
   display: flex;
   flex-wrap: wrap;
@@ -559,7 +548,7 @@
   color: #f08a7a;
 }
 
-/* ---- Inline clip edit (title + mentions) ---- */
+/* inline clip edit: title + mentions */
 .fp-edit-title {
   width: 100%;
   box-sizing: border-box;

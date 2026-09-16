@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Benchmark Runner
- * 
- * CLI entry point for running benchmarks.
- * Spawns Electron in benchmark mode and orchestrates test execution.
- * 
+ * CLI entry point: spawns Electron in benchmark mode, orchestrates scenario runs.
+ *
  * Usage:
- *   npm run benchmark              # Run standard suite
+ *   npm run benchmark              # standard suite
  *   npm run benchmark -- --suite full
  *   npm run benchmark -- --scenario open_clip
  *   npm run benchmark -- --verbose
@@ -37,8 +34,8 @@ function createIsolatedProfile() {
   settings.sharing = { ...(settings.sharing || {}), apiToken: '' };
   fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify(settings, null, 2));
 
-  // Preserve renderer preferences/onboarding state without sharing a live
-  // Chromium profile or its single-instance lock with the developer's app.
+  // keep renderer prefs/onboarding state without sharing a live Chromium
+  // profile or its single-instance lock with the dev's app
   for (const name of ['Local Storage', 'global_tags.json', 'tagPreferences.json', 'trackPreferences.json']) {
     const from = path.join(source, name);
     if (fs.existsSync(from)) fs.cpSync(from, path.join(profile, name), { recursive: true });
@@ -54,7 +51,6 @@ function removeIsolatedProfile(profile) {
   }
 }
 
-// Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
   const options = {
@@ -113,10 +109,8 @@ function parseArgs() {
         options.timeout = parseInt(args[++i], 10) || 120000;
         break;
       case '--single':
-        // Pin a specific clip to the "single audio track" bucket in the
-        // audio-track comparison scenarios. Accepts either the bare
-        // filename ("Forza Horizon 6 ….mp4") or a full path — we forward
-        // it verbatim and the bench resolves it against allClips.
+        // pins a clip to the "single audio track" bucket for audio-track scenarios;
+        // bare filename or full path, forwarded verbatim, resolved against allClips
         options.singleClip = args[++i];
         break;
       case '--multi':
@@ -208,9 +202,8 @@ function ratioStr(s, m) {
 }
 
 /**
- * Print a side-by-side single vs multi table for one comparison scenario.
- * Different scenarios surface different fields; we switch on `label` to keep
- * the table compact and meaningful instead of dumping every key.
+ * Side-by-side single vs multi table for one comparison scenario; switches on
+ * `label` to keep the table compact instead of dumping every key.
  */
 function printAudioTrackComparison(data) {
   const { label, single, multi, probed, missing } = data;
@@ -222,9 +215,8 @@ function printAudioTrackComparison(data) {
     console.log(`  ⚠ Missing bucket(s): ${missing.join(', ')} — probed ${probed} clips`);
   }
 
-  // `row` accepts raw numbers + a formatter so the printed value and the
-  // ratio computation stay in sync. Pass `fmt = null` for already-formatted
-  // strings (e.g. counts) — ratio is still computed from the raw numbers.
+  // `row` takes raw numbers + a formatter so the printed value and ratio stay
+  // in sync; pass fmt=null for already-formatted strings, ratio still uses raw numbers
   const row = (label, sRaw, mRaw, fmt) => {
     const sStr = fmt ? fmt(sRaw) : (sRaw == null ? '—' : String(sRaw));
     const mStr = fmt ? fmt(mRaw) : (mRaw == null ? '—' : String(mRaw));
@@ -334,7 +326,6 @@ class BenchmarkRunner {
     console.log(`Memory: ${this.results.system.totalMemory} total, ${this.results.system.freeMemory} free`);
     console.log();
 
-    // Get scenarios to run
     let scenarios;
     if (this.options.scenario) {
       const scenario = getScenario(this.options.scenario);
@@ -353,7 +344,6 @@ class BenchmarkRunner {
       }
     }
 
-    // Filter to only renderer-executable scenarios
     const executableScenarios = scenarios.filter(s => s.renderer === true);
     
     console.log(`Running ${executableScenarios.length} executable scenarios from suite: ${this.options.suite}`);
@@ -370,14 +360,12 @@ class BenchmarkRunner {
       return this.results;
     }
 
-    // Run warmup if enabled
     if (this.options.warmup && executableScenarios.length > 0) {
       console.log('Running warmup...');
       await this.runElectronBenchmark(executableScenarios.slice(0, 1), true);
       console.log('Warmup complete.\n');
     }
 
-    // Run actual benchmarks
     console.log('Starting benchmarks...\n');
     
     for (let iteration = 0; iteration < this.options.iterations; iteration++) {
@@ -388,10 +376,8 @@ class BenchmarkRunner {
       await this.runElectronBenchmark(executableScenarios, false, iteration);
     }
 
-    // Calculate summary
     this.calculateSummary();
     
-    // Generate report
     this.generateReport();
 
     if (this.results.summary?.failed > 0) {
@@ -407,7 +393,6 @@ class BenchmarkRunner {
       const appPath = path.join(__dirname, '..');
       const profileDir = createIsolatedProfile();
       
-      // Environment for benchmark mode
       const env = {
         ...process.env,
         CLIPS_BENCHMARK: '1',
@@ -421,8 +406,8 @@ class BenchmarkRunner {
         BENCH_MULTI_CLIP: this.options.multiClip || ''
       };
       // Codex/VS Code and some Electron parents export this for helper Node
-      // processes. Inheriting it would make the Electron binary execute
-      // main.js as plain Node (`require('electron').app` is then undefined).
+      // processes; inherited, Electron would run main.js as plain Node
+      // (`require('electron').app` is then undefined)
       delete env.ELECTRON_RUN_AS_NODE;
 
       this.log('Spawning Electron with benchmark mode');
@@ -440,17 +425,14 @@ class BenchmarkRunner {
       let benchmarkFatal = null;
       let timedOut = false;
 
-      // Parse output line by line for better marker detection
       const processOutput = (output) => {
         outputBuffer += output;
         
-        // Split by lines and process each
         const lines = outputBuffer.split('\n');
-        // Keep incomplete last line in buffer
+        // keep incomplete last line in buffer
         outputBuffer = lines.pop() || '';
         
         for (const line of lines) {
-          // Look for benchmark result markers
           if (line.includes('BENCHMARK_RESULT:')) {
             const match = line.match(/BENCHMARK_RESULT:(.+)/);
             if (match) {
@@ -467,19 +449,16 @@ class BenchmarkRunner {
             }
           }
 
-          // Look for openClip timing breakdown
           if (line.includes('OPENCLIP_TIMING:')) {
             const match = line.match(/OPENCLIP_TIMING:(.+)/);
             if (match) {
               try {
                 const timing = JSON.parse(match[1]);
-                // Store timing data and print it
                 if (!this.results.openClipTimings) {
                   this.results.openClipTimings = [];
                 }
                 this.results.openClipTimings.push(timing);
 
-                // Print timing breakdown
                 console.log(`\n  📊 openClip timing for ${timing.clip}:`);
                 for (const [phase, data] of Object.entries(timing.breakdown)) {
                   const bar = '█'.repeat(Math.min(Math.floor(data.delta / 20), 30));
@@ -492,7 +471,6 @@ class BenchmarkRunner {
             }
           }
 
-          // Look for audio-track comparison results
           if (line.includes('AUDIO_TRACK_COMPARE:')) {
             const match = line.match(/AUDIO_TRACK_COMPARE:(.+)/);
             if (match) {
@@ -509,7 +487,6 @@ class BenchmarkRunner {
             }
           }
 
-          // Look for startup detailed breakdown
           if (line.includes('STARTUP_BREAKDOWN:')) {
             const match = line.match(/STARTUP_BREAKDOWN:(.+)/);
             if (match) {
@@ -517,7 +494,6 @@ class BenchmarkRunner {
                 const report = JSON.parse(match[1]);
                 this.results.startupBreakdown = report;
 
-                // Print detailed breakdown
                 console.log('\n  ========== STARTUP DETAILED BREAKDOWN ==========');
                 console.log(`  Total Time: ${report.totalTime.toFixed(1)}ms`);
                 console.log(`  Clips: ${report.clipCount} found, ${report.renderedClips} rendered, ${report.groupCount} groups`);
@@ -525,7 +501,6 @@ class BenchmarkRunner {
                 console.log('  Phase                              Duration    % Total');
                 console.log('  ' + '─'.repeat(55));
 
-                // Sort for bottleneck analysis
                 const sortedPhases = [...report.phases].sort((a, b) => b.duration - a.duration);
 
                 for (const phase of report.phases) {
@@ -560,7 +535,6 @@ class BenchmarkRunner {
             }
           }
 
-          // Look for final results
           if (line.includes('BENCHMARK_COMPLETE:')) {
             const match = line.match(/BENCHMARK_COMPLETE:(.+)/);
             if (match) {
@@ -596,7 +570,7 @@ class BenchmarkRunner {
 
       electronProcess.stderr.on('data', (data) => {
         const output = data.toString();
-        // Also check stderr for markers (Electron sometimes mixes streams)
+        // stderr too: Electron sometimes mixes streams
         processOutput(output);
         
         if (this.options.verbose) {
@@ -604,7 +578,6 @@ class BenchmarkRunner {
         }
       });
 
-      // Handle IPC messages from Electron
       electronProcess.on('message', (message) => {
         this.log('Received IPC message:', message?.type);
         
@@ -626,14 +599,12 @@ class BenchmarkRunner {
         this.log(`Electron process exited with code ${code}`);
         this.log(`Results received: ${resultsReceived}/${scenarios.length}`);
         
-        // Process any remaining buffer
         if (outputBuffer.trim()) {
           processOutput(outputBuffer + '\n');
         }
         
         if (benchmarkData && !isWarmup) {
           const mainData = benchmarkData.main || benchmarkData;
-          // Merge any additional data from the app
           if (mainData.ipc) {
             this.results.ipc = mainData.ipc;
           }
@@ -667,7 +638,6 @@ class BenchmarkRunner {
         reject(error);
       });
 
-      // Timeout for the entire benchmark run
       const timeout = this.options.timeout;
       const timeoutId = setTimeout(() => {
         if (electronProcess && !electronProcess.killed) {
@@ -708,13 +678,11 @@ class BenchmarkRunner {
       timestamp: new Date().toISOString()
     });
 
-    // Print progress
     if (error) {
       console.log(`  ✗ ${scenario}: FAILED - ${error}`);
     } else {
       console.log(`  ✓ ${scenario}: ${this.formatDuration(duration)}`);
 
-      // Print grid performance results
       if (scenario === 'grid_performance' && details) {
         console.log('\n  ========== GRID PERFORMANCE ANALYSIS ==========');
         console.log(`  DOM Elements: ${details.domStats?.totalElements || 'N/A'}`);
@@ -754,7 +722,6 @@ class BenchmarkRunner {
         console.log('  ================================================\n');
       }
 
-      // Print detailed breakdown for startup_detailed scenario
       if (scenario === 'startup_detailed' && details && details.phases) {
         const report = details;
         console.log('\n  ========== STARTUP DETAILED BREAKDOWN ==========');
@@ -835,7 +802,7 @@ class BenchmarkRunner {
       }
     }
 
-    // Sort categories by total duration (slowest first)
+    // slowest category first
     for (const category of Object.values(summary.byCategory)) {
       category.scenarios.sort((a, b) => b.avg - a.avg);
     }
@@ -883,7 +850,6 @@ class BenchmarkRunner {
   }
 }
 
-// Main entry point
 async function main() {
   const options = parseArgs();
 

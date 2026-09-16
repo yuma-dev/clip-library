@@ -1,15 +1,8 @@
 'use strict';
 /**
- * Clip open warmer: does the slow, cacheable part of opening a clip ahead of
- * the click. A cold open pays an ffprobe (~250 ms) and, for multi-track
- * clips, a one-time audio track extraction (~200 to 350 ms); both results
- * are cached on disk (thumbnail .meta and .clip_metadata/audio_tracks_v3),
- * so doing them at idle makes the later open a cache hit.
- *
- * One clip at a time, with a breathing gap, so it never competes with the
- * user: the newest clips are queued a few seconds after the library is on
- * screen, a hovered card jumps the queue, and the queue pauses while a clip
- * is being opened.
+ * Pre-runs the slow, cacheable part of opening a clip: ffprobe (~250ms) and
+ * for multi-track clips, audio extraction (~200-350ms), cached to thumbnail
+ * .meta and .clip_metadata/audio_tracks_v3. One clip at a time with a gap, so it never competes with the user.
  */
 const logger = require('../utils/logger');
 
@@ -27,17 +20,17 @@ function init(settingsGetter) {
   getSettings = settingsGetter;
 }
 
-/** Called when the user is opening a clip: keep ffmpeg out of its way. */
+/** user opened a clip: keep ffmpeg out of its way */
 function pause(ms = PAUSE_ON_OPEN_MS) {
   pausedUntil = Math.max(pausedUntil, Date.now() + ms);
 }
 
-/** Lift a long pause early (an export finished). */
+/** lift a long pause early (an export finished) */
 function resume() {
   pausedUntil = 0;
 }
 
-/** Queue one clip; `priority` puts it at the front (hover). */
+/** `priority` puts it at the front of the queue (hover) */
 function warm(clipName, priority = false) {
   if (typeof clipName !== 'string' || !clipName || done.has(clipName) || inFlight.has(clipName)) return;
   queue = queue.filter((name) => name !== clipName);
@@ -46,13 +39,13 @@ function warm(clipName, priority = false) {
   if (!running) void drain();
 }
 
-/** Queue the first `count` names in library order (newest first). */
+/** first `count` names, newest first */
 function warmMany(names, count) {
   if (!Array.isArray(names)) return;
   for (const name of names.slice(0, count)) warm(name);
 }
 
-/** A clip changed on disk (re-recorded, trimmed): allow warming it again. */
+/** clip changed on disk (re-recorded, trimmed): allow warming it again */
 function forget(clipName) {
   done.delete(clipName);
 }
@@ -83,8 +76,7 @@ async function drain() {
         done.add(clipName);
         logger.info(`Warmed clip open in ${Date.now() - startedAt} ms: ${clipName}`);
       } catch (error) {
-        // A clip that cannot be probed will fail on open too; nothing to do
-        // here but not retry in a loop.
+        // unprobeable clip fails on open too; don't retry it in a loop
         done.add(clipName);
         logger.warn(`Clip warm failed for ${clipName}: ${error?.message || error}`);
       } finally {

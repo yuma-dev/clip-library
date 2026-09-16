@@ -2,7 +2,6 @@ const path = require('path');
 const fs = require('fs').promises;
 const util = require('util');
 
-// Log level definitions with both console colors and clean log formats
 const LOG_LEVELS = {
     INFO: {
         console: '\x1b[32m',
@@ -54,7 +53,6 @@ class Logger {
 
     async initializeMain() {
         try {
-            // Ensure we only access Electron paths after the app is ready
             if (!this.app.isReady()) {
                 await new Promise(res => this.app.once('ready', res));
             }
@@ -67,8 +65,7 @@ class Logger {
             
             await this.writeInitialLogEntry();
 
-            // One log file accumulates per launch; prune old ones in the
-            // background so init never waits on directory scans.
+            // one log file per launch; old ones prune in the background so init doesn't wait on it
             this.cleanOldLogs().catch(() => {});
         } catch (error) {
             console.error('Failed to initialize logger:', error);
@@ -137,7 +134,6 @@ class Logger {
         const location = caller ? ` (${caller})` : '';
         let formatted = `${timestamp} ${type.padEnd(7)} [${process.type}]${location} `;
 
-        // Handle message and data
         if (typeof data !== 'undefined' && data !== null) {
             if (typeof data === 'object') {
                 const objString = util.inspect(data, {
@@ -172,7 +168,6 @@ class Logger {
         let finalMessage = '';
         let finalData = data;
 
-        // Handle different message formats
         if (typeof message === 'string' && data !== null && data !== undefined) {
             finalMessage = message;
             finalData = data;
@@ -183,20 +178,16 @@ class Logger {
             finalMessage = String(message);
         }
 
-        // Format the message
         const fileMessage = this.formatLogMessage(type, finalMessage, finalData, error);
         let consoleMessage = fileMessage;
 
-        // Add colors for console output
         if (type === 'INFO') consoleMessage = `\x1b[32m${fileMessage}\x1b[0m`;
         else if (type === 'WARN') consoleMessage = `\x1b[33m${fileMessage}\x1b[0m`;
         else if (type === 'ERROR') consoleMessage = `\x1b[31m${fileMessage}\x1b[0m`;
         else if (type === 'DEBUG') consoleMessage = `\x1b[36m${fileMessage}\x1b[0m`;
 
-        // Console output
         console[type.toLowerCase()](consoleMessage);
 
-        // File output
         if (this.isRenderer) {
             try {
                 await this.ipc.invoke('logger-write', { 
@@ -213,7 +204,6 @@ class Logger {
         }
     }
 
-    // Convenience methods
     async info(message, data = null) {
         await this.log('INFO', message, data);
     }
@@ -238,7 +228,6 @@ class Logger {
         if (this.isRenderer) return;
 
         try {
-            // Lazily initialise the log file if it has not been set up yet.
             if (!this.currentLogFile) {
                 await this.initializeMain();
             }

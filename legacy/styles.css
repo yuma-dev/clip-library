@@ -1,4 +1,3 @@
-/* General styles */
 html {
   scroll-behavior: smooth;
 }
@@ -67,7 +66,7 @@ body.dragging {
 
 body.dragging,
 body.dragging * {
-  user-select: none;  /* Prevent selection in all browsers */
+  user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
@@ -89,33 +88,28 @@ body.dragging * {
   margin-top: 20px;
 }
 
-/* Width of the scrollbar */
 ::-webkit-scrollbar {
   position: absolute;
   width: 12px;
-  height: 12px; /* For horizontal scrollbars */
+  height: 12px;
 }
 
-/* Background of the scrollbar track */
 ::-webkit-scrollbar-track {
   position: absolute;
   background: #1e1e1e;
 }
 
-/* Scrollbar thumb (the draggable part) */
 ::-webkit-scrollbar-thumb {
   position: absolute;
-  background: #888; 
+  background: #888;
   border-radius: 10px;
 }
 
-/* Hover effect for the scrollbar thumb */
 ::-webkit-scrollbar-thumb:hover {
   position: absolute;
-  background: #555; 
+  background: #555;
 }
 
-/* Scrollbar corner for diagonal scrollbars */
 ::-webkit-scrollbar-corner {
   position: absolute;
   background: #f1f1f1; 
@@ -129,11 +123,11 @@ body.dragging * {
 
 #clip-counter-container {
   position: fixed;
-  bottom: 22px; /* Adjust this value to position it below the title bar */
+  bottom: 22px; /* below the title bar */
   left: 50px;
   width: 100%;
   z-index: 500;
-  pointer-events: none; /* This allows clicks to pass through to elements behind it */
+  pointer-events: none;
   box-shadow: 0 0 10px rgb(0, 0, 0);
 }
 
@@ -144,15 +138,15 @@ body.dragging * {
   padding: 5px 10px;
   border-radius: 4px;
   font-size: 14px;
-  pointer-events: auto; /* Allows the counter itself to receive clicks if needed */
+  pointer-events: auto; /* re-enables clicks the container above disables */
   box-shadow: 0 0 10px rgb(0, 0, 0);
 }
 
 .controller-indicator {
   position: absolute;
-  left: 100px; /* Position it closer to the clip counter */
+  left: 100px;
   background-color: rgb(30, 30, 30);
-  color: #ffffff; /* White color for the icon */
+  color: #ffffff;
   padding: 5px 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -174,7 +168,6 @@ body.dragging * {
 
 .controller-indicator.visible { opacity: 1; transform: translateY(0); }
 
-/* Controller focus styles for grid navigation */
 .clip-item.controller-focused {
   transform: scale(1.02);
   border: 2px solid #4caf50;
@@ -435,7 +428,6 @@ body.dragging * {
   color: #888;
 }
 
-/* Modal Styles because alerts are crazy */
 .modal {
   display: none;
   position: fixed;
@@ -483,12 +475,12 @@ body.dragging * {
 
 .context-menu {
   display: none;
-  position: fixed; /* Change this from absolute to fixed */
+  position: fixed;
   background-color: #2a2a2a;
   border: 1px solid #444;
   border-radius: 5px;
   min-width: 150px;
-  z-index: 1999; /* Increase this to ensure it's above other elements */
+  z-index: 1999;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   animation: fadeIn 0.2s ease;
 }
@@ -598,7 +590,6 @@ body.dragging * {
   opacity: 0;
 }
 
-/* Additional styles for smooth transitions */
 .clip-item-media-container .shimmer-wrapper {
   position: absolute;
   top: 0;
@@ -620,7 +611,6 @@ body.dragging * {
   background: #2a2a2a;
 }
 
-/* Only apply the shimmer animation to elements that actually need it */
 .is-loading .shimmer {
   position: absolute;
   top: 0;
@@ -705,7 +695,6 @@ body.dragging * {
   max-width: 100px;
 }
 
-/* Style for the filter dropdown */
 #filter-dropdown {
   padding: 10px 15px;
   background-color: #2a2a2a;
@@ -716,7 +705,6 @@ body.dragging * {
   margin-right: 20px;
 }
 
-/* Clip grid styles */
 .loading-card .loading-placeholder {
   background-color: #2a2a2a;
 }
@@ -836,14 +824,10 @@ body.dragging * {
     box-shadow var(--hover-transition-duration) ease,
     border-color var(--hover-transition-duration) ease;
 
-  /* Performance optimizations for large grids.
-   * `content-visibility: auto` was removed — it registers a browser-managed
-   * IntersectionObserver that recomputes on every layout, which became a
-   * ~40% CPU hit when the player overlay invalidates layout each frame.
-   * Clip visibility is now driven by an explicit IntersectionObserver in
-   * clip-grid.js, which toggles `.cv-offscreen` on offscreen items.
-   * `contain` alone is still cheap and worth keeping. */
-  contain-intrinsic-size: 0 200px; /* Approximate height for layout calculation */
+  /* content-visibility:auto was removed: its IntersectionObserver retriggered on
+     every layout, a ~40% CPU hit under the player overlay. clip-grid.js now toggles
+     .cv-offscreen itself instead; contain alone stays, it's cheap. */
+  contain-intrinsic-size: 0 200px;
   contain: layout style paint;
 }
 
@@ -902,12 +886,10 @@ body.dragging * {
   transition: opacity 0.3s ease;
 }
 
-/* Hide ambient glow in true fullscreen or when marked hidden */
 #ambient-glow-canvas.hidden {
   opacity: 0;
 }
 
-/* Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   #ambient-glow-canvas {
     display: none !important;
@@ -920,7 +902,7 @@ body.dragging * {
   pointer-events: none;
   filter: blur(45px) saturate(1.6) brightness(1.1);
   opacity: 0;
-  z-index: 0; /* Behind clip-items */
+  z-index: 0;
   will-change: transform, opacity;
   transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1),
               transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -948,7 +930,6 @@ body.dragging * {
   }
 }
 
-/* Fullscreen player styles */
 #fullscreen-player {
   position: fixed;
   top: 51%;
@@ -1061,8 +1042,8 @@ body.dragging * {
 
 #video-container {
   width: 100%;
-  height: 100%; /* Adjust based on your bottom bar height */
-  position: relative; /* Add this */
+  height: 100%;
+  position: relative;
 }
 
 #video-wrapper {
@@ -1075,7 +1056,6 @@ body.dragging * {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  /* Add these new properties */
   transform: translateZ(0);
   backface-visibility: hidden;
   perspective: 1000px;
@@ -1259,19 +1239,15 @@ body.dragging * {
   left: 10px;
 }
 
-/* ===========================================================================
- * Multi-track audio mixer popout (lives inside #volume-container).
- * Compact horizontal-row mixer per track: drag = volume, dbl-click = 100%,
- * wheel = ±5%, X = hide (mute), color dot opens palette.
- * =========================================================================== */
+/* mixer popout inside #volume-container: drag = volume, dbl-click = 100%,
+   wheel = +-5%, x = hide/mute, dot opens the color palette */
 #audio-tracks-panel {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
   width: 320px;
   padding: 12px;
-  /* Match the player controls gradient aesthetic: dark translucent backdrop
-     that blends with the bottom-of-player controls bar. */
+  /* echoes the player controls gradient backdrop */
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.78) 0%, rgba(0, 0, 0, 0.88) 100%),
     rgba(20, 20, 24, 0.55);
@@ -1284,8 +1260,7 @@ body.dragging * {
   box-sizing: border-box;
   color: #fff;
   font-size: 13px;
-  /* Expand outward from the volume button anchor (bottom-left of the panel
-     sits just above the button). */
+  /* expands from the volume button anchor, bottom-left just above it */
   transform-origin: bottom left;
   animation: mixerPanelOpen 200ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
 }
@@ -1423,8 +1398,7 @@ body.dragging * {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* Floating hidden-tray: positioned above the panel, outside its background.
-   Chips look "disabled" with a checkered/striped fill. */
+/* floating tray above the panel; chips get a striped "disabled" fill */
 .mixer__hidden-tray {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -1737,7 +1711,6 @@ body.player-open .cet-titlebar {
   height: 100%;
 }
 
-/* Responsive adjustments */
 @media (max-width: 1200px) {
   #clip-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -2076,7 +2049,6 @@ body.player-open .cet-titlebar {
   overflow: hidden;
 }
 
-/* Progress fill effect */
 .export-toast-content::before {
   content: '';
   position: absolute;
@@ -2120,15 +2092,13 @@ body.player-open .cet-titlebar {
   font-weight: 100;
   margin: 0;
   font-size: 14px;
-  /* Add subtle text shadow */
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .export-progress-text {
-  color: #e2e2e2;  /* Made slightly brighter */
+  color: #e2e2e2;
   font-size: 12px;
   margin: 0;
-  /* Add subtle text shadow */
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
@@ -2560,10 +2530,10 @@ body.player-open .cet-titlebar {
 .tooltip {
   visibility: hidden;
   position: absolute;
-  top: 100%; /* Changed from bottom: 100% to top: 100% */
+  top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  margin-top: 5px; /* Changed from margin-bottom to margin-top */
+  margin-top: 5px;
   padding: 8px;
   background-color: rgba(0, 0, 0, 0.8);
   color: #fff;
@@ -2582,7 +2552,7 @@ body.player-open .cet-titlebar {
 .tooltip::after {
   content: "";
   position: absolute;
-  bottom: 100%; /* Changed from top: 100% to bottom: 100% */
+  bottom: 100%;
   left: 50%;
   margin-left: -5px;
   border-width: 5px;
@@ -2930,7 +2900,6 @@ body.player-open .cet-titlebar {
   opacity: 1;
 }
 
-/* Custom checkbox styling */
 .tagv2-item input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
@@ -2956,7 +2925,6 @@ body.player-open .cet-titlebar {
   transform: rotate(45deg);
 }
 
-/* Scrollbar styling for the tag list */
 .tagv2-list::-webkit-scrollbar {
   width: 8px;
 }
@@ -2974,7 +2942,6 @@ body.player-open .cet-titlebar {
   background: #555;
 }
 
-/* Show/hide dropdown */
 .tagv2-dropdown.show {
   display: block;
 }
@@ -2984,8 +2951,6 @@ body.player-open .cet-titlebar {
   background-color: #444;
   margin: 8px 0;
 }
-
-/* Add these styles to styles.css */
 
 .search-display {
   width: 100%;
@@ -3016,8 +2981,6 @@ body.player-open .cet-titlebar {
   content: 'Search clips...';
   color: #888;
 }
-
-/* Update the tag suggestions styles in your styles.css */
 
 .tag-suggestions {
   position: absolute;
@@ -3089,7 +3052,7 @@ body.player-open .cet-titlebar {
   overflow-y: auto;
 }
 
-/* Settings Header - Simplified without close button */
+/* no close button by design */
 .settings-header {
   padding: 20px 30px;
   border-bottom: 1px solid rgb(169 169 169 / 20%);
@@ -3106,7 +3069,6 @@ body.player-open .cet-titlebar {
   text-shadow: 0 0 10px rgba(147, 51, 234, 0.3);
 }
 
-/* Tabs Navigation - Updated with purple accents */
 .settings-tabs {
   display: flex;
   padding: 0 30px;
@@ -3142,13 +3104,13 @@ body.player-open .cet-titlebar {
   transition: width 0.4s ease, height 0.4s ease;
   border-radius: 50%;
   z-index: -1;
-  max-width: 100%;  /* Ensures the gradient doesn't exceed tab width */
-  aspect-ratio: 1/1; /* Maintains circular shape */
+  max-width: 100%;  /* keeps the gradient inside the tab */
+  aspect-ratio: 1/1;
 }
 
 .settings-tab:hover::before {
-  width: 120%;    /* Slightly larger than the height to ensure full coverage */
-  height: 200%;   /* Taller than it is wide to maintain soft edges */
+  width: 120%;    /* taller than wide, for soft edges and full coverage */
+  height: 200%;
 }
 
 .settings-tab:hover {
@@ -3168,10 +3130,10 @@ body.player-open .cet-titlebar {
   height: 2px;
   background: linear-gradient(90deg, #9333EA, #C084FC);
   border-radius: 2px;
-  box-shadow: 
-    0 0 15px rgba(158, 84, 226, 0.6),    /* Increased size and opacity */
-    0 0 30px rgba(157, 80, 230, 0.4),    /* Increased middle glow */
-    0 -40px 60px rgba(163, 95, 226, 0.3); /* Much larger upward glow */
+  box-shadow:
+    0 0 15px rgba(158, 84, 226, 0.6),
+    0 0 30px rgba(157, 80, 230, 0.4),
+    0 -40px 60px rgba(163, 95, 226, 0.3);
 }
 
 .settings-tab.active::before {
@@ -3189,12 +3151,11 @@ body.player-open .cet-titlebar {
     transparent 90%
   );
   border-radius: 50%;
-  filter: blur(15px);                  /* Increased blur */
+  filter: blur(15px);
   z-index: -1;
 }
 
 
-/* Tab Content */
 .settings-tab-content {
   display: none;
   padding: 30px;
@@ -3205,7 +3166,6 @@ body.player-open .cet-titlebar {
   animation: fadeIn 0.3s ease;
 }
 
-/* Settings Groups */
 .settings-group {
   margin-bottom: 30px;
 }
@@ -3217,7 +3177,6 @@ body.player-open .cet-titlebar {
   margin-bottom: 15px;
 }
 
-/* Settings Items */
 .settings-item {
   display: flex;
   align-items: center;
@@ -3316,7 +3275,6 @@ body.player-open .cet-titlebar {
   color: #f87171;
 }
 
-/* Update Check Status */
 .update-check-status {
   margin-top: 8px;
   font-size: 12px;
@@ -3338,12 +3296,10 @@ body.player-open .cet-titlebar {
   color: #f87171;
 }
 
-/* Controls */
 .settings-control {
   margin-left: 20px;
 }
 
-/* Buttons */
 .settings-button {
   padding: 8px 16px;
   border-radius: 6px;
@@ -3393,7 +3349,6 @@ body.player-open .cet-titlebar {
   background: rgba(255, 255, 255, 0.15);
 }
 
-/* Switch Toggle */
 .settings-switch {
   position: relative;
   display: inline-block;
@@ -3447,7 +3402,6 @@ input:checked + .settings-switch-slider::before {
     0 0 10px rgba(255, 255, 255, 0.3);
 }
 
-/* Select Dropdown */
 .settings-select {
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(179, 179, 179, 0.2);
@@ -3616,7 +3570,6 @@ input:checked + .settings-switch-slider::before {
   }
 }
 
-/* Version Info */
 .settings-version {
   color: #888;
   font-size: 13px;
@@ -3625,13 +3578,11 @@ input:checked + .settings-switch-slider::before {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* Animations */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
-/* Range Slider */
 .settings-range {
   width: 200px;
   height: 4px;
@@ -3656,7 +3607,6 @@ input:checked + .settings-switch-slider::before {
   box-shadow: 0 0 15px rgba(147, 51, 234, 0.5);
 }
 
-/* Footer */
 .settings-footer {
   padding: 20px 30px;
   border-top: 1px solid rgb(151 151 151 / 20%);
@@ -3707,7 +3657,6 @@ input:checked + .settings-switch-slider::before {
   left: 100%;
 }
 
-/* Base Modal Styles */
 .tagManagement-modal {
   display: none;
   position: fixed;
@@ -3867,7 +3816,6 @@ input:checked + .settings-switch-slider::before {
   background: rgba(255, 255, 255, 0.15);
 }
 
-/* Scrollbar styling */
 .tagManagement-list::-webkit-scrollbar {
   width: 8px;
 }
@@ -3885,7 +3833,6 @@ input:checked + .settings-switch-slider::before {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* No tags message */
 .tagManagement-noTags {
   text-align: center;
   color: #888;
@@ -3908,7 +3855,7 @@ input:checked + .settings-switch-slider::before {
 .update-notification.show {
   visibility: visible;
   opacity: 1;
-  transform: translateX(-380px); /* Changed to move it properly on screen */
+  transform: translateX(-380px);
 }
 
 .update-notification-content {
@@ -3981,7 +3928,6 @@ input:checked + .settings-switch-slider::before {
   opacity: 1;
 }
 
-/* Progress bar styles */
 .download-progress {
   position: absolute;
   bottom: 0;
@@ -4002,7 +3948,6 @@ input:checked + .settings-switch-slider::before {
   position: relative;
 }
 
-/* Downloading state */
 .update-notification-content.downloading {
   background: linear-gradient(90deg, #581c87, #7c3aed);
   pointer-events: none;
@@ -4130,10 +4075,10 @@ input:checked + .settings-switch-slider::before {
   width: 4px;
   height: 12px;
   background-color: #fff;
-  cursor: ew-resize !important;  /* Force cursor type */
+  cursor: ew-resize !important;
   opacity: 0.8;
   z-index: 3;
-  user-select: none;  /* Prevent selection */
+  user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
@@ -4154,9 +4099,9 @@ input:checked + .settings-switch-slider::before {
 
 .volume-drag-control {
   position: absolute;
-  top: -50px;  /* 20px above the volume bars */
+  top: -50px;  /* 20px above, same height as the volume bars */
   width: 100px;
-  height: 20px;  /* Match height of volume bars */
+  height: 20px;
   border-radius: 5px;
   background-color: rgba(0, 0, 0, 0.8);
   display: none;
@@ -4246,7 +4191,6 @@ input:checked + .settings-switch-slider::before {
   }
 }
 
-/* Time-based group styles */
 .clip-group {
   width: 100%;
   animation: fadeIn 0.5s ease;
@@ -4353,7 +4297,6 @@ input:checked + .settings-switch-slider::before {
   transform-origin: top;
 }
 
-/* New Clips Indicator */
 .new-clips-indicator {
   z-index: 10;
   pointer-events: none;
@@ -4390,7 +4333,6 @@ input:checked + .settings-switch-slider::before {
   animation: newClipsGlowTop 2s ease-in-out infinite alternate;
 }
 
-/* Inter-group indicators (unchanged) */
 .new-clips-indicator.inter-group {
   grid-column: 1 / -1;
   margin: 30px 20px;
@@ -4438,7 +4380,6 @@ input:checked + .settings-switch-slider::before {
   }
 }
 
-/* Directional glow animations */
 @keyframes newClipsGlowLeft {
   from {
     box-shadow: 0 0 30px rgba(34, 197, 94, 0);
@@ -4466,7 +4407,6 @@ input:checked + .settings-switch-slider::before {
   }
 }
 
-/* New clips group styling - green divider and logo */
 .clip-group.new-clips-group .clip-group-divider {
   background: linear-gradient(
     90deg,
@@ -4488,7 +4428,6 @@ input:checked + .settings-switch-slider::before {
   animation: newClipsGlow 2s ease-in-out infinite alternate;
 }
 
-/* Hover effects for new clips groups */
 .clip-group.new-clips-group .clip-group-header:hover .clip-group-divider {
   background: linear-gradient(
     90deg,
@@ -4513,8 +4452,6 @@ input:checked + .settings-switch-slider::before {
 .clip-group.new-clips-group.collapsed .clip-group-header:hover .clip-group-divider {
   transform: scaleX(0.98);
 }
-
-/* New Clips Notification removed - using inline green line indicator only */
 
 .clip-group.collapsed .clip-group-content {
   opacity: 0;
@@ -4549,7 +4486,6 @@ input:checked + .settings-switch-slider::before {
   transform: scaleX(0.98);
 }
 
-/* Update existing clip grid styles */
 #clip-grid {
   display: flex;
   flex-direction: column;
@@ -4558,7 +4494,6 @@ input:checked + .settings-switch-slider::before {
   margin: 0 auto;
 }
 
-/* Responsive adjustments */
 @media (max-width: 1200px) {
   .clip-group-content {
     grid-template-columns: repeat(2, 1fr);
@@ -4581,7 +4516,7 @@ input:checked + .settings-switch-slider::before {
   color: #a0a0a0;
   font-size: 14px;
   width: 100%;
-  grid-column: 1 / -1; /* Span all columns */
+  grid-column: 1 / -1;
 }
 
 .loading-indicator .loading-spinner {
@@ -4593,7 +4528,6 @@ input:checked + .settings-switch-slider::before {
   animation: spin 1s linear infinite;
 }
 
-/* Add an explicit height and overflow rule to ensure collapsed groups truly hide content */
 .clip-group.collapsed .clip-group-content {
   opacity: 0;
   transform: translateY(-10px);
@@ -4607,9 +4541,7 @@ input:checked + .settings-switch-slider::before {
   filter: grayscale(100%);
 }
 
-/* -------------------------------------------------- */
-/* Keyboard Shortcuts (Keybinding) Settings Styles */
-/* -------------------------------------------------- */
+/* keyboard shortcuts settings */
 .keybinding-list {
   display: flex;
   flex-direction: column;

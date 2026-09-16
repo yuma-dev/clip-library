@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // Functional smoke test of the packaged app (dist/win-unpacked) with an
-// isolated profile: the library paints, a clip opens in the player, the
-// settings and feed routes render, and the deferred services come up.
+// isolated profile: library paints, a clip opens in the player, settings and
+// feed routes render, deferred services come up.
 //
 //   node benchmark/smoke-packaged.js [--exe PATH] [--profile DIR] [--wait-before-open MS] [--card N] [--hover-wait MS] [--reset-cache]
 
@@ -19,7 +19,7 @@ const opt = (name, dflt) => {
 };
 
 async function main() {
-  // Playwright drives the Electron binary directly (the launcher is "ClipLib Launcher.exe").
+  // drives the Electron binary directly; the launcher is "ClipLib Launcher.exe"
   const exe = path.resolve(opt('--exe', path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe')));
   const template = path.join(root, 'benchmark', 'profiles', 'warm-template');
   const profile = opt('--profile', path.join(os.tmpdir(), 'cliplib-bench', 'smoke-profile'));
@@ -52,13 +52,12 @@ async function main() {
     );
     check('thumbnails decoded', true);
 
-    // The reveal waits for the compositor to frame the grid, a moment after
-    // the thumbnails decode; give it a few seconds.
+    // reveal waits for the compositor to frame the grid, a moment after
+    // thumbnails decode; give it a few seconds
     let visible = false;
     for (let i = 0; i < 50 && !visible; i++) {
-      // Around the reveal the main-process inspector context is sometimes
-      // reported destroyed for one call (the app stays up; seen 1 in 4 runs).
-      // A retry a moment later succeeds.
+      // inspector context sometimes reported destroyed for one call around
+      // reveal (app stays up, seen 1 in 4 runs); a retry succeeds
       visible = await app
         .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.isMaximized()))
         .catch((error) => {
@@ -69,7 +68,7 @@ async function main() {
     }
     check('main window visible and maximized', visible);
 
-    // Open the first clip in the player (optionally after the warmer had time).
+    // optionally wait for the warmer before opening
     const waitBeforeOpen = Number(opt('--wait-before-open', 0));
     if (waitBeforeOpen > 0) await new Promise((r) => setTimeout(r, waitBeforeOpen));
     const cardIndex = Number(opt('--card', 0));
@@ -77,18 +76,17 @@ async function main() {
     await card.scrollIntoViewIfNeeded();
     const cardName = await card.getAttribute('data-original-name');
     if (args.includes('--reset-cache') && cardName) {
-      // Drop the probe and audio-track caches so the open is a true cold one.
+      // drop probe + audio-track caches for a true cold open
       await page.evaluate((name) => window.clips.resetClipCache(name), cardName);
       await new Promise((r) => setTimeout(r, 300));
     }
     const hoverWait = Number(opt('--hover-wait', 0));
     if (hoverWait > 0) {
-      // Hover triggers the clip warmer; give it time before the click. The
-      // preview only runs while the window is focused.
+      // hover triggers the clip warmer; preview only runs while window is focused
       await page.bringToFront();
       await card.hover();
-      // Chromium tracks one mouse: park the real OS cursor on the card too, or
-      // its position elsewhere on screen cancels the synthetic hover.
+      // Chromium tracks one mouse; OS cursor elsewhere on screen cancels the
+      // synthetic hover
       const box = await card.boundingBox();
       if (box) {
         const cx = Math.round(box.x + box.width / 2);

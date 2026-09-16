@@ -1,14 +1,12 @@
-// Overlap between Discord participant ids and registered ClipLib (share
-// server) accounts. Fetched lazily once per session via the existing
-// get-share-users IPC; resolves to an empty map when the share account isn't
-// connected, so callers can treat "no match" and "not connected" the same.
+// overlap between discord participant ids and registered ClipLib share-server accounts
+// fetched lazily once per session via get-share-users; empty map when not connected, same as no match
 
 export interface ShareUser {
   id: string;
   username: string;
   displayName: string;
   avatarUrl: string;
-  /** Discord user id linked to the ClipLib account, when the server exposes it. */
+  /** discord id linked to this account, when the server exposes it */
   discordId: string | null;
 }
 
@@ -28,7 +26,7 @@ export function loadShareUsers(): Promise<void> {
           }
         }
       } catch {
-        /* not connected / offline — no matches this session */
+        /* not connected/offline - no matches this session */
       }
     })();
   }

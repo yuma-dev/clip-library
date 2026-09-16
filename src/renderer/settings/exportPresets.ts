@@ -1,6 +1,5 @@
-// Export preset system — ported verbatim from the legacy
-// settings-manager-ui.js (presets are opinionated + trusted; plan §6 says
-// changing them needs migration logic, so the keys/values must not drift).
+// ported verbatim from legacy settings-manager-ui.js; presets are opinionated and trusted, plan
+// section 6 requires migration logic for changes, so keys/values must not drift
 
 export interface ExportTuning {
   exportQuality: string;

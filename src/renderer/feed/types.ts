@@ -1,9 +1,6 @@
-// Shared types + helpers for the in-app ClipLib feed.
-//
-// Ported from the reference website (React 19 + Tailwind) — see
-// `cliplib share/src/hooks/useClips.ts`, `ClipCard.tsx`, `ClipDetailPage.tsx`,
-// `UserProfilePage.tsx`, `CommentSection.tsx`. Interfaces are kept verbatim so
-// the API surface matches the server 1:1.
+// Shared types + helpers for the in-app ClipLib feed, ported from the
+// reference website (React 19 + Tailwind: useClips.ts, ClipCard.tsx, etc).
+// Interfaces kept verbatim so the API surface matches the server 1:1.
 
 export interface ClipUser {
   id: string;
@@ -82,8 +79,7 @@ export interface UserProfile {
   createdAt: string;
 }
 
-// Directory user (GET /users?all=true) plus the optional clipCount the feed
-// filter dropdowns may surface.
+// Directory user (GET /users?all=true), clipCount optional for filter dropdowns.
 export interface ShareUser {
   id: string;
   discordId: string;
@@ -93,7 +89,7 @@ export interface ShareUser {
   clipCount?: number;
 }
 
-// Admin badge catalog entry (GET /admin/badges — website BadgeManagerModal.tsx).
+// Admin badge catalog entry (GET /admin/badges, website BadgeManagerModal.tsx).
 export interface AdminBadge {
   id: string;
   slug: string;
@@ -105,7 +101,7 @@ export interface AdminBadge {
   userCount: number;
 }
 
-// Invite code (GET /invites — website SettingsPage.tsx).
+// Invite code (GET /invites, website SettingsPage.tsx).
 export interface InviteCode {
   id: string;
   code: string;
@@ -114,7 +110,7 @@ export interface InviteCode {
   createdAt: string;
 }
 
-// API token metadata (GET /auth/tokens — website SettingsPage.tsx).
+// API token metadata (GET /auth/tokens, website SettingsPage.tsx).
 export interface ApiTokenInfo {
   id: string;
   label: string;
@@ -157,12 +153,8 @@ export function getAvatarUrl(discordId: string, avatarHash: string | null, size 
   return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
 }
 
-/**
- * Absolutize a server-relative media path (e.g. a `thumbnailUrl` starting with
- * `/`) against the ClipLib server. Absolute URLs and empty values pass through.
- * The main process injects the Authorization header for friends.cliplib.app, so
- * the returned URL can be used directly in <img>/<video> src.
- */
+/** Absolutize a server-relative media path (e.g. `thumbnailUrl`) against the
+ * ClipLib server; main injects the auth header for friends.cliplib.app. */
 export function mediaUrl(path: string | null | undefined): string {
   if (!path) return "";
   if (/^https?:\/\//i.test(path)) return path;
@@ -174,7 +166,7 @@ export function streamUrl(clipId: string): string {
   return `${SERVER_URL}/api/clips/${clipId}/stream`;
 }
 
-/** Low-resolution preview stream — used by the card hover previews. */
+/** Low-resolution preview stream, used by the card hover previews. */
 export function previewStreamUrl(clipId: string): string {
   return `${SERVER_URL}/api/clips/${clipId}/stream/preview`;
 }

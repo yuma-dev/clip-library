@@ -14,37 +14,31 @@ import { bootMark, initBootMarks } from "./perf/bootMarks";
 
 initBootMarks();
 
-// The emoji face is a 45 MB file loaded on the first emoji glyph. Left to
-// itself that happened during the boot reveal animation, with its ~80 ms
-// decode on the main thread mid-flip; asking for it now moves the decode into
-// the quiet second before the window is shown.
+// preloads the 45MB emoji font now, was an 80ms main-thread decode mid-flip during boot reveal
 try {
   void document.fonts.load('1em "Apple Color Emoji"').then(() => bootMark("emoji_font_loaded"));
 } catch {
-  /* font loading API unavailable: the face still loads on first use */
+  /* font loading API unavailable: loads on first use instead */
 }
 
-// First, so window.onerror / unhandledrejection cover the startup path too.
+// first, so window.onerror / unhandledrejection cover the startup path too
 initTelemetry();
 
 initGridDensity();
 initGlowTuner();
 
-// Source-level benchmarks run against the same React renderer as development.
-// Dynamic loading keeps the harness out of normal startup execution while
-// still including it in renderer-dist for `npm run benchmark`.
+// dynamic import keeps the benchmark harness out of normal startup, still in renderer-dist
 if (window.__benchmarkConfig?.enabled) {
   void import("./benchmark/runtime").then(({ runBenchmarks }) => runBenchmarks());
 }
 
-// Mirror main-process log lines into the renderer console (legacy `log` IPC).
+// mirrors main-process log lines into the renderer console (legacy `log` IPC)
 window.clips?.onLog?.(({ type, message }: { type: string; message: string }) => {
   const fn = (console as unknown as Record<string, (...a: unknown[]) => void>)[type];
   (typeof fn === "function" ? fn : console.log)(`[Main Process] ${message}`);
 });
 
-// ErrorBoundary sits outermost so it also catches a provider blowing up, and
-// so both root.render() call sites below get it without repeating themselves.
+// outermost so it catches a provider blowing up; shared by both root.render() sites below
 const Providers = ({ children }: { children: ReactNode }) => (
   <ErrorBoundary>
     <ToastProvider>
@@ -55,21 +49,16 @@ const Providers = ({ children }: { children: ReactNode }) => (
   </ErrorBoundary>
 );
 
-// NOTE: no <React.StrictMode> — it double-mounts in dev, which breaks the
-// wrapped legacy player's one-time imperative init against a stable DOM (D1).
+// no <React.StrictMode>: double-mounts in dev, breaking the legacy player's one-time init (D1)
 const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 
-// Profiler runs ONLY on `npm run dev:trace` (preload sets window.__perfEnabled
-// when CLIPS_PERF_STARTUP=1). Normal `npm run dev` skips it entirely; the
-// import.meta.env.DEV guard also compile-strips it from production builds.
+// runs only on `npm run dev:trace` (preload sets __perfEnabled via CLIPS_PERF_STARTUP=1)
 const perfEnabled =
   import.meta.env.DEV && (window as unknown as { __perfEnabled?: boolean }).__perfEnabled === true;
 
 if (perfEnabled) {
-  // Dynamic import keeps the profiler (and every probe it pulls in) out of the
-  // production bundle. We render ONCE, after perf loads, so App isn't mounted
-  // then remounted under the Profiler (which would re-run the legacy player's
-  // one-time init). The native splash covers the brief wait.
+  // dynamic import keeps the profiler out of prod; renders once after it loads so App
+  // isn't mounted then remounted under Profiler (would re-run the legacy player's init)
   import("./perf").then(({ initPerf, PerfProfiler, PerfHud }) => {
     initPerf();
     root.render(

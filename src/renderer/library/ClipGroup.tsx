@@ -22,13 +22,11 @@ interface ClipGroupProps {
 }
 
 function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, collapsed, onToggle, layoutHint }: ClipGroupProps) {
-  // The header reacts to `collapsed` urgently (instant diamond/aria feedback);
-  // the card mounting below runs as a deferred, interruptible render.
-  // Streamed mounting itself lives in useStreamedSlice (shared with the feed);
-  // group identity is stabilized by ClipGrid, so `group.clips` changing means
-  // membership really changed.
+  // Header reacts to `collapsed` urgently; card mounting below is a deferred
+  // interruptible render. Group identity is stabilized by ClipGrid, so `group.clips` changing means
+  // real membership change.
   const expanded = !useDeferredValue(collapsed);
-  // A small first commit: the window is revealed only after it has painted,
+  // A small first commit: the window is revealed only after it has painted
   // and the rest of the group streams in on the following frames.
   const shown = useStreamedSlice(group.clips, expanded, { initial: 12, perFrame: 80 });
 
@@ -40,7 +38,7 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, colla
         onClick={() => onToggle(group.name)}
         aria-expanded={!collapsed}
       >
-        {/* ◆ gradient diamond — rotates 45° when the group is open (design). */}
+        {/* gradient diamond, rotates 45deg when the group is open (design). */}
         <span className={`clip-group-diamond${collapsed ? "" : " open"}`} aria-hidden="true" />
         <h2 className="clip-group-title">{group.name}</h2>
         <span className="clip-group-count">{group.clips.length}</span>
@@ -48,9 +46,8 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, colla
       </button>
 
       {shown ? (
-        // Offscreen groups are skipped by the browser (content-visibility:
-        // auto in styles.css); this is the height it reserves for a group it
-        // has not laid out yet, from the measured columns and row height.
+        // Reserved height for a group content-visibility:auto skips (styles.css)
+        // before layout, from the measured columns + row height.
         <div
           className="clip-group-content"
           style={

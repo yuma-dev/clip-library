@@ -1,29 +1,22 @@
 // Discord profile widget stats pusher (widgets v2, owner-only experiment).
-//
-// Pushes library stats to the ClipLib Discord application's identity-profile
-// endpoint, which feeds the profile widget configured in the dev portal.
-// Discord currently only lets the application OWNER add this widget to their
-// profile, so the feature is hard-gated:
-//   - it only activates when <userData>/discord-widget.json exists (the bot
-//     token lives there, never in the repo or settings.json), and
-//   - the locally logged-in Discord user must match ALLOWED_DISCORD_USER_ID,
-//     verified via a Discord RPC handshake.
+// Only Discord's app owner can add this widget, so it's hard-gated: needs
+// <userData>/discord-widget.json (bot token) and the local Discord user to match
+// ALLOWED_DISCORD_USER_ID (RPC handshake).
 const { app } = require('electron');
 const fs = require('fs').promises;
 const path = require('path');
 const logger = require('../utils/logger');
 
-// The widget's Discord application (shared with clipdip's voice integration).
+// shared with clipdip's voice integration
 const APPLICATION_ID = '1523640943218000042';
-// Only this Discord account may receive pushes (the app owner).
+// app owner; only this account may receive pushes
 const ALLOWED_DISCORD_USER_ID = '178525733600100352';
 
 const TOKEN_FILE = () => path.join(app.getPath('userData'), 'discord-widget.json');
 const ACTIVITY_LOG_DIR = () => path.join(app.getPath('userData'), 'activity_logs');
 
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.mov', '.avi']);
-// Footage hours are estimated from bytes at a typical clip bitrate; probing
-// 2000+ files with ffprobe on every push is not worth the accuracy.
+// hours estimated from bytes at this bitrate; ffprobing 2000+ files per push isn't worth the accuracy
 const ASSUMED_MBPS = 20;
 
 const INITIAL_DELAY_MS = 45 * 1000;
@@ -66,9 +59,8 @@ async function pushSafely() {
   }
 }
 
-// The RPC handshake's READY payload includes the logged-in user, which is the
-// only local way to confirm whose profile the widget would update. Verified
-// once per app run; if Discord isn't running yet we retry on the next tick.
+// RPC READY payload's user id is the only local way to confirm whose profile
+// this would update. verified once per run; retries next tick if Discord isn't up yet
 async function verifyLoggedInUser() {
   if (userVerified) return true;
 
@@ -134,8 +126,8 @@ async function watchedHours() {
   return Math.round(seconds / 3600);
 }
 
-// Clips are named "<process name> HH.MM.SS DD.MM.YYYY"; strip the timestamp
-// tokens and engine suffixes to get a displayable game name.
+// clips are named "<process name> HH.MM.SS DD.MM.YYYY"; strip timestamp and engine suffixes for a
+// displayable name
 function gameOf(filePath) {
   return path.basename(filePath, path.extname(filePath))
     .replace(/(\s+\d{1,2}\.\d{1,2}\.\d{2,4}){1,2}\s*(\(\d+\))?$/, '')
@@ -162,8 +154,8 @@ async function gatherStats() {
 }
 
 async function pushStats(stats) {
-  // Field types: 1 = string, 2 = number. total_clips goes as a string so the
-  // widget shows the full number instead of Discord's "2K" abbreviation.
+  // type 1 = string, 2 = number. total_clips is a string so the widget shows
+  // the full number instead of Discord's "2K" abbreviation
   const payload = {
     username: 'ClipLib',
     data: {

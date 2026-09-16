@@ -1,17 +1,4 @@
-/**
- * Clip Grid Module
- *
- * Handles clip grid management operations:
- * - Loading and rendering clips
- * - Creating clip elements
- * - Context menu handling
- * - Clip deletion
- * - Clip name updates
- * - Clip list validation
- * - Thumbnail management
- */
-
-// Imports
+// clip grid: loading/rendering, clip elements, context menu, delete, rename, thumbnails
 const { ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
@@ -22,7 +9,6 @@ const videoPlayerModule = require('./video-player');
 const keybinds = require('./keybinding-manager');
 const searchManagerModule = require('./search-manager');
 
-// Dependencies (injected)
 let showCustomConfirm, showCustomAlert, updateClipCounter, getTimeGroup, getGroupOrder,
     loadCollapsedState, saveCollapsedState, removeDuplicates, getRelativeTimeString,
     showDeletionTooltip, hideDeletionTooltip, updateNewClipsIndicators, newClipsInfo,
@@ -31,17 +17,9 @@ let showCustomConfirm, showCustomAlert, updateClipCounter, getTimeGroup, getGrou
     closePlayer, disableVideoThumbnail, saveTitleChange, filterClips, setupClipTitleEditing,
     positionNewClipsIndicators, hideLoadingScreen, currentClipLocationSpan, clipGrid;
 
-// ============================================================================
-// VISIBILITY OBSERVER
-// ============================================================================
-// Replaces `content-visibility: auto` on .clip-item, which silently registers
-// a browser-managed IntersectionObserver that recomputes on every layout — and
-// when the video player is open the playhead invalidates layout each frame,
-// pushing the per-frame visibility check to ~150 calls/sec across the whole
-// grid (~40% of one CPU core in profiling). This observer is event-driven:
-// it fires only when scroll position actually changes a clip's intersection
-// with the viewport (+/- rootMargin), so offscreen clips cost nothing while
-// the user watches a video.
+// replaces content-visibility: auto on .clip-item: that silently recomputes every layout
+// and with the player open the playhead invalidates layout each frame (~150 calls/sec
+// ~40% of a core in profiling). this is event-driven off scroll instead.
 
 let _visibilityObserver = null;
 function getVisibilityObserver() {
@@ -58,13 +36,6 @@ function observeClipVisibility(el) {
   try { getVisibilityObserver().observe(el); } catch (_) { /* element may have been removed */ }
 }
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
-
-/**
- * Initialize the clip grid manager with required dependencies.
- */
 function init(dependencies) {
   showCustomConfirm = dependencies.showCustomConfirm;
   showCustomAlert = dependencies.showCustomAlert;
@@ -98,20 +69,12 @@ function init(dependencies) {
   clipGrid = dependencies.clipGrid;
 }
 
-// ============================================================================
-// CLIP GRID MANAGEMENT
-// ============================================================================
-
-/**
- * Load clips from disk and render the initial grid state.
- */
 async function loadClips() {
   try {
     logger.info("Loading clips...");
     state.clipLocation = await ipcRenderer.invoke("get-clip-location");
     currentClipLocationSpan.textContent = state.clipLocation;
 
-    // Get new clips info before loading all clips
     const newClipsData = await ipcRenderer.invoke("get-new-clips-info");
     Object.assign(newClipsInfo, newClipsData);
     logger.info("New clips info:", newClipsInfo);
@@ -119,12 +82,10 @@ async function loadClips() {
     state.allClips = await ipcRenderer.invoke("get-clips");
     logger.info("Loaded", state.allClips.length, "clips");
 
-    // Mark which clips are new
     state.allClips.forEach(clip => {
       clip.isNewSinceLastSession = newClipsInfo.newClips.includes(clip.originalName);
     });
 
-    // Load tags for each clip in smaller batches
     const TAG_BATCH_SIZE = 50;
     for (let i = 0; i < state.allClips.length; i += TAG_BATCH_SIZE) {
       const batch = state.allClips.slice(i, i + TAG_BATCH_SIZE);
@@ -136,20 +97,19 @@ async function loadClips() {
     state.allClips = removeDuplicates(state.allClips);
     state.allClips.sort((a, b) => b.createdAt - a.createdAt);
 
-    // Restore any missing global tags from clip tags (e.g., after PC reset)
+    // recovers global tags lost e.g. after a PC reset
     try {
       const restoreResult = await ipcRenderer.invoke("restore-missing-global-tags");
       if (restoreResult.success && restoreResult.restoredCount > 0) {
         logger.info(`Restored ${restoreResult.restoredCount} missing global tags:`, restoreResult.restoredTags);
-        // Reload global tags to include the newly restored ones
         await tagManagerModule.loadGlobalTags();
       }
     } catch (error) {
       logger.error("Error during tag restoration:", error);
     }
 
-    await tagManagerModule.loadTagPreferences(); // This will set up state.selectedTags
-    filterClips(); // This will set state.currentClipList correctly
+    await tagManagerModule.loadTagPreferences(); // sets state.selectedTags
+    filterClips(); // sets state.currentClipList
 
     logger.info("Initial state.currentClipList length:", state.currentClipList.length);
     updateClipCounter(state.currentClipList.length);
@@ -160,12 +120,10 @@ async function loadClips() {
 
     logger.info("Clips loaded and rendered.");
 
-    // Position indicators after rendering is complete
     setTimeout(() => {
       positionNewClipsIndicators();
     }, 100);
 
-    // Save current clip list after initial load
     try {
       await ipcRenderer.invoke('save-clip-list-immediately');
     } catch (error) {
@@ -174,7 +132,6 @@ async function loadClips() {
 
     hideLoadingScreen();
 
-    // Start thumbnail validation after a short delay
     setTimeout(() => {
       startThumbnailValidation();
     }, 1000);
@@ -210,15 +167,13 @@ async function renderClips(clips) {
     return;
   }
 
-  // Remove duplicates
   clips = removeDuplicates(clips);
   logger.info("Clips to render after removing duplicates:", clips.length);
 
-  // Batch prefetch all thumbnail paths in a single IPC call (major perf optimization)
+  // single IPC call for all thumbnail paths, avoids per-clip round trips
   const clipNames = clips.map(clip => clip.originalName);
   await prefetchThumbnailPaths(clipNames);
 
-  // Group clips by time period
   const groups = {};
   clips.forEach(clip => {
     const group = getTimeGroup(clip.createdAt);
@@ -226,38 +181,30 @@ async function renderClips(clips) {
     groups[group].push(clip);
   });
 
-  // Get collapsed state
   const collapsedState = loadCollapsedState();
 
-  // Sort groups by time (most recent first)
-  const sortedGroups = Object.entries(groups).sort((a, b) => 
+  const sortedGroups = Object.entries(groups).sort((a, b) =>
     getGroupOrder(a[0]) - getGroupOrder(b[0])
   );
 
-  // Find where new clips begin for visual indicator
   let newClipsStartIndex = -1;
   if (newClipsInfo.totalNewCount > 0) {
     newClipsStartIndex = clips.findIndex(clip => clip.isNewSinceLastSession);
   }
-  
-  // Debug logging
+
   console.log('Debug - New clips info:', newClipsInfo);
   console.log('Debug - newClipsStartIndex:', newClipsStartIndex);
   console.log('Debug - clips with new status:', clips.map(c => ({ name: c.originalName, isNew: c.isNewSinceLastSession })).slice(0, 10));
 
-  // Create and append groups
   let hasAddedNewClipsIndicator = false;
-  
+
   for (const [groupName, groupClips] of sortedGroups) {
-    // Check if this group contains the first new clip
-    const groupHasFirstNewClip = newClipsStartIndex >= 0 && 
+    const groupHasFirstNewClip = newClipsStartIndex >= 0 &&
       groupClips.some(clip => clip.isNewSinceLastSession) &&
       !groupClips.every(clip => clip.isNewSinceLastSession);
-    
-    // Check if this entire group consists of new clips and we haven't added indicator yet
+
     const groupIsAllNewClips = groupClips.every(clip => clip.isNewSinceLastSession) && groupClips.length > 0;
-    
-    // Debug logging for this group
+
     console.log(`Debug - Group "${groupName}":`, {
       groupIsAllNewClips,
       hasAddedNewClipsIndicator,
@@ -277,8 +224,7 @@ async function renderClips(clips) {
     groupElement.className = groupClasses;
     groupElement.dataset.loaded = collapsedState[groupName] ? 'false' : 'true';
     groupElement.dataset.groupName = groupName;
-    
-    // Create group header
+
     const header = document.createElement('div');
     header.className = 'clip-group-header';
     header.innerHTML = `
@@ -289,22 +235,18 @@ async function renderClips(clips) {
       <div class="clip-group-divider"></div>
     `;
 
-    // Create group content
     const content = document.createElement('div');
     content.className = 'clip-group-content';
-    
-    // Only create clip elements if the group is not collapsed
+
     if (!collapsedState[groupName]) {
-      // Create clip elements
       const clipElements = await Promise.all(groupClips.map(createClipElement));
-      
-      // Add clips to content with new clips indicator
+
       for (let i = 0; i < clipElements.length; i++) {
         const clipElement = clipElements[i];
         const clip = groupClips[i];
-        
-        // Mark this content area for later indicator positioning
-        // Skip if the whole group is already marked as new clips or if indicators are disabled
+
+        // marks the new->old transition for the indicator, unless the whole group is new or
+        // indicators are off
         if (state.settings.showNewClipsIndicators !== false && !groupIsAllNewClips && i > 0 && groupClips[i-1].isNewSinceLastSession && !clip.isNewSinceLastSession && !hasAddedNewClipsIndicator) {
           console.log('Debug - Will add indicator after clip:', groupClips[i-1].originalName, 'before clip:', clip.originalName);
           console.log('Debug - Setting data attributes on content for group');
@@ -313,24 +255,22 @@ async function renderClips(clips) {
           content.dataset.firstOldIndex = i;
           hasAddedNewClipsIndicator = true;
         }
-        
+
         content.appendChild(clipElement);
       }
-      
-      // Check if we need an indicator at the end of the group (last clip is new, no more clips)
-      // Skip if the whole group is already marked as new clips or if indicators are disabled
+
+      // last clip in group is new with nothing after it: indicator goes at the end
       if (state.settings.showNewClipsIndicators !== false && !groupIsAllNewClips && !hasAddedNewClipsIndicator && groupClips.length > 0) {
         const lastClip = groupClips[groupClips.length - 1];
         if (lastClip.isNewSinceLastSession) {
           console.log('Debug - Adding end-of-group indicator after last new clip:', lastClip.originalName);
           content.dataset.needsIndicator = 'true';
           content.dataset.lastNewIndex = groupClips.length - 1;
-          content.dataset.firstOldIndex = -1; // Special case: no next clip
+          content.dataset.firstOldIndex = -1; // no next clip
           hasAddedNewClipsIndicator = true;
         }
       }
     } else {
-      // Store the clip data for lazy loading
       groupElement.dataset.clips = JSON.stringify(groupClips.map(clip => ({
         originalName: clip.originalName,
         customName: clip.customName,
@@ -339,31 +279,25 @@ async function renderClips(clips) {
       })));
     }
 
-    // Add click handler for collapse/expand with lazy loading
     header.addEventListener('click', async () => {
       const isCollapsed = groupElement.classList.contains('collapsed');
-      
-      // Toggle collapsed state
+
       groupElement.classList.toggle('collapsed');
       collapsedState[groupName] = !isCollapsed;
       saveCollapsedState(collapsedState);
-      
-      // If we're expanding and the content isn't loaded yet, load it now
+
       if (isCollapsed && groupElement.dataset.loaded === 'false') {
         try {
           let groupClips;
-          
-          // Get the clips data from the dataset
+
           if (groupElement.dataset.clips) {
             groupClips = JSON.parse(groupElement.dataset.clips);
           } else {
-            // Fallback to find clips in the current list if data not stored
             groupClips = state.currentClipList.filter(
               clip => getTimeGroup(clip.createdAt) === groupName
             );
           }
-          
-          // Show a loading indicator if there are many clips
+
           if (groupClips.length > 50) {
             const loadingIndicator = document.createElement('div');
             loadingIndicator.className = 'loading-indicator';
@@ -374,34 +308,28 @@ async function renderClips(clips) {
             content.appendChild(loadingIndicator);
           }
 
-          // Batch prefetch thumbnail paths for this group (single IPC call)
           await prefetchThumbnailPaths(groupClips.map(c => c.originalName));
 
-          // Create clip elements in batches to avoid UI freezing
-          const batchSize = 20;
+          const batchSize = 20; // batched to avoid freezing the UI thread
           for (let i = 0; i < groupClips.length; i += batchSize) {
             const batch = groupClips.slice(i, i + batchSize);
-            
-            // Add a small delay between batches to allow UI to update
+
             if (i > 0) {
               await new Promise(resolve => setTimeout(resolve, 10));
             }
-            
+
             const clipElements = await Promise.all(batch.map(createClipElement));
-            
-            // Remove loading indicator if it exists
+
             if (i === 0 && groupClips.length > 50) {
               content.innerHTML = '';
             }
-            
-            // Add clips with new clips indicator logic (similar to main render)
+
             for (let j = 0; j < clipElements.length; j++) {
               const clipElement = clipElements[j];
               const clipIndex = i + j;
               const clip = batch[j];
-              
-              // Mark for indicator positioning in lazy-loaded content.
-              // Indicator belongs at the first new->old transition.
+
+              // indicator goes at the first new->old transition
               if (
                 clipIndex > 0 &&
                 !content.dataset.needsIndicator &&
@@ -416,16 +344,12 @@ async function renderClips(clips) {
               content.appendChild(clipElement);
             }
           }
-          
-          // Mark as loaded
+
           groupElement.dataset.loaded = 'true';
-          
-          // Remove stored clip data to free memory
-          delete groupElement.dataset.clips;
+          delete groupElement.dataset.clips; // free the stashed json now that DOM has it
 
           tagManagerModule.setupTooltips();
-          
-          // Position indicators for lazy-loaded content
+
           setTimeout(() => {
             positionNewClipsIndicators();
           }, 50);
@@ -434,11 +358,7 @@ async function renderClips(clips) {
           content.innerHTML = '<div class="error-message">Error loading clips</div>';
         }
       } else if (!isCollapsed && groupElement.dataset.loaded === 'true') {
-        // If we're collapsing, optionally cleanup resources
-        // This could be enabled for very large groups to free more memory
-        // when collapsed, but would require reloading clips when expanded again
-        
-        // Uncomment the following code to enable cleanup on collapse
+        // optional cleanup path for very large groups on collapse, currently disabled
         /*
         if (groupClips.length > 100) {
           // Cleanup existing elements
@@ -478,15 +398,13 @@ async function renderClips(clips) {
   tagManagerModule.setupTooltips();
   state.currentClipList = clips;
 
-  // Initialize clip glow manager via the video player module
   const clipGlowManager = videoPlayerModule.getClipGlowManager();
   if (clipGlowManager) {
     clipGlowManager.init();
   }
 
   logger.info("Rendered clips count:", clips.length);
-  
-  // Setup grid navigation if controller is connected
+
   if (state.gamepadManager && state.gamepadManager.isGamepadConnected() && clips.length > 0) {
     setTimeout(() => {
       if (!state.gridNavigationEnabled) {
@@ -494,16 +412,12 @@ async function renderClips(clips) {
       } else {
         updateGridSelection();
       }
-    }, 100); // Small delay to ensure DOM is updated
+    }, 100); // let DOM settle first
   }
-  
+
   state.isRendering = false;
 }
 
-/**
- * Build a DOM element for a single clip.
- * Wires dataset fields, click handlers, and preview behavior.
- */
 function createClipElement(clip) {
   return new Promise(async (resolve) => {
     const clipElement = document.createElement("div");
@@ -513,21 +427,16 @@ function createClipElement(clip) {
     const contentElement = document.createElement("div");
     contentElement.className = "clip-item-content";
 
-    // Use cached thumbnail path (batch prefetched) with fallback to individual IPC
     let thumbnailPath = await getThumbnailPath(clip.originalName);
 
     const relativeTime = getRelativeTimeString(clip.createdAt);
 
-    // Create media container
     const mediaContainer = document.createElement("div");
     mediaContainer.className = "clip-item-media-container";
 
-    // Create image element
     const imgElement = document.createElement("img");
-    
-    // Only create shimmer if we don't have a thumbnail
+
     if (thumbnailPath === null) {
-      // Add loading class to container
       mediaContainer.classList.add('is-loading');
       
       // Create shimmer elements only for loading items
@@ -544,7 +453,6 @@ function createClipElement(clip) {
       // When the real thumbnail loads
       imgElement.addEventListener('load', () => {
         if (!imgElement.src.includes('loading-thumbnail.gif')) {
-          // Remove shimmer elements completely from DOM
           const shimmerWrapper = mediaContainer.querySelector('.shimmer-wrapper');
           if (shimmerWrapper) {
             shimmerWrapper.remove();
@@ -553,14 +461,12 @@ function createClipElement(clip) {
         }
       });
     } else {
-      // We have a thumbnail, just set it directly
       imgElement.src = `file://${thumbnailPath}`;
     }
 
     imgElement.alt = clip.customName;
     imgElement.onerror = () => {
       imgElement.src = 'assets/fallback-image.jpg';
-      // Remove shimmer if there's an error
       mediaContainer.classList.remove('is-loading');
       const shimmerWrapper = mediaContainer.querySelector('.shimmer-wrapper');
       if (shimmerWrapper) {
@@ -570,31 +476,27 @@ function createClipElement(clip) {
 
     mediaContainer.appendChild(imgElement);
 
-    // Create tag container and add tags directly during clip element creation
     const tagContainer = document.createElement("div");
     tagContainer.className = "tag-container";
-    
-    // Add tags to the container if they exist
+
     if (clip.tags && clip.tags.length > 0) {
-      const visibleTags = clip.tags.slice(0, 3);  // Show only first 3 tags
+      const visibleTags = clip.tags.slice(0, 3);
       visibleTags.forEach(tag => {
         const tagElement = document.createElement("span");
         tagElement.className = "tag";
         tagElement.textContent = tagManagerModule.truncateTag(tag);
-        tagElement.title = tag; // Show full tag on hover
+        tagElement.title = tag;
         tagContainer.appendChild(tagElement);
       });
-      
+
       if (clip.tags.length > 3) {
         const moreTagsElement = document.createElement("span");
         moreTagsElement.className = "tag more-tags";
         moreTagsElement.textContent = `+${clip.tags.length - 3}`;
-        
-        // Create a tooltip element
+
         const tooltip = document.createElement("div");
         tooltip.className = "tags-tooltip";
-        
-        // Add remaining tags to the tooltip
+
         clip.tags.slice(3).forEach(tag => {
           const tooltipTag = document.createElement("span");
           tooltipTag.className = "tooltip-tag";
@@ -607,7 +509,6 @@ function createClipElement(clip) {
       }
     }
 
-    // Create the clip element structure
     clipElement.innerHTML = `
       ${mediaContainer.outerHTML}
       <div class="clip-info">
@@ -616,7 +517,6 @@ function createClipElement(clip) {
       </div>
     `;
 
-    // Insert the tag container after mediaContainer
     clipElement.insertBefore(tagContainer, clipElement.querySelector('.clip-info'));
 
     let videoElement;
@@ -633,31 +533,21 @@ function createClipElement(clip) {
     clipNameElement.addEventListener('keydown', (e) => handleClipTitleKeydown(e, clipNameElement, clip));
     clipNameElement.addEventListener('click', (e) => e.stopPropagation());
 
-    // Setup tooltip events for tags if needed
     tagManagerModule.setupTagTooltips(clipElement);
 
-    /**
-     * Record original title before inline editing.
-     */
     function handleClipTitleFocus(titleElement, clip) {
       titleElement.dataset.originalValue = titleElement.textContent;
     }
-    
-    /**
-     * Persist title changes on blur if modified.
-     */
+
     function handleClipTitleBlur(titleElement, clip) {
       const newTitle = titleElement.textContent.trim();
       if (newTitle !== titleElement.dataset.originalValue) {
         saveTitleChange(clip.originalName, clip.customName, newTitle);
       }
     }
-    
-    /**
-     * Commit title on Enter, revert on Escape.
-     */
+
     function handleClipTitleKeydown(e, titleElement, clip) {
-      e.stopPropagation(); // Stop the event from bubbling up
+      e.stopPropagation();
       if (e.key === 'Enter') {
         e.preventDefault();
         titleElement.blur();
@@ -668,11 +558,7 @@ function createClipElement(clip) {
       }
     }
 
-    /**
-     * Hide preview/ambient glow on mouse leave.
-     */
     function handleMouseLeave() {
-    // Hide ambient glow
     const clipGlowManager = videoPlayerModule.getClipGlowManager();
     if (clipGlowManager) {
       clipGlowManager.hide();
@@ -690,7 +576,7 @@ function createClipElement(clip) {
     clipElement.addEventListener("click", (e) => handleClipClick(e, clip));
 
     clipElement.addEventListener("contextmenu", (e) => {
-      e.preventDefault(); // Prevent the default context menu
+      e.preventDefault();
       showContextMenu(e, clip);
     });
     clipElement.appendChild(contentElement);
@@ -701,7 +587,7 @@ function createClipElement(clip) {
       clipElement.removeEventListener("mouseleave", handleMouseLeave);
     };
 
-    // Fetch a potential game/application icon and append it to the clip-info
+    // game/app icon, if the backend has one for this clip
     try {
       const iconData = await ipcRenderer.invoke('get-game-icon', clip.originalName);
       const iconPath = iconData && typeof iconData === 'object' ? iconData.path : iconData;
@@ -732,23 +618,16 @@ function createClipElement(clip) {
   });
 }
 
-/**
- * Open a clip or update selection based on input modifiers.
- */
 function handleClipClick(e, clip) {
-  // Check if the clicked element is the title or its parent (the clip-info div)
   if (e.target.classList.contains('clip-name') || e.target.classList.contains('clip-info')) {
-    // If it's the title or clip-info, don't open the clip
     return;
   }
 
-  // Handle multi-select
   if (e.ctrlKey || e.metaKey || e.shiftKey) {
     handleClipSelection(e.target.closest('.clip-item'), e);
     return;
   }
 
-  // Clear selection if clicking without modifier keys
   if (state.selectedClips.size > 0) {
     clearSelection();
     return;
@@ -762,21 +641,16 @@ function handleClipClick(e, clip) {
   videoPlayerModule.openClip(clip.originalName, clip.customName);
 }
 
-/**
- * Update group counts or remove empty groups after deletion.
- */
 function updateGroupAfterDeletion(clipElement) {
   const groupElement = clipElement.closest('.clip-group');
   if (!groupElement) return;
 
   const content = groupElement.querySelector('.clip-group-content');
-  const remainingClips = content.querySelectorAll('.clip-item').length - 1; // -1 because the clip is not yet removed
+  const remainingClips = content.querySelectorAll('.clip-item').length - 1; // clipElement is still in the DOM here
 
   if (remainingClips === 0) {
-    // If this was the last clip, remove the entire group
     groupElement.remove();
   } else {
-    // Update the clip count
     const countElement = groupElement.querySelector('.clip-group-count');
     if (countElement) {
       countElement.textContent = `${remainingClips} clip${remainingClips !== 1 ? 's' : ''}`;
@@ -784,33 +658,27 @@ function updateGroupAfterDeletion(clipElement) {
   }
 }
 
-/**
- * Confirm and delete a clip (current or specified).
- */
 async function confirmAndDeleteClip(clipToDelete = null) {
   if (!clipToDelete && !state.currentClip) return;
-  
+
   const clipInfo = clipToDelete || state.currentClip;
-  
+
   const isConfirmed = await showCustomConfirm(`Are you sure you want to delete "${clipInfo.customName}"? This action cannot be undone.`);
 
   if (isConfirmed) {
-    // Ensure preview/glow are released before any deletion attempt
     videoPlayerModule.cleanupVideoPreview();
     const clipGlowManager = videoPlayerModule.getClipGlowManager();
     if (clipGlowManager) {
       clipGlowManager.hide();
     }
 
-    // Immediately remove the clip from UI
+    // optimistic UI removal, reverted in the catch block below if the IPC delete fails
     const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(clipInfo.originalName)}"]`);
     if (clipElement) {
-      // Update group before removing the clip
       updateGroupAfterDeletion(clipElement);
       clipElement.remove();
     }
 
-    // Remove from state.allClips and state.currentClipList
     const allClipsIndex = state.allClips.findIndex(clip => clip.originalName === clipInfo.originalName);
     const currentClipListIndex = state.currentClipList.findIndex(clip => clip.originalName === clipInfo.originalName);
     
@@ -818,17 +686,15 @@ async function confirmAndDeleteClip(clipToDelete = null) {
     if (currentClipListIndex > -1) state.currentClipList.splice(currentClipListIndex, 1);
 
     try {
-      // Close the player if we're deleting the current clip
       if (state.currentClip && state.currentClip.originalName === clipInfo.originalName) {
         await closePlayer();
         await videoPlayerModule.releaseVideoElement();
       }
-      
+
       disableVideoThumbnail(clipInfo.originalName);
-      
-      // Show deletion tooltip
+
       showDeletionTooltip();
-      
+
       const result = await ipcRenderer.invoke('delete-clip', clipInfo.originalName);
       if (result.success) {
         logger.info('Clip deleted successfully');
@@ -838,15 +704,13 @@ async function confirmAndDeleteClip(clipToDelete = null) {
     } catch (error) {
       logger.error('Error deleting clip:', error);
       await showCustomAlert(`Failed to delete clip: ${error.message}`);
-      
-      // Revert the UI changes if deletion fails
+
+      // undo the optimistic removal above
       if (clipElement && clipElement.parentNode === null) {
-        // Find or recreate the appropriate group
         const timeGroup = getTimeGroup(clipInfo.createdAt);
         let groupElement = document.querySelector(`.clip-group[data-group-name="${timeGroup}"]`);
-        
+
         if (!groupElement) {
-          // Recreate the group if it was removed
           groupElement = document.createElement('div');
           groupElement.className = 'clip-group';
           groupElement.dataset.groupName = timeGroup;
@@ -866,10 +730,9 @@ async function confirmAndDeleteClip(clipToDelete = null) {
           
           groupElement.appendChild(header);
           groupElement.appendChild(content);
-          
-          // Insert the group in the correct position
+
           const groups = Array.from(document.querySelectorAll('.clip-group'));
-          const insertIndex = groups.findIndex(g => 
+          const insertIndex = groups.findIndex(g =>
             getGroupOrder(g.dataset.groupName) > getGroupOrder(timeGroup)
           );
 
@@ -879,31 +742,24 @@ async function confirmAndDeleteClip(clipToDelete = null) {
             clipGrid.insertBefore(groupElement, groups[insertIndex]);
           }
         }
-        
-        // Add the clip back to the group
+
         const content = groupElement.querySelector('.clip-group-content');
         content.appendChild(clipElement);
-        
-        // Update the group count
+
         const countElement = groupElement.querySelector('.clip-group-count');
         const currentCount = content.querySelectorAll('.clip-item').length;
         countElement.textContent = `${currentCount} clip${currentCount !== 1 ? 's' : ''}`;
       }
-      
-      // Revert data changes
+
       if (allClipsIndex > -1) state.allClips.splice(allClipsIndex, 0, clipInfo);
       if (currentClipListIndex > -1) state.currentClipList.splice(currentClipListIndex, 0, clipInfo);
     } finally {
-      // Hide deletion tooltip
       hideDeletionTooltip();
     }
 
     updateClipCounter(state.currentClipList.length);
-    
-    // Update new clips indicators after deletion
     updateNewClipsIndicators();
-    
-    // Save clip list immediately after deletion
+
     try {
       await ipcRenderer.invoke('save-clip-list-immediately');
     } catch (error) {
@@ -912,9 +768,6 @@ async function confirmAndDeleteClip(clipToDelete = null) {
   }
 }
 
-/**
- * Update the clip title shown in the grid and backing state.
- */
 function updateClipNameInLibrary(originalName, newCustomName) {
   if (!originalName) {
     logger.warn(
@@ -956,9 +809,6 @@ function validateClipLists() {
   }
 }
 
-/**
- * Show the right-click context menu for a clip.
- */
 function showContextMenu(e, clip) {
   e.preventDefault();
   e.stopPropagation();
@@ -967,36 +817,29 @@ function showContextMenu(e, clip) {
   const tagsDropdown = document.getElementById("tags-dropdown");
 
   if (contextMenu) {
-    // Reset the context menu state
     contextMenu.style.display = "none";
     tagsDropdown.style.display = "none";
-    state.isTagsDropdownOpen = false; 
-    
-    // Clear any checked checkboxes
+    state.isTagsDropdownOpen = false;
+
     const checkboxes = tagsDropdown.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach(checkbox => checkbox.checked = false);
-    
-    // Clear the tag search input
+
     const tagSearchInput = document.getElementById("tag-search-input");
     if (tagSearchInput) tagSearchInput.value = '';
 
-    // Set new position and show the menu
     contextMenu.style.left = `${e.clientX}px`;
     contextMenu.style.top = `${e.clientY}px`;
     contextMenu.style.display = "block";
 
-    // Update the state.contextMenuClip
     state.contextMenuClip = clip;
 
     logger.info("Context menu shown for clip:", clip.originalName);
-    
-    // Update the tag list for the new clip
+
     tagManagerModule.updateTagList();
-    
-    // Add a click event listener to the document to close the context menu
+
     document.addEventListener('click', closeContextMenu);
-    
-    // Add an overlay to block clicks outside the context menu
+
+    // blocks clicks outside the menu from reaching the grid
     const overlay = document.createElement('div');
     overlay.id = 'context-menu-overlay';
     overlay.style.position = 'fixed';
@@ -1004,16 +847,13 @@ function showContextMenu(e, clip) {
     overlay.style.left = '0';
     overlay.style.width = '100%';
     overlay.style.height = '100%';
-    overlay.style.zIndex = '1980'; // Just below the context menu
+    overlay.style.zIndex = '1980'; // just below the context menu
     clipGrid.appendChild(overlay);
   } else {
     logger.error("Context menu elements not found");
   }
 }
 
-/**
- * Close the clip context menu if open.
- */
 function closeContextMenu(e) {
   const contextMenu = document.getElementById("context-menu");
   const tagsDropdown = document.getElementById("tags-dropdown");
@@ -1030,22 +870,14 @@ function closeContextMenu(e) {
   }
 }
 
-// ============================================================================
-// THUMBNAIL MANAGEMENT
-// ============================================================================
+const THUMBNAIL_RETRY_DELAY = 2000;
+const THUMBNAIL_INIT_DELAY = 1000;
 
-const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
-const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
-
-/**
- * Batch fetch thumbnail paths for multiple clips in a single IPC call
- */
 async function prefetchThumbnailPaths(clipNames) {
   if (!clipNames || clipNames.length === 0) return;
 
   try {
     const results = await ipcRenderer.invoke("get-thumbnail-paths-batch", clipNames);
-    // Store results in cache
     for (const [clipName, thumbnailPath] of Object.entries(results)) {
       state.thumbnailPathCache.set(clipName, thumbnailPath);
     }
@@ -1054,23 +886,15 @@ async function prefetchThumbnailPaths(clipNames) {
   }
 }
 
-/**
- * Get thumbnail path from cache or fetch individually as fallback
- */
 async function getThumbnailPath(clipName) {
-  // Check cache first
   if (state.thumbnailPathCache.has(clipName)) {
     return state.thumbnailPathCache.get(clipName);
   }
-  // Fallback to individual IPC call (for edge cases)
   const path = await ipcRenderer.invoke("get-thumbnail-path", clipName);
   state.thumbnailPathCache.set(clipName, path);
   return path;
 }
 
-/**
- * Kick off thumbnail validation/generation for the current list.
- */
 async function startThumbnailValidation() {
   logger.info("Starting thumbnail validation for clips:", state.allClips.length);
   
@@ -1091,7 +915,6 @@ async function startThumbnailValidation() {
 
     let currentTimeout = createTimeout();
 
-    // Add this line to collect pending clips
     const pendingClips = new Set(state.allClips.map(clip => clip.originalName));
 
     const generationPromise = new Promise((resolve) => {
@@ -1106,12 +929,10 @@ async function startThumbnailValidation() {
               updateThumbnailGenerationText(total - current);
             }
             
-            // Remove from pending set when processed
             pendingClips.delete(clipName);
-            
+
             ipcRenderer.invoke("get-thumbnail-path", clipName).then(thumbnailPath => {
               if (thumbnailPath) {
-                // Update cache with newly generated thumbnail path
                 state.thumbnailPathCache.set(clipName, thumbnailPath);
                 updateClipThumbnail(clipName, thumbnailPath);
               }
@@ -1119,9 +940,7 @@ async function startThumbnailValidation() {
           });
 
           ipcRenderer.once("thumbnail-generation-complete", () => {
-            // Check if any clips were missed
             if (pendingClips.size > 0) {
-              // Process any remaining clips
               ipcRenderer.invoke("generate-thumbnails-progressively", Array.from(pendingClips));
             }
             clearTimeout(timeoutId);
@@ -1179,7 +998,7 @@ function clipMatchesSearchFilters(clip, searchText) {
     return false;
   }
 
-  // Explicit tag searches (e.g. "@MyTag") should override dropdown visibility.
+  // explicit tag search (e.g. "@MyTag") overrides dropdown filter state
   if (searchTerms.tags.length > 0) {
     return true;
   }
@@ -1246,12 +1065,8 @@ function insertClipIntoCurrentList(clip) {
   }
 }
 
-/**
- * Add a new clip to state and update the grid.
- */
 async function addNewClipToLibrary(fileName) {
   try {
-    // First check if the file exists
     const clipPath = path.join(state.clipLocation, fileName);
     try {
       await fs.access(clipPath);
@@ -1261,21 +1076,17 @@ async function addNewClipToLibrary(fileName) {
     }
 
     const newClipInfo = await ipcRenderer.invoke('get-new-clip-info', fileName);
-    
-    // Mark as new since it's being added during runtime
-    newClipInfo.isNewSinceLastSession = true;
-    
-    // Update the newClipsInfo to include this clip
+
+    newClipInfo.isNewSinceLastSession = true; // added at runtime, not from a past session
+
     if (!newClipsInfo.newClips.includes(fileName)) {
       newClipsInfo.newClips.push(fileName);
       newClipsInfo.totalNewCount++;
     }
-    
-    // Check if the clip already exists in state.allClips
+
     const existingClipIndex = state.allClips.findIndex(clip => clip.originalName === newClipInfo.originalName);
-    
+
     if (existingClipIndex === -1) {
-      // If it doesn't exist, add it to state.allClips
       state.allClips.unshift(newClipInfo);
 
       const shouldRenderInCurrentView = shouldIncludeClipInCurrentList(newClipInfo);
@@ -1283,39 +1094,32 @@ async function addNewClipToLibrary(fileName) {
         insertClipIntoCurrentList(newClipInfo);
       }
 
-      // Create clip element with a loading thumbnail first
       const newClipElement = shouldRenderInCurrentView ? await createClipElement({
         ...newClipInfo,
         thumbnailPath: "assets/loading-thumbnail.gif"
       }) : null;
 
       if (shouldRenderInCurrentView) {
-        // Find or create the appropriate time group
         const timeGroup = getTimeGroup(newClipInfo.createdAt);
-        
-        // First try to find an existing group by looking at the header text content
+
         let groupElement = Array.from(document.querySelectorAll('.clip-group'))
           .find(group => {
             const headerText = group.querySelector('.clip-group-header h2.clip-group-title')?.textContent.trim();
             return headerText?.startsWith(timeGroup);
           });
         let content;
-        
+
         if (groupElement) {
-          // Use existing group
           content = groupElement.querySelector('.clip-group-content');
-          
-          // Update clip count
+
           const countElement = groupElement.querySelector('.clip-group-count');
           const currentCount = parseInt(countElement.textContent);
           countElement.textContent = `${currentCount + 1} clip${currentCount + 1 !== 1 ? 's' : ''}`;
         } else {
-          // Create new group if it doesn't exist
           groupElement = document.createElement('div');
           groupElement.className = 'clip-group';
           groupElement.dataset.groupName = timeGroup;
-          
-          // Create group header
+
           const header = document.createElement('div');
           header.className = 'clip-group-header';
           header.innerHTML = `
@@ -1326,12 +1130,11 @@ async function addNewClipToLibrary(fileName) {
             <div class="clip-group-divider"></div>
           `;
 
-          // Add click handler for collapse/expand
           const collapsedState = loadCollapsedState();
           if (collapsedState[timeGroup]) {
             groupElement.classList.add('collapsed');
           }
-          
+
           header.addEventListener('click', () => {
             groupElement.classList.toggle('collapsed');
             const newState = loadCollapsedState();
@@ -1339,16 +1142,14 @@ async function addNewClipToLibrary(fileName) {
             saveCollapsedState(newState);
           });
 
-          // Create group content
           content = document.createElement('div');
           content.className = 'clip-group-content';
-          
+
           groupElement.appendChild(header);
           groupElement.appendChild(content);
 
-          // Insert the group in the correct position
           const groups = Array.from(document.querySelectorAll('.clip-group'));
-          const insertIndex = groups.findIndex(g => 
+          const insertIndex = groups.findIndex(g =>
             getGroupOrder(g.dataset.groupName) > getGroupOrder(timeGroup)
           );
 
@@ -1359,10 +1160,8 @@ async function addNewClipToLibrary(fileName) {
           }
         }
 
-        // Add the new clip to the group content at the beginning
         content.insertBefore(newClipElement, content.firstChild);
-        
-        // Check if this group now contains only new clips and update styling
+
         const groupClips = Array.from(content.querySelectorAll('.clip-item')).map(el => {
           const clipName = el.dataset.originalName;
           return state.allClips.find(clip => clip.originalName === clipName);
@@ -1400,22 +1199,19 @@ async function addNewClipToLibrary(fileName) {
           delete content.dataset.firstOldIndex;
         }
         
-        // Force a clean state for the new clip
-        newClipElement.dataset.trimStart = undefined;
+        newClipElement.dataset.trimStart = undefined; // no stale trim values on a freshly added clip
         newClipElement.dataset.trimEnd = undefined;
       }
 
-      // Generate thumbnail in the background without waiting
       setTimeout(async () => {
         try {
           await ipcRenderer.invoke("generate-thumbnails-progressively", [fileName]);
         } catch (error) {
           logger.error("Error in background thumbnail generation:", error);
         }
-      }, 1000); // Give a slight delay to ensure file is fully written
+      }, 1000); // delay so the file has finished writing to disk
 
     } else {
-      // If it exists, update the existing clip info
       state.allClips[existingClipIndex] = newClipInfo;
       if (shouldIncludeClipInCurrentList(newClipInfo)) {
         insertClipIntoCurrentList(newClipInfo);
@@ -1429,12 +1225,10 @@ async function addNewClipToLibrary(fileName) {
     
     tagManagerModule.updateFilterDropdown();
 
-    // Update new clips indicators after adding clip (avoid full re-render)
-    positionNewClipsIndicators();
+    positionNewClipsIndicators(); // avoids a full re-render just for the indicator
 
     updateClipCounter(state.currentClipList.length);
 
-    // Save clip list immediately after adding clip
     try {
       await ipcRenderer.invoke('save-clip-list-immediately');
     } catch (error) {
@@ -1445,48 +1239,36 @@ async function addNewClipToLibrary(fileName) {
   }
 }
 
-// ============================================================================
-// GRID NAVIGATION
-// ============================================================================
-
 function enableGridNavigation() {
   state.gridNavigationEnabled = true;
   state.currentGridFocusIndex = 0;
   updateGridSelection();
-  setupMouseKeyboardDetection(); // Set up detection to hide on mouse/keyboard use
+  setupMouseKeyboardDetection();
 }
 
-/**
- * Disable grid navigation and clear the focus highlight.
- */
 function disableGridNavigation() {
   state.gridNavigationEnabled = false;
-  // Remove focus from all clips
   document.querySelectorAll('.clip-item').forEach(clip => {
     clip.classList.remove('controller-focused');
   });
-  removeMouseKeyboardDetection(); // Clean up listeners when disabling
+  removeMouseKeyboardDetection();
 }
 
-/**
- * Open the clip currently focused by grid navigation.
- */
 function openCurrentGridSelection() {
   if (!state.gridNavigationEnabled) return;
-  
+
   const visibleClips = getVisibleClips();
   if (visibleClips.length === 0 || state.currentGridFocusIndex >= visibleClips.length) return;
-  
+
   const selectedClip = visibleClips[state.currentGridFocusIndex];
   if (!selectedClip) return;
-  
+
   const originalName = selectedClip.dataset.originalName;
   const customName = selectedClip.dataset.customName || originalName;
 
   if (originalName) {
-    disableGridNavigation(); // Disable grid navigation when opening clip
+    disableGridNavigation();
 
-    // Add keyboard event listeners for video player controls
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("keyup", handleKeyRelease);
 
@@ -1494,49 +1276,34 @@ function openCurrentGridSelection() {
   }
 }
 
-// Mouse and keyboard detection to hide controller selection
 function setupMouseKeyboardDetection() {
-  if (state.mouseKeyboardListenersSetup) return; // Already set up
-  
-  // Mouse movement detection
+  if (state.mouseKeyboardListenersSetup) return;
+
   document.addEventListener('mousemove', hideControllerSelectionOnInput, { passive: true });
-  
-  // Mouse click detection
   document.addEventListener('mousedown', hideControllerSelectionOnInput, { passive: true });
-  
-  // Keyboard detection (but exclude controller-related keys in video player)
   document.addEventListener('keydown', hideControllerSelectionOnKeyboard, { passive: true });
-  
+
   state.mouseKeyboardListenersSetup = true;
 }
 
-/**
- * Remove mouse/keyboard detection listeners.
- */
 function removeMouseKeyboardDetection() {
   if (!state.mouseKeyboardListenersSetup) return;
-  
+
   document.removeEventListener('mousemove', hideControllerSelectionOnInput);
   document.removeEventListener('mousedown', hideControllerSelectionOnInput);
   document.removeEventListener('keydown', hideControllerSelectionOnKeyboard);
-  
+
   state.mouseKeyboardListenersSetup = false;
 }
 
-/**
- * Hide controller focus ring after pointer input.
- */
 function hideControllerSelectionOnInput() {
   if (state.gridNavigationEnabled) {
     disableGridNavigation();
   }
 }
 
-/**
- * Hide controller focus ring after keyboard input.
- */
 function hideControllerSelectionOnKeyboard(e) {
-  // Don't hide on controller-related keys
+  // arrow keys drive controller navigation itself, don't let them cancel it
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     return;
   }
@@ -1554,96 +1321,74 @@ function updateGridSelection() {
   document.querySelectorAll('.clip-item').forEach(clip => {
     clip.classList.remove('grid-focused');
   });
-  
-  // Add focus class to the currently selected clip
+
   const visibleClips = getVisibleClips();
   if (visibleClips.length > 0 && state.currentGridFocusIndex < visibleClips.length) {
     const selectedClip = visibleClips[state.currentGridFocusIndex];
     if (selectedClip) {
       selectedClip.classList.add('grid-focused');
-      
-      // Scroll the selected clip into view if needed
       selectedClip.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
     }
   }
 }
 
-/**
- * Return visible clip elements in the grid.
- */
 function getVisibleClips() {
-  // Get all clip elements that are currently visible in the grid
   return Array.from(document.querySelectorAll('.clip-item:not(.hidden)'));
 }
 
-/**
- * Find the closest clip in a given direction.
- */
 function findClipInDirection(clips, currentIndex, direction) {
   if (clips.length === 0) return currentIndex;
-  
+
   const gridElement = document.getElementById('clip-grid');
   if (!gridElement) return currentIndex;
-  
+
   if (currentIndex < 0 || currentIndex >= clips.length) return currentIndex;
-  
-  // Get the bounding rectangle of the current clip
+
   const currentClip = clips[currentIndex];
   if (!currentClip) return currentIndex;
-  
+
   const currentRect = currentClip.getBoundingClientRect();
-  
+
   switch (direction) {
     case 'up':
-      // Find the clip above the current one
       for (let i = currentIndex - 1; i >= 0; i--) {
         const clipRect = clips[i].getBoundingClientRect();
-        // Check if this clip is in the same column (approximately)
+        // same column: left edge within one card-width of the current clip
         if (Math.abs(clipRect.left - currentRect.left) < currentRect.width) {
           return i;
         }
       }
       return currentIndex;
-      
+
     case 'down':
-      // Find the clip below the current one
       for (let i = currentIndex + 1; i < clips.length; i++) {
         const clipRect = clips[i].getBoundingClientRect();
-        // Check if this clip is in the same column (approximately)
         if (Math.abs(clipRect.left - currentRect.left) < currentRect.width) {
           return i;
         }
       }
       return currentIndex;
-      
+
     case 'left':
-      // Find the clip to the left
       if (currentIndex > 0) {
         return currentIndex - 1;
       }
       return currentIndex;
-      
+
     case 'right':
-      // Find the clip to the right
       if (currentIndex < clips.length - 1) {
         return currentIndex + 1;
       }
       return currentIndex;
-      
+
     default:
       return currentIndex;
   }
 }
 
-// ============================================================================
-// EXPORTS
-// ============================================================================
-
 module.exports = {
-  // Initialization
   init,
 
-  // Clip grid management
   loadClips,
   renderClips,
   createClipElement,
@@ -1654,13 +1399,11 @@ module.exports = {
   showContextMenu,
   closeContextMenu,
 
-  // Thumbnail management
   prefetchThumbnailPaths,
   getThumbnailPath,
   startThumbnailValidation,
   addNewClipToLibrary,
 
-  // Grid navigation
   enableGridNavigation,
   disableGridNavigation,
   openCurrentGridSelection,

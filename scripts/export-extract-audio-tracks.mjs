@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Extract a clip's real audio tracks into an `audioMixer` export spec (+ a
-// blurred backdrop frame). Track names/order/channels come straight from the
-// clip's audio streams via ffprobe, mirroring buildAudioTracksFromStreams()
-// (main/ffmpeg.js): title tag -> non-generic handler_name -> "Track N". Palette
-// colours are assigned by ordinal like AudioTracksManager.
+// blurred backdrop frame). Names/order/channels come from ffprobe, mirroring
+// buildAudioTracksFromStreams() (main/ffmpeg.js): title tag, then non-generic
+// handler_name, then "Track N". Colours assigned by ordinal like AudioTracksManager.
 //
 //   node scripts/export-extract-audio-tracks.mjs "<clip filename>" [options]
 //     --volumes 0.9,0.65,1.2,0.4   per-track volume (1 == 100%, >1 boosted); default all 1
@@ -55,7 +54,7 @@ if (!fs.existsSync(clipPath)) {
   process.exit(1);
 }
 
-// --- discover audio tracks (mirrors buildAudioTracksFromStreams) ---
+// discover audio tracks (mirrors buildAudioTracksFromStreams)
 const probe = JSON.parse(
   execFileSync(ffprobePath, ["-v", "error", "-show_streams", "-select_streams", "a", "-of", "json", clipPath], {
     encoding: "utf8",
@@ -88,7 +87,7 @@ const tracks = streams.map((s, ordinal) => {
   };
 });
 
-// --- backdrop frame (native res; the scene blurs it) ---
+// backdrop frame, native res; the scene blurs it
 const duration = parseFloat(
   execFileSync(
     ffprobePath,

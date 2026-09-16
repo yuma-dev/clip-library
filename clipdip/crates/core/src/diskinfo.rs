@@ -1,14 +1,9 @@
-//! Disk facts for telemetry, in a shape that never leaks a user path.
-//!
-//! Events and the heartbeat's machine block need "is the clips drive full?"
-//! and "what kind of volume is it?", but a raw path embeds the Windows
-//! username and folder names. So the only representations that leave the
-//! machine are a free-space number and a coarse volume category.
+//! Disk facts for telemetry, shaped so a user path never leaks: only a free-space
+//! number and a coarse volume category ever leave the machine.
 
 use std::path::{Component, Path, PathBuf};
 
-/// Free bytes on the volume holding `path` (via `GetDiskFreeSpaceExW` on the
-/// deepest existing ancestor, so a not-yet-created output dir still resolves).
+/// Free bytes on `path`'s volume; resolves via the deepest existing ancestor.
 pub fn free_disk_bytes(path: &Path) -> Option<u64> {
     use windows::core::HSTRING;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -21,20 +16,19 @@ pub fn free_disk_bytes(path: &Path) -> Option<u64> {
     Some(free_to_caller)
 }
 
-/// Coarse category of the volume holding `path`. The only path-derived value
-/// telemetry ever transmits.
+/// Only path-derived value telemetry sends.
 pub fn volume_category(path: &Path) -> &'static str {
     use windows::core::HSTRING;
     use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 
-    // Raw GetDriveTypeW results (winbase.h).
+    // GetDriveTypeW results (winbase.h)
     const DRIVE_REMOVABLE: u32 = 2;
     const DRIVE_FIXED: u32 = 3;
     const DRIVE_REMOTE: u32 = 4;
     const DRIVE_CDROM: u32 = 5;
     const DRIVE_RAMDISK: u32 = 6;
 
-    // UNC paths are network shares regardless of what GetDriveType says.
+    // UNC paths are always network shares regardless of GetDriveType
     if path.as_os_str().to_string_lossy().starts_with(r"\\") {
         return "network";
     }
@@ -56,7 +50,7 @@ pub fn volume_category(path: &Path) -> &'static str {
     }
 }
 
-/// Free space in whole GB on `path`'s volume, for heartbeat fields.
+/// Free space in whole GB, for heartbeat fields.
 pub fn free_disk_gb(path: &Path) -> Option<u64> {
     free_disk_bytes(path).map(|b| b / (1 << 30))
 }
@@ -73,7 +67,7 @@ fn deepest_existing(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// `C:\` root of a path, if it has a drive prefix.
+/// `C:\` root, if present.
 fn path_root(path: &Path) -> Option<PathBuf> {
     match path.components().next() {
         Some(Component::Prefix(prefix)) => {
@@ -85,7 +79,7 @@ fn path_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The Windows system drive root (usually `C:\`).
+/// Usually `C:\`.
 fn system_root() -> Option<PathBuf> {
     let windir = std::env::var_os("SystemDrive")?;
     let mut root = PathBuf::from(windir);

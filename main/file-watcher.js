@@ -1,15 +1,6 @@
-/**
- * File watcher module - detects new clips landing in the clip folder.
- *
- * One native recursive watch on the clip folder (fs.watch with `recursive`,
- * backed by ReadDirectoryChangesW on Windows). This replaced chokidar, which
- * registered a separate fs.watch per file: on a 2,800-clip library that was
- * about 7 seconds of synchronous native work on the main thread at every
- * launch, during which the browser thread could not bring up the window.
- *
- * A new file is announced only once it has stopped growing (write-finish
- * detection), the way chokidar's awaitWriteFinish did.
- */
+// detects new clips landing in the clip folder: one native recursive fs.watch
+// (ReadDirectoryChangesW), replacing chokidar's per-file watches which cost
+// ~7s of main-thread work at launch on a 2,800-clip library, blocking the window
 
 const fs = require('fs');
 const path = require('path');
@@ -17,7 +8,7 @@ const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
-// A clip counts as finished once its size has not changed for this long.
+// clip counts as finished once size hasn't changed for this long
 const STABILITY_MS = 2000;
 const POLL_MS = 250;
 
@@ -28,8 +19,7 @@ let onNewClipCallback = null;
 let onOverflowCallback = null;
 // filePath -> { size, stableSince, since, timer }
 const pending = new Map();
-// Announced files, so a burst of change events after the announcement (or a
-// rename/change pair for the same create) does not announce twice.
+// announced files, so a burst of events after (rename/change pair for one create) doesn't double-announce
 const announced = new Set();
 
 function isHidden(relative) {
@@ -54,7 +44,7 @@ function poll(filePath) {
   fs.stat(filePath, (error, stats) => {
     if (!pending.has(filePath)) return;
     if (error || !stats.isFile()) {
-      // Deleted or replaced before it settled: not a new clip.
+      // deleted or replaced before it settled: not a new clip
       pending.delete(filePath);
       return;
     }
@@ -63,8 +53,7 @@ function poll(filePath) {
       entry.size = stats.size;
       entry.stableSince = now;
     }
-    // A file that keeps growing (a recording written straight into the
-    // library) is announced only once it stops, however long that takes.
+    // a recording written straight into the library keeps growing; announce only once it stops
     if (now - entry.stableSince >= STABILITY_MS) {
       pending.delete(filePath);
       announce(filePath);
@@ -78,7 +67,7 @@ function track(filePath) {
   if (announced.has(filePath)) return;
   const existing = pending.get(filePath);
   if (existing) {
-    // Still being written: the poller keeps watching its size.
+    // still being written, poller keeps watching its size
     return;
   }
   const now = Date.now();
@@ -87,8 +76,7 @@ function track(filePath) {
   entry.timer = setTimeout(() => poll(filePath), POLL_MS);
 }
 
-// A directory moved or renamed into the library arrives as one rename event
-// for the directory; the clips inside get no events of their own. Walk it.
+// a directory move/rename fires one rename event for itself, none for its clips
 function trackDirectory(dirPath) {
   fs.readdir(dirPath, { withFileTypes: true }, (error, entries) => {
     if (error) return;
@@ -106,8 +94,7 @@ function trackDirectory(dirPath) {
 
 function onFsEvent(eventType, filename) {
   if (!filename) {
-    // ReadDirectoryChangesW buffer overflow: events were dropped. Let the
-    // owner rescan rather than miss a clip until the next launch.
+    // ReadDirectoryChangesW overflow, events dropped: let owner rescan
     if (typeof onOverflowCallback === 'function') {
       Promise.resolve().then(onOverflowCallback).catch((error) => logger.warn(`Watcher rescan failed: ${error.message}`));
     }
@@ -124,8 +111,7 @@ function onFsEvent(eventType, filename) {
     return;
   }
   if (eventType === 'rename') {
-    // Create, move-in, or delete. A delete drops any pending entry; a create
-    // starts tracking. The stat in poll() tells the two apart.
+    // create, move-in, or delete; the stat in poll() tells them apart
     if (announced.has(filePath)) {
       fs.stat(filePath, (error) => {
         if (error) announced.delete(filePath);
@@ -134,19 +120,16 @@ function onFsEvent(eventType, filename) {
     }
     track(filePath);
   } else if (pending.has(filePath)) {
-    // Bytes still arriving for a tracked file: nothing to do, the poller
-    // notices the growing size. Untracked change events (an existing clip
-    // rewritten in place) are not new clips.
+    // bytes still arriving for a tracked file, poller notices the growing size
   }
 }
 
 /**
- * Set up the file watcher for the clip location.
- * @param {string} clipLocation - Base clip folder path.
- * @param {object} options - Optional callbacks.
- * @param {Function} options.onNewClip - Called with (fileName, filePath) on new clip.
- * @param {Function} [options.onOverflow] - Called when events were lost; should rescan.
- * @returns {object|null} Watcher instance or null if not started.
+ * @param {string} clipLocation
+ * @param {object} options
+ * @param {Function} options.onNewClip - (fileName, filePath)
+ * @param {Function} [options.onOverflow] - events were lost, should rescan
+ * @returns {object|null}
  */
 function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
   if (!clipLocation) {
@@ -181,8 +164,7 @@ function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
   watcher.on('error', (error) => {
     logger.error('File watcher error:', error);
     watcherAlive = false;
-    // Nothing restarts the watcher after this: on a network share or a removed
-    // drive new clip detection stops for the rest of the session.
+    // nothing restarts the watcher: a network share or removed drive stops detection for the session
     telemetry.event('watcher_error', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.ERROR,
@@ -193,15 +175,11 @@ function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
     });
   });
 
-  // One directory handle, ready as soon as it is opened.
   telemetry.metric('watcher_ready_ms', Date.now() - setupAtMs, { unit: 'ms' });
   logger.info(`File watcher set up for: ${clipLocation}`);
   return watcher;
 }
 
-/**
- * Stop and clear the file watcher.
- */
 function stopFileWatcher() {
   clearPending();
   if (!watcher) return;
@@ -219,10 +197,7 @@ function stopFileWatcher() {
   watcherAlive = false;
 }
 
-/**
- * Whether a watcher is currently running and has not errored out.
- * @returns {boolean}
- */
+/** @returns {boolean} */
 function isWatcherAlive() {
   return watcherAlive;
 }

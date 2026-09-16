@@ -1,6 +1,5 @@
-/* ===================== In-app ClipLib feed =====================
-   Follows styles.css conventions: design tokens, kebab-case classes prefixed
-   `feed-`, and the same radius / border / hover language as .clip-item. */
+/* In-app ClipLib feed: follows styles.css conventions (design tokens, kebab-case
+   feed- classes) and the same radius/border/hover language as .clip-item. */
 
 .feed-view {
   flex: 1;
@@ -19,7 +18,6 @@
   padding: 18px 22px 48px;
 }
 
-/* ---- Filter bar ---- */
 .feed-filters {
   display: flex;
   flex-wrap: wrap;
@@ -141,12 +139,8 @@
   color: var(--color-text-secondary);
 }
 
-/* ---- Card ----
-   The card shares .clip-item / .clip-item-media-container with the library grid
-   (see styles.css) so sizing, radius, gap and hover behaviour are IDENTICAL.
-   Only the feed-specific overlays + footer are styled here; the `feed-card` /
-   `feed-card-media` classes are kept for overlay scoping but no longer redefine
-   the shared metrics. */
+/* card shares .clip-item/.clip-item-media-container with the library grid (styles.css)
+   for identical sizing/radius/hover; feed-card* classes here only scope overlays */
 .feed-card-media-empty {
   display: grid;
   place-items: center;
@@ -242,9 +236,8 @@
   }
 }
 
-/* ---- Card footer ----
-   Mirrors the library card: a tight text column (title over byline, 2px gap)
-   with the bookmark on the right, aligned to the top of the title. */
+/* card footer mirrors the library card: tight text column (title over byline, 2px
+   gap), bookmark on the right aligned to the title's top */
 .feed-card-foot {
   display: flex;
   align-items: flex-start;
@@ -267,7 +260,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Byline: avatar + name · time · game — sized like the library meta row. */
+/* byline: avatar + name / time / game, sized like the library meta row */
 .feed-card-byline {
   display: flex;
   align-items: center;
@@ -342,7 +335,6 @@
   color: var(--color-accent-glyph);
 }
 
-/* ---- Infinite-scroll sentinel + spinner ---- */
 .feed-sentinel {
   display: flex;
   justify-content: center;
@@ -356,8 +348,8 @@
   border-top-color: transparent;
   animation: feed-spin 0.7s linear infinite;
 }
-/* Hover-preview loading overlay — bottom-right of the thumbnail while the
-   remote stream buffers (removed when playback starts). */
+/* hover-preview loading overlay, bottom-right of the thumbnail while the remote
+   stream buffers (removed when playback starts) */
 .feed-preview-loading {
   position: absolute;
   right: 8px;
@@ -382,7 +374,7 @@
   }
 }
 
-/* ---- Empty / connect states ---- */
+/* empty / connect states */
 .feed-empty-icon {
   color: var(--color-text-muted);
   margin-bottom: 6px;
@@ -404,12 +396,10 @@
   background: var(--color-accent-hover);
 }
 
-/* ---- Sidebar feed filters (FeedRailFilters, route === "feed") ----
-   flex:1 fills the rail's remaining height exactly like .rail-tags does on the
-   library route, so RailProfile stays pinned to the bottom of the rail (instead
-   of floating up right under the filters). */
-/* .rail prefix beats styles.css's `.rail-section-fixed { flex: none }` in the
-   cascade — without it the computed flex is 0 0 auto and the profile floats. */
+/* sidebar feed filters (FeedRailFilters, route === "feed"): flex:1 fills the rail's
+   remaining height like .rail-tags, so RailProfile stays pinned to the bottom */
+/* .rail prefix beats styles.css's .rail-section-fixed{flex:none} in the cascade;
+   without it flex computes to 0 0 auto and the profile floats */
 .rail .fr-rail {
   flex: 1 1 auto;
   display: flex;

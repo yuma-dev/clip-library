@@ -3,14 +3,12 @@ import type { LocalClip } from "./types";
 import { bootMark } from "../perf/bootMarks";
 import { whenCommitsAllowed } from "../boot/bootHold";
 
-// A rendering opportunity plus an optional pause, so consecutive whole-grid
-// commits never share a frame.
+// forces consecutive whole-grid commits onto separate frames
 const nextFrame = (pauseMs = 0) =>
   new Promise<void>((resolve) => requestAnimationFrame(() => (pauseMs ? setTimeout(resolve, pauseMs) : resolve())));
 
-// Last session's library snapshot — lets the grid paint instantly on launch
-// while the real scan runs, instead of showing a loading screen for ~1s.
-// The fresh get-clips result replaces it wholesale when it arrives.
+// last session's snapshot, paints the grid instantly instead of a ~1s loading screen
+// while the real get-clips scan runs; replaced wholesale once that resolves
 const CLIPS_CACHE_KEY = "clip-library:clips-cache-v1";
 
 interface ClipsCache {
@@ -32,8 +30,7 @@ function readClipsCache(): ClipsCache | null {
 }
 
 function writeClipsCache(produce: () => ClipsCache): void {
-  // Deferred + produced at write time, so thumbnails generated in the first
-  // seconds of the session make it into the snapshot. ~400KB JSON write.
+  // deferred so thumbnails generated in the first seconds land in the snapshot (~400KB JSON write)
   setTimeout(() => {
     try {
       localStorage.setItem(CLIPS_CACHE_KEY, JSON.stringify(produce()));
@@ -47,42 +44,23 @@ export interface UseClips {
   clips: LocalClip[];
   clipLocation: string;
   loading: boolean;
-  /** originalName -> absolute thumbnail path (or null while missing). */
+  /** originalName -> absolute thumbnail path, null while missing */
   thumbnails: Map<string, string | null>;
-  /** How many thumbnails are still being generated (0 = idle). */
+  /** thumbnails still being generated, 0 = idle */
   generatingCount: number;
-  /** Remove clips from the list (e.g. after a successful delete). */
   removeClips: (names: string[]) => void;
-  /**
-   * Mark clips as watched (player opened): clears their "new" highlight
-   * immediately and persists via IPC so it survives restarts.
-   */
+  /** clears "new" highlight immediately, persists via IPC */
   markClipsWatched: (names: string[]) => void;
-  /**
-   * Rename a clip's custom title. Persists via IPC, updates the list, and
-   * reflects the change into the open legacy player. Returns true on success.
-   */
+  /** persists via IPC, reflects into the open legacy player */
   renameClip: (originalName: string, newName: string) => Promise<boolean>;
-  /**
-   * Replace a clip's tag list. Updates the list, persists via IPC, and reflects
-   * the change into the open legacy player. Drives the grid "Manage tags" menu.
-   */
+  /** persists via IPC, reflects into the legacy player; drives grid "Manage tags" */
   setClipTags: (originalName: string, tags: string[]) => void;
-  /**
-   * In-memory reflections of global tag management (settings → Manage tags).
-   * Disk changes are done by the caller via `update-tag-in-all-clips` /
-   * `remove-tag-from-all-clips`; these keep the loaded list in sync.
-   */
+  /** in-memory mirror of settings' Manage Tags; disk side done by the caller */
   renameTagInClips: (oldTag: string, newTag: string) => void;
   removeTagFromClips: (tag: string) => void;
 }
 
-/**
- * Loads the local clip library + thumbnails + tags.
- * - clips render immediately (newest-first from `get-clips`);
- * - thumbnails come from one batch call, then progressive generation events;
- * - tags load in background batches of 50 (like the legacy renderer) and fill in.
- */
+/** clips render immediately, thumbnails batch then stream progressively, tags fill in batches of 500 */
 export function useClips(): UseClips {
   const cacheRef = useRef<ClipsCache | null | undefined>(undefined);
   if (cacheRef.current === undefined) {
@@ -110,18 +88,16 @@ export function useClips(): UseClips {
       ]);
       if (cancelled) return;
       bootMark("get_clips_returned");
-      // Handing over the names spares main a second walk of the library.
+      // passing known names spares main a second walk of the library
       const knownNames = (Array.isArray(raw) ? raw : []).map((c) => String(c.originalName ?? ""));
       const newInfo = await window.clips.getNewClipsInfo(knownNames).catch(() => ({ newClips: [] }));
       if (cancelled) return;
-      // While the boot intro plays, a commit that touches every card would
-      // cost its frames; the list waits for it, then takes a frame of its own.
+      // wait out the boot intro before a commit that touches every card
       await whenCommitsAllowed();
       if (cancelled) return;
       await nextFrame();
       if (cancelled) return;
 
-      // Clips added since the last session — used to highlight them on load.
       const newSet = new Set<string>(Array.isArray(newInfo?.newClips) ? newInfo.newClips : []);
 
       const rawList: Record<string, unknown>[] = Array.isArray(raw) ? raw : [];
@@ -136,11 +112,8 @@ export function useClips(): UseClips {
       }));
 
       setClipLocation(loc);
-      // Reconcile against the cached snapshot instead of replacing wholesale:
-      // swapping 2000+ object identities re-rendered every memoized card in
-      // one commit (a ~600ms dropped frame at startup) and blanked the tags
-      // until the tag batches refilled them. Unchanged clips keep their old
-      // object (and cached tags — the batches below remain authoritative).
+      // reconcile, don't replace wholesale: swapping 2000+ identities re-rendered every
+      // card in one commit (~600ms dropped frame) and blanked tags until batches refilled
       setClips((prev) => {
         if (prev.length === 0) return list;
         const byName = new Map(prev.map((c) => [c.originalName, c]));
@@ -162,8 +135,7 @@ export function useClips(): UseClips {
       setLoading(false);
       requestAnimationFrame(() => bootMark("fresh_list_committed"));
 
-      // Live: a clip file lands while the app is running. Fetch its info, mark
-      // it new, prepend it (dedup), then fill in its thumbnail + tags.
+      // a clip lands live: fetch its info, mark new, prepend (dedup), fill in thumbnail + tags
       unsubs.push(
         window.clips.onNewClipAdded(async (fileName: string) => {
           if (!fileName || cancelled) return;
@@ -199,15 +171,14 @@ export function useClips(): UseClips {
 
       const names = list.map((c) => c.originalName);
 
-      // --- Thumbnails: authoritative batch, then generate the missing ones. ---
+      // authoritative thumbnail batch; missing ones generate below
       const batch = (await window.clips
         .getThumbnailPathsBatch(names)
         .catch(() => ({}))) as Record<string, string | null>;
       if (cancelled) return;
       const tmap = new Map<string, string | null>(Object.entries(batch));
 
-      // --- Tags: batched IPC (500 names per call), fetched now so the round
-      // trips overlap the reveal hold; applied per batch further down. ---
+      // fetched now so round trips overlap the reveal hold; applied per batch further down
       const TAG_BATCH = 500;
       const tagBatches: Promise<Record<string, string[]>>[] = [];
       for (let i = 0; i < list.length; i += TAG_BATCH) {
@@ -229,7 +200,7 @@ export function useClips(): UseClips {
       unsubs.push(
         window.clips.onThumbnailGenerated((payload: { clipName?: string; thumbnailPath?: string }) => {
           if (!payload?.clipName) return;
-          tmap.set(payload.clipName, payload.thumbnailPath ?? null); // keep the cache snapshot source fresh
+          tmap.set(payload.clipName, payload.thumbnailPath ?? null); // keeps the cache snapshot fresh
           setThumbnails((prev) => {
             const next = new Map(prev);
             next.set(payload.clipName!, payload.thumbnailPath ?? null);
@@ -245,12 +216,10 @@ export function useClips(): UseClips {
           }
         }),
       );
-      // Once any progress or completion event has arrived, the count is owned
-      // by those events; the generation call's return value is then stale.
+      // once a progress/completion event arrives it owns the count; the generation call's return goes stale
       let progressSeen = false;
       unsubs.push(window.clips.onThumbnailGenerationComplete(() => { progressSeen = true; setGeneratingCount(0); }));
-      // Main revalidates thumbnails on startup/location change; seed the
-      // pending count so the indicator appears before the first progress tick.
+      // main revalidates on startup/location change; seed the count before the first progress tick
       unsubs.push(
         window.clips.onThumbnailValidationStart((payload: { total?: number }) => {
           setGeneratingCount(Math.max(0, Number(payload?.total) || 0));
@@ -262,8 +231,7 @@ export function useClips(): UseClips {
         }),
       );
 
-      // Generation runs in the background; tags below must not wait for it
-      // (on a cold cache it takes seconds before the first thumbnail lands).
+      // tags below must not wait on this; cold cache takes seconds for the first thumbnail
       const missing = names.filter((n) => !tmap.get(n));
       const generation =
         missing.length > 0
@@ -272,9 +240,7 @@ export function useClips(): UseClips {
             } | null>)
           : null;
 
-      // --- Tags: fill in per batch (fetched above). ---
-      // One round trip per 500 clips instead of one per clip; clips whose tags
-      // stay empty keep their object identity so memoized cards skip re-render.
+      // clips whose tags stay empty keep their object identity so memoized cards skip re-render
       const allTags: Record<string, string[]> = {};
       const sameTags = (a: string[], b: string[]) =>
         a.length === b.length && a.every((t, i) => t === b[i]);
@@ -285,16 +251,12 @@ export function useClips(): UseClips {
         if (cancelled) return;
         await whenCommitsAllowed();
         if (cancelled) return;
-        // One batch per frame, with a breath between them.
         await nextFrame(40);
         if (cancelled) return;
-        // The batch returns an entry for every requested name ([] when
-        // tagless); an empty object means the IPC failed — keep current tags.
+        // empty object means the IPC call itself failed - keep current tags
         if (Object.keys(byName).length === 0) continue;
         Object.assign(allTags, byName);
-        // Authoritative for the clips in this batch (an absent entry means "no
-        // tags" — cached tags carried over by the startup reconcile must be
-        // cleared, not kept). Identity only changes when the tags differ.
+        // absent entry means "no tags", clears cached tags from the reconcile above
         setClips((prev) =>
           prev.map((c) => {
             if (!sliceNames.has(c.originalName)) return c;
@@ -311,9 +273,8 @@ export function useClips(): UseClips {
         if (!cancelled && !progressSeen && res?.needsGeneration) setGeneratingCount(res.needsGeneration);
       }
 
-      // Snapshot for the next launch's instant first paint. "New" flags are
-      // session-relative, so they're stripped. Never cache an empty library —
-      // a transient scan failure must not make later launches paint "no clips".
+      // "new" flags are session-relative, stripped here; never cache an empty
+      // library or a transient scan failure paints "no clips" next launch
       if (list.length > 0) {
         writeClipsCache(() => ({
           location: loc,
@@ -322,8 +283,6 @@ export function useClips(): UseClips {
             tags: Array.isArray(allTags[c.originalName]) ? allTags[c.originalName] : [],
             isNewSinceLastSession: false,
           })),
-          // tmap is kept up to date by onThumbnailGenerated below, so thumbs
-          // generated before the deferred write land in the snapshot too.
           thumbnails: [...tmap],
         }));
       }
@@ -363,12 +322,12 @@ export function useClips(): UseClips {
       prev.map((c) => (c.originalName === originalName ? { ...c, customName: newName } : c)),
     );
 
-    // Reflect into the open legacy player, if it's showing this clip.
+    // reflect into the legacy player, if it's showing this clip
     const state = window.legacyState;
     if (state?.currentClip?.originalName === originalName) {
       state.currentClip.customName = newName;
       const input = document.getElementById("clip-title") as HTMLInputElement | null;
-      // Don't stomp the field the user is actively typing in.
+      // don't stomp the field the user is actively typing in
       if (input && document.activeElement !== input) input.value = newName;
     }
     return true;
@@ -379,7 +338,6 @@ export function useClips(): UseClips {
       prev.map((c) => (c.originalName === originalName ? { ...c, tags } : c)),
     );
     window.clips.saveClipTags(originalName, tags).catch(() => {});
-    // Reflect into the open legacy player, if it's showing this clip.
     const state = window.legacyState;
     if (state?.currentClip?.originalName === originalName) {
       state.currentClip.tags = tags;
@@ -410,7 +368,7 @@ export function useClips(): UseClips {
     }
   }, []);
 
-  // Stable object identity so memoized consumers only re-render on real changes.
+  // stable object identity so memoized consumers only re-render on real changes
   return useMemo(
     () => ({
       clips,

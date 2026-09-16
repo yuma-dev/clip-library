@@ -1,12 +1,6 @@
-// Offline queue: NDJSON, one fully formed wire event per line.
-//
-// Every line carries an `event_id`, so resending after an ambiguous failure is
-// a server-deduped no-op. Appends are SYNCHRONOUS on purpose: the uncaught
-// exception handler and the panic path must be able to persist an event before
-// process.exit(1), and events are rare enough (coalesced, capped per session)
-// that the blocking cost is irrelevant.
-//
-// Never throws. A broken queue must not be able to take the app down.
+// Offline queue: NDJSON, one wire event per line, each with an event_id so a resend after an ambiguous
+// failure is a server-deduped no-op. Appends are synchronous so the uncaught-exception/panic path can
+// persist an event before process.exit(1). Never throws: a broken queue must not take the app down.
 
 const fs = require('fs');
 const path = require('path');
@@ -77,15 +71,8 @@ function rewrite(events) {
   return dropped;
 }
 
-/**
- * Drop the first `count` lines, re-reading the file first.
- *
- * A flush snapshots the queue, awaits a request that can take 20 seconds, then
- * needs to remove exactly the batch it sent. Rewriting from the snapshot would
- * erase every event appended during that window, which is precisely when the
- * interesting ones arrive. Re-reading here keeps them: appends only ever go to
- * the end, so dropping the first N is safe regardless of what arrived since.
- */
+/** Drops the first `count` lines but re-reads the file first: a flush awaits a request that can take
+ * 20s, and rewriting from the old snapshot would erase anything appended (to the end) during that wait. */
 function dropFirst(count) {
   if (count <= 0) return 0;
   return rewrite(readAll().slice(count));

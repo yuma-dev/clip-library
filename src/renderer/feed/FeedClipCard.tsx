@@ -1,4 +1,4 @@
-// Feed clip card — ports the reference website ClipCard, adapted to the app's
+// Feed clip card, ports the reference website ClipCard, adapted to the app's
 // visual language (custom classes + design tokens, not Tailwind). Shares the
 // library card's hover feel (translateY(-3px), border + shadow) via feed.css.
 
@@ -29,8 +29,8 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
   const ref = useRef<HTMLElement>(null);
   const observe = useObserve();
 
-  // Register with the shared visibility observer (toggles .cv-offscreen so
-  // far-offscreen cards stop costing layout/paint — same as library ClipCard).
+  // shared visibility observer toggles .cv-offscreen so far-offscreen cards
+  // stop costing layout/paint, same as library ClipCard
   useEffect(() => {
     const el = ref.current;
     if (!el || !observe) return;
@@ -50,11 +50,9 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
     e.stopPropagation();
     const isActive = clip.userReactions.includes(emoji);
     const expectedAction: "added" | "removed" = isActive ? "removed" : "added";
-    // Optimistic update
     onReactionUpdate(clip.id, emoji, expectedAction);
     try {
       const res = await toggleReaction(clip.id, emoji);
-      // If server disagrees, revert
       if (res.action !== expectedAction) {
         onReactionUpdate(clip.id, emoji, res.action === "added" ? "removed" : "added");
       }
@@ -98,7 +96,7 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
           </div>
         )}
 
-        {/* Mentions — top-left stacked avatars (reuse library classes). */}
+        {/* Mentions: top-left stacked avatars (reuse library classes). */}
         {clip.mentions.length > 0 && (
           <div className="clip-participants" onClick={(e) => e.stopPropagation()}>
             {mentions.map((mention, i) => {
@@ -131,12 +129,12 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
           </div>
         )}
 
-        {/* Duration badge — top-right. */}
+        {/* Duration badge, top-right. */}
         {clip.duration ? (
           <span className="feed-card-duration">{formatDuration(clip.duration)}</span>
         ) : null}
 
-        {/* Reactions — bottom-left. */}
+        {/* Reactions, bottom-left. */}
         {topReactions.length > 0 && (
           <div className="feed-card-reactions" onClick={(e) => e.stopPropagation()}>
             {topReactions.map(([emoji, count]) => {
@@ -156,7 +154,7 @@ function FeedClipCard({ clip, onReactionUpdate, onFavoriteUpdate, onOpen }: Feed
           </div>
         )}
 
-        {/* Comment count — bottom-right. */}
+        {/* Comment count, bottom-right. */}
         {clip.commentCount > 0 && (
           <span className="feed-card-comments">
             <MessageSquare size={13} />

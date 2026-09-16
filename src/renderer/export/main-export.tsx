@@ -1,11 +1,6 @@
-// Entry point for the component-mockup exporter (a second Vite HTML entry —
-// export.html). Reads a spec from `window.__EXPORT_SPEC__` (injected by the
-// capture script before load), installs a stub window.clips that replays its
-// fixture, mounts the named scene, then flips `data-export-ready` once fonts and
-// images have settled so the capture script knows the frame is paintable.
-//
-// This file is component-agnostic and permanent; everything specific to a given
-// render lives in the spec. See docs/component-mockups.md.
+// Entry point for the component-mockup exporter (export.html). Reads a spec from
+// window.__EXPORT_SPEC__, mounts the named scene, then flips data-export-ready
+// once fonts/images settle. Component-agnostic; see docs/component-mockups.md.
 
 import "@fontsource-variable/inter";
 import ReactDOM from "react-dom/client";
@@ -28,7 +23,7 @@ async function signalReady(): Promise<void> {
   try {
     await (document as unknown as { fonts?: { ready: Promise<unknown> } }).fonts?.ready;
   } catch {
-    /* fonts API absent — ignore */
+    /* fonts API absent, ignore */
   }
   // Let the ~50ms game-icon IPC debounce flush and avatars mount.
   await new Promise((r) => setTimeout(r, settle));

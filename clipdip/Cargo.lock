@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "cliplib-launcher"
-version = "3.5.18"
+version = "3.5.19"
 dependencies = [
  "png 0.17.16",
  "windows 0.58.0",

@@ -43,9 +43,8 @@ function decodeRecord(record) {
 
   if (record.mode === 'safeStorage') {
     if (!safeStorage.isEncryptionAvailable()) {
-      // The user is reported as "not connected" with nothing telling them
-      // their stored token can no longer be read (OS keyring reset, profile
-      // copied to another machine).
+      // reads as "not connected" with no hint that the stored token can no
+      // longer be decrypted (OS keyring reset, profile copied to another machine)
       telemetry.event('auth_token_undecryptable', {
         kind: telemetry.KIND.ERROR,
         severity: telemetry.SEVERITY.ERROR,
@@ -57,7 +56,7 @@ function decodeRecord(record) {
     try {
       decrypted = safeStorage.decryptString(Buffer.from(record.value, 'base64'));
     } catch (error) {
-      // Same outcome, different cause: the key is there but it is not ours.
+      // same outcome, different cause: the key is there but it is not ours
       telemetry.event('auth_token_undecryptable', {
         kind: telemetry.KIND.ERROR,
         severity: telemetry.SEVERITY.ERROR,
@@ -75,9 +74,8 @@ function decodeRecord(record) {
   return '';
 }
 
-// In-memory cache: the token is needed on every share API call and every
-// media request (header injection), so skip the file read + decrypt after
-// the first resolution. `null` = not yet read; '' = known-absent.
+// cached after first read (needed on every share call + media header
+// injection). null = not yet read, '' = known-absent
 let cachedToken = null;
 
 async function getToken() {
@@ -94,7 +92,7 @@ async function getToken() {
         severity: telemetry.SEVERITY.WARNING,
         context: { errno: error?.code }
       });
-      return ''; // transient failure — don't cache
+      return ''; // transient failure, don't cache
     }
     cachedToken = '';
   }

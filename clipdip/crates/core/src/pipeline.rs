@@ -1,17 +1,6 @@
-//! Capture pipeline orchestration.
-//!
-//! [`Pipeline`] owns the ring buffer, the video capture+encode thread, and
-//! the per-source audio threads — i.e. everything that needs to be live
-//! between "user pressed Start" and "user pressed Stop". The CLI binary
-//! wires it up against a hotkey + Ctrl+C; the Tauri UI (when it lands)
-//! will wire the same `start` / `save_clip` / `stop` against its own
-//! event surface.
-//!
-//! What the pipeline does NOT do:
-//! - **CLI flag handling / config editing.** Those are launch-time only.
-//! - **Hotkey listening / Ctrl+C / event loop.** Those are event sources;
-//!   the caller decides when to call `save_clip` and `stop`.
-//! - **Tracing init.** Whoever owns the process owns logging setup.
+//! Capture pipeline orchestration: [`Pipeline`] owns the ring buffer, the
+//! video capture+encode thread, and per-source audio threads, live between
+//! start and stop. Not its job: CLI/config, hotkey/event loop, tracing init.
 
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -36,12 +25,8 @@ use crate::config::{
 };
 use crate::filename::FilenameVars;
 
-/// Current QPC time in 100-ns ticks — the same clock and unit the ring
-/// buffer's packet PTS values use (WASAPI positions and DXGI present
-/// times are both QPC-derived). Callers stamp the hotkey moment with
-/// this so the saved clip can be clamped to end exactly at the press,
-/// excluding anything that happens during the save flow itself (e.g.
-/// the notification chirp leaking into the clip's system audio).
+/// QPC time in 100-ns ticks, same clock/unit as ring packet PTS (WASAPI and
+/// DXGI are both QPC-derived). Lets a save clamp exactly to the hotkey press.
 pub fn qpc_now_100ns() -> i64 {
     use windows::Win32::System::Performance::{
         QueryPerformanceCounter, QueryPerformanceFrequency,
@@ -55,43 +40,35 @@ pub fn qpc_now_100ns() -> i64 {
     if freq <= 0 {
         return 0;
     }
-    // Split to avoid overflow: counter * 1e7 can exceed i64 after ~10h
-    // of uptime if multiplied naively.
+    // split to avoid overflow: counter * 1e7 can exceed i64 after ~10h uptime
     let secs = counter / freq;
     let rem = counter % freq;
     secs * 10_000_000 + rem * 10_000_000 / freq
 }
 
-/// Metadata about one running audio source, used at save time to size WAV
-/// headers correctly.
+/// Metadata about one running audio source, used at save time to size WAV headers.
 pub struct AudioMeta {
     pub stream_id: u8,
-    /// Short slug used for the WAV sidecar filename (e.g. `loopback`,
-    /// `mic-3a8f12c0`). Stays stable regardless of the device's current
-    /// friendly name.
+    /// WAV sidecar filename slug (e.g. `loopback`, `mic-3a8f12c0`); stable across device renames.
     pub label: String,
-    /// Human-readable name written as the track's `title` metadata in
-    /// the muxed MP4 — the device's WASAPI friendly name when we could
-    /// resolve it, otherwise a fallback derived from the source kind.
+    /// Track `title` metadata in the muxed MP4: WASAPI friendly name, or a kind-derived fallback.
     pub friendly_name: String,
     pub fmt: WaveFormat,
 }
 
-/// Facts about the running capture session, populated by the video thread
-/// once the encoder is open. Feeds the telemetry heartbeat's `app` block
-/// (resolved encoder + backend + real dimensions), so the dashboard's
-/// GPU x encoder health matrix reflects what actually ran, not the config.
+/// Facts about the running session once the encoder is open. Feeds the
+/// telemetry heartbeat's `app` block for the GPU x encoder health matrix.
 #[derive(Clone, Copy, Debug)]
 pub struct SessionInfo {
     pub codec: ActiveCodec,
-    /// `"wgc"` or `"dxgi"` — the backend that actually resolved (Auto picks).
+    /// `"wgc"` or `"dxgi"`, whichever Auto resolved to.
     pub backend: &'static str,
     pub width: u32,
     pub height: u32,
 }
 
 impl SessionInfo {
-    /// Server-side encoder slug (the capture-health matrix groups on this).
+    /// Encoder slug the capture-health matrix groups on.
     pub fn encoder_slug(&self) -> &'static str {
         match self.codec {
             ActiveCodec::H264 => "nvenc_h264",
@@ -99,7 +76,7 @@ impl SessionInfo {
         }
     }
 
-    /// Server-side capture-mode slug.
+    /// Capture-mode slug for the same matrix.
     pub fn capture_mode_slug(&self) -> &'static str {
         match self.backend {
             "wgc" => "wgc",
@@ -113,66 +90,44 @@ pub struct Pipeline {
     ring: Arc<PacketRing>,
     audio_meta: Vec<AudioMeta>,
     audio_handles: Vec<AudioCapture>,
-    /// Per-configured-source outcome of `start_audio`, for the app layer's
-    /// toasts, the control-server status, and the device-change watcher.
+    /// Per-source outcome of `start_audio`, for toasts/status/device-watcher.
     audio_states: Vec<AudioSourceState>,
     stop: Arc<AtomicBool>,
     video_thread: Option<JoinHandle<Result<()>>>,
-    /// Spawned only when `clipdip_profile::enabled()` was true at `start`.
-    /// Periodically drains the global profiler and logs the report.
+    /// Only spawned when `clipdip_profile::enabled()`; drains + logs the profiler periodically.
     reporter_thread: Option<JoinHandle<()>>,
-    /// Set once by the video thread after the NVENC session opens, so the
-    /// muxer can tell ffmpeg the right input format (`-f h264` vs `-f av1`).
-    /// `None` until the encoder is ready (saving before then is impossible
-    /// anyway — the ring has no IDR yet).
+    /// Set by the video thread once NVENC opens, so the muxer picks `-f
+    /// h264`/`-f av1`. `None` until then (no IDR to save yet anyway).
     active_codec: Arc<Mutex<Option<ActiveCodec>>>,
-    /// Codec sequence header bytes captured once at NVENC init. Prepended
-    /// to the saved bitstream file so ffmpeg always sees a sequence
-    /// header at byte 0, even when the rolling buffer's first keyframe
-    /// didn't repeat one. Empty until the video thread populates it.
+    /// Sequence header from NVENC init, prepended to the saved bitstream so
+    /// ffmpeg always sees one at byte 0 even if no keyframe repeats it.
     codec_header: Arc<Mutex<Vec<u8>>>,
-    /// PTS anchor of an in-progress manual recording. While `Some`, the
-    /// ring holds everything from this point on (no eviction past it);
-    /// `stop_recording_and_save_in` consumes it.
+    /// PTS anchor of an in-progress manual recording; `Some` pins the ring
+    /// against eviction past it until `stop_recording_and_save_in` consumes it.
     recording_from: Mutex<Option<i64>>,
-    /// Shared clock that folds capture stalls out of the PTS timeline. Held
-    /// here so it lives as long as the pipeline; the video and audio threads
-    /// hold their own clones.
+    /// Clock folding capture stalls out of the PTS timeline; video/audio threads clone it.
     _media_clock: Arc<MediaClock>,
-    /// Raw (uncompensated) QPC timestamp of the most recently captured video
-    /// frame, in 100-ns ticks; 0 until the first frame. The video thread
-    /// writes it every frame; a health monitor compares it against
-    /// `qpc_now_100ns()` to detect a live capture stall.
+    /// Raw QPC of the last captured video frame (100ns ticks), 0 until the
+    /// first frame. A health monitor diffs it against `qpc_now_100ns()` for a stall.
     frame_liveness: Arc<AtomicI64>,
-    /// Set (once) by the video thread if it exits with an error, so a
-    /// supervisor can react immediately instead of waiting to join the
-    /// thread at shutdown — before this existed, a dead capture thread
-    /// looked identical to a wedged one for 15s and the error text was
-    /// lost until process exit.
+    /// Set once if the video thread dies, so a supervisor reacts immediately
+    /// instead of waiting for shutdown join (used to be silent for 15s).
     video_error: Arc<Mutex<Option<String>>>,
-    /// Which stage the video loop is currently in (see [`CapturePhase`]).
-    /// If frame production wedges, this pins down *which* GPU call hung —
-    /// the loop sets it before each call but can't clear it if the call
-    /// never returns.
+    /// Current video-loop stage (see [`capture_phase`]); pins down which GPU
+    /// call hung if frame production wedges.
     capture_phase: Arc<AtomicU8>,
-    /// QP the encoder should run at *right now* (H.264 scale), or
-    /// [`QP_BOOST_OFF`] for the configured base quality. Written by
-    /// `start_recording` / `stop_recording_and_save_in`; the video thread
-    /// polls it once per frame and reconfigures NVENC on change, so manual
-    /// recordings encode at `video.recording_quality` while replay-buffer
-    /// footage stays at the cheaper clip quality.
+    /// QP to run at now (H.264 scale), or [`QP_BOOST_OFF`] for base quality.
+    /// Video thread polls once per frame and reconfigures NVENC on change.
     recording_qp_boost: Arc<AtomicU32>,
-    /// Set once by the video thread after the encoder opens (see
-    /// [`SessionInfo`]). `None` until then, or forever if init failed.
+    /// Set once the encoder opens (see [`SessionInfo`]); `None` if init failed.
     session_info: Arc<Mutex<Option<SessionInfo>>>,
 }
 
-/// Sentinel in [`Pipeline::recording_qp_boost`]: no boost, run at the
-/// configured base rate control.
+/// Sentinel: no QP boost, run at the configured base rate control.
 const QP_BOOST_OFF: u32 = u32::MAX;
 
-/// Stage values stored in [`Pipeline::capture_phase`]. A health watchdog
-/// reads this when frames stop to report where the loop is stuck.
+/// Stage values for [`Pipeline::capture_phase`]; a watchdog reads this to
+/// report where the loop is stuck when frames stop.
 pub mod capture_phase {
     pub const SLEEP: u8 = 0;
     pub const ACQUIRE: u8 = 1;
@@ -191,14 +146,8 @@ pub mod capture_phase {
 }
 
 impl Pipeline {
-    /// Start capture: spawn one WASAPI thread per `cfg.audio.sources` entry,
-    /// plus the video capture+encode thread. Returns once both are running
-    /// (the video thread is up but may still be initializing the encoder).
-    ///
-    /// `ProcessLoopback` sources are logged + skipped (not implemented).
-    /// Failed audio sources are logged + skipped (the rest of the pipeline
-    /// continues). Failure to start the video thread aborts the whole
-    /// pipeline.
+    /// Spawn one WASAPI thread per `cfg.audio.sources` entry plus the video
+    /// thread. Failed audio sources are logged + skipped; a failed video thread aborts.
     pub fn start(cfg: Config) -> Result<Self> {
         let byte_budget = cfg.ring_byte_budget();
         info!(
@@ -212,8 +161,7 @@ impl Pipeline {
             cfg.ring_time_window_100ns(),
         ));
 
-        // One clock shared by every capture thread so audio and video stay
-        // on a single, gap-free timebase across a stall.
+        // shared clock keeps audio/video on one gap-free timebase across a stall
         let media_clock = Arc::new(MediaClock::new());
 
         let (audio_meta, audio_handles, audio_states) =
@@ -276,9 +224,7 @@ impl Pipeline {
         *self.session_info.lock().unwrap()
     }
 
-    /// Shared handle to [`Self::session_info`], for a watcher thread that
-    /// wants to observe the video thread populating it without holding a
-    /// borrow of the pipeline.
+    /// Shared handle for a watcher thread to observe without borrowing the pipeline.
     pub fn session_info_handle(&self) -> Arc<Mutex<Option<SessionInfo>>> {
         Arc::clone(&self.session_info)
     }
@@ -287,10 +233,8 @@ impl Pipeline {
         &self.cfg
     }
 
-    /// Where each configured audio source currently stands: what the config
-    /// wants, what's actually recording, and at which fallback rank. Thread
-    /// liveness is applied at call time, so a source whose device vanished
-    /// mid-session reads as not recording here.
+    /// Per-source status: wanted vs actually-recording vs fallback rank.
+    /// Liveness is checked at call time, so a vanished device reads as silent here.
     pub fn audio_states(&self) -> Vec<AudioSourceState> {
         self.audio_states
             .iter()
@@ -309,57 +253,36 @@ impl Pipeline {
             .collect()
     }
 
-    /// Shared handle to the packet ring, for live occupancy stats
-    /// (the settings UI's file-size estimate).
+    /// Shared handle for the settings UI's file-size estimate.
     pub fn ring(&self) -> Arc<PacketRing> {
         Arc::clone(&self.ring)
     }
 
-    /// Shared handle to the raw-QPC timestamp (100-ns ticks) of the most
-    /// recently captured video frame; 0 until the first frame. A health
-    /// monitor compares `qpc_now_100ns() - this` against a threshold to
-    /// detect a capture stall while the app is running.
+    /// Raw QPC (100ns ticks) of the last captured frame, 0 until the first.
+    /// A health monitor diffs against `qpc_now_100ns()` to detect a stall.
     pub fn frame_liveness(&self) -> Arc<AtomicI64> {
         Arc::clone(&self.frame_liveness)
     }
 
-    /// The error the video thread died with, if it has died. A health
-    /// monitor polls this to alert + restart the pipeline immediately
-    /// (the thread's `JoinHandle` result is otherwise only observed at
-    /// shutdown, so without this a capture failure is silent).
+    /// Error the video thread died with, if any; polled so a monitor can
+    /// restart immediately instead of only at shutdown join.
     pub fn video_error(&self) -> Arc<Mutex<Option<String>>> {
         Arc::clone(&self.video_error)
     }
 
-    /// Shared handle to the video loop's current stage (see
-    /// [`capture_phase`]). A watchdog reads this when frames have stopped to
-    /// report which call wedged.
+    /// Current video-loop stage, for a watchdog to report which call wedged.
     pub fn capture_phase(&self) -> Arc<AtomicU8> {
         Arc::clone(&self.capture_phase)
     }
 
-    /// Snapshot the ring, find the oldest video IDR, write temp `.h264` +
-    /// per-source `.wav` sidecars trimmed to that IDR's PTS, then run
-    /// ffmpeg to produce an MP4 with a "Mix" track + one stream per
-    /// source. Returns the saved MP4 path.
+    /// Snapshot the ring, trim to the oldest video IDR, write `.h264` +
+    /// per-source `.wav` sidecars, mux to MP4. Returns the saved path.
     pub fn save_clip(&self) -> Result<PathBuf> {
         self.save_clip_in(None, &FilenameVars::default())
     }
 
-    /// Like [`save_clip`] but writes to `directory_override` instead of
-    /// the directory the pipeline was started with. Used so config edits
-    /// to the output directory take effect on the next save without
-    /// requiring a pipeline restart (which would tear down NVENC + the
-    /// ring buffer for what is conceptually just a path change).
-    ///
-    /// The filename comes from expanding the `output.filename_stem`
-    /// template against `vars` (focused app, etc.); a numeric suffix is
-    /// added only if that name is already taken.
-    ///
-    /// The clip always covers the full configured replay window ending at
-    /// the newest buffered frame. The notification chirp can't leak in: it
-    /// only plays after the save completes, well after the ring snapshot is
-    /// taken synchronously at the start of the save.
+    /// Like [`save_clip`] but to `directory_override`, so a directory config
+    /// change applies without a restart. Filename from `output.filename_stem` expanded + deduped.
     pub fn save_clip_in(
         &self,
         directory_override: Option<&std::path::Path>,
@@ -390,32 +313,22 @@ impl Pipeline {
         )
     }
 
-    /// Begin a manual recording: pin the ring against eviction from the
-    /// newest buffered IDR onward. Returns an error if a recording is
-    /// already in progress. Memory grows with recording length (raw
-    /// encoded packets stay in RAM until the recording is saved).
+    /// Pin the ring against eviction from the newest buffered IDR onward.
+    /// Errors if already recording. Memory grows with length until saved.
     pub fn start_recording(&self) -> Result<()> {
         let mut rec = self.recording_from.lock().unwrap();
         if rec.is_some() {
             return Err(anyhow!("recording already in progress"));
         }
-        // Anchor at the latest IDR (not "now") so the recording is
-        // decodable from its very first frame instead of losing up to
-        // one GOP at the start.
+        // anchor at the latest IDR, not "now", so it's decodable from frame 1
         let anchor = self
             .ring
             .latest_keyframe_pts()
             .ok_or_else(|| anyhow!("no video in buffer yet — wait ~1s after start and retry"))?;
         self.ring.set_hold(Some(anchor));
         *rec = Some(anchor);
-        // Boost encode quality for the recording's duration. Quality
-        // modes only (plain or capped CQP — the boost value is the same
-        // 0-51 quality scale under both; VBR keeps its average) and never
-        // *worse* than the clip quality (a recording QP above the clip QP
-        // is treated as "match clips"). The video thread picks the new
-        // target up on its next frame and reconfigures NVENC; the first
-        // ≤1 GOP of the recording (the pre-anchor footage) stays at clip
-        // quality.
+        // boost quality for the recording; CQP modes only, never worse than
+        // clip quality; the pre-anchor GOP stays at clip quality
         if let (
             RateControlCfg::ConstantQp { qp },
             RecordingQualityCfg::ConstantQp { qp: rec_qp },
@@ -434,9 +347,8 @@ impl Pipeline {
         self.recording_from.lock().unwrap().is_some()
     }
 
-    /// End a manual recording and save everything since the start anchor
-    /// as a clip (same mux path as `save_clip_in`). Releases the ring
-    /// hold whether or not the save succeeds.
+    /// End a manual recording and save since the start anchor. Releases the
+    /// ring hold whether or not the save succeeds.
     pub fn stop_recording_and_save_in(
         &self,
         directory_override: Option<&std::path::Path>,
@@ -449,9 +361,7 @@ impl Pipeline {
             .take()
             .ok_or_else(|| anyhow!("no recording in progress"))?;
 
-        // Drop the encoder back to clip quality right away. Reconfigure
-        // only affects frames encoded from here on; everything already in
-        // the ring keeps the boosted quality for the save below.
+        // reconfigure only affects future frames; already-buffered stays boosted for this save
         self.recording_qp_boost
             .store(QP_BOOST_OFF, Ordering::Relaxed);
 
@@ -478,17 +388,13 @@ impl Pipeline {
             &header,
             Some(anchor),
         );
-        // Release the hold only after the snapshot inside the save has
-        // been taken (save_clip_with_stem snapshots synchronously before
-        // returning control here on the error path too).
+        // hold released only after save_clip_with_stem's synchronous snapshot
         self.ring.set_hold(None);
         result
     }
 
-    /// Like [`save_clip`] but writes to a fixed `{stem}.mp4` (overwriting
-    /// any previous file with the same name). Used by smoke-test flows
-    /// that want a stable output path instead of a new timestamped clip
-    /// every run.
+    /// Like [`save_clip`] but to a fixed `{stem}.mp4`, overwriting; used by
+    /// smoke tests that want a stable path instead of a new one every run.
     pub fn save_clip_as(&self, stem: &str) -> Result<PathBuf> {
         let codec = *self.active_codec.lock().unwrap();
         let header = self.codec_header.lock().unwrap().clone();
@@ -503,8 +409,8 @@ impl Pipeline {
         )
     }
 
-    /// Signal the video thread to stop, join it, then drop audio handles
-    /// (each `AudioCapture::Drop` signals + joins its own thread).
+    /// Stop the video thread, join it, then drop audio handles (each
+    /// `AudioCapture::Drop` signals + joins its own thread).
     pub fn stop(mut self) -> Result<()> {
         self.stop_in_place()
     }
@@ -521,7 +427,7 @@ impl Pipeline {
         if let Some(handle) = self.reporter_thread.take() {
             let _ = handle.join();
         }
-        // Dropping the Vec drops each AudioCapture, whose Drop joins.
+        // dropping the Vec drops each AudioCapture, whose Drop joins
         self.audio_handles.clear();
         Ok(())
     }
@@ -529,42 +435,33 @@ impl Pipeline {
 
 impl Drop for Pipeline {
     fn drop(&mut self) {
-        // Best-effort cleanup if the caller forgot `stop()`. Calling
-        // `stop()` is preferred because it propagates join errors.
+        // best-effort if the caller forgot stop(); stop() is preferred, it propagates join errors
         if self.video_thread.is_some() {
             let _ = self.stop_in_place();
         }
     }
 }
 
-/// Where one configured audio source stands after `start_audio` — what the
-/// config asks for, what's actually recording, and at which position in the
-/// fallback chain. The app layer diffs these across pipeline restarts to
-/// decide what to tell the user; the device watcher reads them to decide
-/// whether a restart would improve anything.
+/// One audio source's state after `start_audio`. The app layer diffs these
+/// across restarts to decide what to tell the user; the device watcher uses them too.
 #[derive(Clone, Debug)]
 pub struct AudioSourceState {
     /// Position in `cfg.audio.sources`.
     pub index: usize,
     pub kind: AudioKind,
-    /// Display name of the primary choice: the pinned device's friendly
-    /// name (or a short-id placeholder while it's disconnected), or
-    /// "System default".
+    /// Primary choice's display name, or "System default".
     pub wanted_label: String,
     /// The primary pin; `None` = system default.
     pub primary_id: Option<String>,
-    /// Raw configured fallback entries (may contain the `"default"`
-    /// sentinel), in priority order.
+    /// Configured fallback entries in priority order (may hold the `"default"` sentinel).
     pub fallback_ids: Vec<String>,
-    /// Friendly name of the device actually recording; `None` = the source
-    /// is not recording at all.
+    /// Friendly name of what's actually recording; `None` = silent.
     pub using_label: Option<String>,
     /// WASAPI id of the endpoint actually opened.
     pub using_id: Option<String>,
-    /// Which candidate is recording: 0 = primary, 1.. = fallback position.
+    /// 0 = primary, 1.. = fallback position.
     pub rank: Option<usize>,
-    /// Position in `Pipeline::audio_handles`, for the liveness overlay in
-    /// [`Pipeline::audio_states`].
+    /// Position in `Pipeline::audio_handles`, for the liveness overlay.
     handle_idx: Option<usize>,
 }
 
@@ -580,8 +477,7 @@ impl AudioSourceState {
     }
 }
 
-/// Per-kind gate key so a missing mic doesn't suppress the report about a
-/// missing loopback device (and vice versa) within the gate window.
+/// Per-kind gate key so a missing mic doesn't suppress a missing-loopback report (or vice versa).
 fn kind_gate_key(base: &'static str, kind: AudioKind) -> String {
     let k = match kind {
         AudioKind::SystemLoopback => "loopback",
@@ -595,10 +491,7 @@ fn start_audio(
     ring: Arc<PacketRing>,
     clock: Arc<MediaClock>,
 ) -> (Vec<AudioMeta>, Vec<AudioCapture>, Vec<AudioSourceState>) {
-    // One-shot enumeration so we can stamp each track with its device's
-    // friendly name (used as the MP4 track title). Falls back to an empty
-    // list on failure — capture still works, titles just lose the device
-    // name.
+    // enumerate once for friendly names (MP4 track titles); empty on failure, capture still works
     let devices = list_devices().unwrap_or_else(|e| {
         warn!("list_devices failed, audio track titles will use fallback: {e:#}");
         Vec::new()
@@ -608,7 +501,7 @@ fn start_audio(
     let mut handles = Vec::new();
     let mut states = Vec::new();
     for (idx, source) in cfg.audio.sources.iter().enumerate() {
-        let stream_id = (idx + 1) as u8; // 0 reserved for video
+        let stream_id = (idx + 1) as u8; // stream 0 is video
         let label = source.label();
         let device_id = source.device_id().map(str::to_string);
         let kind = match source {
@@ -620,9 +513,7 @@ fn start_audio(
             }
         };
         let resolved_name = resolve_friendly_name(kind, device_id.as_deref(), &devices);
-        // A pinned device id that no longer enumerates = "your saved mic is
-        // gone". Silent today (the source may still start on it, or fail
-        // below) — report the mismatch itself, without names or ids.
+        // pinned device id no longer enumerates = "your saved mic is gone"
         let pinned_missing = device_id.is_some() && resolved_name.is_none() && !devices.is_empty();
         let want_flow = match kind {
             AudioKind::SystemLoopback => DeviceFlow::Render,
@@ -633,9 +524,7 @@ fn start_audio(
                 &kind_gate_key("audio_pinned_device_missing", kind),
                 Duration::from_secs(900),
             ) {
-                // The kind is in the message on purpose: the server groups
-                // issues by message template, and a missing mic vs missing
-                // loopback device are different problems.
+                // kind is in the message on purpose: server groups issues by message template
                 clipdip_diagnostics::report_error_with(
                     "audio_pinned_device_missing",
                     clipdip_diagnostics::Severity::Warning,
@@ -651,12 +540,7 @@ fn start_audio(
             }
         }
 
-        // Candidate chain: the primary pick first, then each configured
-        // fallback (the "default" sentinel maps to an unpinned start).
-        // Dedup so "default" listed behind an unpinned primary isn't tried
-        // twice. An empty fallback list preserves the strict behavior: a
-        // missing pinned device records nothing rather than something the
-        // user didn't choose.
+        // primary first, then fallbacks ("default" sentinel = unpinned start); deduped
         let mut candidates: Vec<Option<String>> = vec![device_id.clone()];
         for fb in source.fallbacks() {
             let cand = if fb == crate::config::DEFAULT_DEVICE_SENTINEL {
@@ -714,8 +598,7 @@ fn start_audio(
             Some((cap, rank)) => {
                 let fmt = cap.format();
                 let used_id = cap.device_id_in_use().to_string();
-                // Friendly name of what actually opened — for a fallback or
-                // default start this is not the primary's name.
+                // name of what actually opened, not the primary's name if this is a fallback
                 let friendly_name = devices
                     .iter()
                     .find(|d| d.id == used_id)
@@ -724,8 +607,7 @@ fn start_audio(
                     .unwrap_or_else(|| fallback_friendly_name(kind));
                 info!(stream_id, %label, %friendly_name, rank, ?fmt, "audio source started");
                 if rank > 0 {
-                    // Message carries the kind (issue grouping); ids stay
-                    // out of it — the chain can embed device-id strings.
+                    // message carries kind for grouping; ids left out, the chain can embed device-id strings
                     clipdip_diagnostics::report_error_with(
                         "audio_source_fallback_used",
                         clipdip_diagnostics::Severity::Warning,
@@ -753,8 +635,7 @@ fn start_audio(
                 handles.push(cap);
             }
             None => {
-                // Nothing in the chain started. Message stays free of ids
-                // but carries the kind + primary hresult for grouping.
+                // nothing in the chain started; message carries kind + hresult, no ids
                 let hresult = primary_err.as_deref().map(extract_hresult).unwrap_or_else(|| "no_hresult".into());
                 clipdip_diagnostics::report_error(
                     "audio_source_start_failed",
@@ -773,9 +654,8 @@ fn start_audio(
     (meta, handles, states)
 }
 
-/// Pull the first `0x8....` HRESULT-looking token out of an error chain, so
-/// the event message groups by failure code without carrying the free text
-/// (which can embed device-id strings).
+/// Pull the first `0x8....` HRESULT-looking token from an error chain, so
+/// events group by code without carrying free text (may embed device ids).
 fn extract_hresult(chain: &str) -> String {
     let lower = chain.to_ascii_lowercase();
     if let Some(pos) = lower.find("0x8") {
@@ -819,16 +699,13 @@ fn fallback_friendly_name(kind: AudioKind) -> String {
 }
 
 fn spawn_reporter(stop: Arc<AtomicBool>, interval_ms: u64) -> Result<JoinHandle<()>> {
-    // Drain the very first window (it covers from process start to now —
-    // mostly init noise) so the first logged line reflects real steady
-    // state.
+    // drain the first window (init noise) so the first logged line reflects steady state
     let _ = clipdip_profile::report();
     let interval = Duration::from_millis(interval_ms.max(500));
     std::thread::Builder::new()
         .name("clipdip-profile".into())
         .spawn(move || {
-            // Sleep in small slices so a Ctrl+C exit doesn't have to wait
-            // for a full window. 100ms slices are still imperceptible.
+            // small slices so Ctrl+C doesn't wait for a full window
             let slice = Duration::from_millis(100);
             let mut elapsed = Duration::ZERO;
             while !stop.load(Ordering::Relaxed) {
@@ -842,7 +719,7 @@ fn spawn_reporter(stop: Arc<AtomicBool>, interval_ms: u64) -> Result<JoinHandle<
                     }
                 }
             }
-            // One last drain so partial-window data isn't silently lost.
+            // last drain so partial-window data isn't lost
             let rep = clipdip_profile::report();
             if !rep.stages.is_empty() {
                 info!("{}", clipdip_profile::format_report(&rep));
@@ -881,9 +758,7 @@ fn spawn_video_thread(
                 session_info,
             );
             if let Err(e) = &result {
-                // Surface the failure NOW — the JoinHandle result is only
-                // read at shutdown, and a silently dead capture thread is
-                // exactly how we recorded desktop wallpaper for two hours.
+                // surface now: a silently dead capture thread once recorded desktop wallpaper for 2h
                 error!("video capture thread exited with error: {e:#}");
                 *video_error.lock().unwrap() = Some(format!("{e:#}"));
             }
@@ -892,18 +767,8 @@ fn spawn_video_thread(
         .context("spawn video capture thread")
 }
 
-/// Log a WARN if one video-loop stage blocked far longer than a frame should
-/// take. The loop is otherwise a black box: we know it stalls (the health
-/// monitor sees frames stop) but not *where*. With non-blocking logging this
-/// WARN never blocks capture itself, so the next real stall pins the culprit:
-/// `acquire_frame` slow ⇒ DXGI / GPU / capture-blocking software; `encode_frame`
-/// slow ⇒ NVENC / GPU; neither slow but the stall detector still fires ⇒ the
-/// thread was descheduled (OS scheduling / power), not any capture call.
-/// Bucket an NVENC init failure chain into a stable cause slug so the
-/// dashboard splits the "encoder won't start" population by root cause
-/// (no driver vs old driver vs session limit vs bad resolution). String
-/// matching on the anyhow chain — brittle by nature, so `other` is the
-/// safe default and each arm matches text our own crates emit.
+/// Bucket an NVENC init failure into a stable cause slug for the dashboard.
+/// String-matches our crates' error text; brittle, `other` is the safe default.
 fn classify_encoder_error(chain: &str) -> &'static str {
     let c = chain.to_ascii_lowercase();
     if c.contains("nvencodeapi64") && (c.contains("load") || c.contains("not found") || c.contains("module")) {
@@ -911,8 +776,7 @@ fn classify_encoder_error(chain: &str) -> &'static str {
     } else if c.contains("driver too old") || c.contains("driver does not support") {
         "nvenc_driver_too_old"
     } else if c.contains("open") && c.contains("session") && c.contains("10") {
-        // NV_ENC_ERR_OUT_OF_MEMORY on open = the concurrent-session limit
-        // (OBS/ShadowPlay/Discord already encoding on consumer GPUs).
+        // NV_ENC_ERR_OUT_OF_MEMORY on open = concurrent-session limit (OBS/ShadowPlay/Discord)
         "nvenc_session_limit"
     } else if c.contains("openencodesession") || (c.contains("open") && c.contains("session")) {
         "nvenc_open_session_failed"
@@ -925,7 +789,7 @@ fn classify_encoder_error(chain: &str) -> &'static str {
     }
 }
 
-/// Same idea for capturer creation failures.
+/// Same idea, for capturer creation failures.
 fn classify_capture_error(chain: &str) -> &'static str {
     let c = chain.to_ascii_lowercase();
     if c.contains("enumoutputs") || c.contains("output index") || c.contains("get output") {
@@ -941,6 +805,7 @@ fn classify_capture_error(chain: &str) -> &'static str {
     }
 }
 
+/// acquire_frame slow = DXGI/GPU; encode_frame slow = NVENC; neither but stalled = descheduled.
 fn warn_if_slow(stage: &str, elapsed: Duration) {
     const SLOW_MS: u128 = 250;
     let ms = elapsed.as_millis();
@@ -973,8 +838,7 @@ fn video_loop(
         CaptureBackendCfg::Dxgi => "dxgi",
     };
 
-    /// Quality caps are referenced to 1440p60; scale to the session's
-    /// actual pixel rate so 1080p and 4K users get proportionate ceilings.
+    /// Quality caps are referenced to 1440p60; scale to actual pixel rate.
     /// Clamped to [0.25, 4] against degenerate resolutions/framerates.
     fn scale_cap_to_pixel_rate(reference_bps: u32, w: u32, h: u32, fps: u32) -> u32 {
         const REF_PIXEL_RATE: f64 = 2560.0 * 1440.0 * 60.0;
@@ -1017,9 +881,7 @@ fn video_loop(
         CodecPreferenceCfg::ForceAv1 => CodecPreference::ForceAv1,
     };
     let rate_control = match cfg.video.rate_control {
-        // CQP runs capped by default: same quality on ordinary content, a
-        // hard ceiling on runaway scenes (issue #4: 98 Mbps at QP 26).
-        // `quality_cap_bps = 0` is the explicit uncapped escape hatch.
+        // CQP capped by default against runaway scenes (issue #4: 98 Mbps at QP 26); 0 = uncapped
         RateControlCfg::ConstantQp { qp } => match cfg.video.quality_cap_bps {
             Some(0) => RateControl::ConstantQp { qp },
             cap => RateControl::CappedQuality {
@@ -1090,25 +952,15 @@ fn video_loop(
 
     let frame_interval = Duration::from_secs_f64(1.0 / cfg.video.fps as f64);
     let frame_interval_100ns = (10_000_000 / cfg.video.fps.max(1) as i64).max(1);
-    // A jump larger than this between two consecutive frames' raw QPC
-    // readings means capture stalled (GPU/display power transition blocking
-    // DXGI/NVENC) rather than just a busy-frame hiccup — DXGI acquire can
-    // legitimately stall a couple hundred ms under load, so the threshold
-    // sits well above that.
+    // above this = real capture stall, not a busy-frame hiccup; DXGI can legitimately stall ~200ms
     let stall_threshold_100ns = (frame_interval_100ns * 8).max(5_000_000);
     let mut next_at = Instant::now();
     let mut frames: u32 = 0;
-    // Last PTS handed to the encoder, used only to keep the stream
-    // strictly monotonic. Every frame is timestamped with QPC at emit
-    // time (see the loop below) — the same clock WASAPI audio positions
-    // use — so video and audio share one timebase and can't drift.
+    // last PTS handed to the encoder, kept strictly monotonic; QPC-stamped so video/audio share a timebase
     let mut last_emitted_pts: i64 = 0;
-    // Last raw (uncompensated) QPC reading, for stall detection.
+    // last raw (uncompensated) QPC reading, for stall detection
     let mut last_raw_pts: Option<i64> = None;
-    // QP override currently applied to the encoder session (None = base
-    // config). Tracks `recording_qp_boost` so we only pay the NVENC
-    // reconfigure when the target actually changes — and don't retry
-    // every frame if the driver rejects it.
+    // applied QP override (None = base); only reconfigures NVENC when the target actually changes
     let mut applied_qp_boost: Option<u32> = None;
 
     info!(
@@ -1126,34 +978,25 @@ fn video_loop(
         if now < next_at {
             std::thread::sleep(next_at - now);
         }
-        // Clamp so an idle stretch doesn't push `next_at` far into the
-        // past. Without this, when activity resumes and DXGI delivers
-        // fresh frames quickly, the loop would burst-encode at the
-        // hardware ceiling until `next_at` catches up — visible as a
-        // brief frame-rate spike after returning from idle.
+        // clamp so idle time doesn't leave next_at far in the past, else resuming activity
+        // would burst-encode at the hardware ceiling until it catches up
         next_at = next_at.max(now) + frame_interval;
 
         let _t_frame = clipdip_profile::start("pipeline.video_frame");
 
-        // Apply any pending recording-quality change before encoding this
-        // frame. The reconfigure keeps the NVENC session (and bitstream
-        // continuity) intact and forces an IDR, so the new quality starts
-        // on a clean GOP boundary within one frame of the hotkey.
+        // reconfigure keeps the NVENC session intact and forces an IDR, so quality
+        // changes start on a clean GOP boundary within one frame of the hotkey
         let boost = recording_qp_boost.load(Ordering::Relaxed);
         let target = if boost == QP_BOOST_OFF { None } else { Some(boost) };
         if target != applied_qp_boost {
-            // Rebuild from the SAME variant the session was opened with —
-            // NVENC (and our reconfigure guard) can't switch rate-control
-            // mode on a live session. `rate_control` is the mapped,
-            // pixel-rate-scaled value the encoder started from.
+            // rebuild from the same variant the session opened with; NVENC can't switch
+            // rate-control mode live
             let new_rc = match rate_control {
                 RateControl::ConstantQp { qp: base_qp } => {
                     Some(RateControl::ConstantQp { qp: target.unwrap_or(base_qp) })
                 }
                 RateControl::CappedQuality { cq: base_cq, max_bps } => {
-                    // While boosted, raise the ceiling 1.5x too — a better
-                    // quality target under the clip-tier cap would just
-                    // pin recordings at the cap and encode nothing extra.
+                    // raise the ceiling 1.5x too while boosted, else the clip-tier cap pins recordings
                     Some(match target {
                         Some(cq) => RateControl::CappedQuality {
                             cq,
@@ -1164,8 +1007,7 @@ fn video_loop(
                 }
                 RateControl::Vbr { .. } => None,
             };
-            // `rc` here is the pre-derate request — the encoder logs the
-            // effective post-derate config itself on success.
+            // rc is the pre-derate request; encoder logs the effective config itself on success
             if let Some(rc) = new_rc {
                 match encoder.reconfigure_rate_control(rc) {
                     Ok(()) => {
@@ -1178,31 +1020,19 @@ fn video_loop(
                     ),
                 }
             }
-            // Mark handled even on failure so we don't hammer the driver
-            // with a doomed reconfigure every frame.
+            // mark handled even on failure, else we hammer the driver every frame
             applied_qp_boost = target;
         }
 
-        // Timeout=0: DXGI returns immediately, either with a fresh frame
-        // (desktop changed since the last acquire) or with TIMEOUT, in
-        // which case `acquire_frame` re-emits the last captured texture
-        // so we stay at the configured CFR. A non-zero timeout would
-        // block the loop here for up to that long whenever the desktop
-        // is static — which on an idle screen meant the loop produced
-        // only ~5 fps no matter the target. The outer `next_at` sleep
-        // already handles pacing, so DXGI doesn't need to.
+        // timeout=0: DXGI returns immediately (fresh frame or TIMEOUT, re-emitting the last
+        // texture for CFR); a nonzero timeout blocked static-desktop capture to ~5fps
         let t_acq = Instant::now();
         capture_phase.store(capture_phase::ACQUIRE, Ordering::Relaxed);
         let acquired = match dup.acquire_frame(0) {
             Ok(a) => a,
             Err(e) => {
-                // ACCESS_LOST (game switched display modes, HDR toggle,
-                // monitor re-plug) or a WGC item close. Rebuild the
-                // capturer on the SAME device — the NVENC session stays
-                // open, so once capture is back the ring keeps filling and
-                // the media clock folds the gap out of the timeline.
-                // Before this existed the thread just died here, silently,
-                // and the watchdog restarted the whole app 15s later.
+                // ACCESS_LOST (mode switch/HDR toggle/monitor replug) or WGC item close;
+                // rebuild on the same device, NVENC session stays open. Used to die silently here.
                 error!(
                     backend = dup.backend_name(),
                     "capture failed: {e:#} — rebuilding capturer"
@@ -1256,9 +1086,7 @@ fn video_loop(
                                 backend = c.backend_name(),
                                 "capture rebuilt after error"
                             );
-                            // One event per rebuild episode. "recovered on
-                            // attempt 1" is a benign HDCP/mode blip;
-                            // "attempt 87" is a real problem.
+                            // one event per episode: attempt 1 is a benign blip, attempt 87 is a real problem
                             clipdip_diagnostics::report_capture_failure_with(
                                 "capture_rebuild_recovered",
                                 clipdip_diagnostics::Severity::Info,
@@ -1313,22 +1141,8 @@ fn video_loop(
             }
         };
 
-        // PTS: stamp every frame — real or repeat — with QPC at emit
-        // time. This is the single clock the whole pipeline uses: audio
-        // packets carry WASAPI's QPC position (same epoch, same 100ns
-        // units), so video and audio never drift and the replay-window
-        // math compares like with like. We deliberately ignore DXGI's
-        // LastPresentTime: mixing it (real frames) with a synthetic CFR
-        // counter (repeats) meant two different clocks, whose drift could
-        // mis-bound the saved window. `.max(last + 1)` keeps PTS strictly
-        // monotonic for NVENC even if two QPC reads land on the same tick.
-        // Detect a capture stall: between two real iterations the raw QPC
-        // delta should be ~one frame interval. A delta of many intervals
-        // means the GPU/display powered down and DXGI/NVENC blocked while
-        // QPC kept advancing. Fold the excess into the shared media clock so
-        // the emitted timeline stays continuous — otherwise the first
-        // resumed frame jumps the clock forward and the ring's time-window
-        // eviction wipes the whole buffer, collapsing the next clip to ~1s.
+        // QPC at emit time, not DXGI's LastPresentTime (would drift); a big jump here means
+        // GPU/display powered down, fold it into the media clock or a resume wipes the ring.
         let raw = qpc_now_100ns();
         if let Some(prev) = last_raw_pts {
             let delta = raw - prev;
@@ -1344,9 +1158,7 @@ fn video_loop(
             }
         }
         last_raw_pts = Some(raw);
-        // Liveness beacon for the health monitor: raw QPC keeps advancing
-        // during a stall, but this only updates when a frame is actually
-        // produced, so `now - this` is the true time since last capture.
+        // only updates when a frame is actually produced, so now - this is true time since last capture
         frame_liveness.store(raw, Ordering::Relaxed);
 
         let pts = media_clock.to_media(raw).max(last_emitted_pts + 1);
@@ -1392,12 +1204,8 @@ fn save_clip_with_stem(
         .ok_or_else(|| anyhow!("encoder not yet open — wait ~1s after start and retry"))?;
     let _t = clipdip_profile::start("pipeline.save_clip");
     let snapshot = ring.snapshot();
-    // Bound the saved clip by time. `t_min` is either the replay window
-    // start (hotkey save) or the manual-recording anchor (override). The
-    // ring's time-based eviction keeps a couple of seconds of slack beyond
-    // the replay window, so cutting at the *latest IDR at-or-before*
-    // `t_min` is normally possible — the clip then always covers the full
-    // configured window (it may run up to one GOP longer, never shorter).
+    // t_min is the replay window start (hotkey) or recording anchor (override); cut at the
+    // latest IDR at-or-before it, so the clip covers the full window (may run up to one GOP longer)
     let t_last = snapshot
         .iter()
         .rev()
@@ -1435,16 +1243,11 @@ fn save_clip_with_stem(
             break;
         }
     }
-    // No IDR at/before the window start means the buffer simply doesn't
-    // reach back that far yet (app just started, or recording anchor was
-    // the very first IDR) — fall back to the oldest IDR so we still emit
-    // a playable clip rather than refusing to save.
+    // no IDR at/before the window start = buffer doesn't reach back that far yet;
+    // fall back to the oldest IDR rather than refuse to save
     if t_min_override.is_none() && idr_at_or_before.is_none() {
-        // This is the "short clip" symptom. Causes, in likelihood order:
-        // the app just started; the byte budget starved the window
-        // (`bytes_used` at/near `byte_budget` below); or capture lost more
-        // time than the media clock could fold out (a stall longer than
-        // the whole window).
+        // "short clip" symptom: app just started, byte budget starved the window, or a
+        // stall longer than the media clock could fold out
         let oldest_video_pts = snapshot
             .iter()
             .find(|p| p.stream_id == STREAM_VIDEO)
@@ -1461,9 +1264,8 @@ fn save_clip_with_stem(
              truncated (app just started, byte-budget starvation, or a \
              capture stall)"
         );
-        // The "1-second clip" bug shape. Every occurrence ships — low
-        // frequency, and each carries the ring state needed to tell "app
-        // just started" from byte starvation from a long stall.
+        // "1-second clip" bug shape; carries ring state to distinguish app-just-started
+        // from byte starvation from a long stall
         clipdip_diagnostics::report_capture_failure_with(
             "clip_truncated_short_window",
             clipdip_diagnostics::Severity::Warning,
@@ -1512,12 +1314,8 @@ fn save_clip_with_stem(
         anyhow!("video IDR found but no packets after it")
     })?;
 
-    // Real fps measured from the QPC span of the captured packets. The
-    // capture loop drops frames under load (DXGI acquire can stall for
-    // up to 200ms), so the target fps from config overstates the actual
-    // rate — using it would shrink the video timeline relative to the
-    // (real-time) audio and audio would drift later. `frames-1` because
-    // a span of N frames covers N-1 inter-frame intervals.
+    // real fps from the QPC span: config fps overstates it under load (DXGI can stall
+    // ~200ms), and using it would drift audio vs video. frames-1: N frames = N-1 intervals.
     let span_secs = (t_last - t0) as f64 / 1e7;
     let actual_fps = if span_secs > 0.0 && video_pkts.len() > 1 {
         (video_pkts.len() - 1) as f64 / span_secs
@@ -1525,9 +1323,7 @@ fn save_clip_with_stem(
         cfg.video.fps as f64
     };
 
-    // Bitstream sidecar uses an extension that matches the encoded codec —
-    // ffmpeg auto-detects format from extension and would otherwise treat
-    // an `.h264` file containing AV1 OBUs as broken H.264.
+    // ffmpeg auto-detects format from extension; a mismatched .h264 with AV1 OBUs looks broken
     let video_ext = match codec {
         ActiveCodec::H264 => "h264",
         ActiveCodec::Av1 => "av1",
@@ -1542,10 +1338,8 @@ fn save_clip_with_stem(
         "saving clip"
     );
 
-    // Disk-failure reporter for the sidecar/mux write path. Paths never
-    // leave the machine: only the io kind, a volume category, and free
-    // space go out. StorageFull (or the raw Win32 disk-full codes) gets
-    // its own `disk_full` code — a whole user cohort on its own.
+    // paths never leave the machine, only io kind/volume/free space; StorageFull (or raw
+    // Win32 disk-full codes) gets its own disk_full code
     let report_disk_error = |stage: &'static str, err: &std::io::Error| {
         let raw = err.raw_os_error();
         let is_full = matches!(err.kind(), std::io::ErrorKind::StorageFull)
@@ -1569,8 +1363,7 @@ fn save_clip_with_stem(
         }
     };
 
-    // The configured directory may not exist yet (fresh default config, or
-    // a folder the user deleted) — a save must never fail on that.
+    // directory may not exist yet (fresh config, or user deleted it); save must never fail on that
     std::fs::create_dir_all(&cfg.output.directory)
         .inspect_err(|e| {
             if let clipdip_diagnostics::Gate::Send { .. } =
@@ -1593,15 +1386,8 @@ fn save_clip_with_stem(
     let mut vf = File::create(&video_path)
         .inspect_err(|e| report_disk_error("create", e))
         .with_context(|| format!("create {}", video_path.display()))?;
-    // For AV1: ffmpeg's `obu` demuxer (low-overhead bitstream) requires
-    // every Temporal Unit — including the one carrying the initial
-    // sequence header — to start with an OBU_TEMPORAL_DELIMITER, else
-    // it bails out with "Missing Temporal Delimiter" before the
-    // sequence header is parsed. NVENC emits TDs in front of every
-    // packet it gives us, but `nvEncGetSequenceParams` returns just the
-    // bare SEQ_HDR OBU. Wrap it in its own TU: [TD][SEQ_HDR].
-    // For H.264 the equivalent header (SPS+PPS) is already framed by
-    // start codes, so this path doesn't apply.
+    // ffmpeg's obu demuxer needs every TU (incl. sequence header) to start with a TD, else
+    // "Missing Temporal Delimiter"; nvEncGetSequenceParams gives a bare SEQ_HDR, so wrap it.
     if matches!(codec, ActiveCodec::Av1) && !codec_header.is_empty() {
         // OBU_TEMPORAL_DELIMITER, obu_has_size_field=1, payload size=0
         const AV1_TD: [u8; 2] = [0x12, 0x00];
@@ -1639,11 +1425,8 @@ fn save_clip_with_stem(
             warn!(stream_id, %label, "no audio packets in window — skipping");
             continue;
         }
-        // Audio packets are written into the WAV starting at sample 0, but
-        // their first packet's QPC may be a few ms after t0 (audio is
-        // captured in ~10ms WASAPI chunks). Tell ffmpeg to shift this
-        // track by that gap so what was originally at t0+δ doesn't end up
-        // playing at video time 0.
+        // WAV starts at sample 0, but the first packet's QPC may be a few ms after t0
+        // (~10ms WASAPI chunks); shift the track by that gap so it doesn't play at time 0.
         let first_a_pts = pkts.first().map(|p| p.pts_100ns).unwrap_or(t0);
         let offset_secs = (first_a_pts - t0).max(0) as f64 / 1e7;
         let wav_path = cfg.output.directory.join(format!("{stem}.{label}.wav"));
@@ -1659,8 +1442,7 @@ fn save_clip_with_stem(
                 if let clipdip_diagnostics::Gate::Send { suppressed } =
                     clipdip_diagnostics::gate("wav_write_failed", Duration::from_secs(60))
                 {
-                    // Positional stream id only — labels can embed device
-                    // names, which never leave the machine.
+                    // positional stream id only; labels can embed device names
                     clipdip_diagnostics::report_error_with(
                         "wav_write_failed",
                         clipdip_diagnostics::Severity::Warning,
@@ -1711,9 +1493,7 @@ fn save_clip_with_stem(
     }
     info!(path = %mp4_path.display(), "clip saved");
 
-    // Success metric: the denominator for every save-failure rate, and the
-    // fps/size/latency distributions that surface quality regressions
-    // without a bug report. Numeric fields only — no path, no stem.
+    // denominator for save-failure rate + fps/size/latency distributions; numeric fields only
     let total = clipdip_diagnostics::increment_clips_saved();
     let mp4_bytes = std::fs::metadata(&mp4_path).map(|m| m.len()).unwrap_or(0);
     clipdip_diagnostics::report_custom(
@@ -1761,17 +1541,11 @@ fn write_wav(path: &PathBuf, fmt: WaveFormat, pkts: &[&EncodedPacket]) -> Result
     f.write_all(b"data")?;
     f.write_all(&0u32.to_le_bytes())?; // patched
 
-    // WASAPI loopback only delivers buffers while a render session is
-    // active — if nothing is playing for a stretch, packets simply stop
-    // arriving and resume later with a fresh QPC stamp. Writing those
-    // packets back-to-back compresses real-time gaps out of the WAV and
-    // the back half of the clip ends up out of sync with video. Detect
-    // inter-packet gaps via QPC deltas and pad with silence frames so the
-    // WAV stays wall-clock-accurate.
+    // loopback stops delivering when nothing plays then resumes with a fresh QPC stamp;
+    // pad gaps with silence so the WAV stays wall-clock-accurate instead of desyncing.
     let frame_bytes = fmt.frame_bytes() as u64;
     let sample_rate = fmt.sample_rate as i64;
-    // Threshold of half a typical WASAPI period (~5 ms) — large enough to
-    // ignore scheduling jitter, small enough to catch real dropouts.
+    // half a WASAPI period (~5ms): ignores jitter, catches real dropouts
     const GAP_THRESHOLD_100NS: i64 = 50_000;
     let mut data_bytes = 0u64;
     let mut prev_end_pts: Option<i64> = None;
@@ -1779,7 +1553,7 @@ fn write_wav(path: &PathBuf, fmt: WaveFormat, pkts: &[&EncodedPacket]) -> Result
         if let Some(end) = prev_end_pts {
             let delta = p.pts_100ns - end;
             if delta > GAP_THRESHOLD_100NS {
-                // Round to nearest whole frame; never negative.
+                // round to nearest whole frame, never negative
                 let missing_frames = (delta * sample_rate + 5_000_000) / 10_000_000;
                 if missing_frames > 0 {
                     let silence_bytes = (missing_frames as u64) * frame_bytes;

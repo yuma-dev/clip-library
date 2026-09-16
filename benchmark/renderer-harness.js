@@ -1,12 +1,6 @@
 /**
- * Renderer Process Benchmark Harness
- * 
- * Automates UI actions and collects renderer-side metrics:
- * - DOM rendering performance
- * - Clip loading and display
- * - Video player operations
- * - Search/filter performance
- * - Export operations
+ * Automates UI actions in the renderer and collects metrics: DOM rendering
+ * clip loading, video player ops, search/filter, export.
  */
 
 'use strict';
@@ -24,7 +18,7 @@ class RendererHarness {
     this.currentScenario = null;
     this.results = [];
     
-    // Store references to app functions (to be set by renderer.js)
+    // set by renderer.js
     this.appFunctions = {};
     
     if (this.isEnabled) {
@@ -44,20 +38,13 @@ class RendererHarness {
     }
   }
 
-  /**
-   * Register app functions that can be benchmarked
-   * @param {Object} functions - Object containing app functions
-   */
+  /** @param {Object} functions */
   registerFunctions(functions) {
     this.appFunctions = { ...this.appFunctions, ...functions };
     this.log('Registered functions:', Object.keys(functions));
   }
 
-  /**
-   * Setup benchmark event listeners
-   */
   setupBenchmarkListeners() {
-    // Listen for benchmark commands from main process
     ipcRenderer.on('benchmark:runScenario', async (event, scenarioName) => {
       try {
         const result = await this.runScenario(scenarioName);
@@ -74,10 +61,9 @@ class RendererHarness {
   }
 
   /**
-   * Wait for a condition to be true
-   * @param {Function} condition - Function that returns true when condition is met
-   * @param {number} timeout - Maximum wait time in ms
-   * @param {number} interval - Check interval in ms
+   * @param {Function} condition
+   * @param {number} timeout
+   * @param {number} interval
    */
   async waitFor(condition, timeout = 30000, interval = 100) {
     const startTime = Date.now();
@@ -92,17 +78,11 @@ class RendererHarness {
     throw new Error(`Timeout waiting for condition after ${timeout}ms`);
   }
 
-  /**
-   * Delay execution
-   * @param {number} ms - Milliseconds to delay
-   */
+  /** @param {number} ms */
   delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Wait for DOM to be ready with clips
-   */
   async waitForClipsLoaded() {
     await this.waitFor(() => {
       const grid = document.getElementById('clip-grid');
@@ -111,9 +91,6 @@ class RendererHarness {
     }, 60000);
   }
 
-  /**
-   * Wait for video player to be ready
-   */
   async waitForVideoReady() {
     const video = document.getElementById('video-player');
     if (!video) throw new Error('Video player not found');
@@ -123,36 +100,29 @@ class RendererHarness {
     }, 30000);
   }
 
-  /**
-   * Benchmark: Load clips from disk
-   */
   async benchmarkLoadClips() {
     this.log('Starting loadClips benchmark');
 
-    // Clear collapsed state so ALL groups render expanded (gives realistic full load timing)
+    // expand all groups first for realistic full-load timing
     localStorage.removeItem('clipGroupsCollapsed');
-    // Clear the instant-first-paint snapshot so the benchmark measures the
-    // real cold load path, not a cached render.
+    // clear the first-paint snapshot so this measures a real cold load, not a cached render
     localStorage.removeItem('clip-library:clips-cache-v1');
 
-    // Clear current clips if any
     const clipGrid = document.getElementById('clip-grid');
     if (clipGrid) clipGrid.innerHTML = '';
 
-    // Measure the loadClips function
     const { measurement } = await this.metrics.measure('loadClips', async () => {
       if (this.appFunctions.loadClips) {
         await this.appFunctions.loadClips();
       } else {
-        // Fallback: trigger via IPC
+        // fallback: trigger via IPC
         await ipcRenderer.invoke('get-clips');
       }
     });
 
-    // Wait for DOM to update
     await this.waitForClipsLoaded();
 
-    // Count clips (all should be rendered since groups are expanded)
+    // all rendered since groups are expanded
     const clipCount = document.querySelectorAll('.clip-item').length;
     const groupCount = document.querySelectorAll('.clip-group').length;
 
@@ -166,9 +136,6 @@ class RendererHarness {
     };
   }
 
-  /**
-   * Benchmark: Render clips to DOM
-   */
   async benchmarkRenderClips() {
     this.log('Starting renderClips benchmark');
     
@@ -187,10 +154,7 @@ class RendererHarness {
     };
   }
 
-  /**
-   * Benchmark: Open a clip in the player
-   * @param {number} clipIndex - Index of clip to open (default: 0)
-   */
+  /** @param {number} clipIndex */
   async benchmarkOpenClip(clipIndex = 0) {
     this.log(`Starting openClip benchmark for clip ${clipIndex}`);
     
@@ -203,7 +167,6 @@ class RendererHarness {
     const originalName = targetClip.dataset.originalName;
     const customName = targetClip.querySelector('.clip-name')?.textContent || originalName;
 
-    // Mute video during benchmark
     const video = document.getElementById('video-player');
     const wasMuted = video?.muted;
     if (video) video.muted = true;
@@ -213,12 +176,11 @@ class RendererHarness {
         if (this.appFunctions.openClip) {
           await this.appFunctions.openClip(originalName, customName);
         } else {
-          // Fallback: simulate click
+          // fallback: simulate click
           targetClip.click();
         }
       });
       
-      // Wait for video to be ready
       await this.waitForVideoReady();
       
       return {
@@ -226,14 +188,11 @@ class RendererHarness {
         clipName: originalName
       };
     } finally {
-      // Restore mute state
       if (video && wasMuted !== undefined) video.muted = wasMuted;
     }
   }
 
-  /**
-   * Benchmark: Video metadata loading (FFprobe)
-   */
+  // via FFprobe
   async benchmarkVideoMetadata() {
     this.log('Starting video metadata benchmark');
     
@@ -251,10 +210,7 @@ class RendererHarness {
     return measurement;
   }
 
-  /**
-   * Benchmark: Search performance
-   * @param {string} searchTerm - Term to search for
-   */
+  /** @param {string} searchTerm */
   async benchmarkSearch(searchTerm = 'test') {
     this.log(`Starting search benchmark with term: "${searchTerm}"`);
     
@@ -263,22 +219,19 @@ class RendererHarness {
       throw new Error('Search input not found');
     }
     
-    // Clear search first
     searchInput.value = '';
     searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await this.delay(350); // Wait for debounce
+    await this.delay(350); // wait for debounce
     
     const { measurement } = await this.metrics.measure('search', async () => {
       searchInput.value = searchTerm;
       searchInput.dispatchEvent(new Event('input', { bubbles: true }));
       
-      // Wait for search to complete (debounce + filter)
-      await this.delay(350);
+      await this.delay(350); // debounce + filter
     });
     
     const visibleClips = document.querySelectorAll('.clip-item:not([style*="display: none"])').length;
     
-    // Clear search
     searchInput.value = '';
     searchInput.dispatchEvent(new Event('input', { bubbles: true }));
     
@@ -289,9 +242,6 @@ class RendererHarness {
     };
   }
 
-  /**
-   * Benchmark: Video seek operation
-   */
   async benchmarkSeek() {
     this.log('Starting seek benchmark');
     
@@ -300,7 +250,6 @@ class RendererHarness {
       throw new Error('Video not ready for seeking');
     }
 
-    // Mute during seek benchmark
     const wasMuted = video.muted;
     video.muted = true;
     
@@ -329,7 +278,7 @@ class RendererHarness {
           duration: measurement?.duration
         });
         
-        await this.delay(100); // Small delay between seeks
+        await this.delay(100);
       }
       
       return results;
@@ -338,9 +287,6 @@ class RendererHarness {
     }
   }
 
-  /**
-   * Benchmark: Close player
-   */
   async benchmarkClosePlayer() {
     this.log('Starting closePlayer benchmark');
     
@@ -348,7 +294,7 @@ class RendererHarness {
       if (this.appFunctions.closePlayer) {
         this.appFunctions.closePlayer();
       } else {
-        // Try ESC key
+        // try ESC key
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       }
       await this.delay(100);
@@ -357,10 +303,7 @@ class RendererHarness {
     return measurement;
   }
 
-  /**
-   * Benchmark: Grid performance with varying clip counts
-   * Measures FPS and responsiveness as more clips become visible
-   */
+  // FPS and responsiveness as more clips become visible
   async benchmarkGridPerformance() {
     this.log('Starting grid performance benchmark');
 
@@ -369,11 +312,10 @@ class RendererHarness {
       recommendations: []
     };
 
-    // First measure with current state (few clips visible)
     let initialClipCount = document.querySelectorAll('.clip-item').length;
     this.log(`Initial clips in DOM: ${initialClipCount}`);
 
-    // Expand all collapsed groups to simulate user scenario
+    // simulate user expanding all groups
     const collapsedGroups = document.querySelectorAll('.clip-group.collapsed');
     this.log(`Expanding ${collapsedGroups.length} collapsed groups...`);
 
@@ -381,18 +323,16 @@ class RendererHarness {
       const header = group.querySelector('.clip-group-header');
       if (header) {
         header.click();
-        // Wait for lazy loading to complete
+        // wait for lazy loading to complete
         await this.delay(100);
       }
     }
 
-    // Wait for all clips to render
     await this.delay(500);
 
     let totalClipsInDOM = document.querySelectorAll('.clip-item').length;
     this.log(`After expansion: ${totalClipsInDOM} clips in DOM`);
 
-    // Measure baseline FPS with current state
     const measureFPS = async (duration = 2000) => {
       let frameCount = 0;
       let lastTime = performance.now();
@@ -416,7 +356,6 @@ class RendererHarness {
           }
         };
 
-        // Start measuring after a small delay
         setTimeout(() => {
           lastTime = performance.now();
           frames.push(lastTime);
@@ -425,7 +364,6 @@ class RendererHarness {
       });
     };
 
-    // Measure scroll performance
     const measureScrollPerformance = async () => {
       const clipGrid = document.getElementById('clip-grid');
       if (!clipGrid) return { scrollFPS: 0, jank: 0 };
@@ -442,8 +380,7 @@ class RendererHarness {
           const now = performance.now();
           const frameDelta = now - lastFrameTime;
 
-          // Count janky frames (>32ms = <30fps)
-          if (frameDelta > 32) jankFrames++;
+          if (frameDelta > 32) jankFrames++; // >32ms = <30fps
           frameCount++;
           lastFrameTime = now;
 
@@ -452,7 +389,6 @@ class RendererHarness {
           if (clipGrid.scrollTop < maxScroll - 100) {
             requestAnimationFrame(scrollStep);
           } else {
-            // Scroll back to start
             clipGrid.scrollTop = startY;
             resolve({
               scrollFPS: frameCount / ((now - lastFrameTime) / 1000) || 60,
@@ -466,11 +402,9 @@ class RendererHarness {
       });
     };
 
-    // Test with current clip count
     const clipCount = document.querySelectorAll('.clip-item').length;
     this.log(`Testing with ${clipCount} clips visible`);
 
-    // Measure idle FPS
     const idleFPS = await measureFPS(1500);
     results.tests.push({
       clipCount,
@@ -478,11 +412,9 @@ class RendererHarness {
       minFPS: idleFPS.minFPS.toFixed(1)
     });
 
-    // Measure scroll performance
     const scrollPerf = await measureScrollPerformance();
     results.scrollPerformance = scrollPerf;
 
-    // Count DOM elements
     const domStats = {
       totalElements: document.querySelectorAll('*').length,
       clipItems: document.querySelectorAll('.clip-item').length,
@@ -491,7 +423,6 @@ class RendererHarness {
     };
     results.domStats = domStats;
 
-    // Check for expensive CSS
     const clipItems = document.querySelectorAll('.clip-item');
     let hasBoxShadow = 0;
     let hasFilter = 0;
@@ -507,7 +438,6 @@ class RendererHarness {
 
     results.cssStats = { hasBoxShadow, hasFilter, hasTransform };
 
-    // Generate recommendations
     if (domStats.clipItems > 100) {
       results.recommendations.push(`High clip count (${domStats.clipItems}) - consider virtual scrolling`);
     }
@@ -518,16 +448,11 @@ class RendererHarness {
       results.recommendations.push(`${hasBoxShadow} elements with box-shadow - consider removing or simplifying`);
     }
 
-    // Output results
     await ipcRenderer.invoke('benchmark:outputMarker', 'GRID_PERFORMANCE', results);
 
     return results;
   }
 
-  /**
-   * Benchmark: Detailed startup breakdown
-   * Times each individual phase of the startup process
-   */
   async benchmarkStartupDetailed() {
     this.log('Starting detailed startup breakdown');
 
@@ -537,24 +462,21 @@ class RendererHarness {
       this.log(`  ${name}: ${duration.toFixed(1)}ms`);
     };
 
-    // Clear clips grid to simulate fresh start
     const clipGrid = document.getElementById('clip-grid');
     if (clipGrid) clipGrid.innerHTML = '';
 
     let totalStart = performance.now();
     let phaseStart;
 
-    // Phase 1: Get clip location
     phaseStart = performance.now();
     const clipLocation = await ipcRenderer.invoke("get-clip-location");
     addPhase('get-clip-location', performance.now() - phaseStart);
 
-    // Phase 2: Get new clips info
     phaseStart = performance.now();
     const newClipsInfo = await ipcRenderer.invoke("get-new-clips-info");
     addPhase('get-new-clips-info', performance.now() - phaseStart);
 
-    // Phase 3: Get clips (filesystem scan) - THE BIG ONE
+    // filesystem scan, the big one
     phaseStart = performance.now();
     let allClips = await ipcRenderer.invoke("get-clips");
     addPhase('get-clips (filesystem)', performance.now() - phaseStart);
@@ -562,7 +484,6 @@ class RendererHarness {
     const clipCount = allClips.length;
     this.log(`  Clips found: ${clipCount}`);
 
-    // Phase 4: Tag loading (batched)
     phaseStart = performance.now();
     const TAG_BATCH_SIZE = 50;
     let tagBatchTimes = [];
@@ -578,24 +499,20 @@ class RendererHarness {
     const totalTagTime = performance.now() - phaseStart;
     addPhase(`load-tags (${Math.ceil(clipCount / TAG_BATCH_SIZE)} batches)`, totalTagTime);
 
-    // Phase 5: Sort clips
     phaseStart = performance.now();
     allClips.sort((a, b) => b.createdAt - a.createdAt);
     addPhase('sort-clips', performance.now() - phaseStart);
 
-    // Phase 6: Load global tags
     phaseStart = performance.now();
     await ipcRenderer.invoke("load-global-tags");
     addPhase('load-global-tags', performance.now() - phaseStart);
 
-    // Phase 7: Render clips to DOM
     phaseStart = performance.now();
     if (this.appFunctions.renderClips) {
       await this.appFunctions.renderClips(allClips);
     }
     addPhase('render-clips (DOM)', performance.now() - phaseStart);
 
-    // Phase 8: Count rendered elements
     phaseStart = performance.now();
     const renderedClips = document.querySelectorAll('.clip-item').length;
     const groupCount = document.querySelectorAll('.time-group').length;
@@ -603,7 +520,6 @@ class RendererHarness {
 
     const totalTime = performance.now() - totalStart;
 
-    // Calculate percentages and build report
     const report = {
       totalTime,
       clipCount,
@@ -621,15 +537,12 @@ class RendererHarness {
       }
     };
 
-    // Output structured data for the runner to display
+    // for the runner to display
     await ipcRenderer.invoke('benchmark:outputMarker', 'STARTUP_BREAKDOWN', report);
 
     return report;
   }
 
-  /**
-   * Benchmark: Thumbnail generation
-   */
   async benchmarkThumbnailGeneration() {
     this.log('Starting thumbnail generation benchmark');
     
@@ -638,7 +551,6 @@ class RendererHarness {
       throw new Error('No clips available');
     }
     
-    // Get clip names
     const clipNames = Array.from(clipItems).slice(0, 5).map(c => c.dataset.originalName);
     
     const { measurement } = await this.metrics.measure('thumbnailGeneration', async () => {
@@ -651,11 +563,8 @@ class RendererHarness {
     };
   }
 
-  /**
-   * Benchmark: Detailed open clip profiling using REAL openClip function
-   * Provides granular timing for each phase of clip opening
-   * @param {Object} options - Profiling options
-   */
+  // uses the real openClip function (not simulated), granular per-phase timing
+  /** @param {Object} options */
   async benchmarkOpenClipDetailed(options = {}) {
     this.log('Starting detailed open clip profiler (using real openClip)');
     
@@ -672,7 +581,7 @@ class RendererHarness {
     const warmupRuns = options.warmupRuns || 1;
     const delayBetweenRuns = options.delayBetweenRuns || 2000;
 
-    // MUTE the video to prevent loud audio during benchmarks
+    // mute to avoid loud audio during benchmark
     const originalVolume = videoPlayer.volume;
     const originalMuted = videoPlayer.muted;
     videoPlayer.muted = true;
@@ -683,59 +592,48 @@ class RendererHarness {
     const clips = allClips.slice(0, Math.min(5, allClips.length));
 
     try {
-      // Warmup runs
       for (let w = 0; w < warmupRuns; w++) {
         this.log(`Warmup run ${w + 1}/${warmupRuns}`);
         const clip = clips[0];
         
-        // Close player if open
         if (this.appFunctions.closePlayer) {
           this.appFunctions.closePlayer();
           await this.delay(200);
         }
 
-        // Call the REAL openClip function
         if (this.appFunctions.openClip) {
           await this.appFunctions.openClip(clip.originalName, clip.customName);
         }
         await this.delay(500);
       }
 
-      // Actual benchmark runs
       for (let i = 0; i < iterations; i++) {
         const clip = clips[i % clips.length];
         this.log(`Iteration ${i + 1}/${iterations} - Clip: ${clip.originalName}`);
 
-        // Close player if open
         if (this.appFunctions.closePlayer) {
           this.appFunctions.closePlayer();
           await this.delay(300);
         }
 
-        // Measure memory before
         const memBefore = this.getMemoryUsage();
 
-        // Wait for any pending operations
         await this.delay(100);
 
-        // Start timing
         const startTime = performance.now();
 
-        // Call the REAL openClip function
         if (this.appFunctions.openClip) {
           await this.appFunctions.openClip(clip.originalName, clip.customName);
         }
 
-        // Wait for video to be ready and playing
         await this.waitForVideoReady();
 
-        // Wait a bit more for UI to settle
+        // settle time for the UI
         await this.delay(100);
 
         const endTime = performance.now();
         const duration = endTime - startTime;
 
-        // Measure memory after
         const memAfter = this.getMemoryUsage();
 
         results.push({
@@ -755,13 +653,11 @@ class RendererHarness {
         }
       }
     } finally {
-      // Restore original volume settings
       videoPlayer.muted = originalMuted;
       videoPlayer.volume = originalVolume;
       this.log('Video volume restored');
     }
 
-    // Calculate statistics
     const durations = results.map(r => r.duration);
     const sorted = [...durations].sort((a, b) => a - b);
     const sum = sorted.reduce((a, b) => a + b, 0);
@@ -783,7 +679,6 @@ class RendererHarness {
       results
     };
 
-    // Log summary
     this.log('\n========== REAL OPEN CLIP BENCHMARK ==========');
     this.log(`Runs: ${report.runs}`);
     this.log(`Total Time: avg=${avg.toFixed(1)}ms, min=${sorted[0].toFixed(1)}ms, max=${sorted[sorted.length - 1].toFixed(1)}ms`);
@@ -797,9 +692,6 @@ class RendererHarness {
     return { report, rawResults: results };
   }
 
-  /**
-   * Get current memory usage
-   */
   getMemoryUsage() {
     if (typeof process !== 'undefined' && process.memoryUsage) {
       return process.memoryUsage().heapUsed;
@@ -810,10 +702,7 @@ class RendererHarness {
     return 0;
   }
 
-  /**
-   * Run a specific scenario by name
-   * @param {string} scenarioName - Name of scenario to run
-   */
+  /** @param {string} scenarioName */
   async runScenario(scenarioName) {
     this.log(`Running scenario: ${scenarioName}`);
     this.currentScenario = scenarioName;
@@ -843,9 +732,6 @@ class RendererHarness {
     return result;
   }
 
-  /**
-   * Run all registered scenarios in sequence
-   */
   async runAllScenarios() {
     this.log('Running all scenarios');
     
@@ -863,7 +749,7 @@ class RendererHarness {
     for (const scenario of scenarios) {
       try {
         results[scenario] = await this.runScenario(scenario);
-        await this.delay(500); // Pause between scenarios
+        await this.delay(500); // pause between scenarios
       } catch (error) {
         results[scenario] = { error: error.message };
         this.log(`Scenario ${scenario} failed:`, error.message);
@@ -873,9 +759,6 @@ class RendererHarness {
     return results;
   }
 
-  /**
-   * Get all collected metrics
-   */
   getMetrics() {
     return {
       summary: this.metrics.getSummary(),
@@ -884,9 +767,6 @@ class RendererHarness {
     };
   }
 
-  /**
-   * Collect DOM performance metrics
-   */
   getDOMMetrics() {
     const entries = performance.getEntriesByType('measure');
     const paint = performance.getEntriesByType('paint');
@@ -908,16 +788,12 @@ class RendererHarness {
     };
   }
 
-  /**
-   * Reset all metrics
-   */
   reset() {
     this.metrics.reset();
     this.results = [];
   }
 }
 
-// Create singleton instance
 let instance = null;
 
 function getRendererHarness() {

@@ -17,8 +17,7 @@ import {
   type CardGlowSettings,
 } from "../library/glowConfig";
 
-// The persisted settings object (main process settings-manager). Loosely typed
-// on purpose — main owns the file; we only read/patch the keys we know.
+// persisted by main's settings-manager; loosely typed on purpose, main owns the file
 export interface AmbientGlowSettings {
   enabled: boolean;
   smoothing: number;
@@ -62,8 +61,7 @@ export { CARD_GLOW_DEFAULTS };
 export const SETTINGS_DEFAULTS: AppSettings = {
   enableDiscordRPC: false,
   uiFont: UI_FONT_DEFAULT,
-  // Legacy defaulted greyscale off; the new design defaults it ON (matches the
-  // previous App.tsx behavior `s?.iconGreyscale ?? true`).
+  // legacy defaulted greyscale off; new design defaults ON (matches old App.tsx `s?.iconGreyscale ?? true`)
   iconGreyscale: true,
   showNewClipsIndicators: true,
   onboardingVersion: 0,
@@ -83,17 +81,12 @@ function withDefaults(raw: Record<string, unknown> | null | undefined): AppSetti
 interface SettingsApi {
   settings: AppSettings;
   ready: boolean;
-  /**
-   * Update one setting by dot-path (e.g. `set("ambientGlow.blur", 60)`),
-   * optimistically in memory, then persist the whole object. Resolves false
-   * if the save failed (state is left at the optimistic value; main keeps the
-   * old file — a rare enough case that we surface it via the return value
-   * rather than reverting mid-interaction).
-   */
+  /** updates one setting by dot-path (e.g. set("ambientGlow.blur", 60)), optimistic then persisted;
+   * resolves false on save failure without reverting the optimistic value */
   set: (path: string, value: unknown) => Promise<boolean>;
-  /** Update several top-level keys at once (export presets, resets). */
+  /** updates several top-level keys at once (export presets, resets) */
   patch: (partial: Record<string, unknown>) => Promise<boolean>;
-  /** Step back/forward through this session's settings changes (Ctrl+Z / Ctrl+Shift+Z). */
+  /** steps back/forward through this session's settings changes (Ctrl+Z / Ctrl+Shift+Z) */
   undo: () => boolean;
   redo: () => boolean;
 }
@@ -108,11 +101,8 @@ export function useSettings(): SettingsApi {
 
 const HISTORY_LIMIT = 100;
 
-/**
- * All cross-cutting side effects of a settings object live here, so every
- * write path (set / patch / undo / redo / initial load) behaves identically:
- * font, legacy-player state, player keybindings, ambient glow, card glow.
- */
+/** every write path (set/patch/undo/redo/initial load) funnels through here: font, legacy-player
+ * state, keybindings, ambient glow, card glow */
 function applySideEffects(next: AppSettings, prev: AppSettings | null): void {
   if (window.legacyState) window.legacyState.settings = next;
   applyUiFont(next.uiFont);
@@ -126,7 +116,7 @@ function applySideEffects(next: AppSettings, prev: AppSettings | null): void {
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(SETTINGS_DEFAULTS);
   const [ready, setReady] = useState(false);
-  // Canonical copy for read-modify-write saves (state updates are async).
+  // canonical copy for read-modify-write saves, since state updates are async
   const canonical = useRef<AppSettings>(SETTINGS_DEFAULTS);
   const undoStack = useRef<AppSettings[]>([]);
   const redoStack = useRef<AppSettings[]>([]);

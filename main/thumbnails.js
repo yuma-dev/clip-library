@@ -1,11 +1,3 @@
-/**
- * Thumbnails module - handles thumbnail generation, caching, and validation
- *
- * Provides thumbnail generation with queue processing, validation against trim data,
- * and metadata caching for efficient thumbnail management.
- */
-
-// Imports
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
@@ -18,14 +10,12 @@ const { mapLimit } = require('../utils/pool');
 // Concurrent thumbnail validations (fs.access + two small reads each).
 const VALIDATE_CONCURRENCY = 16;
 
-// Constants
 const CONCURRENT_GENERATIONS = 4;
 const THUMBNAIL_RETRY_ATTEMPTS = 3;
 const FAST_PATH_THRESHOLD = 12;
 const EPSILON = 0.001;
 const META_CORRUPT_COALESCE_MS = 600000;
 
-// Module state
 let THUMBNAIL_CACHE_DIR = null;
 const thumbnailQueue = [];
 let isProcessingQueue = false;
@@ -35,7 +25,6 @@ let completedThumbnails = 0;
 let inFlightGenerations = 0;
 
 /**
- * Pull the numeric exit code out of a fluent-ffmpeg error message.
  * @param {Error} error
  * @returns {number|undefined}
  */
@@ -44,10 +33,7 @@ function parseFfmpegExitCode(error) {
   return match ? Number(match[1]) : undefined;
 }
 
-/**
- * Initialize thumbnail cache directory
- * Must be called after app is ready
- */
+// must be called after app is ready
 async function initThumbnailCache() {
   THUMBNAIL_CACHE_DIR = path.join(app.getPath('userData'), 'thumbnail-cache');
   try {
@@ -67,39 +53,20 @@ async function initThumbnailCache() {
   return THUMBNAIL_CACHE_DIR;
 }
 
-/**
- * Get the cache directory path
- * @returns {string} Path to thumbnail cache directory
- */
 function getCacheDir() {
   return THUMBNAIL_CACHE_DIR;
 }
 
-/**
- * Generate thumbnail path from clip path using MD5 hash
- * @param {string} clipPath - Full path to the clip file
- * @returns {string} Path to the thumbnail file
- */
 function generateThumbnailPath(clipPath) {
   const hash = crypto.createHash('md5').update(clipPath).digest('hex');
   return path.join(THUMBNAIL_CACHE_DIR, `${hash}.jpg`);
 }
 
-/**
- * Save thumbnail metadata to .meta file
- * @param {string} thumbnailPath - Path to thumbnail file
- * @param {object} metadata - Metadata object to save
- */
 async function saveThumbnailMetadata(thumbnailPath, metadata) {
   const metadataPath = thumbnailPath + '.meta';
   await fs.writeFile(metadataPath, JSON.stringify(metadata));
 }
 
-/**
- * Get thumbnail metadata from .meta file
- * @param {string} thumbnailPath - Path to thumbnail file
- * @returns {object|null} Metadata object or null if not found
- */
 async function getThumbnailMetadata(thumbnailPath) {
   let data = null;
   try {
@@ -107,9 +74,8 @@ async function getThumbnailMetadata(thumbnailPath) {
     data = await fs.readFile(metadataPath, 'utf8');
     return JSON.parse(data);
   } catch (error) {
-    // Read failure means the .meta is genuinely missing. A parse failure means
-    // it is corrupt, which every caller then treats as missing, so the clip
-    // re-probes on every open and never repairs itself.
+    // parse failure (vs read failure) means corrupt; callers treat both as missing
+    // so the clip re-probes every open and never self-repairs
     if (data !== null) {
       telemetry.event('thumbnail_meta_corrupt', {
         kind: telemetry.KIND.DEGRADED,
@@ -122,16 +88,8 @@ async function getThumbnailMetadata(thumbnailPath) {
   }
 }
 
-/**
- * Validate if a thumbnail is up-to-date with current trim data
- * @param {string} clipName - Name of the clip file
- * @param {string} thumbnailPath - Path to thumbnail file
- * @param {Function} getTrimData - Function to get trim data for a clip
- * @returns {boolean} True if thumbnail is valid
- */
 async function validateThumbnail(clipName, thumbnailPath, getTrimData) {
   try {
-    // First check if thumbnail exists
     try {
       await fs.access(thumbnailPath);
     } catch (error) {
@@ -139,7 +97,6 @@ async function validateThumbnail(clipName, thumbnailPath, getTrimData) {
       return false;
     }
 
-    // Then check if metadata exists
     try {
       const metadata = await getThumbnailMetadata(thumbnailPath);
       if (!metadata) {
@@ -174,11 +131,6 @@ async function validateThumbnail(clipName, thumbnailPath, getTrimData) {
   }
 }
 
-/**
- * Process the thumbnail generation queue
- * @param {Function} getSettings - Function to get current settings
- * @param {Function} getTrimData - Function to get trim data for a clip
- */
 async function processQueue(getSettings, getTrimData) {
   if (isProcessingQueue || thumbnailQueue.length === 0) return;
 
@@ -206,7 +158,6 @@ async function processQueue(getSettings, getTrimData) {
           const isValid = await validateThumbnail(clipName, thumbnailPath, getTrimData);
 
           if (!isValid) {
-            // Get video info first
             inFlightGenerations++;
             counted = true;
             const info = await new Promise((resolve, reject) => {
@@ -292,34 +243,23 @@ async function processQueue(getSettings, getTrimData) {
   } finally {
     isProcessingQueue = false;
 
-    // Only send completion event if queue is actually empty
     if (thumbnailQueue.length === 0) {
-      // Get event from last processed batch if available
       BrowserWindow.getAllWindows().forEach((window) => {
         window.webContents.send('thumbnail-generation-complete');
       });
     } else if (!isProcessingQueue) {
-      // If there are still items in queue, restart processing
+      // new items were pushed mid-batch, restart the loop
       processQueue(getSettings, getTrimData);
     }
   }
 }
 
-/**
- * Handle fast-path thumbnail generation for initial visible clips
- * @param {string[]} clipNames - Array of clip names
- * @param {object} event - IPC event object
- * @param {Function} getSettings - Function to get current settings
- * @param {Function} getTrimData - Function to get trim data for a clip
- * @returns {object} Object with processed count and processedClips Set
- */
 async function handleInitialThumbnails(clipNames, event, getSettings, getTrimData) {
   const settings = await getSettings();
   const initialClips = clipNames.slice(0, FAST_PATH_THRESHOLD);
-  // Clips the fast path could not probe; the caller retries them on the queue.
+  // clips the fast path could not probe; the caller retries them on the queue
   let droppedClips = [];
 
-  // Quick parallel check for existence
   const missingThumbnails = await Promise.all(
     initialClips.map(async clipName => {
       const clipPath = path.join(settings.clipLocation, clipName);
@@ -333,24 +273,20 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
     })
   );
 
-  // Filter out nulls
   const clipsNeedingGeneration = missingThumbnails.filter(Boolean);
 
   if (clipsNeedingGeneration.length > 0) {
     logger.info(`Fast-tracking thumbnail generation for ${clipsNeedingGeneration.length} initial clips`);
 
-    // Get correct timestamps first
     const clipData = await Promise.all(
       clipsNeedingGeneration.map(async clipName => {
         const clipPath = path.join(settings.clipLocation, clipName);
         try {
-          // Check trim data first
           const trimData = await getTrimData(clipName);
           if (trimData) {
             return { clipName, startTime: trimData.start };
           }
 
-          // If no trim data, get duration
           const info = await new Promise((resolve, reject) => {
             ffmpeg.ffprobe(clipPath, (err, metadata) => {
               if (err) reject(err);
@@ -371,13 +307,10 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
       })
     );
 
-    // Filter out failed clips
     const validClipData = clipData.filter(Boolean);
 
-    // Clips that fell out here used to be dropped for good: never generated,
-    // never reported, card stays empty. They are handed back to the caller now
-    // and go through the normal queue, which retries and reports.
-    // clipData keeps the order of clipsNeedingGeneration, so the index pairs.
+    // used to be dropped for good here; now handed to the caller's queue for retry+report
+    // (clipData keeps clipsNeedingGeneration's order, so the index pairs)
     droppedClips = clipsNeedingGeneration.filter((_, i) => !clipData[i]);
     if (droppedClips.length > 0) {
       telemetry.event('thumbnail_fastpath_dropped', {
@@ -385,13 +318,12 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
         severity: telemetry.SEVERITY.WARNING,
         context: {
           count: droppedClips.length,
-          // File names only, no paths, capped so the context stays small.
+          // names only, no paths, capped so context stays small
           clips: droppedClips.slice(0, 10).map((name) => path.basename(name))
         }
       });
     }
 
-    // Generate all in parallel with correct timestamps
     await Promise.all(
       validClipData.map(async ({ clipName, startTime, duration }) => {
         const clipPath = path.join(settings.clipLocation, clipName);
@@ -414,7 +346,6 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
               .on('error', reject);
           });
 
-          // Save metadata
           await saveThumbnailMetadata(thumbnailPath, {
             startTime,
             duration,
@@ -429,7 +360,6 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
             dims: { stage: 'fastpath' }
           });
 
-          // Only send the thumbnail generated event, no progress events
           event.sender.send('thumbnail-generated', {
             clipName,
             thumbnailPath
@@ -449,38 +379,25 @@ async function handleInitialThumbnails(clipNames, event, getSettings, getTrimDat
 
   return {
     processed: clipsNeedingGeneration.length,
-    // Dropped clips are not "processed" — they must not be filtered out of the
-    // queue pass below.
+    // dropped clips are not "processed", must not be filtered out of the queue pass below
     processedClips: new Set(clipsNeedingGeneration.filter((name) => !droppedClips.includes(name))),
     droppedClips
   };
 }
 
-/**
- * Generate thumbnails progressively for all clips
- * @param {string[]} clipNames - Array of clip names
- * @param {object} event - IPC event object
- * @param {Function} getSettings - Function to get current settings
- * @param {Function} getTrimData - Function to get trim data for a clip
- * @returns {object} Generation status object
- */
 async function generateThumbnailsProgressively(clipNames, event, getSettings, getTrimData) {
   const settings = await getSettings();
 
   try {
-    // Handle initial clips first (silently)
     const { processed, processedClips, droppedClips } = await handleInitialThumbnails(clipNames, event, getSettings, getTrimData);
     const fastPathDropped = Array.isArray(droppedClips) ? droppedClips : [];
 
-    // Process remaining clips if any
     if (clipNames.length > FAST_PATH_THRESHOLD) {
       const remainingClips = clipNames.slice(FAST_PATH_THRESHOLD).filter(clipName => !processedClips.has(clipName));
-      // Fast-path failures go on the queue, which retries and, when it gives
-      // up, tells the renderer instead of leaving an empty card.
+      // fast-path failures go on the queue too, which retries and reports instead of leaving an empty card
       let clipsNeedingGeneration = [...fastPathDropped];
 
-      // Validate remaining clips through a bounded pool: three file reads per
-      // clip, which used to run one clip at a time for the whole library.
+      // bounded pool (3 file reads/clip) - used to run one clip at a time for the whole library
       const invalid = await mapLimit(remainingClips, VALIDATE_CONCURRENCY, async (clipName) => {
         const clipPath = path.join(settings.clipLocation, clipName);
         const thumbnailPath = generateThumbnailPath(clipPath);
@@ -493,7 +410,6 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
       });
       clipsNeedingGeneration.push(...invalid.filter(Boolean));
 
-      // Only show progress and start queue if there are clips to process
       if (clipsNeedingGeneration.length > 0) {
         event.sender.send('thumbnail-validation-start', {
           total: clipsNeedingGeneration.length
@@ -510,10 +426,9 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
           processQueue(getSettings, getTrimData);
         }
       }
-      // Note: No else clause here - we don't send completion for no-op cases
+      // deliberately no else: no completion event for the no-op case
     } else if (fastPathDropped.length > 0) {
-      // Small library: no queue pass runs below, so start one just for the
-      // clips the fast path could not handle.
+      // small library, no queue pass below - start one just for what the fast path couldn't handle
       event.sender.send('thumbnail-validation-start', { total: fastPathDropped.length });
       thumbnailQueue.push(...fastPathDropped.map(clipName => ({
         clipName,
@@ -524,7 +439,6 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
         processQueue(getSettings, getTrimData);
       }
     } else if (processed > 0) {
-      // Only send completion if we actually processed initial clips
       event.sender.send('thumbnail-generation-complete');
     }
 
@@ -539,24 +453,16 @@ async function generateThumbnailsProgressively(clipNames, event, getSettings, ge
   }
 }
 
-/**
- * Generate a single thumbnail for a clip
- * @param {string} clipName - Name of the clip file
- * @param {Function} getSettings - Function to get current settings
- * @returns {string} Path to the generated thumbnail
- */
 async function generateThumbnail(clipName, getSettings) {
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
   const thumbnailPath = generateThumbnailPath(clipPath);
 
   try {
-    // Check if cached thumbnail exists
     await fs.access(thumbnailPath);
     return thumbnailPath;
   } catch (error) {
     logger.info(`Generating new thumbnail for ${clipName}`);
-    // If thumbnail doesn't exist, generate it
     return new Promise((resolve, reject) => {
       ffmpeg(clipPath)
         .screenshots({
@@ -578,20 +484,12 @@ async function generateThumbnail(clipName, getSettings) {
   }
 }
 
-/**
- * Regenerate thumbnail at a specific timestamp (for trim updates)
- * @param {string} clipName - Name of the clip file
- * @param {number} startTime - Timestamp in seconds
- * @param {Function} getSettings - Function to get current settings
- * @returns {object} Result object with success status and thumbnailPath
- */
 async function regenerateThumbnailForTrim(clipName, startTime, getSettings) {
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
   const thumbnailPath = generateThumbnailPath(clipPath);
 
   try {
-    // Generate new thumbnail at trim point
     await new Promise((resolve, reject) => {
       ffmpeg(clipPath)
         .screenshots({
@@ -604,7 +502,6 @@ async function regenerateThumbnailForTrim(clipName, startTime, getSettings) {
         .on('error', reject);
     });
 
-    // Save new metadata
     await saveThumbnailMetadata(thumbnailPath, {
       startTime,
       clipName,
@@ -618,12 +515,6 @@ async function regenerateThumbnailForTrim(clipName, startTime, getSettings) {
   }
 }
 
-/**
- * Get thumbnail path for a clip, checking if it exists
- * @param {string} clipName - Name of the clip file
- * @param {Function} getSettings - Function to get current settings
- * @returns {string|null} Path to thumbnail or null if not found
- */
 async function getThumbnailPath(clipName, getSettings) {
   const settings = await getSettings();
   const clipPath = path.join(settings.clipLocation, clipName);
@@ -637,12 +528,6 @@ async function getThumbnailPath(clipName, getSettings) {
   }
 }
 
-/**
- * Get thumbnail paths for multiple clips in batch
- * @param {string[]} clipNames - Array of clip names
- * @param {Function} getSettings - Function to get current settings
- * @returns {object} Object mapping clip names to thumbnail paths (or null)
- */
 async function getThumbnailPathsBatch(clipNames, getSettings) {
   const settings = await getSettings();
   const results = {};
@@ -662,13 +547,9 @@ async function getThumbnailPathsBatch(clipNames, getSettings) {
   return results;
 }
 
-/**
- * Stop queue processing and clear the queue
- * Called during app quit
- */
+// called during app quit
 function stopQueue() {
-  // Clearing the array does not kill the ffmpeg children already spawned, so
-  // on quit they are orphaned and keep running.
+  // clearing the array doesn't kill already-spawned ffmpeg children, they're orphaned on quit
   if (inFlightGenerations > 0) {
     telemetry.event('thumbnail_queue_orphaned', {
       kind: telemetry.KIND.DEGRADED,
@@ -680,48 +561,27 @@ function stopQueue() {
   isProcessingQueue = false;
 }
 
-/**
- * Check if queue is currently processing
- * @returns {boolean}
- */
 function isQueueProcessing() {
   return isProcessingQueue;
 }
 
-/**
- * Get current queue length
- * @returns {number}
- */
 function getQueueLength() {
   return thumbnailQueue.length;
 }
 
 module.exports = {
-  // Initialization
   initThumbnailCache,
   getCacheDir,
-
-  // Path generation
   generateThumbnailPath,
-
-  // Metadata
   saveThumbnailMetadata,
   getThumbnailMetadata,
-
-  // Validation
   validateThumbnail,
-
-  // Generation
   generateThumbnail,
   generateThumbnailsProgressively,
   handleInitialThumbnails,
   regenerateThumbnailForTrim,
-
-  // Path lookup
   getThumbnailPath,
   getThumbnailPathsBatch,
-
-  // Queue management
   processQueue,
   stopQueue,
   isQueueProcessing,

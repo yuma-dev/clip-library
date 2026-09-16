@@ -1,9 +1,7 @@
-// Settings modal shortcuts tab UI
-// Imports
+// settings modal shortcuts tab UI
 const { ipcRenderer } = require('electron');
 const keybinds = require('./keybinding-manager');
 
-// Action metadata
 const ACTION_INFO = {
   playPause:             { t: 'Play / Pause',            d: 'Toggle video playback',                     i: 'play_arrow' },
   frameBackward:         { t: 'Frame Backward',          d: 'Step one frame back',                       i: 'keyboard_arrow_left' },
@@ -32,7 +30,6 @@ let captureBox = null;
 let captureAction = null;
 const pressed = new Set();
 
-// Tab layout
 function ensureShortcutsTab() {
   if (!settingsModalRef) return;
   if (settingsModalRef.querySelector('.settings-tab[data-tab="shortcuts"]')) return;
@@ -66,7 +63,6 @@ function ensureShortcutsTab() {
   contentWrapper.insertBefore(shortcutsContent, footer);
 }
 
-// Combo helpers
 function buildCombo(ev) {
   const parts = [];
   if (ev.ctrlKey || ev.metaKey) parts.push('Ctrl');
@@ -77,9 +73,6 @@ function buildCombo(ev) {
   return parts.join('+');
 }
 
-/**
- * Update capture box text while keys are held.
- */
 function captureKey(ev) {
   if (!captureBox) return;
   ev.preventDefault();
@@ -87,9 +80,6 @@ function captureKey(ev) {
   captureBox.textContent = buildCombo(ev);
 }
 
-/**
- * Finalize capture and persist the new keybinding.
- */
 function releaseKey() {
   if (!captureBox) return;
   if (pressed.size > 0) return;
@@ -109,7 +99,6 @@ function releaseKey() {
   captureAction = null;
 }
 
-// Capture flow
 function startKeyCapture(e) {
   captureBox = e.currentTarget;
   captureAction = captureBox.dataset.action;
@@ -121,7 +110,6 @@ function startKeyCapture(e) {
   document.addEventListener('keyup', releaseKey, true);
 }
 
-// UI rendering
 function populateKeybindingList() {
   const list = document.getElementById('keybinding-list');
   if (!list) return;
@@ -153,7 +141,6 @@ function populateKeybindingList() {
   list.querySelectorAll('.kb-box').forEach(box => box.addEventListener('click', startKeyCapture));
 }
 
-// Actions
 async function handleResetKeybinds() {
   if (typeof showCustomConfirmRef !== 'function') return;
   const confirmed = await showCustomConfirmRef('Reset all keyboard shortcuts to default values?');
@@ -167,7 +154,6 @@ async function handleResetKeybinds() {
   populateKeybindingList();
 }
 
-// Module API
 function init({ settingsModal, showCustomConfirm }) {
   settingsModalRef = settingsModal;
   showCustomConfirmRef = showCustomConfirm;

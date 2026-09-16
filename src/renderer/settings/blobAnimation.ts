@@ -1,18 +1,15 @@
-// Shared fake-"video" animation for the glow previews. With a base image
-// (a real library thumbnail) it draws the image plus faint drifting color
-// blobs — enough motion to demonstrate smoothing/update-rate without looking
-// like a neon lamp. Without one it falls back to full-strength blobs.
-// Draws the same frame to every ctx (video + glow copies) so a CSS-filtered
-// duplicate stays in sync.
+// fake "video" for the glow previews: draws a base thumbnail plus faint drifting color blobs to
+// show smoothing/update-rate without looking like a neon lamp; no image falls back to full-strength
+// blobs. draws the same frame to every ctx so the CSS-filtered duplicate stays in sync
 
 export interface BlobAnimationOpts {
   width: number;
   height: number;
-  /** Redraw throttle — mirrors the ambient glow fps setting. */
+  /** redraw throttle, mirrors the ambient glow fps setting */
   getFps: () => number;
-  /** Hue lerp factor per frame (lower = smoother), mirrors glow smoothing. */
+  /** hue lerp factor per frame, lower = smoother, mirrors glow smoothing */
   getSmoothing: () => number;
-  /** Real thumbnail to draw under the blobs (may resolve late — polled per frame). */
+  /** real thumbnail drawn under the blobs; may resolve late, polled per frame */
   getBaseImage?: () => CanvasImageSource | null;
 }
 
@@ -44,7 +41,7 @@ export function startBlobAnimation(
         try {
           ctx.drawImage(base, 0, 0, W, H);
         } catch {
-          /* image not ready — blobs only this frame */
+          /* image not ready, blobs only this frame */
         }
       }
       ctx.globalAlpha = blobAlpha;
@@ -81,7 +78,7 @@ export function startBlobAnimation(
   return () => cancelAnimationFrame(raf);
 }
 
-/** Load a file path as an <img> for canvas drawing; resolves null on failure. */
+/** loads a file path as an <img> for canvas drawing; resolves null on failure */
 export function loadPreviewImage(path: string | null): { get: () => HTMLImageElement | null } {
   let img: HTMLImageElement | null = null;
   if (path) {

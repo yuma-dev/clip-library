@@ -1,7 +1,6 @@
-// Time-groups a feed clip list into the same ordered sections the library uses
-// (reusing library/grouping.ts — no logic is copied), plus a persisted
-// collapsed-state map keyed per surface (feed vs. each profile tab). Feed
-// Clip.createdAt is an ISO string; groupByTime is fed a ms accessor.
+// Time-groups a feed clip list via library/grouping.ts's groupByTime, plus a
+// persisted collapsed-state map keyed per surface (feed vs. each profile tab).
+// Feed Clip.createdAt is an ISO string; groupByTime wants a ms accessor.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { groupByTime } from "../library/grouping";

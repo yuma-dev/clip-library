@@ -1,11 +1,6 @@
-// Profile page — in-app port of the reference website UserProfilePage.tsx,
-// adapted to the app's design language (kebab-case `profile-` classes + design
-// tokens, no Tailwind). Rendered as an overlay by App.tsx over the routed view.
-//
-// Shows the public profile card (banner, avatar, bio, badges, stats), a
-// posted / mentioned / favs tab strip, and the matching clip grid. For the
-// signed-in user's own profile a subtle strip explains that only published
-// clips appear here and links back to the local library.
+// Profile page, in-app port of the website UserProfilePage.tsx (kebab-case profile-
+// classes, no Tailwind). Rendered as an overlay by App.tsx; shows the profile card
+// a posted/mentioned/favs tab strip, and the matching clip grid.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Lock, Pencil, Settings } from "lucide-react";
@@ -94,8 +89,7 @@ export default function ProfilePage({ userId }: { userId: string }) {
       .catch(() => setError(true));
   }, [userId]);
 
-  // Determine whether this is the signed-in user's own public profile, and
-  // whether they're an admin (badge manager affordance).
+  // also determine admin status, for the badge manager affordance
   useEffect(() => {
     let alive = true;
     fetchMe()
@@ -149,7 +143,7 @@ export default function ProfilePage({ userId }: { userId: string }) {
       onClipUpdated: patchClip,
     });
   const { gridRef, canvasRef } = useCardGlow();
-  // Streamed mounting + offscreen culling — same mechanics as the other grids.
+  // streamed mounting + offscreen culling, same mechanics as the other grids
   const shownClips = useStreamedSlice(clips, true) ?? [];
   const observe = useVisibilityObserver();
 
@@ -340,8 +334,8 @@ export default function ProfilePage({ userId }: { userId: string }) {
             </div>
           </div>
 
-          {/* Clips grid — library-sized cards, flat (no time groups: the tab
-              already scopes the list, headers would just add noise). */}
+          {/* library-sized cards, flat: the tab already scopes the list,
+              time-group headers would just add noise */}
           <div className="profile-grid-wrap">
             {clips.length === 0 && !clipsLoading ? (
               <p className="profile-empty">{emptyMessage}</p>

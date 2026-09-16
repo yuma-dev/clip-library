@@ -1,32 +1,6 @@
-//! Lightweight runtime profiler for the clipdip pipeline.
-//!
-//! Goals
-//! - **Off by default, near-zero overhead when disabled.** Fast-path is a
-//!   single relaxed-atomic load. Instrumented code stays in place in
-//!   release builds; flipping the toggle starts collecting samples.
-//! - **Per-stage timings** with p50 / p95 / p99 / mean / max over a
-//!   reporting window, so we can answer "where do the milliseconds go?"
-//!   instead of guessing.
-//! - **Process CPU%** sampled via `GetProcessTimes`, walltime-normalized.
-//! - **Process GPU%** sampled via PDH `\GPU Engine(pid_*)\Utilization
-//!   Percentage`, summed across all engine types for this PID.
-//! - **One log line per window.** The pipeline owns the reporter cadence
-//!   (default 5 s); this crate just collects.
-//!
-//! Usage
-//! ```ignore
-//! // Once, from the CLI binary:
-//! clipdip_profile::enable();
-//!
-//! // Anywhere in a hot path:
-//! let _t = clipdip_profile::start("encode");
-//! // ... work ...
-//! // drop(_t) records the elapsed time under the "encode" stage.
-//!
-//! // Periodically, from the pipeline reporter thread:
-//! let report = clipdip_profile::report();
-//! tracing::info!(?report, "profile window");
-//! ```
+//! Runtime profiler for the clipdip pipeline. Off by default (single relaxed
+//! atomic load fast path); collects per-stage p50/p95/p99/mean/max, process
+//! CPU% (GetProcessTimes) and GPU% (PDH), logged once per ~5s window.
 
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
@@ -37,23 +11,19 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 
-/// Global toggle. The fast path is a single relaxed load; instrumentation
-/// macros and `ScopedTimer::drop` check this before touching the mutex.
+/// Global toggle; fast path is a single relaxed load, checked before the mutex.
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Lazily-initialized state. Mutex contention is OK — we only lock on
-/// stage record (typically <300 samples/sec total) and on the reporter
-/// thread once per window.
+/// Lazily-initialized state. Mutex contention is fine: locked on stage record
+/// (<300 samples/sec typical) and once per window on the reporter thread.
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 
 struct State {
-    /// Sample buffers per stage. Microseconds as u32 — 71 minutes max,
-    /// plenty for any realistic stage.
+    /// Sample buffers per stage. Microseconds as u32, 71 minutes max.
     samples: BTreeMap<&'static str, Vec<u32>>,
     /// Wall-clock start of the current reporting window.
     window_start: Instant,
-    /// Last CPU sampling state. `None` until the first call to
-    /// [`report`].
+    /// Last CPU sampling state; `None` until the first [`report`] call.
     last_cpu: Option<CpuSample>,
     /// PDH GPU sampler. Lazily initialized on first `report()`.
     #[cfg(target_os = "windows")]
@@ -80,17 +50,14 @@ fn state() -> &'static Mutex<State> {
     })
 }
 
-/// Turn profiling on. Fast path everywhere else becomes one atomic load
-/// returning `true`.
+/// Turn profiling on; fast path elsewhere becomes one atomic load returning `true`.
 pub fn enable() {
     ENABLED.store(true, Ordering::Relaxed);
-    // Force-init the state so the first sample doesn't pay the OnceLock
-    // race.
+    // force-init so the first sample doesn't pay the OnceLock race
     state();
 }
 
-/// Turn profiling off. In-flight `ScopedTimer`s already in progress will
-/// silently skip their record on drop.
+/// Turn profiling off; in-flight `ScopedTimer`s silently skip their record on drop.
 pub fn disable() {
     ENABLED.store(false, Ordering::Relaxed);
 }
@@ -100,9 +67,8 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// Start a scope. The returned guard records its lifetime under
-/// `stage` when dropped, *if* profiling is enabled at drop time. When
-/// disabled, drop is a single relaxed load.
+/// Records elapsed time under `stage` on drop, if profiling is enabled at
+/// drop time (not construction). Disabled drop is a single relaxed load.
 #[inline]
 pub fn start(stage: &'static str) -> ScopedTimer {
     ScopedTimer {
@@ -111,9 +77,7 @@ pub fn start(stage: &'static str) -> ScopedTimer {
     }
 }
 
-/// Record a pre-measured duration without a scope guard. Use this when
-/// you already have an `Instant` from earlier (e.g. across an await
-/// or thread boundary).
+/// Records a pre-measured duration, for one spanning an await or thread boundary.
 #[inline]
 pub fn record(stage: &'static str, micros: u32) {
     if !enabled() {
@@ -129,18 +93,14 @@ pub fn record(stage: &'static str, micros: u32) {
 
 pub struct ScopedTimer {
     stage: &'static str,
-    /// `None` if profiling was disabled at construction. We re-check
-    /// `enabled()` at drop, so toggling on mid-scope still records
-    /// (and toggling off mid-scope still skips).
+    /// None if disabled at construction; enabled() is re-checked at drop.
     start: Option<Instant>,
 }
 
 impl Drop for ScopedTimer {
     #[inline]
     fn drop(&mut self) {
-        // Re-check the flag so a late `enable()` doesn't capture a
-        // partially-elapsed scope (it has no valid start), and so a late
-        // `disable()` doesn't waste a lock.
+        // re-check: a late enable() has no valid start, a late disable() shouldn't lock
         let Some(start) = self.start else { return };
         if !enabled() {
             return;
@@ -171,19 +131,15 @@ pub struct ProfileReport {
     pub stages: Vec<StageStats>,
     /// Window length in milliseconds. Resets on each `report()` call.
     pub window_ms: u64,
-    /// Process CPU usage over the window, 0.0..=1.0 per logical core
-    /// (so 1.0 = one core fully pinned). `None` on the first call (no
-    /// baseline to compare against yet) or if `GetProcessTimes` fails.
+    /// CPU usage over the window, 0.0..=1.0 per core (1.0 = one core pinned).
+    /// `None` on first call (no baseline yet) or if `GetProcessTimes` fails.
     pub cpu_cores_busy: Option<f64>,
-    /// Sum of `\GPU Engine(pid_*)\Utilization Percentage` across all engine
-    /// types for this process. Each engine contributes 0–100%, so the sum
-    /// can exceed 100% when multiple engines (3D, VideoEncode, Copy, …) are
-    /// active simultaneously. `None` on the first call or if PDH init fails.
+    /// Sum of `\GPU Engine(pid_*)\Utilization Percentage`; can exceed 100% with
+    /// multiple engines active, `None` on first call or PDH failure.
     pub gpu_percent: Option<f64>,
 }
 
-/// Drain current samples and return a window report. The window starts
-/// over at the moment of the call.
+/// Drain current samples into a window report; the window restarts at the call.
 pub fn report() -> ProfileReport {
     let now = Instant::now();
     let mut st = state().lock();
@@ -234,8 +190,7 @@ pub fn report() -> ProfileReport {
     }
 }
 
-/// Sample process CPU time and return cores-busy since the previous sample.
-/// `None` on first call (no delta yet) or on Windows API failure.
+/// Cores-busy since the previous sample; `None` on first call or Windows API failure.
 #[cfg(target_os = "windows")]
 fn sample_cpu(st: &mut State, now: Instant) -> Option<f64> {
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -278,11 +233,11 @@ fn sample_cpu(_st: &mut State, _now: Instant) -> Option<f64> {
     None
 }
 
-// ---- GPU% via PDH ----------------------------------------------------------
+// gpu% via pdh
 
 #[cfg(target_os = "windows")]
 enum GpuInit {
-    /// PDH not yet opened — happens on first `report()`.
+    /// PDH not yet opened, happens on first `report()`.
     Uninit,
     /// PDH query open and running.
     Active(GpuSampler),
@@ -290,15 +245,12 @@ enum GpuInit {
     Failed,
 }
 
-/// Owns a PDH query that watches `\GPU Engine(pid_<PID>_*)\Utilization
-/// Percentage` for this process. Handles are plain `isize` in windows 0.58.
+/// Owns a PDH query watching `\GPU Engine(pid_<PID>_*)\Utilization Percentage`.
 #[cfg(target_os = "windows")]
 struct GpuSampler {
     query: isize,
     counter: isize,
-    /// False until we've done two collects (PDH needs two samples to compute
-    /// a rate). The first collect in `new()` primes t0; `primed` flips to
-    /// true after the first collect inside `sample()`.
+    /// False until two collects have run (PDH needs two samples for a rate).
     primed: bool,
 }
 
@@ -338,8 +290,7 @@ impl GpuSampler {
             return None;
         }
 
-        // First collect establishes t0 for rate counters; we can't read
-        // values yet (need a second collect to compute the delta).
+        // first collect establishes t0; needs a second to compute the delta
         unsafe { PdhCollectQueryData(query) };
 
         Some(Self {
@@ -360,15 +311,13 @@ impl GpuSampler {
             return None;
         }
 
-        // First sample after init: this collect was t1, but we treat it as
-        // the new t0 and wait for the next report() to read values.
+        // treat this collect as the new t0, wait for the next report() to read values
         if !self.primed {
             self.primed = true;
             return None;
         }
 
-        // Two-pass: call with no buffer to get required byte count, then
-        // allocate and call again.
+        // two-pass: no buffer first to get required byte count, then allocate and call again
         let mut buf_bytes: u32 = 0;
         let mut item_count: u32 = 0;
         let status = unsafe {
@@ -452,10 +401,8 @@ fn sample_gpu(_st: &mut State) -> Option<f64> {
     None
 }
 
-/// Format a `ProfileReport` as a single human-readable line suitable for
-/// `info!`. Lines look like:
-///   `profile cpu=0.42cores gpu=12.3% window=5012ms acquire(n=300 p50=1.2
-///    p95=3.4 p99=4.5 max=7.0 ms) encode(n=300 p50=2.1 ...)`
+/// Formats a `ProfileReport` as one line for `info!`, e.g.
+/// `profile cpu=0.42cores gpu=12.3% window=5012ms stage(n=300 p50=1.2 ...)`.
 pub fn format_report(rep: &ProfileReport) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(256);
@@ -485,8 +432,7 @@ pub fn format_report(rep: &ProfileReport) -> String {
 mod tests {
     use super::*;
 
-    // Profile state is process-global. Serialize tests so enable()/disable()
-    // calls in one test don't race with record() calls in another.
+    // profile state is process-global; serialize tests to avoid enable/record races
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -495,8 +441,7 @@ mod tests {
         disable();
         let _t = start("noop");
         record("noop", 123);
-        // No samples should have been recorded when disabled; the BTree
-        // might still exist from earlier tests, so just check the count.
+        // BTree may still exist from earlier tests, so check the count not existence
         let rep = report();
         assert!(rep.stages.iter().all(|s| s.name != "noop" || s.count == 0));
     }
@@ -521,7 +466,7 @@ mod tests {
     fn percentiles_handle_small_n() {
         let _g = TEST_LOCK.lock().unwrap();
         enable();
-        // Single sample — all percentiles should equal it.
+        // single sample, all percentiles should equal it
         record("single", 42);
         let rep = report();
         let st = rep.stages.iter().find(|s| s.name == "single").unwrap();

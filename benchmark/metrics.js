@@ -14,10 +14,7 @@ class Metrics {
     this.cpuBaseline = null;
   }
 
-  /**
-   * Start a timing mark
-   * @param {string} name - Unique identifier for this measurement
-   */
+  /** @param {string} name */
   startMark(name) {
     const memory = process.memoryUsage();
     const cpu = process.cpuUsage();
@@ -38,9 +35,8 @@ class Metrics {
   }
 
   /**
-   * End a timing mark and record the measurement
-   * @param {string} name - The mark identifier to end
-   * @returns {Object|null} The measurement result or null if mark not found
+   * @param {string} name
+   * @returns {Object|null}
    */
   endMark(name) {
     const mark = this.marks.get(name);
@@ -71,22 +67,19 @@ class Metrics {
       timestamp: Date.now()
     };
 
-    // Store measurement for aggregation
     if (!this.measurements.has(name)) {
       this.measurements.set(name, []);
     }
     this.measurements.get(name).push(measurement);
 
-    // Clean up the mark
     this.marks.delete(name);
 
     return measurement;
   }
 
   /**
-   * Measure an async function execution
-   * @param {string} name - Measurement name
-   * @param {Function} fn - Async function to measure
+   * @param {string} name
+   * @param {Function} fn
    * @returns {Promise<{result: any, measurement: Object}>}
    */
   async measure(name, fn) {
@@ -102,9 +95,8 @@ class Metrics {
   }
 
   /**
-   * Measure a sync function execution
-   * @param {string} name - Measurement name
-   * @param {Function} fn - Function to measure
+   * @param {string} name
+   * @param {Function} fn
    * @returns {{result: any, measurement: Object}}
    */
   measureSync(name, fn) {
@@ -120,10 +112,10 @@ class Metrics {
   }
 
   /**
-   * Record a manual measurement (for external timing)
-   * @param {string} name - Measurement name
-   * @param {number} duration - Duration in ms
-   * @param {Object} [extra={}] - Additional data
+   * for external timing
+   * @param {string} name
+   * @param {number} duration
+   * @param {Object} [extra={}]
    */
   recordManual(name, duration, extra = {}) {
     const measurement = {
@@ -144,9 +136,8 @@ class Metrics {
   }
 
   /**
-   * Get aggregated statistics for a measurement
-   * @param {string} name - Measurement name
-   * @returns {Object|null} Aggregated stats or null if not found
+   * @param {string} name
+   * @returns {Object|null}
    */
   getStats(name) {
     const measurements = this.measurements.get(name);
@@ -181,12 +172,10 @@ class Metrics {
     const sum = sorted.reduce((a, b) => a + b, 0);
     const avg = sum / sorted.length;
 
-    // Calculate standard deviation
     const squareDiffs = sorted.map(value => Math.pow(value - avg, 2));
     const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / squareDiffs.length;
     const stdDev = Math.sqrt(avgSquareDiff);
 
-    // Calculate percentiles
     const p50Index = Math.floor(sorted.length * 0.5);
     const p95Index = Math.floor(sorted.length * 0.95);
     const p99Index = Math.floor(sorted.length * 0.99);
@@ -204,10 +193,7 @@ class Metrics {
     };
   }
 
-  /**
-   * Get all measurements as a summary object
-   * @returns {Object} Summary of all measurements
-   */
+  /** @returns {Object} */
   getSummary() {
     const summary = {};
     for (const [name] of this.measurements) {
@@ -216,10 +202,7 @@ class Metrics {
     return summary;
   }
 
-  /**
-   * Get all raw measurements
-   * @returns {Object} All raw measurements
-   */
+  /** @returns {Object} */
   getAllMeasurements() {
     const all = {};
     for (const [name, measurements] of this.measurements) {
@@ -228,10 +211,7 @@ class Metrics {
     return all;
   }
 
-  /**
-   * Get current memory snapshot
-   * @returns {Object} Current memory usage
-   */
+  /** @returns {Object} */
   getMemorySnapshot() {
     const mem = process.memoryUsage();
     return {
@@ -245,18 +225,12 @@ class Metrics {
     };
   }
 
-  /**
-   * Reset all measurements
-   */
   reset() {
     this.marks.clear();
     this.measurements.clear();
   }
 
-  /**
-   * Export measurements to JSON
-   * @returns {string} JSON string of all measurements
-   */
+  /** @returns {string} */
   toJSON() {
     return JSON.stringify({
       summary: this.getSummary(),
@@ -267,12 +241,10 @@ class Metrics {
   }
 }
 
-// Helper functions for formatting
 const formatters = {
   /**
-   * Format duration in human-readable form
-   * @param {number} ms - Duration in milliseconds
-   * @returns {string} Formatted duration
+   * @param {number} ms
+   * @returns {string}
    */
   duration(ms) {
     if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
@@ -282,9 +254,8 @@ const formatters = {
   },
 
   /**
-   * Format bytes in human-readable form
-   * @param {number} bytes - Size in bytes
-   * @returns {string} Formatted size
+   * @param {number} bytes
+   * @returns {string}
    */
   bytes(bytes) {
     const sign = bytes < 0 ? '-' : '+';
@@ -295,17 +266,12 @@ const formatters = {
     return `${sign}${(abs / 1024 / 1024 / 1024).toFixed(2)}GB`;
   },
 
-  /**
-   * Format percentage
-   * @param {number} value - Value between 0 and 1
-   * @returns {string} Formatted percentage
-   */
+  /** @param {number} value 0-1 */
   percent(value) {
     return `${(value * 100).toFixed(1)}%`;
   }
 };
 
-// Singleton instance for shared use
 const globalMetrics = new Metrics();
 
 module.exports = {

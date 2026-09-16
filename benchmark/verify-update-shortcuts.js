@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 'use strict';
-// Verifies that updating from an older installer keeps the desktop and start
-// menu shortcuts and a taskbar pin, and that the app then points them at the
-// native launcher. Installs the OLD installer silently, plants a taskbar pin
-// file the way Windows creates one (target = installed ClipLib.exe, the
-// app's AppUserModelID), installs the NEW installer silently, then launches
-// the app once so its pin repair runs.
+// Checks that updating keeps the desktop/start-menu shortcuts and taskbar pin
+// and that the app repoints them at the native launcher: install OLD silently
+// plant a taskbar pin like Windows would (target = installed ClipLib.exe
+// tagged with the app's AppUserModelID), install NEW silently, then launch
+// once so pin repair runs.
 //
 //   node benchmark/verify-update-shortcuts.js --old "path\to\ClipLib Setup 3.3.0.exe" --new "dist\ClipLib Setup 3.5.1.exe"
 //
-// Touches the real install (%LOCALAPPDATA%\Programs\Clips) and the real
-// taskbar pin folder; run it only on a machine where that is intended.
+// touches the real install (%LOCALAPPDATA%\Programs\Clips) and taskbar pin folder
 
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -66,8 +64,7 @@ async function main() {
   await sleep(1500);
   report('after old install');
 
-  // Plant the pin the way Windows does when a user pins the running app:
-  // a .lnk in the taskbar folder targeting the exe, tagged with the AUMID.
+  // mimic how Windows plants a pin: .lnk in the taskbar folder targeting the exe, tagged with the AUMID
   const electron = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
   const script = path.join(root, 'benchmark', 'results', 'make-pin.js');
   fs.mkdirSync(path.dirname(script), { recursive: true });

@@ -2,8 +2,8 @@ import type { ClipGlow } from "./ClipGlow";
 import { isBootHeld } from "../boot/bootHold";
 import type { LocalClip } from "./types";
 
-// Node's path.join via the (nodeIntegration) global require — matches how the
-// legacy renderer built file:// URLs for local clips.
+// Node's path.join via the nodeIntegration global require, matches how the legacy renderer built
+// file:// URLs.
 const nodeRequire = (window as unknown as { require?: (m: string) => { join: (...p: string[]) => string } }).require;
 function clipFileUrl(clipLocation: string, originalName: string): string {
   const full = nodeRequire ? nodeRequire("path").join(clipLocation, originalName) : `${clipLocation}/${originalName}`;
@@ -16,13 +16,8 @@ interface PreviewContext {
   img?: HTMLImageElement | null;
 }
 
-/**
- * Orchestrates card hover: shows the shared glow immediately, and after a 100ms
- * delay creates a looping preview <video> in the card (start at trim.start or
- * mid-clip), hiding the thumbnail and feeding the live video to the glow.
- * Cancellation is via a per-hover token (legacy `state.activePreview`).
- * (Warm-audio-on-hover is deferred to Phase 4, when the player consumes it.)
- */
+/** Card hover: shows glow immediately, then after 100ms a looping preview
+ * <video> (trim.start or mid-clip); cancellation via a per-hover token. */
 export class LibraryHover {
   private activePreview: PreviewContext | null = null;
   private previewTimer: number | null = null;
@@ -32,10 +27,8 @@ export class LibraryHover {
     private readonly glow: ClipGlow,
     private clipLocation: string,
   ) {
-    // A preview left playing under a resting cursor decodes video and drives
-    // the glow at 30 fps for as long as it sits there. Nobody sees that when
-    // the window is unfocused or hidden, so stop it; the next mouse move over
-    // a card starts a fresh one.
+    // A resting-cursor preview decodes/drives the glow at 30fps forever if left running; stop on
+    // blur/hidden, restart on next hover.
     window.addEventListener("blur", this.onWindowAway);
     document.addEventListener("visibilitychange", this.onVisibility);
   }
@@ -52,16 +45,15 @@ export class LibraryHover {
     this.clipLocation = loc;
   }
 
-  /** Settings → preview volume; also applied live to a playing preview. */
+  /** Settings, preview volume; also applied live to a playing preview. */
   setPreviewVolume(volume: number): void {
     this.previewVolume = volume;
     if (this.activePreview?.video) this.activePreview.video.volume = volume;
   }
 
   enter(cardEl: HTMLElement, clip: LocalClip): void {
-    // No preview or clip warm-up while the boot reveal plays: the cursor often
-    // sits on the grid when the window appears, and the first <video> costs
-    // the GPU process a decoder plus an encoder-capability probe mid-intro.
+    // No preview during boot reveal: cursor often rests on the grid then, and
+    // the first <video> costs the GPU a decoder + encoder-capability probe.
     if (isBootHeld()) return;
     this.glow.show(cardEl);
     this.cleanupPreview();
@@ -74,16 +66,15 @@ export class LibraryHover {
 
       let startTime = 0;
       try {
-        // One cheap IPC (trim.start or cached-duration midpoint). Never call
-        // getClipInfo here — on a cold cache it runs a ~300ms ffprobe on the
-        // main process, which serially stalled every hover + queued IPC.
+        // Cheap IPC (trim.start or cached midpoint); never getClipInfo here
+        // cold cache runs a ~300ms ffprobe that serially stalls every hover.
         startTime = Number(await window.clips.getPreviewStartTime(clip.originalName)) || 0;
       } catch {
         /* default to 0 */
       }
       if (this.activePreview !== ctx || !cardEl.matches(":hover")) return;
-      // A hovered card is the likeliest next open: warm its probe and audio
-      // tracks now (main does it one clip at a time, off the click path).
+      // Hovered card is the likeliest next open: warm probe/audio now (main does one clip at a
+      // time, off the click path).
       window.clips.warmClipOpen?.(clip.originalName).catch(() => undefined);
 
       const media = cardEl.querySelector<HTMLElement>(".clip-item-media-container");
@@ -115,7 +106,7 @@ export class LibraryHover {
           .play()
           .then(() => this.glow.updateSource(video))
           .catch(() => {
-            /* autoplay rejection — leave the thumbnail visible */
+            /* autoplay rejection, leave the thumbnail visible */
           });
       });
 

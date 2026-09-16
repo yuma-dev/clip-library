@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
-// Scroll-cost experiments on the packaged app: one launch, then a series of
-// CSS overrides injected into the live page, each followed by the same wheel
-// scroll, reporting frame times. Tells which part of the grid's styling makes
-// a scroll frame expensive without a rebuild per hypothesis.
+// Scroll-cost experiments on the packaged app: one launch, then CSS overrides
+// injected into the live page, each followed by the same wheel scroll
+// reporting frame times. Finds which grid style is expensive, no rebuild per guess.
 //
 //   node benchmark/scroll-experiments.js [--cursor grid|edge] [--exe PATH] [--wait MS]
 

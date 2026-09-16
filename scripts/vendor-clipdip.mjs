@@ -1,8 +1,6 @@
-// Copies the clipdip binary from the in-repo cargo build (clipdip/ subtree)
-// into vendor/clipdip/ so electron-builder's extraResources can ship it as
-// resources/clipdip/. ffmpeg is NOT vendored — clipdip shares the library's
-// ffmpeg via its config's output.ffmpeg_path (written by main/clipdip.js).
-//
+// Copies the clipdip binary from the in-repo cargo build into vendor/clipdip/
+// so electron-builder ships it as resources/clipdip/. ffmpeg isn't vendored
+// clipdip shares the library's ffmpeg via output.ffmpeg_path (main/clipdip.js).
 // Run via `npm run vendor:clipdip` (or as part of `npm run build`).
 import { copyFileSync, mkdirSync, existsSync, statSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -20,7 +18,7 @@ if (!existsSync(exe)) {
 }
 
 mkdirSync(outDir, { recursive: true });
-// Drop stale extras from the pre-merge layout (bundled ffmpeg etc.).
+// drop stale extras from the pre-merge layout
 for (const stale of ["ffmpeg.exe", "ATTRIBUTION.txt"]) {
   rmSync(join(outDir, stale), { force: true });
 }

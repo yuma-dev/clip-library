@@ -1,23 +1,17 @@
-//! Blocking HTTPS calls to the Clipdip diagnostics server.
-//!
-//! Only ever driven from the single manager thread, so no internal locking. The
-//! contract (from the server's OpenAPI): every write carries `X-Clipdip-Key`;
-//! heartbeat/events must be `application/json` (form-encoded is rejected 400);
-//! 429 carries a retry hint; other 4xx are permanent (fix the payload, never
-//! retry); 5xx / transport errors are retryable with backoff.
+//! Blocking HTTPS calls to the Clipdip diagnostics server. Single manager
+//! thread only, so no internal locking. Every write carries `X-Clipdip-Key`
+//! body must be `application/json`; 429 retries after its hint, other 4xx drop, 5xx/transport
+//! retries with backoff.
 
 use crate::{bundle, ServerConfig};
 use std::time::Duration;
 
 /// What to do with a batch of events after a send attempt.
 pub enum SendOutcome {
-    /// Server accepted them — drop from the queue.
     Accepted,
-    /// Permanent client error (e.g. 400). Drop them too; retrying can't help
-    /// and would wedge the queue behind a poison payload.
+    /// Permanent error (e.g. 400): drop rather than wedge the queue on a poison payload.
     Drop,
-    /// Transient failure — keep the events and retry after the given delay
-    /// (from `Retry-After` when present, else the caller's backoff).
+    /// Keep and retry after `Retry-After`, or the caller's backoff.
     Retry(Option<Duration>),
 }
 
@@ -58,13 +52,9 @@ impl HttpClient {
         }
     }
 
-    /// POST /v1/heartbeat — records the beat and returns the current config
-    /// (log-level override, min supported version). Errors are swallowed by the
-    /// caller and simply retried on the next tick.
-    ///
-    /// `machine` (hardware profile) rides along only on the first successful
-    /// beat of a session; `app` whenever it changed. The server COALESCEs
-    /// omitted fields, so leaving them off never erases stored values.
+    /// POST /v1/heartbeat, returns server config (log level, min version).
+    /// `machine` sent once per session, `app` on change; omitted fields are COALESCEd server-side,
+    /// not erased.
     pub fn heartbeat(
         &self,
         machine: Option<&serde_json::Value>,
@@ -100,14 +90,11 @@ impl HttpClient {
         Ok(cfg)
     }
 
-    /// POST /v1/events — batch (already ≤100). Classifies the response into a
-    /// [`SendOutcome`] so the manager knows whether to drop or retry.
+    /// POST /v1/events, batch already <=100.
     pub fn send_events(&self, batch: &[serde_json::Value]) -> SendOutcome {
         let body = match serde_json::to_string(batch) {
             Ok(b) => b,
-            // Can't even serialize our own queue lines — drop them, they're
-            // unrecoverable.
-            Err(_) => return SendOutcome::Drop,
+            Err(_) => return SendOutcome::Drop, // unrecoverable, can't even serialize
         };
         let result = self
             .agent
@@ -122,7 +109,7 @@ impl HttpClient {
                 if code == 429 {
                     SendOutcome::Retry(retry_after(&resp))
                 } else if (400..500).contains(&code) {
-                    // Permanent (bad payload / bad key). Don't loop on it.
+                    // permanent: bad payload/key, don't loop on it
                     tracing::warn!("diagnostics: events rejected {code}, dropping batch");
                     SendOutcome::Drop
                 } else {
@@ -133,8 +120,7 @@ impl HttpClient {
         }
     }
 
-    /// POST /v1/bundles — multipart upload of the diagnostic zip. Returns the
-    /// server-assigned bundle id on success.
+    /// POST /v1/bundles, multipart. Returns the server-assigned bundle id.
     pub fn upload_bundle(&self, note: Option<String>, source: &str) -> Result<i64, String> {
         let zip = bundle::build_zip(&self.install_id, &self.app_version)
             .map_err(|e| format!("build bundle: {e}"))?;
@@ -149,12 +135,10 @@ impl HttpClient {
             text_field(&mut body, &boundary, "user_note", n);
         }
         file_field(&mut body, &boundary, "file", "clipdip-diagnostics.zip", &zip);
-        // Closing boundary.
         body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
         let content_type = format!("multipart/form-data; boundary={boundary}");
-        // Bundles can be several MB — give the upload a longer ceiling than the
-        // shared agent's default.
+        // longer timeout than the shared agent: bundles can be several MB
         let resp = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
@@ -172,10 +156,8 @@ impl HttpClient {
     }
 }
 
-/// POST /v1/session/end — best-effort, never blocking shutdown for more than
-/// ~2 s. Called from exit paths outside the manager thread (which may be mid
-/// backoff), so it builds its own short-fuse agent. Unknown session ids are
-/// accepted silently server-side, and the result is deliberately ignored.
+/// POST /v1/session/end, best-effort with its own ~2s-fuse agent since it
+/// runs from exit paths outside the manager thread. Result ignored.
 pub fn session_end_blocking(base: &str, key: &str, install_id: &str, session_id: &str, reason: &str) {
     let body = serde_json::json!({
         "install_id": install_id,

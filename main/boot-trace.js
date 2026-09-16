@@ -1,17 +1,10 @@
 'use strict';
-// Boot timeline for benchmark/cold-start.js.
-//
-// Enabled only when the process starts with CLIPLIB_BOOT_TRACE=1; every call
-// is a no-op otherwise, so it costs nothing in normal launches. Marks are
-// epoch milliseconds so main and renderer clocks line up and the harness can
-// subtract its own spawn timestamp. The file is rewritten (atomically) a
-// short moment after every new mark so the harness can watch it grow.
+// Boot timeline for benchmark/cold-start.js. No-op unless CLIPLIB_BOOT_TRACE
+// is set; epoch-ms marks so main/renderer clocks line up, file rewritten atomically after each mark.
 const path = require('path');
 
-// '1' = timeline marks only; '2' = marks plus a Chromium content trace of the
-// whole launch (chromium-trace.json next to boot-trace.json), for digging
-// into what the renderer is doing between marks.
-// '3' = marks plus a V8 CPU profile of the main process (main.cpuprofile).
+// '1' = timeline marks; '2' = marks + chromium content trace (chromium-trace.json);
+// '3' = marks + V8 cpu profile of main process (main.cpuprofile)
 const enabled = ['1', '2', '3'].includes(process.env.CLIPLIB_BOOT_TRACE);
 const cpuProfileWanted = process.env.CLIPLIB_BOOT_TRACE === '3';
 let cpuSession = null;
@@ -29,8 +22,7 @@ let contentTraceTimer = null;
 const firstLineAt = Date.now();
 const uptimeMsAtFirstLine = Math.round(process.uptime() * 1000);
 const marks = {};
-// Free-form facts about the boot (frame statistics and the like), written
-// next to the marks.
+// free-form boot facts (frame stats etc), written next to marks
 const notes = {};
 let outFile = null;
 let writeTimer = null;
@@ -51,7 +43,7 @@ function write() {
     fs.writeFileSync(`${outFile}.tmp`, data);
     fs.renameSync(`${outFile}.tmp`, outFile);
   } catch (_) {
-    /* the harness tolerates a missing or partial file */
+    /* harness tolerates a missing or partial file */
   }
 }
 
@@ -64,7 +56,7 @@ function scheduleWrite() {
   if (writeTimer.unref) writeTimer.unref();
 }
 
-/** Record `name` once (first call wins) at `at` (epoch ms, default now). */
+/** first call wins; `at` defaults to now (epoch ms) */
 function mark(name, at) {
   if (!enabled || marks[name] !== undefined) return;
   marks[name] = typeof at === 'number' && Number.isFinite(at) ? at : Date.now();
@@ -76,7 +68,7 @@ function mark(name, at) {
   }
 }
 
-/** Record a non-timing fact (an object) under `name`; last call wins. */
+/** non-timing fact; last call wins */
 function note(name, value) {
   if (!enabled) return;
   notes[name] = value;
@@ -103,15 +95,14 @@ function stopContentTrace() {
   contentTracing.stopRecording(path.join(path.dirname(outFile), 'chromium-trace.json')).catch(() => {});
 }
 
-/** Call once app.whenReady has resolved: sets the output file and the IPC. */
+/** call after app.whenReady: sets the output file and the ipc listener */
 function init({ ipcMain, userData }) {
   if (!enabled) return;
   outFile = path.join(userData, 'boot-trace.json');
   if (contentTraceWanted) {
     const { contentTracing } = require('electron');
     contentTracing.startRecording({
-      // Lean set: enough for a DevTools-style view of the renderer main thread
-      // (parse, compile, evaluate, layout, paint) without slowing the app down.
+      // lean set: devtools-style renderer timeline without slowing the app down
       included_categories: (process.env.CLIPLIB_TRACE_CATEGORIES || 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,v8.execute,loading,disabled-by-default-v8.compile').split(','),
       recording_mode: 'record-until-full',
     }).then(() => { mark('content_trace_started'); }).catch(() => {});

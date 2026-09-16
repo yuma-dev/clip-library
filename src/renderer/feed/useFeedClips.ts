@@ -1,13 +1,6 @@
-// Cursor-paginated clip list for the feed. Ported from the reference website's
-// `useClips` hook (cliplib share/src/hooks/useClips.ts), adapted to the app's
-// typed `api.ts` client. Behavior preserved verbatim (except the page size —
-// the server takes ~1s per authed query regardless of limit, and streamed
-// card mounting makes big pages cheap, so bigger pages = fewer stalls):
-//   - limit PAGE_SIZE, cursor pagination
-//   - loadMore guarded by in-flight + hasMore refs
-//   - request-version race guard (stale responses dropped)
-//   - sessionStorage cache per persistKey (restore on mount → restoredFromCache)
-//   - optimistic reaction/favorite mutators that also re-persist the cache
+// Cursor-paginated clip list for the feed, ported from the website's useClips
+// hook. Page size differs from upstream: server takes ~1s per authed query
+// regardless of limit, and streamed mounting makes big pages cheap, so bigger pages = fewer stalls.
 
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { fetchClips, FeedApiError } from "./api";
@@ -38,17 +31,12 @@ function getCacheKey(persistKey?: string | null): string | null {
  * streamed, so fetch big pages and grow the scroll area in big steps. */
 const PAGE_SIZE = 60;
 
-/** After page 1 paints, the entire remainder (server-reported total) is
- * fetched in ONE background request — clip rows are ~0.5KB of metadata, so
- * even a full library is ~1MB and the per-request auth/query overhead (~1s)
- * dominates anyway. The cap is a guard against pathological totals; anything
- * beyond it falls back to cursor pagination via InfiniteScroll, which also
- * covers servers that clamp `limit`. */
+/** After page 1, fetch the reported total's remainder in ONE background
+ * request (full library is ~1MB); cap guards pathological totals, falls back to cursor pagination. */
 const MAX_EAGER_FETCH = 2000;
 
-/** Cache younger than this skips the mount-time revalidate fetch entirely —
- * bouncing between views within half a minute shouldn't re-hit the share
- * server (each round trip is ~300ms and lands mid-navigation). */
+/** Cache younger than this skips the mount-time revalidate fetch, so quick
+ * view bounces don't re-hit the share server. */
 const REVALIDATE_AFTER_MS = 30_000;
 
 function readCachedState(storageKey: string): CachedClipState | null {
@@ -69,12 +57,8 @@ function readCachedState(storageKey: string): CachedClipState | null {
   }
 }
 
-/**
- * Drop every cached feed list so the next FeedPage mount refetches from the
- * server. Call after an action that changes what the feed should contain — e.g.
- * publishing a clip — since the 30s fresh-cache skip would otherwise show a
- * stale list that's missing the just-uploaded clip.
- */
+/** Drop every cached feed list; call after an action that changes feed
+ * contents (e.g. publish) so the 30s fresh-cache skip doesn't hide it. */
 export function invalidateFeedListCache(): void {
   try {
     for (const key of Object.keys(sessionStorage)) {
@@ -85,11 +69,8 @@ export function invalidateFeedListCache(): void {
   }
 }
 
-/**
- * Warm the sessionStorage cache for a filter combination before FeedPage ever
- * mounts (startup prefetch) — the page then paints instantly from cache.
- * No-op if that key is already cached this session.
- */
+/** Warm the sessionStorage cache before FeedPage mounts so it paints from
+ * cache instantly; no-op if already cached this session. */
 export async function prefetchFeedList(
   options: UseFeedClipsOptions,
   persistKey: string,
@@ -103,7 +84,7 @@ export async function prefetchFeedList(
       JSON.stringify({ clips, nextCursor, hasMore: Boolean(nextCursor), total, savedAt: Date.now() }),
     );
   } catch {
-    /* not connected / offline — the page fetches live and handles the error */
+    /* not connected / offline, the page fetches live and handles the error */
   }
 }
 
@@ -222,10 +203,8 @@ export function useFeedClips(
           setTotal(data.total);
         }
         persistCache(nextClips, data.nextCursor, nextHasMore);
-        // Complete the list in one background request once page 1 is up:
-        // deferred a tick so this fetch's `finally` clears the in-flight
-        // guard first. Failure (or a server that clamps `limit`) degrades
-        // to normal cursor pagination.
+        // Complete the list in one background request (deferred a tick so
+        // `finally` clears in-flight first); failure/clamped limit falls back to cursor pagination.
         if (nextHasMore && data.total != null && !eagerLoadedRef.current) {
           const remaining = data.total - nextClips.length;
           if (remaining > 0 && remaining <= MAX_EAGER_FETCH) {
@@ -246,8 +225,7 @@ export function useFeedClips(
     },
     [persistCache],
   );
-  // Self-reference for the deferred eager fetch (can't close over `doFetch`
-  // inside its own useCallback definition).
+  // Self-ref for the deferred eager fetch (can't close over doFetch in its own useCallback).
   const doFetchRef = useRef(doFetch);
   doFetchRef.current = doFetch;
 
@@ -288,11 +266,8 @@ export function useFeedClips(
         setHasMore(cached.hasMore);
         setTotal(cached.total);
         setLoading(false);
-        // Stale-while-revalidate: paint the cached list instantly, then
-        // refetch page 1 in the background so clips shared since the last
-        // visit appear on re-entry (the fetch replaces the list on success
-        // and leaves the cached one up on failure). Fresh caches skip the
-        // refetch — quick view bounces shouldn't re-hit the server.
+        // Stale-while-revalidate: paint cache instantly, refetch page 1 in
+        // the background (replaces list on success, kept on failure); fresh caches skip the refetch.
         if (Date.now() - cached.savedAt > REVALIDATE_AFTER_MS) {
           doFetch(true); // its success schedules the eager remainder fetch
         } else if (cached.hasMore && cached.total != null) {

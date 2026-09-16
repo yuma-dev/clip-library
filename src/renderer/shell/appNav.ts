@@ -1,6 +1,6 @@
-// App-level navigation context. Lets deep children (feed cards, mention
-// avatars, profile links) open/close the profile overlay without prop drilling.
-// Provided by App.tsx; consumed via `useAppNav()`.
+// lets deep children (feed cards, mentions, profile links) open/close the profile overlay without
+// prop drilling
+// provided by App.tsx, consumed via useAppNav()
 
 import { createContext, useContext } from "react";
 

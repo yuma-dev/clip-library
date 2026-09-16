@@ -1,6 +1,5 @@
 // Live glow tuning via the DevTools console (like window.clipGrid). Visual
-// params (opacity/blur/saturate/brightness) are applied as CSS variables on
-// the glow canvas; geometry (overflow/yShift) is read by ClipGlow on each hover.
+// params are CSS vars on the canvas; overflow/yShift are read by ClipGlow on hover.
 //
 //   window.clipGlow.opacity(0.5)   // overall strength (screen blend over black)
 //   window.clipGlow.blur(40)       // px
@@ -32,7 +31,7 @@ const DEFAULTS: GlowConfig = {
   yShift: 0,
 };
 
-/** Settings → Card hover glow. Geometry (overflow/yShift) stays dev-only. */
+/** Settings: Card hover glow. Geometry (overflow/yShift) stays dev-only. */
 export interface CardGlowSettings {
   enabled: boolean;
   opacity: number;
@@ -49,11 +48,8 @@ export const CARD_GLOW_DEFAULTS: CardGlowSettings = {
   brightness: DEFAULTS.brightness,
 };
 
-/**
- * Apply persisted settings to the live glow. Settings are the canonical
- * source; the window.clipGlow console tuner (below) remains a session-level
- * dev override on top.
- */
+/** Apply persisted settings to the live glow; window.clipGlow (below) is a
+ * session-level dev override on top. */
 export function applyCardGlowSettings(s: Partial<CardGlowSettings>): void {
   Object.assign(glowConfig, s);
   applyVars();

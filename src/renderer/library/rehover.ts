@@ -1,7 +1,5 @@
-// Give the card under the pointer its hover back after a spell in which
-// pointer events were off (the boot intro, a scroll). React derives
-// onMouseEnter from mouseover/mouseout pairs, so a mouseover coming from
-// outside the card is what a real entry would deliver.
+// restores hover on the card under the pointer after pointer events were off (boot intro, scroll)
+// react derives onMouseEnter from mouseover/mouseout pairs, so fake a mouseover from outside the card
 let last: { x: number; y: number } | null = null;
 let tracking = false;
 

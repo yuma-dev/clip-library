@@ -1,11 +1,6 @@
-// Integrated clipdip (the recorder binary) — process lifecycle + config bridge.
-//
-// Clipdip is a standalone tray app: we spawn it fully detached so it
-// survives the library quitting, and control the running instance through
-// its single-instance guard (`clipdip.exe --reload` / `--quit` forward the
-// flag into the running process and exit). Its settings live in a TOML file
-// (%APPDATA%\clipdip\config\config.toml) that we read/write directly; the
-// running clipdip picks changes up via --reload.
+// Integrated clipdip (the recorder binary): process lifecycle + config bridge.
+// Spawned fully detached so it outlives the library; controlled via its
+// single-instance guard (--reload/--quit) and a TOML config at %APPDATA%\clipdip\config\config.toml.
 const { app } = require('electron');
 const path = require('path');
 const os = require('os');
@@ -25,8 +20,8 @@ const RUN_VALUE_LEGACY = 'ClipDip';
 const configPath = () =>
   path.join(app.getPath('appData'), 'clipdip', 'config', 'config.toml');
 
-// Written by the running clipdip primary instance ({port, token, pid});
-// best-effort deleted on its exit, so treat it as possibly stale.
+// {port, token, pid}, written by the running primary; deleted best-effort on
+// exit, so treat it as possibly stale
 const controlJsonPath = () =>
   path.join(path.dirname(configPath()), 'control.json');
 
@@ -41,12 +36,11 @@ async function resolveBinaryPath() {
   const override = settings?.clipdip?.binaryPath;
   if (override && typeof override === 'string' && override.trim()) {
     const p = override.trim();
-    // The picker hands us a folder; a direct exe path also works.
+    // picker gives a folder; a direct exe path also works
     return p.toLowerCase().endsWith('.exe') ? p : path.join(p, EXE_NAME);
   }
   if (!app.isPackaged) {
-    // Dev convenience: use the in-repo cargo build (clipdip/ subtree) or the
-    // vendored copy, so clipdip works without configuring a path.
+    // dev: fall back to the in-repo cargo build or vendored copy, no path config needed
     const candidates = [
       path.resolve(__dirname, '..', 'clipdip', 'target', 'release', EXE_NAME),
       path.resolve(__dirname, '..', 'vendor', 'clipdip', EXE_NAME)
@@ -67,7 +61,7 @@ async function binaryFound() {
   }
 }
 
-// ---------- config bridge --------------------------------------------------
+// config bridge
 
 async function getConfig() {
   let raw = null;
@@ -77,8 +71,7 @@ async function getConfig() {
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.warn(`Clipdip config read failed: ${error.message}`);
-      // The empty config we return here is what the next setConfig merges
-      // into, so an unreadable file becomes an overwritten one.
+      // empty config here is what the next setConfig merges into, so an unreadable file becomes overwritten
       telemetry.event('clipdip_config_parse_failed', {
         kind: telemetry.KIND.DATA_LOSS,
         severity: telemetry.SEVERITY.ERROR,
@@ -96,9 +89,8 @@ function deepMerge(target, patch) {
   for (const [key, value] of Object.entries(patch)) {
     if (
       value && typeof value === 'object' && !Array.isArray(value) &&
-      // Mode-tagged enum tables (rate_control, recording_quality) must be
-      // replaced whole: merging would leave stale variant fields (e.g. a qp
-      // key inside {mode = "match_clips"}) that serde rejects.
+      // mode-tagged tables (rate_control, recording_quality) replace whole: merging leaves stale
+      // variant fields serde rejects
       !('mode' in value) &&
       target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])
     ) {
@@ -110,8 +102,7 @@ function deepMerge(target, patch) {
   return target;
 }
 
-// smol-toml drops comments on rewrite — keep a one-time snapshot of the
-// user's original file as a courtesy.
+// smol-toml drops comments on rewrite; snapshot the original once as a courtesy
 async function snapshotOnce(file) {
   const bak = `${file}.bak`;
   try {
@@ -120,21 +111,17 @@ async function snapshotOnce(file) {
     try {
       await fsp.copyFile(file, bak);
     } catch {
-      /* no original file — nothing to snapshot */
+      /* no original file, nothing to snapshot */
     }
   }
 }
 
 let reloadTimer = null;
-// Highest reload level needed by the patches since the last flush.
-// 0 = none (clipdip re-reads these sections per operation), 1 = hotkeys only,
-// 2 = full pipeline restart (clears the replay buffer — only when capture
-// settings actually changed).
+// highest reload level needed since the last flush:
+// 0 = none, 1 = hotkeys only, 2 = full restart (clears replay buffer)
 let pendingReload = 0;
 
-// Output keys the pipeline captures at start (used at mux time from the
-// startup snapshot). directory/filename_stem are re-read per save and need
-// no reload.
+// keys captured at start (used at mux time); directory/filename_stem are re-read per save, no reload needed
 const OUTPUT_RESTART_KEYS = ['audio_bitrate_bps', 'ffmpeg_path', 'keep_sidecars'];
 
 function reloadLevelFor(patch) {
@@ -161,8 +148,7 @@ async function setConfig(patch) {
   await fsp.writeFile(tmp, serialized, 'utf8');
   await fsp.rename(tmp, file);
 
-  // Debounce the reload: a full restart clears clipdip's replay buffer,
-  // so a burst of settings edits should cost one restart, not one each.
+  // debounce: a full restart clears the replay buffer, so a burst of edits costs one, not one each
   pendingReload = Math.max(pendingReload, reloadLevelFor(patch));
   if (reloadTimer) clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => {
@@ -180,7 +166,7 @@ async function setConfig(patch) {
   return { success: true };
 }
 
-// ---------- process lifecycle ----------------------------------------------
+// process lifecycle
 
 let runningCache = { value: false, at: 0 };
 
@@ -196,8 +182,7 @@ function isRunning() {
       (error, stdout) => {
         const running = !error && typeof stdout === 'string' && stdout.toLowerCase().includes(EXE_NAME);
         if (error) {
-          // A failed probe reads as "not running" everywhere, so clipdip looks
-          // stopped for the rest of the session.
+          // failed probe reads as "not running" everywhere for the rest of the session
           telemetry.event('clipdip_isrunning_probe_failed', {
             kind: telemetry.KIND.SILENT_FAILURE,
             severity: telemetry.SEVERITY.WARNING,
@@ -212,11 +197,8 @@ function isRunning() {
   });
 }
 
-// clipdip needs an ffmpeg for muxing, but we don't ship one next to it —
-// the library already bundles ffmpeg-static. Point clipdip's config at it
-// whenever the configured path is missing or stale (e.g. after an app update
-// moved the unpacked asar path). Deliberate user overrides that still exist
-// on disk are left alone.
+// clipdip has no bundled ffmpeg; point it at the library's ffmpeg-static when its path is
+// missing/stale, but leave user overrides alone
 async function ensureFfmpegPath() {
   let libFfmpeg;
   try {
@@ -230,11 +212,8 @@ async function ensureFfmpegPath() {
   if (current && current !== libFfmpeg && fs.existsSync(current)) return;
   if (current === libFfmpeg) return;
   logger.info(`Pointing clipdip at the library ffmpeg: ${libFfmpeg}`);
-  // clipdip's own startup may rewrite the config at the same moment (its
-  // one-time migration save fires on the first post-update launch, and an
-  // autostarted clipdip races this exact boot). A lost write here would
-  // resurrect the dead pre-update ffmpeg path until the next settings-
-  // driven restart, so verify the write landed and re-apply if not.
+  // clipdip's own migration-save can race this write on first post-update launch; verify it landed
+  // and retry, or the dead path resurrects
   for (let attempt = 0; attempt < 3; attempt++) {
     await setConfig({ output: { ffmpeg_path: libFfmpeg } });
     await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
@@ -250,12 +229,8 @@ async function ensureFfmpegPath() {
   });
 }
 
-// Clipdip must always save somewhere that exists — its save pipeline fails
-// outright when the output directory is missing, and its own default
-// (Videos\Clipdip) is never created up front. Whenever the configured
-// directory is unset or gone from disk, aim it at the library's clip folder
-// so clips land in the library. Folders that exist (e.g. a pre-merge
-// standalone clipdip setup or a deliberate override) are left alone.
+// clipdip's save fails outright if the output dir is missing and its default (Videos\Clipdip) is
+// never created; aim it at the library folder unless one exists
 async function ensureOutputDirectory() {
   const settings = await getSettings();
   const clipLocation = settings?.clipLocation;
@@ -268,8 +243,7 @@ async function ensureOutputDirectory() {
 }
 
 async function start() {
-  // Repair runs even when clipdip is already up: it re-reads the output
-  // directory on every save, so no reload is needed for it to take effect.
+  // runs even when clipdip is already up: output dir is re-read per save, no reload needed
   await ensureOutputDirectory().catch((e) =>
     logger.warn(`Clipdip output folder sync failed: ${e.message}`)
   );
@@ -286,8 +260,7 @@ async function start() {
     return { success: false, error: `Clipdip binary not found at ${exe}` };
   }
   await ensureFfmpegPath().catch((e) => logger.warn(`ffmpeg path sync failed: ${e.message}`));
-  // detached + unref + ignored stdio: clipdip must outlive the library —
-  // it is its own tray app the user may rely on with the library closed.
+  // detached + unref + ignored stdio: clipdip outlives the library as its own tray app
   const child = spawn(exe, [], {
     detached: true,
     stdio: 'ignore',
@@ -304,8 +277,7 @@ function sendControlFlag(flag) {
   return resolveBinaryPath().then(
     (exe) =>
       new Promise((resolve) => {
-        // The secondary instance forwards the flag to the running one and
-        // exits on its own; fire and forget.
+        // secondary instance forwards the flag then exits on its own; fire and forget
         execFile(exe, [flag], { windowsHide: true }, () => resolve());
       })
   );
@@ -314,7 +286,7 @@ function sendControlFlag(flag) {
 async function quit() {
   if (!(await isRunning())) return { success: true, alreadyStopped: true };
   await sendControlFlag('--quit');
-  // Graceful path first; hard-kill only if the process is still around.
+  // Graceful path first; hard-kill only if the process is still around
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     runningCache = { value: false, at: 0 }; // force fresh checks
@@ -334,12 +306,10 @@ async function restart() {
   return start();
 }
 
-// ---------- stateless CLI queries -------------------------------------------
-// Clipdip handles these flags before its tauri/single-instance init: it
-// prints one JSON line to stdout and exits, no running instance needed.
+// stateless CLI queries: handled before tauri/single-instance init, prints one JSON line and exits,
+// no running instance needed
 
-// The exe may log noise before/after the payload; take the last line that
-// parses as JSON.
+// exe may log noise around the payload; take the last line that parses as JSON
 function lastJsonLine(stdout) {
   const lines = String(stdout || '').split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -384,16 +354,13 @@ const listMonitors = () => query('--list-monitors');
 const getFilenameVariables = () => query('--filename-variables');
 const previewFilename = (template) => query('--preview-filename', [String(template ?? '')]);
 
-// ---------- control server client (running instance) ------------------------
-// The primary clipdip instance listens on 127.0.0.1 (ephemeral port, token in
-// control.json next to config.toml), JSON-lines: one request line in, one
-// response line out, connection closes. Never throws to the renderer.
+// control server client: primary listens on 127.0.0.1 (port+token in control.json), JSON-lines
+// request/response, connection closes; never throws to renderer
 
 const NOT_RUNNING = { ok: false, error: 'not_running' };
 
-// Six distinct failure modes all answer `not_running`, so a hung clipdip is
-// indistinguishable from a stopped one. Report the mode, return the same value.
-// A missing control.json is skipped: that is genuinely "not running".
+// six failure modes all answer not_running (hung looks like stopped); mode is reported via
+// telemetry. missing control.json is skipped, that's genuinely not running
 function reportControlFailure(mode) {
   telemetry.event('clipdip_control_failed', {
     kind: telemetry.KIND.SILENT_FAILURE,
@@ -457,7 +424,7 @@ async function control(cmd, args) {
         done({ ok: false, error: 'bad response' });
       }
     });
-    // Stale control.json (dead pid) surfaces as ECONNREFUSED here.
+    // Stale control.json (dead pid) surfaces as ECONNREFUSED here
     socket.on('error', (error) => {
       if (!settled) reportControlFailure(error?.code === 'ECONNREFUSED' ? 'econnrefused' : 'socket_error');
       done({ ...NOT_RUNNING });
@@ -469,7 +436,7 @@ async function control(cmd, args) {
   });
 }
 
-// ---------- autostart (registry Run value, points at clipdip exe) ------
+// autostart (registry Run value points at clipdip exe)
 
 function regQuery(valueName) {
   return new Promise((resolve) => {
@@ -500,7 +467,7 @@ function regRun(args) {
 }
 
 async function setAutostart(enabled) {
-  // Drop the pre-rebrand value either way so we never leave two entries.
+  // Drop the pre-rebrand value either way so we never leave two entries
   await regRun(['delete', RUN_KEY, '/v', RUN_VALUE_LEGACY, '/f']).catch(() => {});
   if (enabled) {
     const exe = await resolveBinaryPath();
@@ -511,11 +478,9 @@ async function setAutostart(enabled) {
   return { success: true };
 }
 
-// ---------- platform support -------------------------------------------------
-// Clipdip captures with Windows Graphics Capture and encodes with NVENC, so
-// it needs Windows + an NVIDIA GPU. Checked once per app run; a failed
-// detection counts as supported (never lock users out on a flaky query —
-// clipdip itself surfaces a pipeline error if NVENC is really absent).
+// platform support: needs Windows + an NVIDIA GPU (WGC capture, NVENC encode)
+// checked once per run; a failed detection counts as supported, clipdip itself errors if NVENC is
+// truly absent
 
 let supportPromise = null;
 
@@ -550,7 +515,7 @@ function detectSupport() {
   return supportPromise;
 }
 
-// ---------- status + startup hook -------------------------------------------
+// status + startup hook
 
 async function getStatus() {
   const [running, found, autostart, { exists }, support] = await Promise.all([
@@ -570,14 +535,12 @@ async function getStatus() {
   };
 }
 
-// Called once from main.js after app ready: if clipdip is enabled but not
-// running (e.g. library launched manually, autostart off), bring it up.
+// called once from main.js after app ready: bring clipdip up if enabled but not running
 async function ensureStartedIfEnabled() {
   try {
     const settings = await getSettings();
     if (!settings?.clipdip?.enabled) return;
-    // No isRunning early-return: start() no-ops on a running instance but
-    // still repairs a missing output folder.
+    // no isRunning early-return: start() no-ops if already running but still repairs a missing output folder
     const result = await start();
     if (!result.success) logger.warn(`Clipdip autostart-on-launch failed: ${result.error}`);
   } catch (error) {
@@ -585,28 +548,21 @@ async function ensureStartedIfEnabled() {
   }
 }
 
-// Clipdip is opt-OUT: on the first launch where the user has never made a
-// choice (no clipdip.enabled key), enable it automatically — but only when
-// the machine supports it (Windows + NVIDIA) and the binary is present.
-// `persistEnabled` writes clipdip.enabled to settings.json; recording the
-// outcome either way means this runs at most once. On failure (spawn error,
-// or the process dying right after start) it records `false` so a broken
-// setup never retries on every launch.
+// opt-out: auto-enables on first launch (no clipdip.enabled key) if Windows+NVIDIA and the binary
+// is present; persistEnabled always records an outcome so this runs at most once
 async function autoEnableIfUnconfigured(persistEnabled) {
   const settings = await getSettings();
   if (settings?.clipdip && 'enabled' in settings.clipdip) return false; // already decided
-  if (!(await binaryFound())) return false; // no binary yet (dev) — stay undecided
+  if (!(await binaryFound())) return false; // no binary yet (dev), stay undecided
   const support = await detectSupport();
   if (!support.supported) {
     logger.info(`Clipdip auto-enable skipped: ${support.reason}`);
     return false; // stays undecided; the settings UI explains why
   }
 
-  // First-time output folder setup happens inside start() (see
-  // ensureOutputDirectory): clips aim straight at the library unless clipdip
-  // already has its own existing folder (pre-merge standalone users).
+  // output folder setup happens inside start() (see ensureOutputDirectory)
 
-  // Start-with-Windows is opt-out too.
+  // start-with-Windows is opt-out too
   await setAutostart(true).catch((e) => logger.warn(`Clipdip autostart enable failed: ${e.message}`));
 
   const startedAt = Date.now();
@@ -619,12 +575,10 @@ async function autoEnableIfUnconfigured(persistEnabled) {
   }
   await persistEnabled(true);
   logger.info('Clipdip auto-enabled (opt-out default)');
-  // Discord authorization needs no nudge from here: an enabled clipdip
-  // prompts for it on its own at every start until authorized (see
-  // clipdip_discord::spawn's auto_authorize).
+  // discord auth needs no nudge here: enabled clipdip prompts every start until authorized
+  // (clipdip_discord::spawn's auto_authorize)
 
-  // Fail-safe: if the process dies within its first seconds (crash on init),
-  // flip the setting off so it doesn't zombie-start on every launch.
+  // fail-safe: flip the setting off if it dies within seconds of start (crash on init)
   setTimeout(() => {
     runningCache = { value: false, at: 0 };
     isRunning().then(async (alive) => {
@@ -642,11 +596,8 @@ async function autoEnableIfUnconfigured(persistEnabled) {
   return true;
 }
 
-// ---------- diagnostics ------------------------------------------------------
-// Everything a bug report about the recorder needs, gathered from clipdip's
-// own on-disk state plus a live snapshot from its control server. Secrets
-// are deliberately excluded: control.json (auth token) and
-// discord_tokens.json never appear in the candidate list.
+// diagnostics: recorder state from clipdip's on-disk files plus a live control-server snapshot;
+// control.json and discord_tokens.json never appear here
 
 const dataDirPath = () =>
   path.join(
@@ -674,15 +625,14 @@ async function collectDiagnosticFiles() {
       const stat = await fsp.stat(candidate.path);
       if (stat.isFile()) found.push({ ...candidate, size: stat.size });
     } catch {
-      /* absent — clipdip may never have run on this machine */
+      /* absent, clipdip may never have run on this machine */
     }
   }
   return found;
 }
 
-// Live state that exists nowhere on disk — ring buffer usage vs budget,
-// pipeline running/error — comes from the running instance's control server;
-// the bridge-level status covers the not-running case.
+// ring buffer usage and pipeline running/error state exist only in the running instance (control
+// server); bridge status covers the not-running case
 async function getDiagnosticsSnapshot() {
   const [bridgeStatus, liveStatus] = await Promise.all([
     getStatus().catch((error) => ({ error: error.message })),
@@ -695,13 +645,12 @@ async function getDiagnosticsSnapshot() {
   };
 }
 
-// Explicit enable/disable side effects (called from the IPC handler).
+// Explicit enable/disable side effects (called from the IPC handler)
 async function setEnabled(enabled) {
   if (enabled) {
     const result = await start();
     const settings = await getSettings();
-    // Autostart is opt-out: enabling clipdip brings it along unless the
-    // user explicitly turned it off.
+    // autostart is opt-out: comes along unless the user explicitly disabled it
     if (settings?.clipdip?.autostart !== false) {
       await setAutostart(true).catch((e) => logger.warn(`Autostart enable failed: ${e.message}`));
     }

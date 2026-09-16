@@ -1,22 +1,6 @@
-//! Safe wrapper around an NVENC encode session for D3D11 input.
-//!
-//! Lifecycle:
-//!   `NvEncoderD3D11::new(device, config)`
-//!       -> opens session with `nvEncOpenEncodeSessionEx`
-//!       -> initializes with H.264 / preset P4 / LOW_LATENCY tuning
-//!       -> allocates a small pool of bitstream output buffers
-//!   `encode_frame(texture, pts_100ns)`
-//!       -> registers the texture as input (NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX)
-//!       -> maps -> encodes -> locks bitstream -> copies NAL bytes out
-//!       -> unmaps / unregisters / unlocks
-//!   `flush()`
-//!       -> EOS picture, drains remaining encoded packets
-//!   `Drop`
-//!       -> destroys bitstream buffers, destroys encoder
-//!
-//! Per-frame register/unregister is slower than maintaining a registration
-//! cache keyed by texture pointer, but it's the simplest correct
-//! implementation and keeps the prototype small. Optimization is a follow-up.
+//! Safe wrapper around an NVENC encode session for D3D11 input: open/init
+//! encode_frame, flush, Drop teardown. Registers the input resource per
+//! frame rather than caching by texture pointer: simpler, slower, fine for now.
 
 use anyhow::{anyhow, bail, Result};
 use clipdip_ringbuf::{EncodedPacket, STREAM_VIDEO};
@@ -41,19 +25,14 @@ use crate::{ActiveCodec, CodecPreference, EncoderConfig, RateControl};
 
 const BITSTREAM_POOL_SIZE: usize = 4;
 
-/// One submitted-but-not-yet-locked frame. NVENC will signal
-/// `pool[slot].event` when the bitstream is ready; until then this entry
-/// sits in `pending`.
+/// One submitted-but-unlocked frame; NVENC signals `pool[slot].event` when
+/// its bitstream is ready.
 struct PendingFrame {
     slot: usize,
 }
 
-/// Bitstream buffer + paired completion event. In async mode every
-/// submitted picture is associated with one of these; NVENC signals the
-/// event when the bitstream for that picture is ready. In sync mode
-/// (AV1 — async is unreliable on the AV1 codec path and causes the
-/// driver to emit INTRA_ONLY instead of KEY_FRAME at IDRs) `event` is
-/// `HANDLE(0)` and we don't register/wait on it.
+/// Bitstream buffer + completion event. Sync mode (AV1: async makes NVENC
+/// emit INTRA_ONLY instead of KEY_FRAME at IDRs) uses HANDLE(0) and skips the event.
 struct PoolSlot {
     bitstream: NV_ENC_OUTPUT_PTR,
     event: HANDLE,
@@ -63,72 +42,47 @@ pub struct NvEncoderD3D11 {
     api: Arc<NvEncApi>,
     encoder: *mut std::ffi::c_void,
     _device: ID3D11Device,
-    /// Immediate device context. Cloned into `nv12_converter` for the
-    /// per-frame draw calls; kept here too so we own a reference for the
-    /// encoder's lifetime independent of the converter.
+    /// Immediate context; cloned into nv12_converter too, kept here so we hold
+    /// our own reference for the encoder's lifetime.
     _context: ID3D11DeviceContext,
-    /// NV12-format staging textures, one per bitstream slot. We
-    /// round-robin so back-to-back submissions never reuse the same
-    /// texture pointer — NVENC holds a reference to the input until the
-    /// corresponding output bitstream is consumed.
+    /// NV12 staging textures, one per bitstream slot; round-robin so NVENC never
+    /// gets the same pointer back-to-back while still holding a reference to it.
     nv12_pool: Vec<ID3D11Texture2D>,
-    /// NVENC registered-resource handles for each `nv12_pool` slot.
-    /// Registered once at `new()` and reused for the lifetime of the
-    /// encoder — `nvEncRegisterResource` is expensive and unnecessary
-    /// per frame when the textures are stable.
+    /// NVENC registration handles, one per nv12_pool slot; registered once at
+    /// new() since nvEncRegisterResource is too expensive to redo per frame.
     nv12_registered: Vec<NV_ENC_REGISTERED_PTR>,
-    /// Shader-based BGRA→NV12 converter. `CopyResource` cannot bridge
-    /// these formats (it's a bit-level copy across compatible families
-    /// only), so each frame we render the capture into NV12 via two
-    /// fullscreen-triangle pixel-shader passes — Y plane, then UV.
+    /// BGRA to NV12 converter: CopyResource can't bridge these formats, so this
+    /// runs two fullscreen-triangle passes (Y, then UV) instead.
     nv12_converter: Nv12Converter,
     config: EncoderConfig,
-    /// The NV_ENC_CONFIG submitted at init, kept boxed (stable address)
-    /// because `reconfigure_rate_control` re-submits it — with updated
-    /// `rcParams` — through NVENC's Reconfigure API.
+    /// Boxed for a stable address: reconfigure_rate_control resubmits this same
+    /// config (with updated rcParams) through NVENC's Reconfigure API.
     enc_cfg: Box<NV_ENC_CONFIG>,
-    /// The init params submitted at init, re-used verbatim (except for the
-    /// `encodeConfig` pointer, refreshed each call) on reconfigure.
+    /// Init params from session open, reused verbatim on reconfigure except
+    /// for a refreshed encodeConfig pointer.
     init_params: NV_ENC_INITIALIZE_PARAMS,
-    /// Codec actually negotiated at session open. Drives the keyframe
-    /// scanner and any caller that needs to know whether the bitstream is
-    /// AVC NAL units or AV1 OBUs.
+    /// Codec negotiated at session open; drives the keyframe scanner and
+    /// whether the bitstream is AVC NALs or AV1 OBUs.
     active_codec: ActiveCodec,
-    /// Paired (bitstream, completion event) entries. Allocated once at
-    /// `new()`; reused via round-robin across submissions.
+    /// (bitstream, event) pairs, allocated once and reused round-robin.
     pool: Vec<PoolSlot>,
     /// Next slot to hand out on submit. Wraps `0..pool.len()`.
     next_slot: usize,
-    /// Submitted frames whose bitstream we haven't read back yet, in
-    /// submission order (FIFO). NVENC produces output strictly in
-    /// submission order for our no-B-frame config, so the front entry is
-    /// the next one whose event will signal.
+    /// Submitted, not-yet-read bitstreams, FIFO. NVENC outputs in submission
+    /// order for our no-B-frame config, so front is next to signal.
     pending: VecDeque<PendingFrame>,
     frames_submitted: u64,
     force_idr: bool,
-    /// Async-mode flag chosen at session open. True for H.264 (per-frame
-    /// completion events let us submit ahead of encode). False for AV1 —
-    /// the NVENC AV1 path in async mode empirically produces IDRs as
-    /// `OBU_FRAME` with `frame_type=INTRA_ONLY` (2) instead of `KEY_FRAME`
-    /// (0). INTRA_ONLY doesn't reset reference picture state, so decoders
-    /// bootstrapping from a saved clip fail with "no sequence header" on
-    /// every frame and the muxed mp4 is unusable. Sync mode side-steps
-    /// the bug entirely.
+    /// True for H.264 (async lets us submit ahead of encode). False for AV1:
+    /// async mode there emits INTRA_ONLY instead of KEY_FRAME at IDRs.
     async_mode: bool,
-    /// Codec-specific sequence header bytes retrieved via
-    /// `nvEncGetSequenceParams` after `InitializeEncoder` returns.
-    /// For H.264 this is concatenated SPS+PPS; for AV1 it's an
-    /// `OBU_SEQUENCE_HEADER`. We cache it here because NVENC AV1 doesn't
-    /// reliably embed the sequence header at the head of every IDR
-    /// bitstream even with `repeatSeqHdr=1`, and ffmpeg refuses to mux an
-    /// AV1 raw input where the first OBU is not a sequence header
-    /// ("dimensions not set"). Callers prepend this to the saved
-    /// bitstream file. OBS does the same.
+    /// Sequence header bytes (H.264 SPS+PPS, AV1 OBU_SEQUENCE_HEADER), cached
+    /// because NVENC doesn't reliably re-emit one at every AV1 IDR; callers prepend it.
     header: Vec<u8>,
 }
 
 // SAFETY: we own the encoder handle. NVENC sessions are not thread-safe and
-// we never share the handle across threads — the type is !Send by default
+// we never share the handle across threads, the type is !Send by default
 // (raw pointer field).
 unsafe impl Send for NvEncoderD3D11 {}
 
@@ -136,7 +90,7 @@ impl NvEncoderD3D11 {
     pub fn new(device: ID3D11Device, config: EncoderConfig) -> Result<Self> {
         let api = NvEncApi::load()?;
 
-        // ---- open session ------------------------------------------------
+        // open session
         let mut session = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS::default();
         session.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
         session.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
@@ -155,10 +109,8 @@ impl NvEncoderD3D11 {
             bail!("OpenEncodeSessionEx returned success but encoder handle is null");
         }
 
-        // ---- codec capability probe -------------------------------------
-        // Ask the driver which codec GUIDs this GPU supports, then resolve
-        // the caller's preference. AV1 NVENC needs Ada (RTX 40+); on older
-        // silicon we transparently fall back to H.264.
+        // codec capability probe: AV1 NVENC needs Ada (RTX 40+), older GPUs fall
+        // back to H.264.
         let supported = query_supported_codecs(&api, encoder)?;
         let active_codec = resolve_codec(config.codec_preference, &supported)?;
         let encode_guid = match active_codec {
@@ -166,11 +118,8 @@ impl NvEncoderD3D11 {
             ActiveCodec::Av1 => NV_ENC_CODEC_AV1_GUID,
         };
 
-        // ---- query preset defaults --------------------------------------
-        // Start from the driver's recommended config for our chosen codec +
-        // preset + tuning, then override only what we care about
-        // (gopLength + idrPeriod + rate-control). This preserves any AQ /
-        // VBV / profile defaults the driver picked.
+        // query preset defaults: start from driver's recommended config for
+        // codec+preset+tuning, override only gopLength/idrPeriod/rate-control.
         let mut preset = NV_ENC_PRESET_CONFIG::default();
         preset.version = NV_ENC_PRESET_CONFIG_VER;
         preset.presetCfg.version = NV_ENC_CONFIG_VER;
@@ -192,10 +141,7 @@ impl NvEncoderD3D11 {
         };
         nvenc_check(&api, encoder, status, "GetEncodePresetConfigEx")?;
 
-        // ---- override the knobs we care about ---------------------------
-        // Boxed so the pointer handed to NVENC in `encodeConfig` stays
-        // valid for the encoder's lifetime — `reconfigure_rate_control`
-        // re-submits the same config with updated rcParams.
+        // override just the knobs we care about
         let mut enc_cfg = Box::new(preset.presetCfg);
         enc_cfg.version = NV_ENC_CONFIG_VER;
         enc_cfg.gopLength = config.gop_length;
@@ -204,31 +150,20 @@ impl NvEncoderD3D11 {
         match active_codec {
             ActiveCodec::H264 => {
                 enc_cfg.set_h264_idr_period(config.gop_length);
-                // Emit SPS+PPS in front of EVERY IDR, not just frame 0. The
-                // ring evicts whole GOPs once full, so without this any
-                // clip saved after the first eviction would start with an
-                // IDR slice whose SPS+PPS are no longer in the file —
-                // ffmpeg / players reject it with "non-existing PPS 0
-                // referenced".
+                // repeat SPS+PPS at every IDR: the ring evicts whole GOPs, so a clip saved
+                // after eviction would start IDR-only and ffmpeg rejects it (missing PPS).
                 enc_cfg.set_h264_repeat_sps_pps(true);
             }
             ActiveCodec::Av1 => {
-                // AV1 needs more than the preset query supplies. Mirror
-                // what OBS does in obs-nvenc/nvenc.c `init_encoder_av1`:
-                // without `chromaFormatIDC=1`, `inputBitDepth`, profile/
-                // tier/level, and explicit reference counts, NVENC AV1
-                // produces malformed bitstreams — IDRs come out as
-                // OBU_FRAME with frame_type=INTRA_ONLY_FRAME instead of
-                // KEY_FRAME, the sequence header is never re-emitted,
-                // and decoders fail to bootstrap on saved clips.
+                // mirrors OBS's init_encoder_av1: without chromaFormatIDC=1, inputBitDepth
+                // profile/tier/level, and ref counts, AV1 IDRs come out INTRA_ONLY not KEY_FRAME.
                 enc_cfg.profileGUID = NV_ENC_AV1_PROFILE_MAIN_GUID;
                 let av1 = enc_cfg.av1_config_mut();
                 av1.level = NV_ENC_LEVEL_AV1_AUTOSELECT;
                 av1.tier = NV_ENC_TIER_AV1_0;
                 av1.idrPeriod = config.gop_length;
-                // Bitfield: repeatSeqHdr=1, chromaFormatIDC=1 (yuv420).
-                // All other flag bits start zeroed from the preset query
-                // and we keep them that way.
+                // bitfield: repeatSeqHdr=1, chromaFormatIDC=1 (yuv420); other flags stay
+                // zeroed from the preset query.
                 av1.flags = (1 << 5) | (1 << 7);
                 av1.chromaSamplePosition = 0;
                 av1.colorRange = 0; // studio range
@@ -243,13 +178,11 @@ impl NvEncoderD3D11 {
         enc_cfg.rcParams.version = NV_ENC_RC_PARAMS_VER;
         apply_rate_control(&mut enc_cfg.rcParams, active_codec, config.rate_control);
 
-        // Dump of the effective encode config (driver preset defaults +
-        // our overrides). Preset defaults vary by driver version, so this
-        // line is what makes "what did the encoder actually run with"
-        // answerable from a user's log. Re-logged on every reconfigure.
+        // logs the effective config (preset defaults + our overrides) so a user's
+        // log answers "what did the encoder actually run with". re-logged on reconfigure.
         log_effective_config(&enc_cfg);
 
-        // ---- initialize -------------------------------------------------
+        // initialize
         let mut init = NV_ENC_INITIALIZE_PARAMS::default();
         init.version = NV_ENC_INITIALIZE_PARAMS_VER;
         init.encodeGUID = encode_guid;
@@ -264,25 +197,12 @@ impl NvEncoderD3D11 {
         init.maxEncodeWidth = config.width;
         init.maxEncodeHeight = config.height;
         init.tuningInfo = NV_ENC_TUNING_INFO_LOW_LATENCY;
-        // NV12 input. The capture path runs `CopyResource` from each
-        // BGRA frame into one of `nv12_pool` (allocated below), letting
-        // the D3D11 driver do the color-space conversion in hardware.
-        // Feeding NVENC ARGB instead makes it do the conversion on the
-        // 3D engine internally, which is roughly the entire 5–10% delta
-        // we measured against OBS.
+        // NV12 input: CopyResource converts BGRA to NV12 in hardware; feeding NVENC
+        // ARGB instead cost the ~5-10% delta we measured against OBS.
         init.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
         init.encodeConfig = enc_cfg.as_mut() as *mut NV_ENC_CONFIG as *mut std::ffi::c_void;
-        // Async mode: NVENC signals a per-frame completion event when the
-        // bitstream is ready instead of making LockBitstream block. Lets
-        // us submit frame N+1 while frame N is still encoding — saves the
-        // ~2.2 ms / frame CPU wait we'd otherwise burn.
-        //
-        // AV1 exception: async mode on the AV1 codec path causes the
-        // driver to emit `INTRA_ONLY_FRAME` (frame_type=2) at IDR
-        // boundaries instead of `KEY_FRAME` (frame_type=0). INTRA_ONLY
-        // doesn't reset reference picture state, so saved clips can't
-        // be bootstrapped by decoders ("no sequence header" cascade).
-        // Sync mode produces real KEY_FRAMEs.
+        // async mode lets us submit frame N+1 while N still encodes, saving ~2.2ms/frame
+        // CPU wait; skipped for AV1 since it emits INTRA_ONLY instead of KEY_FRAME there.
         let async_mode = matches!(active_codec, ActiveCodec::H264);
         init.enableEncodeAsync = if async_mode { 1 } else { 0 };
 
@@ -293,12 +213,8 @@ impl NvEncoderD3D11 {
         let status = unsafe { (init_fn)(encoder, &mut init) };
         nvenc_check(&api, encoder, status, "InitializeEncoder")?;
 
-        // ---- allocate bitstream output pool + completion events --------
-        // Each output buffer is paired with a Win32 auto-reset event.
-        // NVENC signals the event for picture N when picture N's bitstream
-        // is ready to lock. Auto-reset (`bManualReset=FALSE`) means a
-        // successful WaitForSingleObject leaves the event unsignaled —
-        // exactly what we want for "consume once" semantics.
+        // each output buffer pairs with an auto-reset Win32 event NVENC signals when
+        // that picture's bitstream is ready; auto-reset gives consume-once semantics.
         let mut pool = Vec::with_capacity(BITSTREAM_POOL_SIZE);
         let create_bs = api
             .functions
@@ -309,15 +225,14 @@ impl NvEncoderD3D11 {
             .nvEncRegisterAsyncEvent
             .expect("loader checked");
         for _ in 0..BITSTREAM_POOL_SIZE {
-            // Bitstream buffer.
             let mut bs = NV_ENC_CREATE_BITSTREAM_BUFFER::default();
             bs.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
             // SAFETY: well-formed init struct.
             let status = unsafe { (create_bs)(encoder, &mut bs) };
             nvenc_check(&api, encoder, status, "CreateBitstreamBuffer")?;
 
-            // Completion event — only created/registered in async mode.
-            // Sync mode uses HANDLE(0) as a sentinel and skips wait/close.
+            // completion event, only created/registered in async mode; sync mode uses
+            // HANDLE(0) as a sentinel and skips wait/close.
             let event = if async_mode {
                 // SAFETY: parameters are all null/false except `bManualReset`
                 // which we explicitly want false (auto-reset).
@@ -340,10 +255,7 @@ impl NvEncoderD3D11 {
             });
         }
 
-        // ---- allocate NV12 staging textures + register with NVENC -------
-        // One texture per bitstream slot so round-robin submissions never
-        // hand NVENC the same pointer back-to-back. The driver does
-        // BGRA→NV12 on `CopyResource` into these.
+        // one texture per bitstream slot, same round-robin reasoning as nv12_pool.
         // SAFETY: device is a live D3D11 device; GetImmediateContext is
         // always safe to call and returns the device's immediate context.
         let context = unsafe { device.GetImmediateContext() }
@@ -394,15 +306,8 @@ impl NvEncoderD3D11 {
         let nv12_converter =
             Nv12Converter::new(device.clone(), context.clone(), config.width, config.height)?;
 
-        // Retrieve the codec sequence header (H.264 SPS+PPS or AV1
-        // sequence header OBU) out of band. OBS does this on the first
-        // packet; doing it once at init is equivalent because the
-        // sequence parameters don't change for the life of the session,
-        // and it keeps the per-packet hot path free of an extra API
-        // call. Saving paths prepend these bytes to the bitstream file
-        // so decoders / muxers see a sequence header at byte 0 even
-        // when NVENC's `repeatSeqHdr` doesn't materialize one in front
-        // of an arbitrary mid-stream IDR.
+        // fetched once at init (not per-packet like OBS does) since sequence
+        // params don't change for the session; keeps the hot path free of the call.
         let mut header_buf = vec![0u8; 1024];
         let mut header_size: u32 = 0;
         let mut payload = NV_ENC_SEQUENCE_PARAM_PAYLOAD::default();
@@ -436,49 +341,34 @@ impl NvEncoderD3D11 {
             next_slot: 0,
             pending: VecDeque::with_capacity(BITSTREAM_POOL_SIZE),
             frames_submitted: 0,
-            // Force the very first frame to emit SPS+PPS+IDR so decoders
-            // can latch on immediately, regardless of where the next
-            // automatic IDR (driven by gopLength) would fall.
+            // first frame always forces SPS+PPS+IDR so decoders latch on immediately
+            // regardless of where the next gopLength-driven IDR would land.
             force_idr: true,
             async_mode,
             header: header_buf,
         })
     }
 
-    /// Codec sequence-header bytes (H.264 SPS+PPS, AV1 OBU_SEQUENCE_HEADER)
-    /// captured once at session open. Save flows prepend these to the
-    /// bitstream file so ffmpeg / decoders always see a valid header even
-    /// when the saved window doesn't start exactly at a NVENC keyframe
-    /// that re-emitted one.
+    /// Sequence-header bytes captured at open; save flows prepend these so
+    /// decoders/ffmpeg see a valid header even off a keyframe boundary.
     pub fn header(&self) -> &[u8] {
         &self.header
     }
 
-    /// Codec the encoder negotiated at session open. Useful for logging
-    /// and for callers (muxer / keyframe scanner) that need to know
-    /// whether the bitstream is H.264 NAL units or AV1 OBUs.
+    /// Codec negotiated at session open; callers need it to know if the
+    /// bitstream is H.264 NALs or AV1 OBUs.
     pub fn active_codec(&self) -> ActiveCodec {
         self.active_codec
     }
 
-    /// Manually request an IDR on the next submitted frame. Not needed for
-    /// normal operation — the bound `gopLength` drives automatic IDR
-    /// cadence — but useful if a future feature wants on-demand scene cuts
-    /// or recovery after a network blip.
+    /// Forces an IDR on the next frame; gopLength drives automatic IDR cadence
+    /// normally, this is for on-demand scene cuts / recovery.
     pub fn force_idr_next_frame(&mut self) {
         self.force_idr = true;
     }
 
-    /// Change rate-control *parameters* on the live session without
-    /// resetting it — used to boost quality for the duration of a manual
-    /// recording. The bitstream stays continuous (same sequence header,
-    /// same reference state), so packets from before and after the switch
-    /// mux into one playable file.
-    ///
-    /// NVENC cannot switch rate-control *mode* dynamically, so `rc` must be
-    /// the same variant the session was opened with (CQP→CQP or VBR→VBR).
-    /// Forces an IDR so the new quality takes effect on a clean GOP
-    /// boundary instead of mid-GOP.
+    /// Changes rate-control params on the live session (no reset) so packets
+    /// mux continuously. `rc` must match the session's mode (CQP/VBR); forces an IDR.
     pub fn reconfigure_rate_control(&mut self, rc: RateControl) -> Result<()> {
         if std::mem::discriminant(&rc) != std::mem::discriminant(&self.config.rate_control) {
             bail!(
@@ -511,7 +401,7 @@ impl NvEncoderD3D11 {
         // boxed NV_ENC_CONFIG owned by `self`, alive for the whole call.
         let status = unsafe { (reconfigure)(self.encoder, &mut params) };
         if let Err(e) = nvenc_check(&self.api, self.encoder, status, "ReconfigureEncoder") {
-            // Session unchanged on failure — keep our mirror in sync.
+            // session unchanged on failure, keep our mirror in sync.
             self.enc_cfg.rcParams = prev_rc_params;
             return Err(e);
         }
@@ -520,12 +410,8 @@ impl NvEncoderD3D11 {
         Ok(())
     }
 
-    /// Submit one captured texture. Returns zero or more encoded packets —
-    /// NVENC may buffer the first few frames before producing output.
-    ///
-    /// Registrations are cached by texture pointer. The duplicator reuses
-    /// the same private texture handle across calls, so the cache typically
-    /// has only 1–2 live entries.
+    /// Submits one texture; NVENC may buffer a few frames before returning
+    /// packets. Registrations cache by texture pointer (usually 1-2 live).
     pub fn encode_frame(
         &mut self,
         texture: &ID3D11Texture2D,
@@ -534,25 +420,20 @@ impl NvEncoderD3D11 {
         let _t = clipdip_profile::start("encoder.encode_frame");
         let mut packets = Vec::new();
 
-        // ---- safety valve: if all slots are in flight, wait on the
-        // oldest before reusing its buffer. Should be rare under steady
-        // state — pool depth is 4 and our per-frame encode latency p99
-        // is ~4 ms vs a 16.7 ms frame interval, leaving plenty of slack.
+        // safety valve: all slots in flight, wait on the oldest. rare: pool depth 4
+        // p99 encode ~4ms vs a 16.7ms frame interval.
         if self.pending.len() >= self.pool.len() {
             let pkt = self.wait_and_lock_front()?;
             packets.push(pkt);
         }
 
-        // ---- pick a slot. Same index for input NV12 staging and output
-        // bitstream so they stay in lockstep — when slot N's bitstream
-        // is consumed, slot N's NV12 texture is safe to overwrite.
+        // same slot index for input NV12 and output bitstream: once slot N's
+        // bitstream is consumed, slot N's texture is safe to overwrite.
         let slot = self.next_slot;
         self.next_slot = (slot + 1) % self.pool.len();
 
-        // ---- BGRA → NV12 via two pixel-shader passes (Y + UV). This
-        // replaces what NVENC would otherwise do internally for ARGB
-        // input — the driver+shader path here is cheaper and gives us
-        // explicit control of the color matrix (BT.709 full range).
+        // BGRA to NV12 via two shader passes (Y+UV): cheaper than NVENC's internal
+        // ARGB conversion and gives explicit control of the color matrix (BT.709 full range).
         let _t_copy = clipdip_profile::start("encoder.bgra_to_nv12");
         self.nv12_converter
             .convert(texture, &self.nv12_pool[slot])?;
@@ -570,7 +451,7 @@ impl NvEncoderD3D11 {
         let output = self.pool[slot].bitstream;
         let event = self.pool[slot].event;
 
-        // ---- encode picture ---------------------------------------------
+        // encode picture
         let mut pic = NV_ENC_PIC_PARAMS::default();
         pic.version = NV_ENC_PIC_PARAMS_VER;
         pic.inputWidth = self.config.width;
@@ -579,8 +460,7 @@ impl NvEncoderD3D11 {
         pic.inputBuffer = mapped.mappedResource;
         pic.bufferFmt = NV_ENC_BUFFER_FORMAT_NV12;
         pic.outputBitstream = output;
-        // Null completionEvent in sync mode — NVENC interprets a non-null
-        // event in sync mode as a config error.
+        // null completionEvent in sync mode: a non-null one there is a config error.
         pic.completionEvent = if self.async_mode {
             event.0 as *mut _
         } else {
@@ -600,15 +480,8 @@ impl NvEncoderD3D11 {
         let status = unsafe { (encode_fn)(self.encoder, &mut pic) };
         drop(t_submit);
 
-        // Async mode: NVENC fires a completion event for every submitted
-        // picture even when EncodePicture returns NEED_MORE_INPUT (the
-        // picture was consumed; the bitstream just isn't ready yet). Push
-        // to `pending` and let the drain logic pick it up via the event.
-        //
-        // Sync mode: SUCCESS means the bitstream for *this* picture (plus
-        // any earlier buffered ones in submission order) is ready to
-        // lock right now — drain inline. NEED_MORE_INPUT means the
-        // picture was consumed but output is still buffered up; defer it.
+        // async: NEED_MORE_INPUT still consumes the picture, just push to pending
+        // and let the event drain it. sync: SUCCESS drains inline in submit order.
         match status {
             NV_ENC_SUCCESS => {
                 self.pending.push_back(PendingFrame { slot });
@@ -630,19 +503,15 @@ impl NvEncoderD3D11 {
         }
         self.frames_submitted += 1;
 
-        // ---- unmap (safe to do now; NVENC has copied what it needs) ----
+        // unmap: NVENC already copied what it needs
         let unmap_fn = self.api.functions.nvEncUnmapInputResource.expect("loader checked");
         let status = unsafe { (unmap_fn)(self.encoder, mapped.mappedResource) };
         if status != NV_ENC_SUCCESS {
             warn!(status, "UnmapInputResource failed");
         }
 
-        // ---- non-blocking drain (async mode only) ----------------------
-        // Walk the front of the pending queue, popping any frames whose
-        // events are already signaled. Lets us catch up if encode is
-        // running ahead of submission (which is the steady state at
-        // 60 fps + 2.4 ms p50 encode time). Sync mode already drained
-        // above on SUCCESS, so there's nothing to poll for here.
+        // non-blocking drain (async only): pop any already-signaled events; steady
+        // state at 60fps is encode running ahead (p50 ~2.4ms). sync already drained above.
         if self.async_mode {
             loop {
                 let front_slot = match self.pending.front() {
@@ -664,17 +533,16 @@ impl NvEncoderD3D11 {
         Ok(packets)
     }
 
-    /// Block-wait on the front of the pending queue and lock its
-    /// bitstream. Used by the safety valve (pool full) and by `flush`.
+    /// Block-waits on the pending queue's front, locking its bitstream. Used
+    /// by the safety valve and flush.
     fn wait_and_lock_front(&mut self) -> Result<EncodedPacket> {
         let slot = self
             .pending
             .pop_front()
             .ok_or_else(|| anyhow!("wait_and_lock_front called with empty queue"))?
             .slot;
-        // Sync mode: no completion event — anything in `pending` got there
-        // because EncodePicture returned NEED_MORE_INPUT, and LockBitstream
-        // will itself block until the bitstream is ready.
+        // sync mode has no event: anything pending got there via NEED_MORE_INPUT
+        // and LockBitstream itself blocks until ready.
         if self.async_mode {
             let event = self.pool[slot].event;
             let _t = clipdip_profile::start("encoder.wait_block");
@@ -711,9 +579,8 @@ impl NvEncoderD3D11 {
 
         let pts = lock.outputTimeStamp as i64;
 
-        // Don't trust lock.pictureType — in our config NVENC has been
-        // observed to return 0 (P) for every frame including IDRs. Scan
-        // the bitstream instead. OBS does the same.
+        // lock.pictureType isn't trustworthy: NVENC has returned 0 (P) for IDRs too.
+        // scan the bitstream instead, same as OBS.
         let is_keyframe = match self.active_codec {
             ActiveCodec::H264 => scan_for_keyframe_h264(&bytes),
             ActiveCodec::Av1 => scan_for_keyframe_av1(&bytes),
@@ -725,11 +592,8 @@ impl NvEncoderD3D11 {
             warn!(status, "UnlockBitstream failed");
         }
 
-        // Per-frame line is at `trace!` — too noisy for `info`/`debug`
-        // routine output. The `--profile` flag gives the same info
-        // aggregated (frame count, size percentiles) every N seconds
-        // via `clipdip-profile`; reach for `RUST_LOG=clipdip_encoder=trace`
-        // only when investigating a specific per-frame anomaly.
+        // per-frame log is trace-level (too noisy otherwise); --profile aggregates
+        // the same info periodically via clipdip-profile.
         trace!(
             size = bytes.len(),
             is_keyframe,
@@ -746,23 +610,16 @@ impl NvEncoderD3D11 {
         })
     }
 
-    /// Drain the encoder pipeline.
-    ///
-    /// Block-wait on every still-pending completion event in submission
-    /// order, locking each bitstream and emitting the encoded packet.
-    /// Then submit an EOS picture (with its own completion event in async
-    /// mode) and wait for that too — confirming NVENC has flushed
-    /// internal state before we tear down.
+    /// Drains the pipeline: waits out every pending event in submission order
+    /// then submits and waits on an EOS picture before teardown.
     pub fn flush(&mut self) -> Result<Vec<EncodedPacket>> {
         let mut packets = Vec::new();
         while !self.pending.is_empty() {
             packets.push(self.wait_and_lock_front()?);
         }
 
-        // Submit EOS. In async mode this requires a completion event
-        // too — reuse slot 0's, which is now unsignaled (auto-reset
-        // consumed the last signal). In sync mode pass null; EOS in
-        // sync mode is itself blocking.
+        // EOS needs a completion event in async mode too; reuse slot 0's (unsignaled
+        // since auto-reset consumed its last signal). sync mode passes null and blocks itself.
         let eos_event = self.pool[0].event;
         let mut pic = NV_ENC_PIC_PARAMS::default();
         pic.version = NV_ENC_PIC_PARAMS_VER;
@@ -791,10 +648,8 @@ impl NvEncoderD3D11 {
 
 impl Drop for NvEncoderD3D11 {
     fn drop(&mut self) {
-        // If the caller skipped `flush()`, drain remaining events first
-        // — NVENC won't let us unregister an event that still has a
-        // pending picture associated with it. (Sync mode has no events
-        // to wait on; LockBitstream / EOS already blocked as needed.)
+        // drain remaining events if flush() was skipped: NVENC won't unregister an
+        // event tied to a pending picture. sync mode has no events to wait on.
         if self.async_mode {
             while let Some(p) = self.pending.pop_front() {
                 let event = self.pool[p.slot].event;
@@ -804,9 +659,8 @@ impl Drop for NvEncoderD3D11 {
             self.pending.clear();
         }
 
-        // Order matters: unregister textures → unregister events →
-        // destroy bitstream buffers → close event handles →
-        // destroy encoder.
+        // order matters: unregister textures, then events, then destroy bitstream
+        // buffers, close event handles, destroy encoder.
         if let Some(f) = self.api.functions.nvEncUnregisterResource {
             for &registered in &self.nv12_registered {
                 unsafe { (f)(self.encoder, registered) };
@@ -844,18 +698,13 @@ impl Drop for NvEncoderD3D11 {
     }
 }
 
-// ---- bitstream helpers -----------------------------------------------
+// bitstream helpers
 
-/// Scan an Annex-B H.264 bitstream for a keyframe marker — either an IDR
-/// slice NAL (`nal_unit_type == 5`) or an SPS NAL (`nal_unit_type == 7`).
-/// SPS-present implies a stream boundary which all decoders treat as
-/// random-access, so we count it as a keyframe too.
+/// Scans Annex-B H.264 for an IDR slice NAL (type 5) or SPS NAL (type 7
+/// since SPS implies a random-access boundary decoders treat as one).
 fn scan_for_keyframe_h264(bytes: &[u8]) -> bool {
-    // Walk the Annex-B byte stream. NAL units begin with `00 00 00 01` or
-    // `00 00 01`. The byte after the start code holds:
-    //     bit 7    : forbidden_zero_bit (always 0)
-    //     bits 6-5 : nal_ref_idc
-    //     bits 4-0 : nal_unit_type
+    // NAL units start with `00 00 00 01` or `00 00 01`; nal_unit_type is the
+    // low 5 bits of the byte right after the start code.
     let mut i = 0;
     while i + 4 < bytes.len() {
         let is_long = bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 0 && bytes[i + 3] == 1;
@@ -876,16 +725,8 @@ fn scan_for_keyframe_h264(bytes: &[u8]) -> bool {
     false
 }
 
-/// Scan an AV1 low-overhead bitstream for a keyframe access unit. NVENC
-/// emits OBUs with `obu_has_size_field=1` for the low-overhead format,
-/// which lets us walk OBU-by-OBU using the leb128 size field.
-///
-/// Triggers on:
-/// - any OBU_SEQUENCE_HEADER (type 1) — implies a random-access point
-///   (and with `set_av1_repeat_seq_hdr(true)` every keyframe re-emits one)
-/// - any OBU_FRAME (6) or OBU_FRAME_HEADER (3) whose first bit is
-///   `show_existing_frame=0` and whose 2-bit `frame_type` is KEY_FRAME (0)
-///   or INTRA_ONLY_FRAME (2)
+/// Scans low-overhead AV1 OBUs for a keyframe: OBU_SEQUENCE_HEADER, or an
+/// OBU_FRAME/FRAME_HEADER with frame_type KEY_FRAME/INTRA_ONLY_FRAME.
 fn scan_for_keyframe_av1(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i < bytes.len() {
@@ -909,8 +750,8 @@ fn scan_for_keyframe_av1(bytes: &[u8]) -> bool {
             i += leb_len;
             payload_size = size as usize;
         } else {
-            // No size field — the OBU must run to end of bitstream. We can
-            // only check this single OBU before bailing.
+            // no size field: the OBU must run to end of bitstream, only this one OBU
+            // gets checked before bailing.
             payload_size = bytes.len().saturating_sub(i);
         }
 
@@ -936,9 +777,8 @@ fn scan_for_keyframe_av1(bytes: &[u8]) -> bool {
     false
 }
 
-/// Read an AV1 leb128 (little-endian base-128) integer. Returns
-/// `(value, bytes_consumed)` or `None` if the input is malformed or
-/// truncated. AV1 leb128 is capped at 8 bytes.
+/// AV1 leb128 (little-endian base-128) decode; None if malformed/truncated.
+/// Capped at 8 bytes per the AV1 spec.
 fn read_leb128(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut val: u64 = 0;
     for n in 0..8 {
@@ -981,9 +821,9 @@ mod tests {
 
     #[test]
     fn keyframe_scan_finds_idr_after_sps_pps() {
-        // SPS, PPS, IDR all in one buffer — first IDR triggers true.
+        // SPS, PPS, IDR all in one buffer, first IDR triggers true.
         let bytes = [
-            0, 0, 0, 1, 0x67, 0x42, // SPS — already triggers
+            0, 0, 0, 1, 0x67, 0x42, // SPS, already triggers
             0, 0, 0, 1, 0x68, 0xeb, // PPS
             0, 0, 0, 1, 0x65, 0xb8, // IDR
         ];
@@ -1063,11 +903,10 @@ mod tests {
     }
 }
 
-// ---- codec capability probe + selection -------------------------------
+// codec capability probe + selection
 
-/// Enumerate codec GUIDs the open NVENC session can encode. Driven by
-/// `nvEncGetEncodeGUIDCount` + `nvEncGetEncodeGUIDs` — on Ada the list
-/// includes H.264, HEVC, and AV1; on Turing it's H.264 + HEVC.
+/// Enumerates codec GUIDs this NVENC session supports; Ada adds AV1 to the
+/// H.264+HEVC that Turing reports.
 fn query_supported_codecs(
     api: &NvEncApi,
     encoder: *mut std::ffi::c_void,
@@ -1107,9 +946,8 @@ fn query_supported_codecs(
     Ok(guids)
 }
 
-/// Pick the codec to use given the caller's preference and the GPU's
-/// reported capabilities. Errors only for `ForceAv1` on a GPU without
-/// AV1 support — `PreferAv1` silently falls back to H.264.
+/// Picks codec by preference vs GPU capability. Errors only on ForceAv1
+/// without AV1 support; PreferAv1 silently falls back to H.264.
 fn resolve_codec(pref: CodecPreference, supported: &[GUID]) -> Result<ActiveCodec> {
     let has_h264 = supported.contains(&NV_ENC_CODEC_H264_GUID);
     let has_av1 = supported.contains(&NV_ENC_CODEC_AV1_GUID);
@@ -1141,9 +979,8 @@ fn resolve_codec(pref: CodecPreference, supported: &[GUID]) -> Result<ActiveCode
     }
 }
 
-/// Log the encode config as NVENC will actually run it — post
-/// `apply_rate_control`, so derates/clamps are already reflected. Called
-/// at session init and after every successful reconfigure.
+/// Logs the config post-apply_rate_control (clamps/derates already
+/// applied), at init and after every reconfigure.
 fn log_effective_config(enc_cfg: &NV_ENC_CONFIG) {
     let rc = &enc_cfg.rcParams;
     info!(
@@ -1163,9 +1000,8 @@ fn log_effective_config(enc_cfg: &NV_ENC_CONFIG) {
     );
 }
 
-/// Write `rc` into `rc_params`. Shared by session init and
-/// [`NvEncoderD3D11::reconfigure_rate_control`] so both paths scale and
-/// clamp QP identically.
+/// Writes `rc` into `rc_params`; shared by init and reconfigure_rate_control
+/// so both scale/clamp QP identically.
 fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: RateControl) {
     match rc {
         RateControl::ConstantQp { qp } => {
@@ -1174,14 +1010,8 @@ fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: 
                 _ => qp,
             };
             let final_qp = clamp_qp_for_codec(codec, scaled_qp);
-            // Keyframes get a better (lower) QP than delta frames. Every
-            // GOP references its IDR, so intra quality is the ceiling for
-            // everything that follows — most visibly on static content,
-            // where deltas are pure skips and the picture IS the keyframe
-            // re-encoded once per GOP (blocky text + once-a-second
-            // "pumping" at equal QP). ~4 H.264 QP steps of headroom; the
-            // size cost is small because keyframes are a tiny share of
-            // motion clips (~7%) and static clips are tiny anyway.
+            // intra gets a lower QP than delta: it's the GOP's quality ceiling (visible
+            // as static-content "pumping" at equal QP). cheap: keyframes are ~7% of bits.
             let intra_qp = match codec {
                 ActiveCodec::Av1 => final_qp.saturating_sub(16),
                 _ => final_qp.saturating_sub(4),
@@ -1193,30 +1023,24 @@ fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: 
                 qpInterB: final_qp,
                 qpIntra: intra_qp,
             };
-            // CQP ignores these, but zero them for tidiness — the
-            // preset query may have left non-zero defaults behind.
+            // CQP ignores these; zeroed for tidiness since the preset query can leave
+            // non-zero defaults behind.
             rc_params.averageBitRate = 0;
             rc_params.maxBitRate = 0;
         }
         RateControl::CappedQuality { cq, max_bps } => {
-            // Target-quality VBR: constant quality below the cap, hard
-            // ceiling above it. `averageBitRate = 0` + `targetQuality`
-            // puts NVENC in CQ mode; `maxBitRate` + a 1-second VBV bound
-            // the worst case — the VBV only engages on sustained bursts,
-            // so ordinary content encodes exactly like constant quality.
+            // target-quality VBR: averageBitRate=0 + targetQuality puts NVENC in CQ
+            // mode; maxBitRate + a 1s VBV cap the worst case, only engaging on bursts.
             //
-            // AV1 gets ~0.6× the cap: at equal perceptual quality it
-            // needs far fewer bits than H.264, so an H264-sized ceiling
-            // on AV1 would never engage and silently un-cap the mode.
+            // AV1 gets ~0.6x the cap: it needs far fewer bits than H.264 at equal
+            // quality, so an H264-sized ceiling would never engage on AV1.
             let cap = match codec {
                 ActiveCodec::Av1 => (max_bps as u64 * 6 / 10) as u32,
                 _ => max_bps,
             };
             rc_params.rateControlMode = NV_ENC_PARAMS_RC_VBR;
-            // `targetQuality` is codec-agnostic 0–51 (no AV1 ×4 scaling —
-            // the field is u8 and 26×4 would be off-scale garbage). Floor
-            // at 1: a value of 0 means "auto" to NVENC and would silently
-            // discard the quality target for hand-edited qp=0 configs.
+            // targetQuality is codec-agnostic 0-51, no AV1 x4 scaling (u8 field, 26x4
+            // would be garbage). floored at 1: 0 means "auto" to NVENC.
             let cq = cq.clamp(1, 51);
             rc_params.targetQuality = cq as u8;
             rc_params.targetQualityLSB = 0;
@@ -1224,11 +1048,8 @@ fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: 
             rc_params.maxBitRate = cap;
             rc_params.vbvBufferSize = cap;
             rc_params.vbvInitialDelay = 0;
-            // Keep the ConstantQp arm's keyframe headroom (see its comment
-            // on static-content IDR "pumping"): in CQ mode `initialRCQP`
-            // is the rate controller's starting hint, so seed intra ~4 QP
-            // better than delta. Bit 2 of the packed bitfields word is
-            // enableInitialRCQP.
+            // same keyframe headroom as ConstantQp: initialRCQP seeds the rate
+            // controller's starting hint, intra ~4 QP better. bit 2 is enableInitialRCQP.
             rc_params.initialRCQP = NV_ENC_QP {
                 qpInterP: cq,
                 qpInterB: cq,
@@ -1239,10 +1060,8 @@ fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: 
             rc_params.constQP = NV_ENC_QP { qpInterP: 0, qpInterB: 0, qpIntra: 0 };
         }
         RateControl::Vbr { avg_bps } => {
-            // VBR with a hard average target. CBR would honor bitrate
-            // even more strictly but produces filler bits on quiet
-            // content. Allow short-term overshoot up to ~1.5× average
-            // so motion bursts don't smear.
+            // hard average-bitrate VBR; CBR would be stricter but fills quiet content
+            // with padding bits. allows ~1.5x overshoot so motion bursts don't smear.
             rc_params.rateControlMode = NV_ENC_PARAMS_RC_VBR;
             rc_params.averageBitRate = avg_bps;
             rc_params.maxBitRate = avg_bps.saturating_add(avg_bps / 2);
@@ -1250,10 +1069,8 @@ fn apply_rate_control(rc_params: &mut NV_ENC_RC_PARAMS, codec: ActiveCodec, rc: 
     }
 }
 
-/// Clamp a caller-supplied QP to the codec's valid range. H.264 / HEVC
-/// use 0–51; AV1 uses 0–255. Out-of-range values silently saturate
-/// rather than failing — the caller is unlikely to know the codec ahead
-/// of the capability probe.
+/// Clamps QP to the codec's range (H.264/HEVC 0-51, AV1 0-255); saturates
+/// rather than erroring since callers don't know the codec ahead of the probe.
 fn clamp_qp_for_codec(codec: ActiveCodec, qp: u32) -> u32 {
     match codec {
         ActiveCodec::H264 => qp.min(51),
@@ -1261,7 +1078,7 @@ fn clamp_qp_for_codec(codec: ActiveCodec, qp: u32) -> u32 {
     }
 }
 
-// ---- helpers ----------------------------------------------------------
+// helpers
 
 fn nvenc_check(
     api: &NvEncApi,

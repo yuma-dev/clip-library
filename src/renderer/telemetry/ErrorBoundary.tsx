@@ -65,11 +65,8 @@ const action: CSSProperties = {
   cursor: "pointer",
 };
 
-/**
- * Catches render-phase throws, which used to unmount the whole tree to a blank
- * window with nothing in the log. The fallback is styled inline on purpose: it
- * has to render even when whatever broke took the stylesheet's markup with it.
- */
+/** Catches render-phase throws that used to blank the whole window with nothing logged.
+ * Styled inline since whatever broke may have taken the stylesheet with it. */
 export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { crashed: false };
 

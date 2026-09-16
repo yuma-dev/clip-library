@@ -11,11 +11,8 @@ interface ModalProps {
   width?: number;
 }
 
-/**
- * Base modal primitive. The backdrop's `backdrop-filter: blur` doubles as the
- * "ui-blur" behind overlays (replacing the legacy `window.uiBlur`). Closes on
- * Escape and backdrop click.
- */
+/** Base modal: backdrop-filter blur doubles as ui-blur behind overlays
+ * (replaces legacy window.uiBlur). Closes on Escape and backdrop click. */
 export default function Modal({ open, onClose, title, children, width = 460 }: ModalProps) {
   useEffect(() => {
     if (!open) return;

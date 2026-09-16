@@ -46,12 +46,9 @@ function extractProfile(result: Record<string, unknown> | null): {
   };
 }
 
-// ---- Module-scope store ----
-//
-// The connection state is app-global (rail profile, feed page, player upload
-// button all consume it), so verify ONCE per session instead of once per
-// component mount — route switches render instantly from the shared state.
-// Re-verifies on every cliplib-auth-event (connect/disconnect).
+// module-scope store: app-global connection state, verified once per session (not per mount) so
+// route switches render instantly
+// re-verifies on every cliplib-auth-event
 
 let state: Profile = { connected: false, verifying: true, username: "", avatarUrl: "" };
 const listeners = new Set<() => void>();
@@ -74,8 +71,7 @@ async function refresh(): Promise<void> {
     const { username, avatarUrl } = extractProfile(result);
     emit({ connected: true, verifying: false, username, avatarUrl });
   } else {
-    // Logged out: drop the cached feed lists so nothing keeps the feed
-    // browsable (or leaks it to a different account connected later).
+    // logged out: drop cached feed lists so they don't stay browsable or leak to the next account
     try {
       for (const key of Object.keys(sessionStorage)) {
         if (key.startsWith("feed:list:")) sessionStorage.removeItem(key);
@@ -104,11 +100,8 @@ function getSnapshot(): Profile {
   return state;
 }
 
-/**
- * Real ClipLib account state (shared module store). Verifies via the existing
- * `test-share-connection` IPC once per session and re-verifies whenever a
- * `cliplib-auth-event` fires (connect/disconnect from Settings or the flow).
- */
+/** verifies via the existing `test-share-connection` IPC once per session
+ * re-verifies on `cliplib-auth-event` (connect/disconnect from Settings or the flow) */
 export function useProfile(): Profile & { connect: () => void; disconnect: () => void } {
   const profile = useSyncExternalStore(subscribe, getSnapshot);
 

@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const packageJsonPath = path.join(rootDir, 'package.json');
-// Cargo workspace: the version lives in [workspace.package] at the repo
-// root and every crate (incl. src-tauri) inherits it via version.workspace.
+// Cargo workspace: version lives in [workspace.package] at repo root;
+// every crate (incl. src-tauri) inherits it via version.workspace.
 const cargoTomlPath = path.join(rootDir, 'Cargo.toml');
 const cargoLockPath = path.join(rootDir, 'Cargo.lock');
 const tauriConfigPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
@@ -25,12 +25,11 @@ export async function syncVersions() {
     readFile(tauriConfigPath, 'utf8'),
   ]);
 
-  // Workspace Cargo.toml: the first `version = "..."` line is
-  // [workspace.package] version (it precedes [workspace.dependencies]).
+  // workspace Cargo.toml: first `version = "..."` line is [workspace.package]
+  // (precedes [workspace.dependencies])
   const nextCargoToml = cargoTomlRaw.replace(/^version = "([^"]+)"/m, `version = "${version}"`);
 
-  // Cargo.lock: bump every clipdip* workspace crate (they all share the
-  // workspace version).
+  // Cargo.lock: bump every clipdip* workspace crate (they share the workspace version)
   let nextCargoLock = cargoLockRaw;
   if (cargoLockRaw) {
     nextCargoLock = cargoLockRaw.replace(

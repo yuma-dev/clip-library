@@ -10,11 +10,8 @@ import { Disclosure, PresetSlider } from "./controls";
 type RateControl = { mode: "constant_qp"; qp: number } | { mode: "vbr"; avg_bps: number };
 type RecordingQuality = { mode: "match_clips" } | { mode: "constant_qp"; qp: number };
 
-// Named quality presets over the encoder's QP (+6 QP roughly halves size).
-// Each tier also carries an automatic bitrate ceiling (max_bps_for_quality
-// in the core config) so chaotic scenes can't balloon clip sizes. Mbps
-// figures are 1440p60 reference values; the enforced cap scales with
-// resolution/fps and is lower under AV1, hence "around".
+// QP presets; +6 QP roughly halves size. max_bps_for_quality (core config) caps busy-scene bitrate
+// Mbps figures are 1440p60 reference; actual cap scales with resolution/fps and is lower under AV1
 const QUALITY_PRESETS = [
   { qp: 32, label: "Space saver", desc: "Visibly compressed, about a quarter of High quality's size. Busy scenes cap out around 25 Mbps" },
   { qp: 26, label: "Balanced", desc: "Looks great in motion at about half of High quality's size. Busy scenes cap out around 60 Mbps" },
@@ -22,7 +19,7 @@ const QUALITY_PRESETS = [
   { qp: 16, label: "Maximum", desc: "Near-perfect picture, large files. Busy scenes cap out around 100 Mbps" },
 ];
 
-// Quality while a manual recording runs. qp null = match clips (no boost).
+// qp null = match clips, no quality boost
 const RECORDING_PRESETS: { qp: number | null; label: string; desc: string }[] = [
   { qp: null, label: "Match clips", desc: "Recordings use the same quality as replay clips" },
   { qp: 16, label: "High", desc: "Noticeably crisper than clips with a modest size bump" },
@@ -272,8 +269,7 @@ export default function ClipdipVideoSection() {
   );
 }
 
-// Live file-size readout, measured from the actual encoded bytes in the
-// replay ring (buffer_stats via the 2 s live-status poll).
+// measured from actual encoded bytes in the replay ring (buffer_stats, 2 s live-status poll)
 function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
   const { live, running } = useClipdip();
   const stats = live?.buffer_stats;

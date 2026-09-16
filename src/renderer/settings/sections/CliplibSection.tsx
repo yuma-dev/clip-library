@@ -1,7 +1,6 @@
-// ClipLib account settings — connection status, invite codes, and API tokens.
-// Ports the website SettingsPage.tsx (invite + token management) into the
-// desktop app's settings shell. Requires an active ClipLib connection; the
-// underlying write routes go through the authenticated share API.
+// connection status, invite codes, API tokens; ports the website SettingsPage.tsx (invite + token
+// management) into the desktop settings shell. requires an active ClipLib connection, write routes
+// go through the authenticated share API
 
 import { useCallback, useEffect, useState } from "react";
 import { Copy, Check, LogIn, LogOut, Plus, Trash2 } from "lucide-react";

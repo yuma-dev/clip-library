@@ -1,10 +1,6 @@
-// Live profiler HUD (dev-only). Toggle with Ctrl+Shift+P.
-//
-// A small always-on-top overlay with the numbers that matter while you click
-// around: FPS, dropped frames, last long task, in-flight IPC, worst interaction
-// this session, buffered event count. "Dump trace" merges renderer + main events
-// into one Chrome-trace JSON on disk (benchmark/traces/) and reveals it — open in
-// chrome://tracing or Perfetto for the full cross-process flame graph.
+// dev-only profiler HUD, Ctrl+Shift+P toggles it
+// "Dump trace" merges renderer + main events into one Chrome-trace JSON (benchmark/traces/);
+// open in chrome://tracing or Perfetto
 
 import { useEffect, useRef, useState } from "react";
 import { getStats, resetStats, clearBuffer, snapshotForDump, type LiveStats } from "./trace";

@@ -1,11 +1,6 @@
-// Real replacement for the legacy `window.uiBlur` (the new renderer shipped a
-// no-op shim). Refcounted so overlapping consumers compose; toggles a body
-// class that blurs `.app-body` (sidebar + main grid) while leaving the inline
-// overlays that sit ABOVE it — the wrapped legacy player, the feed player —
-// crisp. The player's open/close paths call enable()/disable() directly.
-//
-// Portaled React modals (Modal.tsx and friends) blur their own background via
-// `.modal-backdrop { backdrop-filter }` and deliberately do NOT go through here.
+// Real replacement for the legacy window.uiBlur (new renderer shipped a no-op
+// shim). Refcounted so overlapping consumers compose; toggles ui-blur on body
+// blurring .app-body while leaving inline overlays (legacy/feed player) crisp.
 let count = 0;
 
 function apply(): void {
@@ -20,8 +15,8 @@ export const uiBlur = {
   disable(): void {
     count = Math.max(0, count - 1);
     if (count === 0) {
-      // Snap the blur off (no reverse transition) so it doesn't linger over the
-      // player's own close animation — mirrors the legacy `ui-blur-exit` trick.
+      // snap off (no reverse transition) so it doesn't linger over the player's own
+      // close animation, mirrors the legacy ui-blur-exit trick
       document.body.classList.add("ui-blur-exit");
       document.body.classList.remove("ui-blur");
       requestAnimationFrame(() => document.body.classList.remove("ui-blur-exit"));

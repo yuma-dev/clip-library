@@ -1,3 +1,2 @@
-// Bumped when the intro must show again for everyone. Persisted as
-// settings.onboardingVersion once the wizard has been seen.
+// bump to show the intro again for everyone; persisted as settings.onboardingVersion once seen
 export const ONBOARDING_VERSION = 3;

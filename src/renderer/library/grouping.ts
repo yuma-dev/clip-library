@@ -1,7 +1,6 @@
 import type { LocalClip } from "./types";
 
-// Time grouping — mirrors legacy renderer.js getTimeGroup/getGroupOrder
-// (24h-diff based, not calendar based, to match existing behavior).
+// Mirrors legacy renderer.js getTimeGroup/getGroupOrder: 24h-diff based, not calendar based.
 export function getTimeGroup(ts: number, now: number): string {
   const diffDays = Math.floor((now - ts) / 86_400_000);
   if (diffDays <= 0) return "Today";
@@ -34,12 +33,8 @@ export interface ClipGroupData {
   clips: LocalClip[];
 }
 
-/**
- * Group already-newest-first items into ordered time sections. Generic over the
- * item type so both the local library (LocalClip, createdAt in ms) and the feed
- * (Clip, createdAt as an ISO string) share the exact same time-bucketing +
- * ordering logic — callers supply a `getTs` that returns milliseconds.
- */
+/** Group already-newest-first items into ordered time sections; generic so
+ * the library (ms) and feed (ISO string) share the logic via a `getTs` accessor. */
 export function groupByTime<T>(
   items: T[],
   now: number,

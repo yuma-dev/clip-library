@@ -1,16 +1,7 @@
-// Sound for the boot reveal: three layers mixed live against the intro's
-// real timing (src/renderer/boot/bootReveal.ts).
-//
-//  - woosh   as the logo flies through (the "gust" take): trimmed so its swell peaks 0.4 s
-//            after it starts; started as the reveal arms, so the peak lands
-//            around the fastest part of the fly-through.
-//  - chimes, motes and wind together at +0.6 s, under the drifting motes,
-//            each with its own tail; the wind fades out last.
-//
-// The clips are pre-trimmed and faded (assets/sfx, see benchmark/STARTUP.md)
-// so nothing starts or stops abruptly. Input never cuts the sound: a click
-// or key ends the visuals early, the sound plays out. Nothing plays on the
-// plain reveal.
+// Boot sound: three sfx layers mixed against the intro's timing (bootReveal.ts).
+// woosh starts at 0 (peaks +0.4s, the fastest part of the fly-through); chimes/motes/
+// wind start together at +0.6s, each with its own tail, wind fading out last. Clips
+// are pre-trimmed/faded (assets/sfx); input never cuts the sound, only the visuals.
 import wooshUrl from "../assets/sfx/woosh-gust.ogg";
 import chimesUrl from "../assets/sfx/chimes.ogg";
 import motesUrl from "../assets/sfx/motes.ogg";
@@ -81,16 +72,14 @@ function play(name: SoundLayer, when: number): void {
     gain.gain.linearRampToValueAtTime(0, fadeEnd);
     stopAt = fadeEnd + 0.02;
   }
-  // The chimes carry the tail of the intro: ease them out over their last
-  // 40 percent so sound and motes end together, slowly.
+  // chimes ease out over their last 40% so sound and motes end together, slowly
   if (name === "chimes") {
     const end = when + buffer.duration;
     gain.gain.setValueAtTime(level, end - buffer.duration * 0.4);
     gain.gain.linearRampToValueAtTime(0, end);
   }
   source.start(when);
-  // stop() is only legal after start(): calling it first throws and the
-  // source never plays (the wind was silent for exactly that reason).
+  // stop() is only legal after start(); calling it first threw and silenced the wind
   if (stopAt) source.stop(stopAt);
   playing[name] = { source, gain, startAt: when };
   source.onended = () => {
@@ -127,12 +116,10 @@ export function disposeBootSound(): void {
 function maybeClose(): void {
   if (!disposeWanted || !ctx) return;
   if (Object.keys(playing).length > 0) return;
-  // Layers scheduled but not yet started would still fire; give a pending
-  // start (loading) a moment before giving up on it.
+  // a pending scheduled start (loading) still needs to fire; give it a moment
   if (started && loading) {
     void loading.then(() => {
-      // The scheduled plays land a couple of microtasks after this; look again
-      // once they have had the chance.
+      // scheduled plays land a few microtasks later; recheck after they land
       window.setTimeout(() => {
         if (Object.keys(playing).length === 0) closeNow();
       }, 50);

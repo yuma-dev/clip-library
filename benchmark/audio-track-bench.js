@@ -1,22 +1,14 @@
 /**
- * Audio Track Bench
+ * Comparison benchmarks for single vs multi-audio-track clips, targeting the
+ * regression from when multi-track support landed: sustained playback CPU
+ * openClip phase breakdown (window.__benchmarkLastOpenTimings), seek-burst
+ * latency/CPU, heap/RSS on open.
  *
- * Comparison benchmarks for single-audio-track vs multi-audio-track clips.
- * Targets the regression introduced when multi-track support landed:
+ * Each benchmark returns a `{ single, multi }` pair for a side-by-side print.
  *
- *   - sustained playback CPU (sample CPU + memory + dropped frames over N seconds)
- *   - openClip phase breakdown (uses window.__benchmarkLastOpenTimings)
- *   - seek-burst latency + CPU under a rapid series of seeks
- *   - heap/RSS footprint on open
- *
- * Each benchmark runs the same operation against one single-track and one
- * multi-track clip and returns a `{ single, multi }` pair so the runner can
- * print a side-by-side comparison.
- *
- * Clip selection is automatic via ffprobe (`get-clip-info`) — the first clip
- * the probe reports with <=1 audio track becomes the "single" target; the
- * first with >=2 becomes "multi". If either bucket can't be filled the
- * scenario reports which side was missing instead of failing.
+ * Clip selection is automatic via ffprobe (get-clip-info): first clip with
+ * <=1 audio track is "single", first with >=2 is "multi". A missing side is
+ * reported, not a failure.
  */
 
 'use strict';
@@ -32,10 +24,9 @@ function basename(p) {
 }
 
 /**
- * If the user passed --single or --multi to the runner, those flags arrive
- * here as env vars (set by runner.js before spawning Electron). Resolves a
- * pin string (filename or full path) against `allClips` and returns the
- * matching clip record + its audio-track count.
+ * --single/--multi runner flags arrive here as env vars (set by runner.js
+ * before spawning Electron). Resolves a pin string (filename or full path)
+ * against `allClips`.
  */
 async function resolvePinnedClip(pinStr, allClips) {
   if (!pinStr) return null;
@@ -62,13 +53,10 @@ async function resolvePinnedClip(pinStr, allClips) {
 }
 
 /**
- * Walk `allClips` and ffprobe each until both a single-audio-track and a
- * multi-audio-track example are found (or `limit` is reached).
- *
- * Honors env vars BENCH_SINGLE_CLIP / BENCH_MULTI_CLIP (set by the runner's
- * --single / --multi flags). A pinned clip is used as-is for its bucket,
- * regardless of what ffprobe reports for its audio track count — the user
- * is explicitly overriding the auto-detection.
+ * Walks `allClips`, ffprobing each until both a single- and multi-track
+ * example are found (or `limit` hit). Honors BENCH_SINGLE_CLIP/BENCH_MULTI_CLIP
+ * env vars (--single/--multi); a pinned clip is used as-is, overriding
+ * auto-detection.
  */
 async function categorizeClips(allClipsGetter, limit = DEFAULT_PROBE_LIMIT) {
   const allClips = typeof allClipsGetter === 'function' ? allClipsGetter() : allClipsGetter;
@@ -150,10 +138,7 @@ function getPlaybackQuality(video) {
   return null;
 }
 
-/**
- * Open the clip via the registered openClip function and wait for video
- * readiness. Returns the side-channel timings written by video-player.js.
- */
+/** opens via harness openClip, waits for video ready; returns timings video-player.js writes to the side channel */
 async function openClipAndCaptureTimings(harness, clip) {
   if (!harness.appFunctions.openClip) {
     throw new Error('openClip is not registered on the harness');
@@ -167,8 +152,7 @@ async function openClipAndCaptureTimings(harness, clip) {
   await harness.appFunctions.openClip(clip.originalName, clip.customName);
   const video = document.getElementById('video-player');
   await waitForVideoReady(video);
-  // Give the side-channel a tick to be written (mark('end') is synchronous so
-  // it should already be there, but be defensive against future refactors).
+  // mark('end') is synchronous so this should already be set; poll briefly in case that changes
   for (let i = 0; i < 20 && !window.__benchmarkLastOpenTimings; i++) {
     await delay(10);
   }
@@ -176,20 +160,15 @@ async function openClipAndCaptureTimings(harness, clip) {
 }
 
 /**
- * Sample CPU + memory + dropped frames at a fixed interval while the video
- * plays. Returns aggregate stats describing the steady-state load.
- *
- * CPU% is computed against wall-clock time, so a value of 100% == one fully
- * pegged core. With 16 cores, 1600% would be the system maximum.
+ * Samples CPU + memory + dropped frames at a fixed interval during playback.
+ * CPU% is measured against wall clock: 100% = one pegged core, so max is cores * 100.
  */
 async function samplePlaybackCPU(durationMs = 5000, sampleIntervalMs = 250) {
   const video = document.getElementById('video-player');
   if (!video) throw new Error('video element missing');
 
-  // Force unmuted=false isn't necessary — audio decoding happens regardless
-  // for multi-track clips because the AudioTracksManager pushes its own
-  // <audio> elements through the WebAudio graph. We mute the master video
-  // element to keep benchmarks quiet.
+  // audio decoding happens regardless for multi-track clips (AudioTracksManager pushes its own
+  // <audio> elements through the WebAudio graph); muting the video element just keeps it quiet
   const wasMuted = video.muted;
   const wasVolume = video.volume;
   video.muted = true;
@@ -201,7 +180,6 @@ async function samplePlaybackCPU(durationMs = 5000, sampleIntervalMs = 250) {
   let prevCpu = process.cpuUsage();
   let prevWall = performance.now();
 
-  // Ensure playback is happening.
   if (video.paused) {
     try { await video.play(); } catch (_) { /* benchmark continues even if play fails */ }
   }
@@ -256,9 +234,6 @@ async function samplePlaybackCPU(durationMs = 5000, sampleIntervalMs = 250) {
   };
 }
 
-/**
- * Open clip + play + sample CPU for one bucket.
- */
 async function runPlaybackCPUFor(harness, clip, options) {
   const result = {
     clipName: clip.originalName,
@@ -271,9 +246,8 @@ async function runPlaybackCPUFor(harness, clip, options) {
 }
 
 /**
- * Run an openClip pass and return the phase deltas + audio-track count.
- * The phases come from video-player.js's internal `mark()` calls — see the
- * side channel `window.__benchmarkLastOpenTimings`.
+ * Runs an openClip pass, returns phase deltas + audio-track count. Phases
+ * come from video-player.js's internal mark() calls via window.__benchmarkLastOpenTimings.
  */
 async function runOpenPhasesFor(harness, clip) {
   const before = getMem();
@@ -282,7 +256,7 @@ async function runOpenPhasesFor(harness, clip) {
   const total = performance.now() - start;
   const after = getMem();
 
-  // Convert cumulative phase offsets to per-phase deltas for readability.
+  // timings are cumulative; convert to per-phase deltas
   const phaseDeltas = [];
   if (captured?.timings) {
     const entries = Object.entries(captured.timings);
@@ -302,10 +276,7 @@ async function runOpenPhasesFor(harness, clip) {
   };
 }
 
-/**
- * Open clip, perform a burst of seeks across the timeline, measure end-to-end
- * latency, CPU consumed, and (when available) dropped frames.
- */
+/** seeks across the timeline, measures end-to-end latency, CPU, and dropped frames when available */
 async function runSeekBurstFor(harness, clip, options) {
   await openClipAndCaptureTimings(harness, clip);
   const video = document.getElementById('video-player');
@@ -369,9 +340,8 @@ async function runSeekBurstFor(harness, clip, options) {
 }
 
 /**
- * Heap + RSS footprint snapshot around an open. Lets the new clip render and
- * settle for 1s so background work (extracting audio tracks, decoding the
- * first frame, etc.) is included.
+ * Heap/RSS snapshot around an open; settles 1s after so background work
+ * (audio-track extraction, first-frame decode) is included.
  */
 async function runMemoryFootprintFor(harness, clip) {
   if (harness.appFunctions.closePlayer) {
@@ -399,9 +369,8 @@ async function runMemoryFootprintFor(harness, clip) {
 }
 
 /**
- * Each `runCompare_*` runs the corresponding bench against the single-track
- * and the multi-track example clip discovered by `categorizeClips()`, and
- * returns a `{ single, multi, missing }` shape the runner can print.
+ * Runs `perBucketFn` against categorizeClips()'s single/multi example clips;
+ * returns `{ single, multi, missing }` for the runner to print.
  */
 async function runCompare(harness, perBucketFn, label, options = {}) {
   const cats = await categorizeClips(harness.appFunctions.allClips, options.probeLimit);
@@ -425,9 +394,8 @@ async function runCompare(harness, perBucketFn, label, options = {}) {
     out.missing.push('multi');
   }
 
-  // Emit a structured marker so the runner CLI can print a comparison table.
-  // Renderer console.log doesn't reach the spawned Electron's stdout, so we
-  // route via the main-process IPC marker handler.
+  // renderer console.log doesn't reach the spawned Electron's stdout; route the
+  // comparison table through the main-process IPC marker handler instead
   try {
     await ipcRenderer.invoke('benchmark:outputMarker', 'AUDIO_TRACK_COMPARE', out);
   } catch (_) { /* ignore */ }

@@ -6,16 +6,8 @@ interface RailTagsProps {
   filter: UseLibraryFilter;
 }
 
-/**
- * The liked purple tag-filter system, rehomed from the legacy dropdown into the
- * rail (plan §5, "keep this"). Visual model ported verbatim from the legacy
- * `.tagv2-item`: a right-edge bar marks inclusion; normal click toggles a tag in
- * the persisted AND-exclusion set; Ctrl-click or the bar focuses a single tag
- * (temporary "only show this tag" OR mode).
- *
- * Only the tag LIST scrolls — the section header, search and show/hide actions
- * stay pinned, and the list fades out at the bottom instead of hard-cutting.
- */
+/** rehomed from the legacy dropdown (plan section 5, "keep this"); visual model ported from `.tagv2-item`
+ * click toggles the persisted AND-exclusion set; ctrl-click or the bar focuses one tag (temporary OR mode) */
 export default function RailTags({ filter }: RailTagsProps) {
   const [tagQuery, setTagQuery] = useState("");
   const { tags, globalTags, selectedCount, totalCount } = filter;

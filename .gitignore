@@ -43,3 +43,9 @@ main/ingest-key.generated.json
 # Cold-start benchmark: seeded profiles and per-run results
 benchmark/profiles/
 benchmark/results/
+
+# Claude Code guide (local only, same as AGENT.md)
+CLAUDE.md
+
+# local mcp config
+.mcp.json

@@ -39,11 +39,9 @@ const writeBool = (key: string, value: boolean) => {
 
 export default function App() {
   const [route, setRoute] = useState<Route>("library");
-  // Profile overlay (rendered over the routed view when set). Navigating via
-  // the sidebar clears it (see `navigate`). Wired to deep children via AppNav.
+  // profile overlay, over the routed view when set; navigate() clears it, wired to children via AppNav
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
-  // Read by `navigate` without re-creating it on every route change (its
-  // identity is a prop on the sidebar).
+  // read by navigate without recreating it each route change (its identity is a sidebar prop)
   const routeRef = useRef(route);
   routeRef.current = route;
   // Open rail switch, closed by the effect below once the new view has painted.
@@ -69,9 +67,7 @@ export default function App() {
   const filter = useLibraryFilter(lib.clips);
   const readySent = useRef(false);
 
-  // A small current-state bridge for the source benchmark runtime. Getters
-  // keep the runtime out of React's ownership while ensuring every scenario
-  // observes the latest hook state rather than the first render's snapshot.
+  // current-state bridge for the benchmark runtime; getters avoid stale first-render snapshots
   setBenchmarkContext({
     getClips: () => lib.clips,
     getFilteredClips: () => filter.filteredClips,
@@ -80,9 +76,8 @@ export default function App() {
     setQuery: filter.setQuery,
   });
 
-  // Post-silent-update confirmation ("Updated to vX") — main fires this once
-  // when the version we're running matches the update marker it wrote before
-  // restarting into the installer.
+  // post-silent-update confirmation (Updated to vX): main fires once the running
+  // version matches the update marker it wrote before restarting into the installer
   const toast = useToast();
   useEffect(() => {
     const unsubscribe = window.clips?.onAppUpdated?.((payload: { version?: string }) => {
@@ -91,9 +86,8 @@ export default function App() {
     return unsubscribe;
   }, [toast]);
 
-  // Navigation deep links from main (cliplib://settings/<section> — e.g. the
-  // clipdip tray icon opening Settings → Clipdip). The nonce makes repeated
-  // tray clicks re-apply the section even when it hasn't changed.
+  // deep links from main (cliplib://settings/<section>, e.g. tray icon opening
+  // Settings to Clipdip); nonce re-applies the section even on repeat clicks
   const [settingsIntent, setSettingsIntent] = useState<{ section?: string; nonce: number } | null>(null);
   useEffect(() => {
     const unsubscribe = window.clips?.onCliplibNavigate?.((payload: { view?: string; section?: string }) => {
@@ -105,10 +99,8 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // Keep-alive for the heavy routed views: once visited, library/feed stay
-  // mounted (hidden via .route-host) so switching back is a style flip instead
-  // of a full remount — rail-item switches cost 585-930ms in the 2026-07-08
-  // trace, almost all of it re-mounting the target view's grid.
+  // keep-alive: once visited, library/feed stay mounted (.route-host hidden) so
+  // switching is a style flip; remounting cost 585-930ms in the 2026-07-08 trace
   const visitedRoutes = useRef({ library: false, feed: false });
   if (route === "library") visitedRoutes.current.library = true;
   if (route === "feed") visitedRoutes.current.feed = true;
@@ -116,9 +108,7 @@ export default function App() {
   // Tag every telemetry event with the route the user was on.
   useEffect(() => setTelemetryRoute(route), [route]);
 
-  // Time the rail switch in the field. The double rAF puts the sample after the
-  // new view has actually painted, so it covers the first-mount cost the
-  // comment above is about, not just the React commit.
+  // double rAF samples after paint, covering first-mount cost, not just the React commit
   useEffect(() => {
     const pending = switchRef.current;
     if (!pending || pending.to !== route) return;
@@ -138,9 +128,8 @@ export default function App() {
     };
   }, [route]);
 
-  // Warm the online data shortly after launch, off the startup path: the
-  // registered-user map (grid popovers), own account, and the default feed
-  // page — so Feed/popovers open instantly instead of waiting ~1s each.
+  // warm online data off the startup path (user map, own account, default feed
+  // page) so Feed/popovers open instantly instead of ~1s each
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void import("./library/shareIdentity").then((m) => m.loadShareUsers());
@@ -155,10 +144,8 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // Rail mode. Two axes: `pinned` picks what the titlebar button toggles —
-  //   unpinned → button toggles `dynamic` (auto-collapse, hover to expand);
-  //   pinned   → button toggles `collapsed` (static width, no hover).
-  // Yields three modes: static-expanded, dynamic-hover, static-collapsed.
+  // rail mode: pinned picks what the button toggles (unpinned: dynamic, auto-collapse
+  // + hover; pinned: collapsed, static width), giving 3 modes total
   const [pinned, setPinned] = useState(() => readBool(PIN_KEY));
   const [dynamic, setDynamic] = useState(() => readBool(DYNAMIC_KEY));
   const [collapsed, setCollapsed] = useState(() => readBool(COLLAPSED_KEY));
@@ -190,29 +177,24 @@ export default function App() {
     }
   }, [pinned]);
 
-  // Logging out closes online-only surfaces: the feed route falls back to the
-  // library and any open profile page closes (both need authentication).
+  // logging out closes online-only surfaces: feed falls back to library, open profile closes
   const profile = useProfile();
   const loggedOut = !profile.connected && !profile.verifying;
   useEffect(() => {
     if (!loggedOut) return;
     setProfileUserId(null);
-    // Also drop the kept-alive feed — a cached feed must not stay browsable
-    // (or even mounted) once the user is logged out.
+    // drop the kept-alive feed too, it can't stay browsable once logged out
     visitedRoutes.current.feed = false;
     setRoute((prev) => (prev === "feed" ? "library" : prev));
   }, [loggedOut]);
 
-  // Live app settings (grid appearance + preview volume come from here so
-  // changes in the Settings view apply immediately).
+  // live settings, so grid appearance + preview volume changes apply immediately
   const { settings } = useSettings();
   const grayscaleIcons = Boolean(settings.iconGreyscale);
   const showNewIndicators = settings.showNewClipsIndicators !== false;
   const previewVolume = settings.previewVolume ?? 0.1;
 
-  // Escape exits an active tag focus ("only show this tag") — but not while the
-  // player is open, where Escape closes the player (handled by its own
-  // keybindings, bound on document only while a clip is open).
+  // Escape exits a temporary tag focus, unless the player is open (its own keybindings close it)
   const isTemporary = filter.tags.isTemporary;
   const clearFocus = filter.clearFocus;
   useEffect(() => {
@@ -227,19 +209,15 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [isTemporary, clearFocus]);
 
-  // Once the library grid is committed and its visible thumbnails have
-  // loaded, tell main: it reveals the window after the compositor has
-  // framed this state (a frame with undecoded thumbnails still needs
-  // hundreds of ms of GPU work, and Windows would show white meanwhile).
-  // Without a snapshot this fires when the folder scan lands.
+  // once the grid + visible thumbnails are ready, tell main to reveal after the
+  // compositor frames this; undecoded thumbnails cost 100s of ms of GPU work, else Windows shows white
   useEffect(() => {
     if (lib.loading || readySent.current) return;
     readySent.current = true;
     let cancelled = false;
     (async () => {
       bootMark('reveal_gate_start');
-      // img.decode() only settles on a rendering opportunity, which a hidden
-      // document rarely gets; poll the loaded state instead, briefly.
+      // img.decode() only settles on a render opportunity a hidden doc rarely gets; poll instead
       const loaded = () => {
         const imgs = [...document.querySelectorAll<HTMLImageElement>('.clip-item img')].slice(0, 24);
         const real = imgs.filter((img) => img.src.includes('thumbnail-cache'));
@@ -250,21 +228,18 @@ export default function App() {
         await new Promise((r) => setTimeout(r, 15));
       }
       bootMark('reveal_gate_decoded');
-      // Streaming mounts the grid a chunk per frame; wait (briefly) until it
-      // has filled the first viewport so the reveal shows a complete screen.
+      // streaming mounts a chunk per frame; wait briefly for the first viewport to fill
       const scroller = document.querySelector<HTMLElement>('.clip-scroll');
       const filled = () => !scroller || scroller.scrollHeight >= scroller.clientHeight + 120;
-      // (A timer, not requestAnimationFrame: in a window that has never been
-      // shown, rAF only fires when the compositor produces a frame.)
+      // timer, not rAF: a never-shown window's rAF only fires once the compositor frames it
       const fillDeadline = performance.now() + 250;
       while (!cancelled && !filled() && performance.now() < fillDeadline) {
         await new Promise((r) => setTimeout(r, 16));
       }
       if (cancelled) return;
       bootMark('reveal_gate_filled');
-      // Quiet the main thread for the reveal and promote the cards the
-      // animation will move, before the compositor frames the grid, so their
-      // textures exist when the animation starts.
+      // quiet the main thread and promote the cards the animation will move
+      // before the compositor frames the grid, so their textures already exist
       await prepareBootReveal();
       if (cancelled) return;
       window.clips?.rendererReady();
@@ -274,8 +249,7 @@ export default function App() {
     };
   }, [lib.loading]);
 
-  // The lazy route chunks are local files; fetch them once the library is up
-  // so the first visit to Settings or Feed never shows an empty pane.
+  // prefetch lazy route chunks (local files) once the library is up, so first visit isn't empty
   useEffect(() => {
     if (lib.loading) return;
     const timer = window.setTimeout(() => {
@@ -303,9 +277,7 @@ export default function App() {
       <div className={`app-body${railDynamic ? " rail-floating" : ""}`}>
         <Sidebar
           route={route}
-          /* Any online overlay (a profile page) lights up the Feed nav item —
-             profiles are reached from the feed, so the rail should reflect that
-             even when the underlying route is still the library. */
+          /* an open profile page lights up the Feed nav item too, since profiles are reached from feed */
           activeRoute={profileUserId ? "feed" : route}
           onNavigate={navigate}
           clips={lib.clips}
@@ -314,11 +286,8 @@ export default function App() {
           collapsed={railCollapsed}
         />
         <main className="app-main">
-          {/* Profile overlay takes precedence over the routed view. The routed
-              view stays MOUNTED (display:none via .route-host) so closing the
-              profile doesn't remount the feed/library — remounting re-ran the
-              feed's fetch + mounted every card in one commit (855ms freeze on
-              profile-back in the 2026-07-08 trace). */}
+          {/* profile overlay stays over the routed view, which stays MOUNTED (.route-host
+              hidden) so closing it doesn't remount feed/library (855ms freeze in the 2026-07-08 trace) */}
           {profileUserId ? (
             <Suspense fallback={null}>
               <ProfilePage userId={profileUserId} />
@@ -353,9 +322,7 @@ export default function App() {
           </div>
         </main>
       </div>
-      {/* Wrapped legacy player overlay (fixed; hidden until a clip is opened).
-          Fed the *filtered* list so prev/next walks the same clips the grid
-          shows (respecting the active search / tag focus), not the full library. */}
+      {/* legacy player overlay, fed the *filtered* list so prev/next matches the grid's search/tag focus */}
       <VideoPlayer
         clipLocation={lib.clipLocation}
         clips={filter.filteredClips}
@@ -363,11 +330,9 @@ export default function App() {
         removeClips={lib.removeClips}
         markClipsWatched={lib.markClipsWatched}
       />
-      {/* Feed player mounts once app-wide so any grid (feed route, profile
-          overlay) can open remote clips through the feedPlayerBus. */}
+      {/* feed player mounts app-wide so any grid can open remote clips via feedPlayerBus */}
       <FeedPlayer />
-      {/* One-time 3.0 intro + ClipDip setup. The gate loads the wizard chunk
-          only when it has to open; re-openable via __showOnboarding(). */}
+      {/* one-time 3.0 intro + ClipDip setup; wizard chunk loads only when opened, reopenable via __showOnboarding() */}
       <OnboardingGate />
     </div>
     </AppNavContext.Provider>

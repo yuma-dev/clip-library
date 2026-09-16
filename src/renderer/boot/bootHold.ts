@@ -1,21 +1,8 @@
-// A short hold on the renderer's background work around the boot reveal.
-//
-// Measured without it (benchmark/cold-start.js, reveal frame notes): the main
-// thread was mounting the rest of the 2,000-card grid at 64 cards per frame,
-// 80 to 100 ms a frame, right through the reveal. That made the compositor
-// miss frames of the reveal animation and delayed the window going opaque by
-// 300 ms. Nothing that work produces is visible during the intro (the cards
-// it mounts are below the fold), so it waits.
-//
-// Two levels:
-//  - streaming (useStreamedSlice) is held from just before renderer-ready,
-//    once the first viewport is filled, so the compositor frames a quiet
-//    document;
-//  - commits that touch every card (the fresh list reconcile, thumbnail
-//    paths, tag batches) are held only while the animation itself plays, so a
-//    fresh list that lands before the reveal still shows on the first frame.
-// Any user input releases everything at once: the user's intent wins over
-// the intro. A hard cap releases it regardless.
+// Holds the renderer's background grid work around the boot reveal. Unheld
+// mounting the 2,000-card grid at 64 cards/frame (80-100ms) dropped reveal
+// frames and delayed opaque by 300ms (measured in benchmark/cold-start.js).
+// Streaming holds until the first viewport fills; whole-grid commits hold only
+// while the animation plays. Any input, or a hard cap, releases everything.
 
 const HARD_CAP_MS = 5000;
 
@@ -26,10 +13,8 @@ const waiters: Array<() => void> = [];
 
 const INPUT_EVENTS = ["wheel", "keydown", "pointerdown", "touchstart"] as const;
 
-// A scroll wants the library to respond, not the intro to stop: it lifts the
-// streaming hold and tells the reveal (which restores hover) while the
-// visuals and sound play on. A press or key ends the intro so the action
-// lands on a library at rest.
+// a scroll only lifts the streaming hold (intro visuals/sound keep playing);
+// a press or key ends the intro entirely so the action lands on a library at rest
 const scrollWaiters: Array<() => void> = [];
 export function onScrollInput(cb: () => void): () => void {
   scrollWaiters.push(cb);
@@ -68,9 +53,8 @@ export function holdCommits(): void {
 
 const streamWaiters: Array<() => void> = [];
 
-// Set once main has revealed the window (with or without the intro). Before
-// that, frames in the hidden window are sparse and throughput is all that
-// matters, so pacing decisions wait for it.
+// set once main reveals the window; before that, frames are sparse in a
+// hidden window, so pacing decisions wait for this
 let revealed = false;
 export const markRevealed = (): void => {
   revealed = true;

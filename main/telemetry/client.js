@@ -1,21 +1,12 @@
-// HTTP transport. Speaks the same contract clipdip's Rust client does
-// (clipdip/crates/diagnostics/src/client.rs), plus the cliplib-only routes.
-//
-// Status contract:
-//   2xx             -> accepted, drop the batch
-//   429             -> retry after Retry-After seconds
-//   404 / 501       -> endpoint not deployed yet, RETRY with backoff
-//   other 4xx       -> permanent, DROP the batch (never retried)
-//   5xx / transport -> retry with backoff
-//
-// The 404 case matters during rollout: the client ships before the server grows
-// /v1/ingest, and treating "not deployed yet" as permanent would silently throw
-// away everything collected in the meantime. The queue is capped at 5000 lines
-// keeping the newest, so retrying an endpoint that never appears is bounded.
-//
-// Deliberately uses http/https directly rather than axios: this module is on
-// the startup path and axios is one of the lazy-loaded modules main.js works
-// hard to keep off it.
+// same contract as clipdip's Rust client (clipdip/crates/diagnostics/src/client.rs).
+//   2xx             accepted, drop batch
+//   429             retry after Retry-After seconds
+//   404 / 501       endpoint not deployed yet, retry with backoff
+//   other 4xx       permanent, drop batch (never retried)
+//   5xx / transport retry with backoff
+// 404 covers rollout (client ships before server grows the route); queue caps
+// at 5000 lines (newest kept) so retrying forever stays bounded.
+// uses http/https directly: this is on the startup path, axios is lazy-loaded elsewhere
 
 const http = require('http');
 const https = require('https');

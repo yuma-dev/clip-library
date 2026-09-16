@@ -15,15 +15,13 @@ import type { LocalClip } from "../library/types";
 
 interface SidebarProps {
   route: Route;
-  /** Nav highlight target — differs from `route` when an online overlay (a
-   *  profile page) is open, so the Feed item stays active over any route. */
+  /** differs from `route` when an online overlay (a profile page) is open, so Feed stays active */
   activeRoute: Route;
   onNavigate: (route: Route) => void;
   clips: LocalClip[];
   filter: UseLibraryFilter;
-  /** Dynamic (hover-to-expand) rail. */
+  /** hover-to-expand rail */
   dynamic: boolean;
-  /** Statically collapsed rail (no hover-expand). */
   collapsed: boolean;
 }
 
@@ -36,8 +34,7 @@ const COLLECTIONS: { id: Collection; label: string; icon: typeof Layers }[] = [
 
 const WEEK_MS = 7 * 86_400_000;
 
-// Nav rail — 300px primary surface (design handoff): merged logo+search, nav,
-// scrollable collections + tag filter, stat cards, real profile card.
+// 300px primary surface per design handoff
 function Sidebar({
   route,
   activeRoute,
@@ -48,7 +45,7 @@ function Sidebar({
   collapsed,
 }: SidebarProps) {
   const toast = useToast();
-  // Feed requires a ClipLib login — the nav item locks while logged out.
+  // feed requires a ClipLib login, the nav item locks while logged out
   const { connected, verifying } = useProfile();
   const feedLocked = !connected && !verifying;
 
@@ -67,12 +64,11 @@ function Sidebar({
     return { total: clips.length, week, untagged, trimmed, isNew };
   }, [clips]);
 
-  // Clip-folder disk usage — lazily fetched, refreshed slowly, nothing depends on it.
+  // clip-folder disk usage, lazily fetched and refreshed slowly; nothing depends on it
   const folderBytes = useClipsFolderSize();
 
-  // Collapsed-rail hover title — flies out to the right, over the grid. The
-  // rail clips its own overflow, so the tip is rendered as a fixed sibling and
-  // positioned from the hovered row's rect (delegated so every row is covered).
+  // tooltip is a fixed sibling positioned from the hovered row's rect (rail clips overflow);
+  // delegated for every row
   const [tip, setTip] = useState<{ label: string; y: number } | null>(null);
   const onRailOver = useCallback(
     (e: React.MouseEvent) => {
@@ -110,7 +106,6 @@ function Sidebar({
       onMouseOver={onRailOver}
       onMouseLeave={() => setTip(null)}
     >
-      {/* Merged logo → search field (syntax highlighting + #tag/@user autocomplete). */}
       <RailSearch filter={filter} clips={clips} />
 
       <nav className="rail-nav">
@@ -145,11 +140,11 @@ function Sidebar({
       <div className="rail-divider" />
 
       {route === "feed" ? (
-        /* Feed route: contextual filters replace the library sections. */
+        /* feed route: contextual filters replace the library sections */
         <FeedRailFilters />
       ) : (
         <>
-          {/* Collections stay pinned; only the tag list below scrolls. */}
+          {/* collections stay pinned; only the tag list below scrolls */}
           <div className="rail-section rail-section-fixed">
             <div className="rail-section-head">
               <span className="rail-section-title">Collections</span>
@@ -192,7 +187,7 @@ function Sidebar({
         </>
       )}
 
-      {/* App update pill (only rendered while an update is available/in flight). */}
+      {/* only renders while an update is available or in flight */}
       <UpdatePill />
 
       <RailProfile />

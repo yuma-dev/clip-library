@@ -1,15 +1,6 @@
-//! OAuth2 token handling for the RPC connection.
-//!
-//! The RPC handshake proves *which app* is connecting; to call privileged
-//! commands (reading the voice channel) we additionally need an access
-//! token whose scopes include `rpc` + `rpc.voice.read`. That token is
-//! obtained once via the `AUTHORIZE` popup (a `code` we exchange here for a
-//! token), then refreshed silently forever. The whole token pair is
-//! persisted: the access token (valid ~7 days) so reconnects can
-//! AUTHENTICATE without touching the token endpoint at all, and the
-//! refresh token plus its predecessor so a rotation lost mid-flight
-//! (crash, dropped response) can be recovered instead of stranding the
-//! install in re-authorization.
+//! OAuth2 tokens for the RPC connection: privileged commands need `rpc` +
+//! `rpc.voice.read`, obtained once via AUTHORIZE, refreshed silently.
+//! Persists access token (~7d) and prev refresh token to survive a lost rotation.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,9 +10,8 @@ use serde::{Deserialize, Serialize};
 
 const TOKEN_ENDPOINT: &str = "https://discord.com/api/oauth2/token";
 
-/// A ureq agent with real timeouts, so a stalled network call surfaces as an
-/// error (retryable) instead of wedging the manager thread — and the UI —
-/// on "Connecting…" forever.
+/// Real timeouts so a stalled call errors out (retryable) instead of
+/// wedging the manager thread (and UI) on "Connecting..." forever.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
@@ -41,8 +31,7 @@ pub struct TokenResponse {
     pub scope: String,
 }
 
-/// Wall-clock now as unix seconds. Instants don't survive restarts, so
-/// everything persisted uses this.
+/// Wall-clock unix seconds; instants don't survive restarts, so persisted state uses this.
 pub fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -50,12 +39,8 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Persisted between runs. The access token + expiry let a reconnect (or a
-/// PC restart) AUTHENTICATE without hitting the token endpoint, so the
-/// refresh token is only rotated near expiry. `prev_refresh_token` is the
-/// last refresh token that was used successfully — Discord keeps it valid
-/// until its successor is used, so it recovers a rotation whose response
-/// never made it to disk.
+/// access_token+expires_at let a reconnect AUTHENTICATE without hitting the
+/// token endpoint. prev_refresh_token recovers a rotation lost before it saved.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TokenStore {
     pub refresh_token: Option<String>,
@@ -95,10 +80,8 @@ impl TokenStore {
     }
 }
 
-/// Rolling log of consent-popup (AUTHORIZE) firings, plus when the "you
-/// can turn this off" overlay hint was last shown. Kept in its own file so
-/// hint bookkeeping (written from the app's UI side) can never race a
-/// token-rotation write to the token store.
+/// Consent-popup timestamps + last hint-shown time. Separate file so UI
+/// hint writes never race a token-store write.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PromptLog {
     /// Unix-seconds timestamps of consent popups, pruned to the last week.
@@ -130,10 +113,8 @@ impl PromptLog {
         Ok(())
     }
 
-    /// Record one consent popup, pruning entries older than a week. A record
-    /// within a minute of the previous one collapses into it: an update
-    /// restart can double-start the process and both halves AUTHORIZE, which
-    /// is one popup to the user, not two.
+    /// Prunes entries older than a week; collapses one within 60s of the last
+    /// so an update's double-started process doesn't count as two popups.
     pub fn record(config_dir: &Path) {
         let mut log = Self::load(config_dir);
         let now = now_unix();
@@ -146,13 +127,8 @@ impl PromptLog {
     }
 }
 
-/// Persisted marker that AUTHORIZE is pointless right now: Discord rejected
-/// the requested scopes (`invalid_scope`), which for this app means the
-/// account isn't on the App Testers allowlist (the `rpc` scope is gated).
-/// While present, auto-authorize stays quiet instead of popping a doomed
-/// consent dialog on every launch. Cleared by a manual Connect, and ignored
-/// once the app version changes — an update (or Discord-side approval)
-/// deserves one fresh attempt.
+/// Marks AUTHORIZE as pointless after Discord's invalid_scope (account not
+/// on the App Testers allowlist). Cleared by manual Connect or an app update.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AuthBlock {
     pub reason: String,
@@ -167,8 +143,7 @@ impl AuthBlock {
         config_dir.join("discord_auth_block.json")
     }
 
-    /// The block currently in force, if any. A block written by a different
-    /// app version is stale and reads as absent (and is removed).
+    /// Current block, if any; one from a different app version is stale and gets removed.
     pub fn load(config_dir: &Path) -> Option<Self> {
         let s = std::fs::read_to_string(Self::path(config_dir)).ok()?;
         let block: Self = serde_json::from_str(&s).ok()?;
@@ -196,15 +171,13 @@ impl AuthBlock {
     }
 }
 
-/// Distinguish "the refresh token is dead, must re-authorize" from a
-/// transient network hiccup, so the manager knows whether to prompt the
-/// user again or just retry later.
+/// Distinguishes a dead refresh token (re-authorize) from a transient
+/// network hiccup (just retry).
 #[derive(Debug)]
 pub enum TokenError {
-    /// `invalid_grant` — the refresh token was revoked or reset. The user
-    /// must authorize again.
+    /// invalid_grant: refresh token revoked/reset, user must re-authorize.
     InvalidGrant,
-    /// Anything else (network, 5xx, parse) — worth retrying as-is.
+    /// Anything else (network, 5xx, parse): retry as-is.
     Transient(anyhow::Error),
 }
 
@@ -255,11 +228,8 @@ fn post_token(form: &[(&str, &str)]) -> Result<TokenResponse, TokenError> {
         Ok(r) => r
             .into_json::<TokenResponse>()
             .map_err(|e| TokenError::Transient(anyhow!("parse token response: {e}"))),
-        // Only a 400 whose JSON error field is exactly `invalid_grant`
-        // means the grant is dead. Anything else — invalid_client (build
-        // problem), 429 (rate limit), 5xx, or an error message that merely
-        // mentions the string — must NOT be treated as "re-authorize":
-        // clearing the store for those throws away a working grant.
+        // Only 400 + error=="invalid_grant" means the grant is dead. Anything else
+        // (invalid_client, 429, 5xx) must not trigger re-auth or we'd toss a working grant.
         Err(ureq::Error::Status(code, r)) => {
             let body = r.into_string().unwrap_or_default();
             let error_code = serde_json::from_str::<serde_json::Value>(&body)

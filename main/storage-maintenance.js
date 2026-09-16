@@ -3,10 +3,8 @@ const fs = require('fs').promises;
 const { app } = require('electron');
 const logger = require('../utils/logger');
 
-// Everything here is best-effort housekeeping for userData files that
-// otherwise accumulate forever. Age thresholds are deliberately generous:
-// these files only matter for post-mortem debugging, and anything older
-// than a month has lost that value.
+// best-effort housekeeping for userData files that accumulate forever; 30 day
+// threshold is generous since these only matter for post-mortem debugging
 const MAX_AGE_DAYS = 30;
 
 async function pruneByAge(dir, matches, label) {
@@ -27,7 +25,7 @@ async function pruneByAge(dir, matches, label) {
           removed++;
         }
       } catch (_) {
-        // Skip files we can't stat or delete; never fail the sweep.
+        // skip files we can't stat or delete; never fail the sweep
       }
     }
   } catch (error) {
@@ -38,10 +36,8 @@ async function pruneByAge(dir, matches, label) {
   return removed;
 }
 
-// Prune stale userData accumulations:
-//  - settings.json.backup-<epoch> written on corrupt settings parses
-//  - diagnostics/diagnostics-*.zip bundles generated without an explicit
-//    save path (the save-dialog flow writes elsewhere and isn't touched)
+// prunes settings.json.backup-<epoch> (written on corrupt settings parses) and
+// diagnostics/diagnostics-*.zip bundles saved without an explicit path
 async function run() {
   const userDataPath = app.getPath('userData');
 

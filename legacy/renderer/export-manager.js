@@ -1,27 +1,10 @@
-/**
- * Export Manager Module
- *
- * Handles all export operations:
- * - Video exports (full and trimmed)
- * - Audio exports
- * - Export progress tracking
- */
-
-// Imports
+// export operations: full/trimmed video, audio, progress tracking
 const { ipcRenderer } = require('electron');
 const logger = require('../utils/logger');
 const state = require('./state');
 
-// Dependencies (injected)
 let videoPlayerModule, showExportProgress, showCustomAlert, getFfmpegVersion, getPlaybackRate;
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
-
-/**
- * Initialize the export manager with required dependencies
- */
 function init(dependencies) {
   videoPlayerModule = dependencies.videoPlayerModule;
   showExportProgress = dependencies.showExportProgress;
@@ -40,11 +23,7 @@ function getCurrentPlaybackRate() {
   return 1;
 }
 
-/**
- * Snapshot the active multi-track mix (if any) so the main process can
- * mix the per-track volumes / hide / mute states into the exported file.
- * Returns null when the current clip is single-track (default export path).
- */
+// per-track volume/hide/mute state for the main process to mix in; null if single-track
 function getActiveAudioMix() {
   if (!videoPlayerModule || typeof videoPlayerModule.getActiveAudioTracksManager !== 'function') {
     return null;
@@ -68,10 +47,6 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-// ============================================================================
-// EXPORT OPERATIONS
-// ============================================================================
-
 async function exportVideo(savePath = null) {
   try {
     const volume = await videoPlayerModule.loadVolume(state.currentClip.originalName);
@@ -92,7 +67,7 @@ async function exportVideo(savePath = null) {
       if (result.benchmark) {
         logger.info('[export] benchmark:', result.benchmark);
       }
-      showExportProgress(100, 100, !savePath); // Pass true for clipboard export when no savePath
+      showExportProgress(100, 100, !savePath); // no savePath means clipboard export
     } else {
       throw new Error(result.error);
     }
@@ -102,9 +77,6 @@ async function exportVideo(savePath = null) {
   }
 }
 
-/**
- * Export audio to file or clipboard.
- */
 async function exportAudio(savePath = null) {
   try {
     const volume = await videoPlayerModule.loadVolume(state.currentClip.originalName);
@@ -125,7 +97,7 @@ async function exportAudio(savePath = null) {
       if (result.benchmark) {
         logger.info('[export] benchmark:', result.benchmark);
       }
-      showExportProgress(100, 100, !savePath); // Pass true for clipboard export when no savePath
+      showExportProgress(100, 100, !savePath); // no savePath means clipboard export
     } else {
       throw new Error(result.error);
     }
@@ -135,9 +107,6 @@ async function exportAudio(savePath = null) {
   }
 }
 
-/**
- * Export the current trim to clipboard.
- */
 async function exportTrimmedVideo() {
   if (!state.currentClip) return;
 
@@ -149,7 +118,7 @@ async function exportTrimmedVideo() {
     logger.info(`Trim start: ${state.trimStartTime}, Trim end: ${state.trimEndTime}`);
     logger.info(`Volume: ${volume}, Speed: ${speed}`);
 
-    showExportProgress(0, 100, true); // Show initial progress
+    showExportProgress(0, 100, true);
 
     const result = await ipcRenderer.invoke(
       "export-trimmed-video",
@@ -166,7 +135,7 @@ async function exportTrimmedVideo() {
       if (result.benchmark) {
         logger.info('[export] benchmark:', result.benchmark);
       }
-      showExportProgress(100, 100, true); // Always clipboard export for trimmed video
+      showExportProgress(100, 100, true); // trimmed export is always clipboard
     } else {
       throw new Error(result.error);
     }
@@ -177,9 +146,6 @@ async function exportTrimmedVideo() {
   }
 }
 
-/**
- * Show a notice when software encoding is used.
- */
 function showFallbackNotice() {
   const existing = document.getElementById('export-fallback-notice');
   if (existing) existing.remove();
@@ -198,9 +164,6 @@ function showFallbackNotice() {
   });
 }
 
-/**
- * Show a notice when hardware decode falls back to software decode.
- */
 function showDecodeFallbackNotice(payload = {}) {
   const existing = document.getElementById('decode-fallback-notice');
   if (existing) existing.remove();
@@ -241,15 +204,9 @@ function showDecodeFallbackNotice(payload = {}) {
   }
 }
 
-// ============================================================================
-// EXPORTS
-// ============================================================================
-
 module.exports = {
-  // Initialization
   init,
 
-  // Export operations
   exportVideo,
   exportAudio,
   exportTrimmedVideo,

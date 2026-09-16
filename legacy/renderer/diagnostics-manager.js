@@ -1,16 +1,9 @@
-/**
- * Diagnostics Manager Module
- *
- * Handles diagnostics bundle generation and progress reporting.
- */
-
-// Imports
+// diagnostics bundle generation and progress reporting
 const { ipcRenderer, shell } = require('electron');
 const logger = require('../utils/logger');
 const consoleBuffer = require('../utils/console-log-buffer');
 const state = require('./state');
 
-// Status labels
 const DIAGNOSTICS_STAGE_LABELS = {
   initializing: 'Preparing workspace',
   'system-info': 'Collecting system info',
@@ -26,7 +19,6 @@ let uploadLogsButtonDefaultLabel = 'Upload Logs';
 let uploadLogsCopyTimeout = null;
 let initialized = false;
 
-// Formatting helpers
 function formatBytes(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '';
@@ -45,7 +37,6 @@ function formatBytes(value) {
   return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
-// UI helpers
 function setDiagnosticsStatusMessage(message, statusState = 'info') {
   if (!state.diagnosticsStatusEl) return;
   state.diagnosticsStatusEl.textContent = message;
@@ -100,9 +91,6 @@ async function copyToClipboard(text) {
   }
 }
 
-/**
- * Update diagnostics status UI based on progress payload.
- */
 function updateDiagnosticsStatus(progress) {
   if (!state.diagnosticsStatusEl) return;
   const label = DIAGNOSTICS_STAGE_LABELS[progress.stage] || progress.stage;
@@ -123,7 +111,6 @@ function updateDiagnosticsStatus(progress) {
   state.diagnosticsStatusEl.dataset.state = 'progress';
 }
 
-// Action handlers
 async function handleDiagnosticsGeneration() {
   if (state.diagnosticsInProgress) return;
 
@@ -212,7 +199,6 @@ async function handleLogsUpload() {
   }
 }
 
-// Module API
 function init({ generateDiagnosticsBtn, diagnosticsStatusEl, uploadLogsBtn, uploadLogsStatusEl } = {}) {
   if (initialized) return;
 

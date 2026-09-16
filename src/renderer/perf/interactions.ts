@@ -1,14 +1,6 @@
-// Interaction correlation (dev-only).
-//
-// The point: "opening a clip felt slow" should resolve into the whole causal
-// chain — the click, the get-clip-info / extract-audio-tracks IPC it triggered,
-// the long tasks, the first paint — not a scatter of unrelated numbers.
-//
-// We open a span on user input (or a manual mark()) and keep it open until
-// things go QUIET: any IPC call or long frame refreshes a watchdog; when nothing
-// happens for SETTLE_MS, the span closes. That captures async chains a fixed
-// "one paint later" span would miss, while still ending on its own. A hard cap
-// stops a runaway (e.g. a background poll) from holding it open forever.
+// dev-only: resolves "opening a clip felt slow" into the whole causal chain (click, IPC
+// long tasks, paint) instead of scattered numbers. a span opens on input and stays open until
+// SETTLE_MS of quiet (IPC/long frame refresh the watchdog); MAX_MS caps a runaway chain
 
 import { span, reportInteraction, TID, wallMs } from "./trace";
 
@@ -52,7 +44,7 @@ export function beginInteraction(label: string): void {
   noteActivity();
 }
 
-/** Refresh the settle watchdog — called by the IPC + frame probes. */
+/** Refresh the settle watchdog, called by the IPC + frame probes. */
 export function noteActivity(): void {
   if (!current) return;
   if (settleTimer) clearTimeout(settleTimer);

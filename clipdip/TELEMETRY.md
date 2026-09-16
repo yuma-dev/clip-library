@@ -104,8 +104,8 @@ again; delete `HKCU\Software\Clipdip` to remove it entirely.
 
 ## Changelog
 
-- 2026-07: v2 — added machine_key (random, registry), hardware profile block,
+- 2026-07: v2, added machine_key (random, registry), hardware profile block,
   sessions with end reasons, event severities, and ~35 new failure signals.
   This document was introduced with v2.
-- 2025/2026 v1 — install_id + app version heartbeat, capture failure events,
+- 2025/2026 v1, install_id + app version heartbeat, capture failure events,
   manual bundles.

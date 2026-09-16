@@ -1,4 +1,3 @@
-// Imports
 const { app, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
@@ -7,27 +6,23 @@ const telemetry = require('./telemetry');
 const thumbnailsModule = require('./thumbnails');
 const { mapLimit } = require('../utils/pool');
 
-// Concurrent fs.stat calls during a library walk.
+// concurrent fs.stat calls during a library walk
 const STAT_CONCURRENCY = 32;
 const { logActivity } = require('../utils/activity-tracker');
 
-// Supported video extensions
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov']);
 
-// Size of the library as of the last successful getClips(). Kept so callers
-// that only need the count (telemetry) never trigger another tree walk.
-// null means "no successful scan yet this session".
+// count from the last successful getClips(); kept so callers that only need
+// the count (telemetry) skip a rescan. null = no successful scan yet this session
 let lastClipCount = null;
 
-/**
- * Recursively walk a directory and collect video files with their relative paths.
- * Skips directories starting with '.' (like .clip_metadata) and 'icons'.
- * @param {string} dir - Current directory to scan
- * @param {string} baseDir - Root clip directory (for computing relative paths)
- * @param {number} [depth] - Recursion depth, for telemetry only
- * @param {object} [statFailures] - Shared stat-failure tally; only the
- *        top-level call reports it, so one walk emits one event.
- * @returns {Promise<Array<{name: string, date: Date}>>} Array of clip entries
+/** skips dirs starting with '.' and 'icons'. statFailures tallies stat
+ * errors across the recursion; only the top-level call reports the event
+ * @param {string} dir
+ * @param {string} baseDir
+ * @param {number} [depth]
+ * @param {object} [statFailures]
+ * @returns {Promise<Array<{name: string, date: Date}>>}
  */
 async function walkClips(dir, baseDir, depth = 0, statFailures = null) {
   const dropped = statFailures || { count: 0, errno: undefined };
@@ -47,10 +42,8 @@ async function walkClips(dir, baseDir, depth = 0, statFailures = null) {
     return [];
   }
 
-  // Recurse into subdirectories concurrently; stat files through a bounded
-  // pool. A sequential await-per-file walk costs ~180µs × N clips, while an
-  // unbounded fan-out queues thousands of stats on the libuv threadpool at
-  // once and starves every other file operation during startup.
+  // bounded stat pool: sequential costs ~180us x N clips; unbounded fan-out
+  // queues thousands of stats on the libuv threadpool and starves other file ops at startup
   const dirs = [];
   const files = [];
   for (const entry of entries) {
@@ -69,7 +62,7 @@ async function walkClips(dir, baseDir, depth = 0, statFailures = null) {
       return { name: relativePath, date: st.mtime };
     } catch (error) {
       logger.error(`Error reading stats for ${fullPath}:`, error);
-      // Tallied, not reported per file: one bad drive drops thousands.
+      // tallied, not reported per file: one bad drive drops thousands
       dropped.count += 1;
       if (!dropped.errno) dropped.errno = error.code;
       return null;
@@ -86,12 +79,8 @@ async function walkClips(dir, baseDir, depth = 0, statFailures = null) {
   return clips;
 }
 
-/**
- * Convert a clip's relative path (originalName) into a flat filename
- * safe for use as a metadata file key in .clip_metadata/.
- * e.g., "highlights/gameplay.mp4" -> "highlights--gameplay.mp4"
- * Root clips like "gameplay.mp4" are returned unchanged.
- */
+/** flattens a relative clip path into a safe .clip_metadata/ key, e.g.
+ * "highlights/gameplay.mp4" becomes "highlights--gameplay.mp4"; root clips are unchanged */
 function metadataSafeName(clipName) {
   return clipName.replace(/\//g, '--');
 }
@@ -99,19 +88,14 @@ function metadataSafeName(clipName) {
 // Module state
 let periodicSaveInterval = null;
 
-/**
- * Path to the last-clips snapshot file.
- */
 function getLastClipsFilePath() {
   return path.join(app.getPath('userData'), 'last-clips.json');
 }
 
-/**
- * Snapshot the current clip list for next-session comparison.
- */
+// snapshots the current clip list for next-session comparison
 async function saveCurrentClipList(getSettings) {
   const LAST_CLIPS_FILE = getLastClipsFilePath();
-  // Which step we died on, for telemetry only.
+  // which step we died on, for telemetry only
   let stage = 'scan';
 
   try {
@@ -159,26 +143,20 @@ async function saveCurrentClipList(getSettings) {
       const tempFile = LAST_CLIPS_FILE + '.tmp';
       await fs.unlink(tempFile);
     } catch (cleanupError) {
-      // Ignore cleanup errors
     }
   }
 }
 
-/**
- * Path to the watched-clips file: the set of clips the user has ever opened
- * in the player. A clip is "new" until it appears in this set.
- */
+/** watched-clips file: clips the user has opened in the player; a clip is
+ * "new" until it appears here */
 function getWatchedClipsFilePath() {
   return path.join(app.getPath('userData'), 'watched-clips.json');
 }
 
-// In-memory watched set, loaded once per process. null = not loaded yet.
+// in-memory watched set, loaded once per process; null = not loaded yet
 let watchedClips = null;
 
-/**
- * Load the watched set from disk into `watchedClips`.
- * Returns false when the file doesn't exist yet (pre-migration installs).
- */
+/** loads into watchedClips; returns false if the file doesn't exist yet (pre-migration installs) */
 async function loadWatchedClips() {
   if (watchedClips) return true;
   let data = null;
@@ -190,20 +168,19 @@ async function loadWatchedClips() {
   } catch (error) {
     if (error.code !== 'ENOENT') {
       logger.error('Error reading watched clips file:', error);
-      // Every clip in the library gets re-flagged as new after this.
+      // every clip in the library gets re-flagged as new after this
       telemetry.event('watched_clips_reset', {
         kind: telemetry.KIND.DATA_LOSS,
         severity: telemetry.SEVERITY.ERROR,
         context: {
-          // The in-memory set is always empty here (we only get this far when
-          // it has not been loaded yet); file_bytes carries the real magnitude.
+          // set is always empty here (not loaded yet); file_bytes carries the real magnitude
           prior_size: watchedClips ? watchedClips.size : 0,
           file_bytes: data == null ? 0 : Buffer.byteLength(data, 'utf8'),
           errno: error.code
         },
         error
       });
-      // Unreadable/corrupt: start over rather than flagging the whole library.
+      // unreadable/corrupt: start over rather than flagging the whole library
       watchedClips = new Set();
       return true;
     }
@@ -223,14 +200,11 @@ async function saveWatchedClips() {
     try {
       await fs.unlink(tempFile);
     } catch {
-      // Ignore cleanup errors
     }
   }
 }
 
-/**
- * Record that clips were opened in the player, so they stop counting as new.
- */
+// records clips opened in the player, so they stop counting as new
 async function markClipsWatched(clipNames) {
   const names = (Array.isArray(clipNames) ? clipNames : [clipNames]).filter(Boolean);
   if (names.length === 0) return;
@@ -245,23 +219,15 @@ async function markClipsWatched(clipNames) {
   if (changed) await saveWatchedClips();
 }
 
-/**
- * "New" clips = clips on disk the user has never opened in the player.
- *
- * Migration: installs that predate watched tracking only have the old
- * last-clips.json session snapshot. Its contents seed the watched set —
- * anything that wasn't "new since last session" under the old scheme is
- * treated as already watched, so highlights carry over unchanged. With
- * neither file (true first run) the whole library is seeded as watched.
- */
+/** "new" = never opened in the player. Migration: pre-tracking installs seed
+ * watched from the old last-clips.json snapshot; true first run (neither file) seeds the whole library as watched */
 async function getNewClipsInfo(getSettings, knownNames) {
   try {
     const settings = await getSettings();
     const clipsFolder = settings?.clipLocation;
     if (!clipsFolder) return { newClips: [], totalNewCount: 0 };
 
-    // The renderer passes the names from the get-clips scan it just did;
-    // only walk the library again when nobody did.
+    // renderer passes names from its own get-clips scan; only walk again if it didn't
     const currentClips = Array.isArray(knownNames)
       ? knownNames
       : (await walkClips(clipsFolder, clipsFolder)).map((file) => file.name);
@@ -273,8 +239,8 @@ async function getNewClipsInfo(getSettings, knownNames) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed.clips)) previousClips = parsed.clips;
       } catch (error) {
-        // Missing/corrupt snapshot -> treat as first run below. A missing file
-        // is the normal pre-migration case; anything else lost the seed.
+        // missing/corrupt snapshot: treated as first run below. missing file
+        // is the normal pre-migration case; anything else lost the seed
         if (error.code !== 'ENOENT') {
           telemetry.event('watched_migration_failed', {
             kind: telemetry.KIND.SILENT_FAILURE,
@@ -293,7 +259,7 @@ async function getNewClipsInfo(getSettings, knownNames) {
       await saveWatchedClips();
     }
 
-    // Prune deleted clips so the file doesn't grow forever.
+    // prune deleted clips so the file doesn't grow forever
     const current = new Set(currentClips);
     const before = watchedClips.size;
     for (const name of watchedClips) {
@@ -314,33 +280,10 @@ async function getNewClipsInfo(getSettings, knownNames) {
   }
 }
 
-/**
- * Retrieves clip information for a newly detected clip file.
- * 
- * This function gathers metadata about a clip, prioritizing recording timestamps
- * from metadata files over filesystem timestamps when available. It creates a
- * basic clip info object without any trim or editing data.
- * 
- * @async
- * @param {Function} getSettings - Async function that returns the application settings object
- * @param {string} fileName - The name of the clip file (including extension)
- * @returns {Promise<Object>} A promise that resolves to a clip info object containing:
- *   @returns {string} return.originalName - The original filename of the clip
- *   @returns {string} return.customName - The filename without extension, used as default display name
- *   @returns {number} return.createdAt - Timestamp in milliseconds (prioritizes recording time from metadata, falls back to file creation time)
- *   @returns {Array} return.tags - An empty array initialized for future tag assignment
- * 
- * @throws {Error} If the file cannot be accessed or stat() fails
- * 
- * @example
- * const clipInfo = await getNewClipInfo(getSettings, 'gameplay_2024.mp4');
- * // Returns:
- * // {
- * //   originalName: 'gameplay_2024.mp4',
- * //   customName: 'gameplay_2024',
- * //   createdAt: 1704067200000,
- * //   tags: []
- * // }
+/** recording timestamp from metadata beats file creation time when available
+ * @param {Function} getSettings
+ * @param {string} fileName
+ * @returns {Promise<Object>}
  */
 async function getNewClipInfo(getSettings, fileName) {
   const settings = await getSettings();
@@ -348,14 +291,13 @@ async function getNewClipInfo(getSettings, fileName) {
   const metadataFolder = path.join(settings.clipLocation, ".clip_metadata");
   const datePath = path.join(metadataFolder, `${metadataSafeName(fileName)}.date`);
   const stats = await fs.stat(filePath);
-  
-  // Default to file system time
+
+  // default to file system time
   let createdAt = stats.birthtimeMs || stats.ctimeMs;
 
-  // Try to read recording timestamp from metadata if available
   try {
     const dateStr = await fs.readFile(datePath, "utf8");
-    // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
+    // ISO 8601, e.g. "2023-08-02T22:07:31+02:00"
     const recordingDate = new Date(dateStr);
     if (!isNaN(recordingDate.getTime())) {
       createdAt = recordingDate.getTime();
@@ -365,15 +307,13 @@ async function getNewClipInfo(getSettings, fileName) {
     if (error.code !== "ENOENT") {
       logger.error("Error reading date metadata for new clip:", error);
     }
-    // If date file doesn't exist or is invalid, keep using the file system time
   }
-  
-  // Create bare minimum clip info without any trim data
+
   const newClipInfo = {
     originalName: fileName,
     customName: path.basename(fileName, path.extname(fileName)),
     createdAt: createdAt,
-    tags: [] // Initialize with empty tags array
+    tags: []
   };
 
   return newClipInfo;
@@ -396,28 +336,10 @@ function stopPeriodicSave() {
   }
 }
 
-/**
- * Reads the clips directory, collects metadata for each video file,
- * and returns normalized clip information sorted by newest first.
- *
- * - Supports .mp4, .avi, .mov
- * - Skips non-existent files
- * - Reads optional metadata files (.customname, .trim, .date)
- * - Falls back cleanly when metadata is missing
- *
- * @param {Function} getSettings
- *        Async function that resolves to an object containing at least:
- *        { clipLocation: string }
- *
- * @returns {Promise<Array<{
- *   originalName: string,
- *   customName: string,
- *   createdAt: number,
- *   thumbnailPath: string,
- *   isTrimmed: boolean
- * }>>}
- * Resolves to an array of clip metadata objects.
- * Returns an empty array on failure.
+/** newest first; .mp4/.avi/.mov; missing optional metadata files
+ * (.customname/.trim/.date) fall back cleanly. returns [] on failure
+ * @param {Function} getSettings - resolves to { clipLocation: string }
+ * @returns {Promise<Array<{originalName: string, customName: string, createdAt: number, thumbnailPath: string, isTrimmed: boolean}>>}
  */
 async function getClips(getSettings) {
   const settings = await getSettings();
@@ -427,28 +349,22 @@ async function getClips(getSettings) {
   const scanStartedAt = Date.now();
 
   try {
-    // Dev profiler spans (no-op in production — global.__perf only exists in dev).
+    // dev profiler spans, no-op in production (global.__perf only exists in dev)
     const tScan = global.__perf?.now();
     const files = await walkClips(clipsFolder, clipsFolder);
     if (tScan != null) global.__perf.fsSpan('scan-clips-dir', tScan, global.__perf.now() - tScan, { clips: files.length });
-    // Sort by date descending (newest first)
     files.sort((a, b) => b.date.getTime() - a.date.getTime());
 
     const tMeta = global.__perf?.now();
 
-    // One readdir of .clip_metadata instead of ~3 existence probes per clip:
-    // most clips have no .customname/.trim/.date file, so probing costs
-    // thousands of ENOENT round-trips through the fs thread pool for nothing.
-    // Lowercased on both sides: NTFS is case-insensitive, so a clip whose
-    // on-disk casing drifted from its metadata file's casing must still match
-    // (the old fs.access probes were case-insensitive too).
+    // one readdir instead of ~3 ENOENT probes per clip through the fs thread
+    // pool; lowercased both sides since NTFS is case-insensitive and casing can drift
     let metadataFiles = new Set();
     try {
       metadataFiles = new Set((await fs.readdir(metadataFolder)).map((f) => f.toLowerCase()));
     } catch (error) {
-      // Folder missing -> no metadata exists; the Set stays empty. Any other
-      // errno means the metadata is there but unreadable, so every clip in the
-      // library silently loses its custom name and trim flag.
+      // missing folder: no metadata, Set stays empty. any other errno means
+      // metadata exists but is unreadable, so every clip loses its custom name/trim flag silently
       if (error.code !== 'ENOENT') {
         telemetry.event('clip_metadata_dir_unreadable', {
           kind: telemetry.KIND.DATA_LOSS,
@@ -463,7 +379,7 @@ async function getClips(getSettings) {
     const clipInfoPromises = files
       .map(async (file) => {
         const fullPath = path.join(clipsFolder, file.name);
-        // walkClips() stat'ed this file moments ago — no existence re-check.
+        // walkClips() stat'ed this file moments ago, no existence re-check
 
         const safeName = metadataSafeName(file.name);
         let customName = path.basename(file.name, path.extname(file.name));
@@ -478,11 +394,11 @@ async function getClips(getSettings) {
           }
         }
 
-        // Recording timestamp beats file mtime when present.
+        // recording timestamp beats file mtime when present
         if (hasMetadata(`${safeName}.date`)) {
           try {
             const dateStr = await fs.readFile(path.join(metadataFolder, `${safeName}.date`), "utf8");
-            // Parse ISO 8601 date string (e.g., "2023-08-02T22:07:31+02:00")
+            // ISO 8601, e.g. "2023-08-02T22:07:31+02:00"
             const recordingDate = new Date(dateStr);
             if (!isNaN(recordingDate.getTime())) {
               createdAt = recordingDate.getTime();
@@ -503,14 +419,14 @@ async function getClips(getSettings) {
         };
       });
 
-    const clipInfos = (await Promise.all(clipInfoPromises)).filter(Boolean); // Remove null entries
+    const clipInfos = (await Promise.all(clipInfoPromises)).filter(Boolean);
     if (tMeta != null) global.__perf.span('read-clip-metadata', tMeta, global.__perf.now() - tMeta, { clips: clipInfos.length });
     telemetry.metric('library_scan_ms', Date.now() - scanStartedAt, { unit: 'ms' });
     lastClipCount = clipInfos.length;
     return clipInfos;
   } catch (error) {
     logger.error("Error reading directory:", error);
-    // The library renders empty, which reads to the user as "no clips".
+    // library renders empty, which reads to the user as "no clips"
     telemetry.event('clips_scan_failed', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.ERROR,
@@ -521,13 +437,10 @@ async function getClips(getSettings) {
   }
 }
 
-/**
- * Recursively sum the byte size of every file under `dir`. Mirrors walkClips'
- * concurrent stat strategy but counts ALL files (videos, thumbnails, metadata)
- * so the total reflects the folder's real disk footprint.
- */
+/** mirrors walkClips' concurrent stat strategy but counts every file (video,
+ * thumbnail, metadata) for the folder's real disk footprint */
 async function dirSize(dir, failures = null) {
-  // Shared tally so one sweep reports once instead of per unreadable entry.
+  // shared tally so one sweep reports once instead of per unreadable entry
   const failed = failures || { count: 0, errno: undefined };
   let entries;
   try {
@@ -553,7 +466,7 @@ async function dirSize(dir, failures = null) {
   });
   const total = (await Promise.all(tasks)).reduce((a, b) => a + b, 0);
   if (!failures && failed.count > 0) {
-    // Under-reported size looks like the user freed space they still use.
+    // under-reported size looks like the user freed space they still use
     telemetry.event('folder_size_underreported', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.WARNING,
@@ -563,17 +476,13 @@ async function dirSize(dir, failures = null) {
   return total;
 }
 
-// Cached folder-size result so repeated renderer polls don't re-walk the tree.
-// Nothing depends on this value being fresh, so a stale-but-cheap hit within
-// the TTL is preferred over another full stat sweep.
+// cached so repeated renderer polls don't re-walk the tree; nothing needs
+// this fresh, so a stale-but-cheap hit within TTL beats another sweep
 let folderSizeCache = { location: null, bytes: 0, at: 0 };
-const FOLDER_SIZE_TTL = 4 * 60 * 1000; // 4 min — comfortably below the 5-min poll.
+const FOLDER_SIZE_TTL = 4 * 60 * 1000; // 4 min, comfortably below the 5-min poll
 
-/**
- * Total disk usage (bytes) of the configured clip folder. Recomputed at most
- * once per TTL; returns the cached value instantly otherwise. Runs entirely in
- * the main process off the UI thread, so it never touches renderer perf.
- */
+/** total bytes of the clip folder; recomputed at most once per TTL, cached
+ * otherwise. runs in the main process, never touches renderer perf */
 async function getClipsFolderSize(getSettings) {
   const settings = await getSettings();
   const clipsFolder = settings?.clipLocation;
@@ -594,27 +503,21 @@ async function getClipsFolderSize(getSettings) {
     return { bytes };
   } catch (error) {
     logger.error('Error computing clips folder size:', error);
-    // Fall back to the last known value rather than flashing 0.
+    // fall back to the last known value rather than flashing 0
     return { bytes: folderSizeCache.location === clipsFolder ? folderSizeCache.bytes : 0 };
   }
 }
 
-/**
- * Helper function for delays
- * @param {number} ms - Milliseconds to delay
- * @returns {Promise<void>}
- */
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Delete a clip and all its associated metadata
- * @param {string} clipName - Name of the clip to delete
- * @param {Function} getSettings - Function that returns settings
- * @param {Object} thumbnailsModule - Thumbnails module for path generation
- * @param {Object} videoPlayer - Optional video player element to clear
- * @returns {Promise<Object>} Result object with success status
+/** deletes a clip and its metadata (.customname/.trim/thumbnail)
+ * @param {string} clipName
+ * @param {Function} getSettings
+ * @param {Object} thumbnailsModule
+ * @param {Object} videoPlayer
+ * @returns {Promise<Object>}
  */
 async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) {
   const settings = await getSettings();
@@ -631,34 +534,29 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
     videoPlayer.src = "";
   }
 
-  const maxRetries = 50; // Up to ~5 seconds total retry time
+  const maxRetries = 50; // ~5s total retry time
   const retryDelay = 100; // 0.1 s between attempts
 
-  // Telemetry only: which mechanism produced the last error, and its errno.
+  // telemetry only: which mechanism produced the last error, and its errno
   let via = process.platform === 'win32' ? 'trash' : 'unlink';
   let retryErrno;
 
   for (let retry = 0; retry < maxRetries; retry++) {
     try {
-      // Try deleting immediately; we'll retry quickly if the file is still busy.
       for (const file of filesToDelete) {
         try {
           if (process.platform === 'win32') {
-            // Move the file to the Recycle Bin for a more native deletion behaviour
             via = 'trash';
             await shell.trashItem(file);
           } else {
-            // Fallback for non-Windows platforms (should not be hit in our use-case)
             via = 'unlink';
             await fs.unlink(file);
           }
         } catch (e) {
-          // If trashing failed because the file is missing, continue silently
           if (e.code === 'ENOENT') {
             continue;
           }
 
-          // If trashing failed for another reason on Windows, fall back to a direct unlink
           if (process.platform === 'win32') {
             try {
               via = 'unlink';
@@ -672,15 +570,14 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
             }
           }
 
-          // Throw other unexpected errors so the retry logic can handle them
+          // let unexpected errors reach the retry logic below
           throw e;
         }
       }
 
-      // Log deletion activity
       logActivity('delete', { clipName });
       if (retry > 0) {
-        // Locked files cost up to ~5s of retries today with nothing reported.
+        // locked files cost up to ~5s of retries today with nothing reported
         telemetry.event('clip_delete_retried', {
           kind: telemetry.KIND.DEGRADED,
           severity: telemetry.SEVERITY.INFO,
@@ -691,7 +588,6 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
       return { success: true };
     } catch (error) {
       if ((error.code === "EBUSY" || error.code === "EPERM") && retry < maxRetries - 1) {
-        // If the file is busy and we haven't reached max retries, wait and try again
         retryErrno = error.code;
         await delay(retryDelay);
       } else {
@@ -707,7 +603,6 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
     }
   }
 
-  // If we've exhausted all retries
   return {
     success: false,
     error: "Failed to delete clip after multiple attempts. The file may be in use.",
@@ -715,10 +610,9 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
 }
 
 /**
- * Reveal a clip in the file explorer
- * @param {string} clipName - Name of the clip to reveal
- * @param {Function} getSettings - Function that returns settings
- * @returns {Promise<Object>} Result object with success status
+ * @param {string} clipName
+ * @param {Function} getSettings
+ * @returns {Promise<Object>}
  */
 async function revealClip(clipName, getSettings) {
   try {
@@ -732,9 +626,8 @@ async function revealClip(clipName, getSettings) {
   }
 }
 
-/**
- * Clip count from the last successful getClips(), without rescanning.
- * @returns {number|null} null when no scan has succeeded yet.
+/** count from the last successful getClips(), no rescan
+ * @returns {number|null} null if none yet
  */
 function getLastClipCount() {
   return lastClipCount;

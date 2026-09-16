@@ -62,9 +62,8 @@ function ClipGrid({
   clipsRef.current = clips;
   const menuHostRef = useRef<ContextMenuHandle>(null);
   const [hover, setHover] = useState<LibraryHover | null>(null);
-  // Columns and row height of the rendered grid, for the intrinsic size of
-  // groups the browser skips (content-visibility: auto). Measured from the
-  // first rendered group after mount and again on resize.
+  // Columns + row height of the grid, for content-visibility-skipped groups'
+  // intrinsic size. Measured after mount and on resize.
   const [layoutHint, setLayoutHint] = useState<GridLayoutHint | null>(null);
   useEffect(() => {
     const grid = gridRef.current;
@@ -96,15 +95,9 @@ function ClipGrid({
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
   const toast = useToast();
 
-  // Shared visibility observer (hard-won §4.2), created lazily on first observe.
-  // While the boot intro plays, entries are held back rather than applied:
-  // toggling content-visibility mid-animation repainted tiles inside the
-  // moving body (111 raster batches in one launch trace). They are not
-  // dropped: an observer reports each element once when it is first
-  // observed and then only on changes, so a dropped first report left cards
-  // mounted during the hold un-culled for the session (1,000 fully painted
-  // offscreen cards made every compositing update cost 47 ms, and scrolling
-  // with the cursor on the grid ran at 79 ms a frame).
+  // Shared visibility observer, created lazily on first observe. Boot intro
+  // holds entries rather than dropping them (a lost first report would leave
+  // cards un-culled all session: 1,000 painted offscreen cards cost 47ms compositing, 79ms scroll frames).
   const pendingCullRef = useRef<Map<HTMLElement, boolean>>(new Map());
   const observe = useCallback<ObserveFn>((el) => {
     if (!observerRef.current) {
@@ -128,10 +121,8 @@ function ClipGrid({
           }
           for (const entry of entries) apply(entry.target as HTMLElement, !entry.isIntersecting);
         },
-        // Three screens of lead: at wheel speed (12,000 px/s measured) rows
-        // are un-culled a dozen frames before they show, so the un-cull
-        // layout and paint spread out instead of landing on the frames the
-        // rows appear in. Everything further stays culled.
+        // Three screens of lead: at 12,000px/s wheel speed, rows un-cull a
+        // dozen frames before showing so layout/paint don't land on the frame they appear in.
         { root: scrollRef.current, rootMargin: "3000px 0px" },
       );
     }
@@ -155,13 +146,9 @@ function ClipGrid({
     hover?.setClipLocation(clipLocation);
   }, [hover, clipLocation]);
 
-  // No hover while scrolling. With the cursor resting on the grid, every card
-  // passing under it gained and lost :hover: a transform transition and the
-  // shadow each promote a layer, and each layer change re-ran compositing
-  // over every mounted card (47 ms a time, 79 ms scroll frames measured).
-  // Pointer events are off on the cards during scroll activity and back
-  // 120 ms after the last event, when the card under the cursor is
-  // re-entered so nothing feels different once the scroll stops.
+  // No hover while scrolling: :hover's transform+shadow promote a layer per
+  // card, re-running compositing (47ms/card, 79ms scroll frames). Pointer events are off during
+  // scroll, back 120ms after the last event.
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
@@ -202,7 +189,7 @@ function ClipGrid({
     };
   }, []);
 
-  // --- Selection (imperative — class toggles, no re-render) ---
+  // Selection: imperative class toggles, no re-render.
   const clearSelection = useCallback(() => {
     gridRef.current?.querySelectorAll(".clip-item.selected").forEach((el) => el.classList.remove("selected"));
     selectedRef.current.clear();
@@ -235,11 +222,8 @@ function ClipGrid({
         } else if (e.shiftKey) {
           const grid = gridRef.current;
           if (!grid) return;
-          // Range comes from DATA (all clips in expanded groups, in display
-          // order), not from the DOM — cards still streaming in aren't mounted
-          // yet, and a DOM-derived range would silently skip them. Mounted
-          // cards get their class toggled here; not-yet-mounted ones pick it
-          // up from selectedRef when they mount (ClipCard mount effect).
+          // Range comes from DATA, not the DOM: streaming-in cards aren't
+          // mounted yet and would be silently skipped; unmounted ones pick up selection on mount (ClipCard).
           const names = orderedNamesRef.current;
           const to = names.indexOf(name);
           const from = anchorRef.current ? names.indexOf(anchorRef.current) : to;
@@ -266,8 +250,8 @@ function ClipGrid({
       },
       onCardContextMenu: (e, clip) => {
         e.preventDefault();
-        // Right-clicking inside a multi-selection targets the whole selection
-        // (bulk menu); right-clicking any other card targets just that card.
+        // Right-click inside a multi-selection targets it all (bulk menu); any other card targets
+        // just itself.
         const sel = selectedRef.current;
         const selection =
           sel.size > 1 && sel.has(clip.originalName)
@@ -287,11 +271,8 @@ function ClipGrid({
     [removeClips],
   );
 
-  // Group, then stabilize: filterClips/groupClips build fresh arrays on every
-  // filter run even when a group's membership didn't change. Reusing the
-  // previous group object when its clips are ref-identical lets memo(ClipGroup)
-  // skip untouched groups entirely, and gives ClipGroup's mount-streaming a
-  // meaningful "did this group actually change?" identity signal.
+  // Stabilize: groupClips builds fresh arrays every run even if unchanged;
+  // reuse the previous group object when clips are ref-identical so memo(ClipGroup) skips it.
   const prevGroupsRef = useRef<Map<string, ClipGroupData>>(new Map());
   const groups = useMemo(() => {
     const fresh = groupClips(clips, Date.now());
@@ -314,15 +295,12 @@ function ClipGrid({
     prevGroupsRef.current = new Map(groups.map((g) => [g.name, g]));
   }, [groups]);
 
-  // Stream the GROUPS too: every expanded group mounts 24 cards in the commit
-  // it appears in, so mounting all ~25 groups at once is still a ~600-card
-  // commit (the 700ms first frame in the 2026-07-08 startup trace). A few
-  // groups fill the viewport; the rest stream in below the fold.
+  // Stream the groups too: mounting all ~25 at once is still a ~600-card
+  // commit (700ms first frame, 2026-07-08 trace); a few fill the viewport, rest stream in below the fold.
   const shownGroups = useStreamedSlice(groups, true, { initial: 2, perFrame: 3 }) ?? groups;
 
-  // Display-ordered clip names across expanded groups — the source of truth
-  // for shift-click ranges (kept in a ref so selectionApi stays stable and
-  // SelectionContext consumers don't re-render on filter changes).
+  // Display-ordered names across expanded groups, source of truth for
+  // shift-click ranges; kept in a ref so selectionApi/context stay stable.
   const orderedNamesRef = useRef<string[]>([]);
   useEffect(() => {
     orderedNamesRef.current = groups
@@ -330,9 +308,8 @@ function ClipGrid({
       .flatMap((g) => g.clips.map((c) => c.originalName));
   }, [groups, collapsed]);
 
-  // The header (diamond, aria-expanded) updates urgently for instant click
-  // feedback; ClipGroup defers the expensive card mount itself. Persist
-  // outside the updater (and off the click's critical path).
+  // Header updates urgently for instant click feedback; ClipGroup defers the
+  // card mount. Persist outside the updater, off the click's critical path.
   const toggle = useCallback((name: string) => {
     setCollapsed((prev) => ({ ...prev, [name]: !prev[name] }));
   }, []);

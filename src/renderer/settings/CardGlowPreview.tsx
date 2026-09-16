@@ -1,15 +1,12 @@
 import { useEffect, useRef } from "react";
 import type { CardGlowSettings } from "./SettingsContext";
 
-// Live preview of the library card hover glow, replicating the grid pipeline
-// exactly: the (real) thumbnail is downsampled into a 16×9 canvas, which CSS
-// blows up behind the card with blur + saturate + brightness, screen-blended
-// over black and masked so it fades at the edges (see .clip-glow-canvas).
-// The grid card is ~400px wide with a 55px overflow and 10–100px of blur; this
-// mock card is 150px, so lengths scale by 150/400 = 0.375.
+// replicates the grid glow pipeline: thumbnail downsampled into a 16x9 canvas, CSS blows it up
+// behind the card with blur+saturate+brightness, screen-blended over black, masked at the edges
+// (.clip-glow-canvas). grid card is ~400px with 55px overflow; this mock is 150px, scale 150/400 = 0.375
 
 const SCALE = 0.375;
-const OVERFLOW = Math.round(55 * SCALE); // ≈21px bleed, like the grid's 55px
+const OVERFLOW = Math.round(55 * SCALE); // ~21px bleed, like the grid's 55px
 const CARD_W = 150;
 const CARD_H = 84;
 
@@ -18,14 +15,13 @@ export default function CardGlowPreview({
   thumb,
 }: {
   glow: CardGlowSettings;
-  /** Absolute path of a real library thumbnail (null → gradient fallback). */
+  /** real thumbnail path, null falls back to a gradient */
   thumb: string | null;
 }) {
   const thumbRef = useRef<HTMLCanvasElement>(null);
   const glowRef = useRef<HTMLCanvasElement>(null);
 
-  // Draw the thumbnail once into both canvases (16×9 glow source + card thumb),
-  // the same downsample the grid's ClipGlow does.
+  // draws the thumbnail into both canvases (16x9 glow source + card thumb), same downsample as ClipGlow
   useEffect(() => {
     const thumbCtx = thumbRef.current?.getContext("2d");
     const glowCtx = glowRef.current?.getContext("2d");

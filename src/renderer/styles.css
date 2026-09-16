@@ -1,43 +1,36 @@
 @import "tailwindcss";
 
-/*
-  Unified design tokens (plan D5). Base palette matches the current Clip Library
-  dark + purple theme (from cliplib-share's @theme), with structural tokens to
-  fold in Hynite's chrome later. Extend here as the shell is built.
-*/
+/* design tokens (plan D5); base palette matches the Clip Library dark+purple theme (cliplib-share's @theme)
+   structural tokens fold in Hynite's chrome later; extend here as the shell is built */
 @theme {
-  /* Surfaces — Hynite's REAL near-black (its actual painted color, not the
-     --bg-1 token, which is misleading — verified against the running app). */
+  /* surfaces: Hynite's real near-black, not the misleading --bg-1 token (verified against the running app) */
   --color-bg-primary: rgba(5, 6, 8, 0.94);
   --color-bg-secondary: #141414;
-  /* Elevated surfaces (menus/modals/toasts) — neutral gray, brighter than the
-     bg but NOT blue-tinted (plan D10). */
+  /* elevated surfaces (menus/modals/toasts): neutral gray, brighter than bg, not blue-tinted (plan D10) */
   --color-bg-card: #1c1c1c;
 
-  /* Lines / borders — hairline white-alpha over near-black. */
+  /* lines/borders: hairline white-alpha over near-black */
   --color-border: rgba(255, 255, 255, 0.07);
   --color-border-hover: rgba(255, 255, 255, 0.13);
 
-  /* Accent (purple) — use SPARINGLY, never as large fills (plan D10). */
+  /* accent purple: use sparingly, never as large fills (plan D10) */
   --color-accent: #8e329b;
   --color-accent-hover: #c026d3;
   --color-accent-subtle: #9333ea;
-  /* Bright on-brand purple for selection/accent marks. */
+  /* bright on-brand purple for selection/accent marks */
   --color-accent-glyph: #c774e0;
 
-  /* Text */
   --color-text-primary: #f4f4f6;
   --color-text-secondary: rgba(255, 255, 255, 0.56);
   --color-text-muted: rgba(255, 255, 255, 0.34);
 
-  /* Typography — Inter is bundled (@fontsource-variable/inter). */
+  /* typography: Inter is bundled (@fontsource-variable/inter) */
   --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif,
     "Apple Color Emoji";
 }
 
-/* Apple-style emoji everywhere (reactions, badges, names) — deliberate brand
-   choice shared with the ClipLib website; without it Windows falls back to
-   Segoe UI Emoji. Listed last in the stacks so it only serves emoji. */
+/* Apple-style emoji (reactions, badges, names): brand choice shared with the ClipLib website
+   without it Windows falls back to Segoe UI Emoji; listed last so it only serves emoji */
 @font-face {
   font-family: "Apple Color Emoji";
   src: url("../../assets/AppleColorEmoji.ttf") format("truetype");
@@ -58,22 +51,21 @@ body {
   margin: 0;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
-  /* Settings → App font overrides --app-font-family at runtime; Apple Color
-     Emoji rides along regardless of the chosen UI font. */
+/* Settings > App font overrides --app-font-family at runtime; Apple Color Emoji rides along regardless */
   font-family: var(--app-font-family, var(--font-sans)), "Apple Color Emoji";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Structural (non-color) tokens for the shell chrome. */
+/* structural (non-color) tokens for the shell chrome */
 :root {
   --line: rgba(255, 255, 255, 0.08);
   --rail-width: 300px;
   --rail-collapsed: 58px;
-  /* Snappy-but-smooth easing for the rail collapse/expand. */
+  /* snappy-but-smooth easing for the rail collapse/expand */
   --rail-ease: cubic-bezier(0.33, 1, 0.68, 1);
   --titlebar-height: 34px;
-  /* Legacy player CSS references this; point it at our font. */
+  /* legacy player CSS references this; point it at our font */
   --app-font-family: var(--font-sans);
 }
 
@@ -81,15 +73,15 @@ button {
   font-family: inherit;
 }
 
-/* ◇ diamond accent (plan D10) — the recurring purple mark echoing the logo.
-   Use tastefully: brand, titlebar, active markers, section/empty-state marks. */
+/* diamond accent (plan D10): the recurring purple mark echoing the logo
+   used in brand, titlebar, active markers, section/empty-state marks */
 .dia {
   color: var(--color-accent-glyph);
   font-style: normal;
   line-height: 1;
 }
 
-/* ---- App shell layout ---- */
+/* app shell layout */
 .app-shell {
   display: grid;
   grid-template-rows: var(--titlebar-height) 1fr;
@@ -103,30 +95,28 @@ button {
   position: relative;
 }
 
-/* Real ui-blur (window.uiBlur / src/renderer/ui/uiBlur.ts): blurs the app
-   background — sidebar + main grid — behind the wrapped legacy player and other
-   non-portaled overlays. Portaled React modals blur via .modal-backdrop. */
+/* ui-blur (window.uiBlur, src/renderer/ui/uiBlur.ts): blurs sidebar+grid behind the legacy player and other non-portaled overlays
+   portaled React modals blur via .modal-backdrop instead */
 body.ui-blur .app-body {
   filter: blur(6px) brightness(0.7);
   transition: filter 180ms ease;
   will-change: filter;
 }
 
-/* Clip the blur bleed so the filtered grid can't expand the scrollable area. */
+/* clip the blur bleed so the filtered grid can't expand the scrollable area */
 body.ui-blur .app-body,
 body.ui-blur-exit .app-body {
   overflow: clip;
   clip-path: inset(0);
 }
 
-/* Exit frame: snap the blur off without a reverse transition. */
+/* exit frame: snap the blur off without a reverse transition */
 body.ui-blur-exit .app-body {
   transition: none;
 }
 
-/* Dynamic mode: the rail floats OVER the grid (absolute overlay) so hovering it
-   flies out on top instead of resizing the grid. The grid reserves only the
-   collapsed footprint. */
+/* dynamic mode: rail floats over the grid (absolute overlay) so hover flies out without resizing the grid
+   grid reserves only the collapsed footprint */
 .app-body.rail-floating .rail.dynamic {
   position: absolute;
   left: 0;
@@ -151,7 +141,7 @@ body.ui-blur-exit .app-body {
   overflow: hidden;
 }
 
-/* ---- Titlebar (drag strip; native overlay draws min/max/close at right) ---- */
+/* titlebar drag strip; native overlay draws min/max/close at right */
 .titlebar {
   display: flex;
   align-items: center;
@@ -160,11 +150,11 @@ body.ui-blur-exit .app-body {
   -webkit-app-region: drag;
   user-select: none;
   border-bottom: 0.5px solid var(--line);
-  /* One unified near-black across all chrome; borders separate surfaces. */
+  /* one unified near-black across all chrome; borders separate surfaces */
   background: var(--color-bg-primary);
 }
 
-/* Far-left rail controls (width button + pin). No-drag so they're clickable. */
+/* far-left rail controls (width button + pin); no-drag so they're clickable */
 .titlebar-btn {
   -webkit-app-region: no-drag;
   flex: none;
@@ -200,7 +190,7 @@ body.ui-blur-exit .app-body {
   flex: 1;
 }
 
-/* ---- Sidebar / nav rail (design handoff — 300px primary surface) ---- */
+/* sidebar/nav rail (design handoff, 300px primary surface) */
 .rail {
   width: var(--rail-width);
   flex: none;
@@ -214,7 +204,6 @@ body.ui-blur-exit .app-body {
   transition: width 180ms var(--rail-ease), padding 180ms var(--rail-ease);
 }
 
-/* Dynamic mode: collapse to an icon rail, expand to full on hover. */
 .rail.dynamic {
   width: var(--rail-collapsed);
 }
@@ -222,8 +211,7 @@ body.ui-blur-exit .app-body {
   width: var(--rail-width);
 }
 
-/* Collapse helpers. `.r-label` fades inline text/pills; `.r-extra` fades whole
-   sections (tags, stats). Both restore on hover. */
+  /* .r-label fades inline text/pills, .r-extra fades whole sections (tags, stats); both restore on hover */
 .r-label {
   transition: opacity 120ms ease;
   white-space: nowrap;
@@ -247,7 +235,7 @@ body.ui-blur-exit .app-body {
   color: currentColor;
 }
 
-/* Merged logo + search field. */
+/* merged logo + search field */
 .r-search {
   width: 100%;
   height: 40px;
@@ -270,8 +258,7 @@ body.ui-blur-exit .app-body {
   -webkit-user-drag: none;
   filter: drop-shadow(0 0 12px rgba(199, 116, 224, 0.35));
 }
-/* Field wraps the highlight overlay + the real input in one 40px box; both
-   share identical metrics so the colored mirror sits exactly under the text. */
+  /* highlight overlay + the real input share identical metrics in one 40px box so the mirror lines up with the text */
 .r-search-field {
   position: relative;
   flex: 1;
@@ -304,13 +291,13 @@ body.ui-blur-exit .app-body {
   outline: 0;
   padding: 0;
   background: transparent;
-  /* Text is transparent — the overlay paints the glyphs; only the caret shows. */
+  /* text is transparent: the overlay paints the glyphs, only the caret shows */
   color: transparent;
   caret-color: var(--color-text-primary);
 }
 .r-search-input::placeholder {
   color: var(--color-text-muted);
-  /* Placeholder must be visible (overlay is empty when the field is). */
+  /* placeholder must be visible (overlay is empty when the field is) */
   -webkit-text-fill-color: var(--color-text-muted);
 }
 
@@ -322,16 +309,15 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-primary);
 }
 .r-search-hl .tok-tag {
-  color: #7dd3fc; /* sky — tag tokens */
+  color: #7dd3fc; /* sky: tag tokens */
   font-weight: 600;
 }
 .r-search-hl .tok-mention {
-  color: #c774e0; /* the brand accent — people tokens */
+  color: #c774e0; /* brand accent: people tokens */
   font-weight: 600;
 }
 
-/* Autocomplete dropdown (portaled to <body> so the rail's overflow can't clip
-   it). Positioned from the input rect; flows right over the grid. */
+  /* portaled to <body> so the rail's overflow can't clip it; positioned from the input rect */
 .search-suggest {
   position: fixed;
   z-index: 600;
@@ -458,7 +444,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Purple accent bar marks the active nav item (D10 — accent, not fill). */
+/* purple accent bar marks the active nav item (D10: accent, not fill) */
 .rail-item-mark {
   position: absolute;
   left: -11px;
@@ -476,8 +462,7 @@ body.ui-blur-exit .app-body {
   white-space: nowrap;
   text-overflow: ellipsis;
   transition: opacity 120ms ease;
-  /* Optical centering: flex centers the full glyph box, whose descender space
-     (y/g/p) makes the text read ~1px high next to the icons. */
+/* flex centers the full glyph box; descender space (y/g/p) reads ~1px high next to icons otherwise */
   transform: translateY(1px);
 }
 
@@ -512,11 +497,10 @@ body.ui-blur-exit .app-body {
   margin: 11px 4px;
 }
 
-/* Collections stay pinned above the (scrolling) tag list. */
+/* collections stay pinned above the (scrolling) tag list */
 .rail-section-fixed {
   flex: none;
 }
-/* Tag section fills the remaining rail height; only its list scrolls. */
 .rail-tags {
   flex: 1;
   min-height: 0;
@@ -524,7 +508,6 @@ body.ui-blur-exit .app-body {
   flex-direction: column;
 }
 
-/* Rail section shell (Collections, Tags). */
 .rail-section {
   margin-bottom: 4px;
 }
@@ -562,7 +545,7 @@ body.ui-blur-exit .app-body {
   text-decoration: underline;
 }
 
-/* Collections — quick top-level filters. */
+/* collections: quick top-level filters */
 .rail-collections {
   display: flex;
   flex-direction: column;
@@ -604,7 +587,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Tag filter (the liked purple system, rehomed into the rail). */
+/* tag filter (the liked purple system, rehomed into the rail) */
 .tagf-search {
   display: flex;
   align-items: center;
@@ -652,8 +635,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-primary);
 }
 
-/* Only the list scrolls; it fades at top/bottom instead of hard-cutting, and
-   hides its scrollbar (rail stays chrome-free). */
+  /* list scrolls, fades top/bottom instead of hard-cutting, hides its scrollbar (rail stays chrome-free) */
 .tagf-list-wrap {
   flex: 1;
   min-height: 0;
@@ -685,7 +667,7 @@ body.ui-blur-exit .app-body {
   height: 0;
 }
 
-/* Tag rows — the bar indicator (left) carries selection; rows have no fill. */
+/* tag rows: the left bar indicator carries selection, rows have no fill */
 .tagf-item {
   display: flex;
   align-items: center;
@@ -714,16 +696,16 @@ body.ui-blur-exit .app-body {
   background: rgba(255, 255, 255, 0.04);
   color: var(--color-text-primary);
 }
-/* Selected = included: the bar lights up, the label brightens. No row fill. */
+/* selected = included: the bar lights up, the label brightens; no row fill */
 .tagf-item.selected {
   color: var(--color-text-primary);
 }
-/* Focused = temporary "only show this tag": purple bar + purple label. */
+/* focused = temporary "only show this tag": purple bar + purple label */
 .tagf-item.focused {
   color: #e9b8f5;
 }
 
-/* Left bar indicator — marks inclusion; click to focus a single tag. */
+/* left bar indicator marks inclusion; click to focus a single tag */
 .tagf-indicator {
   position: relative;
   flex: none;
@@ -741,10 +723,8 @@ body.ui-blur-exit .app-body {
   transform: scale(1.1);
   box-shadow: 0 0 8px rgba(147, 51, 234, 0.2);
 }
-/* Hover pulse: a ring on a pseudo-element animated with transform and
-   opacity only. Animating box-shadow on the indicator itself repainted the
-   rail every frame for as long as the cursor rested on a tag (a full CPU
-   core plus half the GPU, measured at rest). Same look, compositor only. */
+  /* ring on a pseudo-element, transform+opacity only; animating box-shadow directly repainted the whole rail every frame
+     (measured: a full CPU core plus half the GPU at rest); this looks identical but compositor-only */
 .tagf-indicator::before {
   content: "";
   position: absolute;
@@ -771,7 +751,7 @@ body.ui-blur-exit .app-body {
   background: linear-gradient(180deg, #9333ea, #c084fc);
   box-shadow: 0 0 10px rgba(147, 51, 234, 0.4);
 }
-/* "Only show this tag" hint, opening to the left so it stays inside the rail. */
+/* "only show this tag" hint, opening to the left so it stays inside the rail */
 .tagf-indicator::after {
   content: attr(data-tip);
   position: absolute;
@@ -816,7 +796,6 @@ body.ui-blur-exit .app-body {
   margin: 6px 8px;
 }
 
-/* Stat cards. */
 .rail-stats {
   display: flex;
   gap: 6px;
@@ -852,11 +831,8 @@ body.ui-blur-exit .app-body {
   white-space: nowrap;
 }
 
-/* ── App-update pill ─────────────────────────────────────────────────────
-   Sits between the stat cards and the profile card; only rendered while an
-   update is available / downloading. Visual style ported from Game Launcher:
-   single purple accent derived everywhere via color-mix, progress fill via a
-   ::before whose width follows --rail-update-pct, star burst on hover. */
+/* app-update pill: sits between stat cards and profile card, renders only while available/downloading
+   style ported from Game Launcher: purple accent via color-mix, ::before progress fill (--rail-update-pct), hover star burst */
 :root {
   --update-clr: #a78bfa;
 }
@@ -883,7 +859,7 @@ body.ui-blur-exit .app-body {
   transition: background 200ms ease, border-color 200ms ease, box-shadow 280ms ease,
     color 120ms ease, width 180ms var(--rail-ease), padding 180ms var(--rail-ease);
 }
-/* Text/icon render above the ::before progress fill. */
+/* text/icon render above the ::before progress fill */
 .rail-update > .r-ico,
 .rail-update > .rail-label,
 .rail-update > .rail-update-pct-label,
@@ -935,7 +911,7 @@ body.ui-blur-exit .app-body {
   }
 }
 
-/* downloaded — main launches the installer + quits moments later. */
+/* downloaded: main launches the installer and quits moments later */
 .rail > .rail-update--downloaded {
   cursor: default;
   background: color-mix(in srgb, var(--update-clr) 13%, transparent);
@@ -1000,7 +976,6 @@ body.ui-blur-exit .app-body {
   }
 }
 
-/* Star burst (available + hover). */
 .rail-update-star {
   position: absolute;
   pointer-events: none;
@@ -1033,8 +1008,7 @@ body.ui-blur-exit .app-body {
 .rail-update--available:hover .star-6,
 .rail-update--available:focus-visible .star-6 { top: -30%; left: 60%; opacity: 1; filter: drop-shadow(0 0 7px var(--update-clr)); }
 
-/* Collapsed / unhovered-dynamic rail: pill trims to the 40px icon square (the
-   labels fade via the shared .rail-label rules; fly-tip covers the text). */
+  /* collapsed rail: pill trims to the 40px icon square, labels fade via .rail-label, fly-tip covers the text */
 .rail.dynamic:not(:hover) > .rail-update,
 .rail.collapsed > .rail-update {
   width: 40px;
@@ -1127,9 +1101,8 @@ body.ui-blur-exit .app-body {
   white-space: nowrap;
 }
 
-/* Connected profile card: the avatar/name area is a button that opens your own
-   ClipLib profile. It fills the row so the whole left side feels clickable; the
-   sign-out button sits beside it (its own click, stopPropagation). */
+  /* avatar/name area is a button that opens your own profile; fills the row so the left side feels clickable
+     sign-out sits beside it with its own click (stopPropagation) */
 .rail-profile-open {
   display: flex;
   align-items: center;
@@ -1151,7 +1124,6 @@ body.ui-blur-exit .app-body {
   background: rgba(255, 255, 255, 0.05);
 }
 
-/* Sign-out button on the connected profile card. */
 .rail-logout {
   flex: none;
   width: 28px;
@@ -1170,10 +1142,8 @@ body.ui-blur-exit .app-body {
   color: #f08a7a;
 }
 
-/* ================= Collapsed rail =================
-   Applies when a Dynamic rail isn't hovered, or a rail is statically collapsed.
-   Everything shrinks to a centered 40px icon column; labels/backgrounds that
-   would spill are removed so only glyphs (and the avatar) remain. */
+/* collapsed rail: applies when a dynamic rail isn't hovered, or is statically collapsed
+   shrinks to a centered 40px icon column; only glyphs (and the avatar) remain */
 .rail.collapsed {
   width: var(--rail-collapsed);
 }
@@ -1183,7 +1153,7 @@ body.ui-blur-exit .app-body {
   padding-right: 9px;
 }
 
-/* Labels/pills/counts cross-fade — never display:none (that pops). */
+/* labels/pills/counts cross-fade, never display:none (that pops) */
 .rail.dynamic:not(:hover) .r-label,
 .rail.dynamic:not(:hover) .rail-label,
 .rail.collapsed .r-label,
@@ -1192,9 +1162,8 @@ body.ui-blur-exit .app-body {
   pointer-events: none;
 }
 
-/* Nav + collection rows trim to a 40px square from the RIGHT. The icon sits at
-   the (unchanged) left padding, so it never moves — only the trailing label
-   area collapses. 11+18+11 = 40 → the icon lands centered in the square. */
+  /* nav/collection rows trim to 40px from the right; icon's left padding is unchanged so it never moves
+     11+18+11 = 40, so the icon lands centered in the square */
 .rail.dynamic:not(:hover) .rail-item,
 .rail.collapsed .rail-item,
 .rail.dynamic:not(:hover) .rail-collection,
@@ -1212,8 +1181,7 @@ body.ui-blur-exit .app-body {
   opacity: 0;
 }
 
-/* Search + profile center their single glyph via symmetric padding (animated),
-   not justify-content (which would snap). */
+  /* search/profile center their glyph via animated symmetric padding, not justify-content (which would snap) */
 .rail.dynamic:not(:hover) .r-search,
 .rail.collapsed .r-search {
   width: 40px;
@@ -1233,8 +1201,7 @@ body.ui-blur-exit .app-body {
   overflow: visible;
 }
 
-/* Collections header collapses its height smoothly — the rows slide up rather
-   than snap. */
+  /* collections header collapses height smoothly; rows slide up rather than snap */
 .rail.dynamic:not(:hover) .rail-section-head,
 .rail.collapsed .rail-section-head {
   max-height: 0;
@@ -1243,7 +1210,7 @@ body.ui-blur-exit .app-body {
   opacity: 0;
 }
 
-/* Tag section is an invisible flex spacer; stats collapse their height away. */
+/* tag section is an invisible flex spacer; stats collapse their height away */
 .rail.dynamic:not(:hover) .rail-tags,
 .rail.collapsed .rail-tags {
   opacity: 0;
@@ -1256,8 +1223,7 @@ body.ui-blur-exit .app-body {
   opacity: 0;
 }
 
-/* Collapsed-rail hover title — flies out to the right, over the grid. Rendered
-   as a fixed sibling of the rail so the rail's overflow:hidden can't clip it. */
+  /* hover title flies out over the grid; rendered as a fixed sibling so the rail's overflow:hidden can't clip it */
 .rail-fly-tip {
   position: fixed;
   left: calc(var(--rail-collapsed) + 10px);
@@ -1286,7 +1252,7 @@ body.ui-blur-exit .app-body {
   }
 }
 
-/* ---- Library view ---- */
+/* library view */
 .library-view {
   position: relative;
   display: flex;
@@ -1296,7 +1262,7 @@ body.ui-blur-exit .app-body {
 }
 
 
-/* ---- View bodies / placeholders ---- */
+/* view bodies / placeholders */
 .library-body {
   flex: 1;
   overflow: auto;
@@ -1325,14 +1291,14 @@ body.ui-blur-exit .app-body {
   font-size: 13px;
 }
 
-/* "Coming soon" nav items (clickable → toast, but visually muted). */
+/* "coming soon" nav items: clickable to toast, but visually muted */
 .rail-item.soon {
   color: var(--color-text-muted);
 }
 
-/* ================= Primitive layer (Phase 2b) ================= */
+/* primitive layer (phase 2b) */
 
-/* ---- Buttons ---- */
+/* buttons */
 .btn {
   height: 34px;
   padding: 0 14px;
@@ -1360,7 +1326,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-primary);
 }
 
-/* Purple appears only on the primary action — sparingly (D10). */
+/* purple appears only on the primary action, sparingly (D10) */
 .btn-primary {
   border-color: transparent;
   background: color-mix(in srgb, var(--color-accent) 60%, #000);
@@ -1381,18 +1347,17 @@ body.ui-blur-exit .app-body {
   background: #8f2a25;
 }
 
-/* ---- Modal ---- */
+/* modal */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  /* Above the video player overlay (z-index 3000) so confirm/alert dialogs
-     opened from the player (e.g. delete) are visible and clickable. */
+  /* above the video player overlay (z-index 3000) so confirm/alert dialogs from the player stay clickable */
   z-index: 4000;
   display: grid;
   place-items: center;
   padding: 32px;
   background: rgba(0, 0, 0, 0.5);
-  /* Doubles as the ui-blur behind overlays. */
+  /* doubles as the ui-blur behind overlays */
   backdrop-filter: blur(10px);
 }
 
@@ -1436,12 +1401,10 @@ body.ui-blur-exit .app-body {
   line-height: 1.5;
 }
 
-/* ---- Popover + menu ---- */
+/* popover + menu */
 .popover {
   position: fixed;
-  /* Popovers are click-spawned and transient — they must float above every
-     surface that can host one, including the onboarding wizard (4500) and
-     the share modal (10000). */
+  /* popovers float above every surface that can host one: onboarding wizard (4500), share modal (10000) */
   z-index: 12000;
 }
 
@@ -1510,8 +1473,8 @@ body.ui-blur-exit .app-body {
   background: var(--color-border);
 }
 
-/* ---- Context-menu "Manage tags" panel (Phase 5) ---- */
-/* The submenu row carries a trailing caret; reuse the grid but leave room. */
+/* context-menu "Manage tags" panel (phase 5) */
+/* the submenu row carries a trailing caret; reuse the grid but leave room */
 .menu-item.ctx-submenu {
   grid-template-columns: 18px minmax(0, 1fr) 14px;
 }
@@ -1523,7 +1486,7 @@ body.ui-blur-exit .app-body {
   width: 244px;
   gap: 0;
 }
-/* Bulk-menu header — "N clips selected" above the multi-selection actions. */
+/* bulk-menu header: "N clips selected" above the multi-selection actions */
 .ctx-multi-head {
   padding: 4px 8px 2px;
   font-size: 11px;
@@ -1674,7 +1637,7 @@ body.ui-blur-exit .app-body {
   text-align: center;
 }
 
-/* ---- Toast ---- */
+/* toast */
 .toast-stack {
   position: fixed;
   right: 20px;
@@ -1709,7 +1672,7 @@ body.ui-blur-exit .app-body {
   color: #f08a7a;
 }
 
-/* ---- Tooltip ---- */
+/* tooltip */
 .tt-wrap {
   position: relative;
   display: inline-flex;
@@ -1746,14 +1709,14 @@ body.ui-blur-exit .app-body {
   opacity: 1;
 }
 
-/* ================= Library grid (Phase 3) ================= */
+/* library grid (phase 3) */
 .clip-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* Slim, self-effacing grid scrollbar (handoff style). */
+/* slim, self-effacing grid scrollbar (handoff style) */
 .clip-scroll::-webkit-scrollbar {
   width: 10px;
 }
@@ -1779,9 +1742,8 @@ body.ui-blur-exit .app-body {
   padding: 14px 22px 48px;
 }
 
-/* Routed-view host — layout-transparent wrapper that lets the routed view stay
-   mounted (hidden) while the profile overlay is up, so closing the profile
-   doesn't remount the feed/library from scratch. */
+/* layout-transparent wrapper keeps the routed view mounted (hidden) under the profile overlay
+   so closing the profile doesn't remount the feed/library from scratch */
 .route-host {
   display: contents;
 }
@@ -1789,11 +1751,8 @@ body.ui-blur-exit .app-body {
   display: none;
 }
 
-/* Shared card glow — one 16x9 canvas behind the cards, unclipped, repositioned
-   over the hovered card with a 55px overflow (see ClipGlow.ts). The wrapper is
-   what moves (transform-only, compositor-friendly); the canvas inside carries
-   the expensive blur/mask stack and never changes geometry, so repositioning
-   never re-rasterizes the filtered layer. */
+/* one 16x9 canvas (ClipGlow.ts) repositions over the hovered card with 55px overflow, unclipped
+   wrapper moves (transform-only); canvas geometry never changes so repositioning never re-rasterizes it */
 .clip-glow-wrap {
   position: absolute;
   left: 0;
@@ -1831,8 +1790,7 @@ body.ui-blur-exit .app-body {
   }
 }
 
-/* Imperative preview mount is layout-transparent; the video positions against
-   the media container (which clips it to the rounded corners). */
+/* imperative preview mount is layout-transparent; video positions against the media container, which clips the rounded corners */
 .clip-preview-mount {
   display: contents;
 }
@@ -1863,7 +1821,7 @@ body.ui-blur-exit .app-body {
   text-align: left;
 }
 
-/* ◆ gradient diamond — echoes the logo; rotates 45° when the group is open. */
+/* gradient diamond echoes the logo, rotates 45deg when the group is open */
 .clip-group-diamond {
   flex: none;
   width: 9px;
@@ -1907,7 +1865,7 @@ body.ui-blur-exit .app-body {
 
 .clip-group-content {
   display: grid;
-  /* Column min-width is tunable live via window.clipGrid.size()/cols() (dev). */
+  /* column min-width is tunable live via window.clipGrid.size()/cols() (dev) */
   grid-template-columns: repeat(auto-fill, minmax(var(--clip-col, 400px), 1fr));
   gap: 16px;
   padding: 4px 4px 12px;
@@ -1923,16 +1881,12 @@ body.ui-blur-exit .app-body {
   cursor: pointer;
   transition: transform 180ms ease;
   contain: layout style;
-  /* NOTE: don't add `content-visibility: auto` here — it force-enables paint
-     containment, which clips the hover shadow on .clip-item-media-container
-     and the selection outline at the card edges. Offscreen skipping comes from
-     the IO-driven .cv-offscreen class below instead. */
+  /* NOTE: no content-visibility:auto here, it force-enables paint containment and clips the hover shadow/selection outline at card edges
+     offscreen skipping comes from the IO-driven .cv-offscreen class below instead */
   contain-intrinsic-size: auto 220px;
 }
-/* Hover shadow, pre-rendered: animating box-shadow repaints the blur every
-   frame of the 180ms transition on every card the pointer crosses; a baked
-   shadow cross-faded via opacity is compositor-only and looks identical. It
-   tracks the media container (first child, full width, 16:9). */
+  /* pre-rendered hover shadow: animating box-shadow repaints blur every frame of a 180ms transition per card crossed
+     a baked shadow cross-faded via opacity is compositor-only and looks identical; tracks the media container (16:9) */
 .clip-item::before {
   content: "";
   position: absolute;
@@ -1967,7 +1921,6 @@ body.ui-blur-exit .app-body {
 }
 .clip-item:hover .clip-item-media-container {
   border-color: var(--color-border-hover);
-  /* hover shadow lives on .clip-item::before (opacity-only animation) */
 }
 .clip-item-media-container img {
   width: 100%;
@@ -1976,7 +1929,7 @@ body.ui-blur-exit .app-body {
   display: block;
 }
 
-/* Multi-select highlight — accent outline + faint purple wash (plan D10). */
+/* multi-select highlight: accent outline + faint purple wash (plan D10) */
 .clip-item.selected .clip-item-media-container {
   outline: 2px solid var(--color-accent-glyph);
   outline-offset: 2px;
@@ -1990,9 +1943,8 @@ body.ui-blur-exit .app-body {
   pointer-events: none;
 }
 
-/* Keyboard/gamepad grid-navigation focus ring (library/gridNavigation.ts).
-   Same outline language as .selected, but brighter + glowing so the "cursor"
-   reads distinctly from a mouse multi-selection. */
+  /* keyboard/gamepad focus ring (library/gridNavigation.ts); same outline language as .selected but brighter+glowing
+     so the "cursor" reads distinctly from a mouse multi-selection */
 .clip-item.grid-focused {
   z-index: 10;
 }
@@ -2010,7 +1962,7 @@ body.ui-blur-exit .app-body {
   pointer-events: none;
 }
 
-/* Gamepad connection chip in the titlebar (player/gamepad.ts store). */
+/* gamepad connection chip in the titlebar (player/gamepad.ts store) */
 .gamepad-indicator {
   display: flex;
   align-items: center;
@@ -2036,7 +1988,7 @@ body.ui-blur-exit .app-body {
   }
 }
 
-/* ---- Publish-to-ClipLib modal (player/ShareModal.tsx) ---- */
+/* publish-to-ClipLib modal (player/ShareModal.tsx) */
 .share-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2249,8 +2201,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Discord call participants — stacked avatars, top-left of the thumbnail
-   (mirrors the ClipLib website mention stack: 32px, -8px overlap, +X bubble). */
+  /* Discord call participants: stacked avatars top-left, mirrors the website mention stack (32px, -8px overlap, +X bubble) */
 .clip-participants {
   position: absolute;
   top: 8px;
@@ -2293,7 +2244,7 @@ body.ui-blur-exit .app-body {
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
 }
 
-/* Hover profile popover (ui/UserPopover.tsx) — portaled to <body>. */
+/* hover profile popover (ui/UserPopover.tsx), portaled to <body> */
 .user-popover-anchor {
   display: inline-flex;
 }
@@ -2368,7 +2319,6 @@ body.ui-blur-exit .app-body {
   background: var(--color-accent-glyph);
 }
 
-/* Rich card additions (registered ClipLib user with an online profile). */
 .user-popover-bio {
   margin: 8px 0 0;
   font-size: 11px;
@@ -2408,7 +2358,6 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Card footer: text column + game icon (design). */
 .clip-foot {
   display: flex;
   align-items: stretch;
@@ -2459,8 +2408,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Game / application icon (get-game-icon). No backdrop — the icon spans the
-   text column's full height (title top to timestamp bottom, via foot stretch). */
+  /* game icon (get-game-icon), no backdrop; spans the text column's full height via foot stretch */
 .clip-game {
   flex: none;
   width: 30px;
@@ -2478,7 +2426,7 @@ body.ui-blur-exit .app-body {
   opacity: 0.9;
 }
 
-/* Inline title editing (click the name). Matches .clip-name metrics. */
+/* inline title editing (click the name); matches .clip-name metrics */
 .clip-name-edit {
   margin: 0;
   width: 100%;
@@ -2495,9 +2443,7 @@ body.ui-blur-exit .app-body {
   outline: none;
 }
 
-/* New-since-last-session / live-added highlight (plan §5 new-clips indicator).
-   The is-new glow wins over the hover shadow (as it did when both lived on the
-   media container and this later rule took precedence). */
+  /* new-since-last-session highlight (plan section 5); is-new glow wins over the hover shadow (later rule takes precedence) */
 .clip-item.is-new::before {
   display: none;
 }
@@ -2506,7 +2452,7 @@ body.ui-blur-exit .app-body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-glyph) 45%, transparent),
     0 10px 28px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
-/* Empty state — no clips match the current search/tag filters. */
+/* empty state: no clips match the current search/tag filters */
 .clip-empty {
   min-height: 55vh;
   display: flex;
@@ -2545,14 +2491,13 @@ body.ui-blur-exit .app-body {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
 
-/* ================= Settings (Phase 6) ================= */
+/* settings (phase 6) */
 .settings-view {
   flex: 1;
   min-height: 0;
   display: flex;
 }
 
-/* Section rail inside the view. */
 .settings-nav {
   flex: none;
   width: 200px;
@@ -2616,7 +2561,7 @@ body.ui-blur-exit .app-body {
 .span-2 {
   grid-column: 1 / -1;
 }
-/* A stack of groups in one grid cell (the other column may hold one tall group). */
+/* a stack of groups in one grid cell (the other column may hold one tall group) */
 .set-col {
   display: grid;
   gap: 16px;
@@ -2643,7 +2588,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* ---- Groups + rows ---- */
+/* groups + rows */
 .set-group {
   border: 0.5px solid var(--color-border);
   border-radius: 14px;
@@ -2676,7 +2621,6 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Header "reset to defaults" icon button. */
 .set-reset {
   width: 24px;
   height: 24px;
@@ -2753,7 +2697,7 @@ body.ui-blur-exit .app-body {
   flex: none;
 }
 
-/* ---- ClipLib account section (invites + API tokens) ---- */
+/* ClipLib account section (invites + API tokens) */
 .cliplib-input {
   flex: 1;
   min-width: 0;
@@ -2872,7 +2816,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Rows whose values are controlled by the export preset. */
+/* rows whose values are controlled by the export preset */
 .set-row.managed .set-row-desc,
 .set-row.managed .set-row-title {
   opacity: 0.62;
@@ -2889,7 +2833,6 @@ body.ui-blur-exit .app-body {
   color: #d8a4f0;
 }
 
-/* Async status line under a row description. */
 .set-status {
   margin-top: 5px;
   font-size: 12px;
@@ -2912,7 +2855,6 @@ body.ui-blur-exit .app-body {
   color: #f08a7a;
 }
 
-/* Buttons with leading icons. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -2929,7 +2871,7 @@ body.ui-blur-exit .app-body {
   }
 }
 
-/* ---- Toggle switch ---- */
+/* toggle switch */
 .switch {
   flex: none;
   position: relative;
@@ -2969,7 +2911,7 @@ body.ui-blur-exit .app-body {
   outline-offset: 2px;
 }
 
-/* ---- Slider ---- */
+/* slider */
 .set-slider {
   display: flex;
   align-items: center;
@@ -3018,7 +2960,7 @@ body.ui-blur-exit .app-body {
   opacity: 0.4;
 }
 
-/* ---- Select ---- */
+/* select */
 .select-trigger {
   display: flex;
   align-items: center;
@@ -3108,7 +3050,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-accent-glyph);
 }
 
-/* ---- Appearance previews ---- */
+/* appearance previews */
 .font-flex {
   display: flex;
   gap: 22px;
@@ -3155,7 +3097,6 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Mock clip cards used by the Appearance previews. */
 .mock-card-row {
   display: flex;
   gap: 14px;
@@ -3219,7 +3160,7 @@ body.ui-blur-exit .app-body {
   font-size: 8.5px;
   padding: 0 6px;
 }
-/* Real game icon in the greyscale preview — mirrors .clip-game (no backdrop). */
+/* real game icon in the greyscale preview, mirrors .clip-game (no backdrop) */
 .mock-card-game {
   flex: none;
   width: 24px;
@@ -3234,7 +3175,7 @@ body.ui-blur-exit .app-body {
   transition: filter 220ms ease, opacity 220ms ease;
 }
 
-/* ---- Ambient glow ---- */
+/* ambient glow */
 .glow-layout {
   display: flex;
   gap: 22px;
@@ -3272,8 +3213,8 @@ body.ui-blur-exit .app-body {
   display: grid;
   place-items: center;
 }
-/* Real player: glow canvas = video + 200px at blur 80px on a ~1700px video.
-   Scaled to this 160px mini player that's ~+19px and ~8–10px of blur. */
+  /* real player: glow canvas is video+200px at 80px blur on a ~1700px video
+     scaled to this 160px mini player: about +19px and 8 to 10px of blur */
 .glow-preview-glow {
   position: absolute;
   width: 180px;
@@ -3321,8 +3262,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Card hover glow preview — replicates .clip-glow-canvas exactly: 16×9 source
-   canvas scaled up behind the card, screen blend, edge-fade masks. */
+  /* replicates .clip-glow-canvas exactly: 16x9 source canvas scaled up, screen blend, edge-fade masks */
 .cardglow-preview {
   position: relative;
   width: 240px;
@@ -3384,7 +3324,7 @@ body.ui-blur-exit .app-body {
   padding: 0 6px;
 }
 
-/* ---- Export strategy summary ---- */
+/* export strategy summary */
 .strategy-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3422,7 +3362,7 @@ body.ui-blur-exit .app-body {
   white-space: nowrap;
 }
 
-/* ---- Shortcuts ---- */
+/* shortcuts */
 .kb-hint {
   margin: 8px 0 10px;
   font-size: 12px;
@@ -3432,7 +3372,7 @@ body.ui-blur-exit .app-body {
   height: 28px;
   font-size: 12px;
 }
-/* Two-column card grid — fills the page instead of one long list. */
+/* two-column card grid fills the page instead of one long list */
 .kb-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
@@ -3503,7 +3443,7 @@ body.ui-blur-exit .app-body {
   color: #f0a89c;
 }
 
-/* ---- About ---- */
+/* about */
 .about-card {
   display: flex;
   align-items: center;
@@ -3541,7 +3481,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-secondary);
 }
 
-/* ---- Tag manager modal ---- */
+/* tag manager modal */
 .tagman-total {
   margin-left: 4px;
   font-size: 11px;
@@ -3682,9 +3622,9 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* ================= Clipdip settings ================= */
+/* clipdip settings */
 
-/* Grouped nav: labeled divider between the library and clipdip sections. */
+/* grouped nav: labeled divider between the library and clipdip sections */
 .settings-nav-group {
   display: flex;
   flex-direction: column;
@@ -3702,7 +3642,7 @@ body.ui-blur-exit .app-body {
   padding: 0 10px 6px;
 }
 
-/* Pipeline status pill (Recording / Capture error / Starting). */
+/* pipeline status pill (Recording / Capture error / Starting) */
 .clipdip-pill {
   display: inline-flex;
   align-items: center;
@@ -3739,7 +3679,6 @@ body.ui-blur-exit .app-body {
   background: #f08a7a;
 }
 
-/* Info box (size estimate, filename preview). */
 .clipdip-infobox {
   display: flex;
   align-items: flex-start;
@@ -3762,7 +3701,6 @@ body.ui-blur-exit .app-body {
   color: var(--color-accent-glyph);
 }
 
-/* Clipdip notification history (settings > notifications). */
 .clipdip-notif-history {
   margin: 2px 0 8px;
   border-radius: 10px;
@@ -3804,7 +3742,6 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
-/* Filename template help. */
 .filename-help {
   flex-direction: column;
   align-items: stretch;
@@ -3855,7 +3792,6 @@ body.ui-blur-exit .app-body {
   font-size: 11px;
 }
 
-/* Hotkey capture. */
 .hotkey-capture {
   display: flex;
   align-items: center;
@@ -3949,7 +3885,6 @@ body.ui-blur-exit .app-body {
   50% { opacity: 0.35; }
 }
 
-/* Corner picker (notification position). */
 .corner-picker {
   position: relative;
   width: 96px;
@@ -3989,7 +3924,6 @@ body.ui-blur-exit .app-body {
 .corner-picker-slot.bottom-left { bottom: 6px; left: 6px; }
 .corner-picker-slot.bottom-right { bottom: 6px; right: 6px; }
 
-/* Advanced disclosure. */
 .set-disclosure {
   border-top: 0.5px solid var(--color-border);
 }
@@ -4025,7 +3959,6 @@ body.ui-blur-exit .app-body {
   border-top: 0;
 }
 
-/* Audio sources list. */
 .audio-sources {
   display: flex;
   flex-direction: column;
@@ -4130,7 +4063,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
   opacity: 0.8;
 }
-/* Live "this source isn't recording what you picked" banner. */
+/* live "this source isn't recording what you picked" banner */
 .audio-live-warn {
   display: flex;
   gap: 10px;
@@ -4164,7 +4097,6 @@ body.ui-blur-exit .app-body {
   padding: 2px 8px;
 }
 
-/* Discord connection status text. */
 .clipdip-conn {
   font-size: 12px;
   color: var(--color-text-muted);
@@ -4173,7 +4105,6 @@ body.ui-blur-exit .app-body {
   color: #6bd18a;
 }
 
-/* Recording-dot preview button indicator. */
 .rec-dot {
   width: 8px;
   height: 8px;
@@ -4186,7 +4117,7 @@ body.ui-blur-exit .app-body {
   box-shadow: 0 0 7px rgba(244, 114, 182, 0.8);
 }
 
-/* ================= Onboarding wizard (3.0 intro) ================= */
+/* onboarding wizard (3.0 intro) */
 
 .ob-backdrop {
   position: fixed;
@@ -4227,15 +4158,14 @@ body.ui-blur-exit .app-body {
   overflow-x: hidden;
 }
 
-/* -- Welcome -- */
+/* welcome */
 .ob-welcome {
   display: flex;
   flex-direction: column;
   min-height: 100%;
 }
 
-/* Full uncropped banner (1779x724); the copy below is kept compact enough
-   that the whole step fits the panel without scrolling. */
+/* full uncropped banner (1779x724); copy below stays compact so the step fits without scrolling */
 .ob-hero {
   flex: none;
   position: relative;
@@ -4247,7 +4177,7 @@ body.ui-blur-exit .app-body {
   user-select: none;
   -webkit-user-drag: none;
 }
-/* Fade the banner into the panel so it reads as one surface. */
+/* fade the banner into the panel so it reads as one surface */
 .ob-hero::after {
   content: "";
   position: absolute;
@@ -4275,7 +4205,7 @@ body.ui-blur-exit .app-body {
   max-width: none;
 }
 
-/* -- Shared step layout -- */
+/* shared step layout */
 .ob-kicker {
   display: flex;
   align-items: center;
@@ -4304,9 +4234,8 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-secondary);
 }
 
-/* Split step: copy column left, asset stage bleeding off the right edge.
-   The step itself clips (not the stage), so artwork wider than the stage
-   continues behind the copy column instead of cutting off mid-panel. */
+/* copy column left, asset stage bleeds off the right edge
+   the step clips (not the stage), so wide artwork continues behind the copy column instead of cutting off mid-panel */
 .ob-split {
   position: relative;
   flex: 1;
@@ -4327,7 +4256,7 @@ body.ui-blur-exit .app-body {
   flex: 1;
   min-width: 0;
 }
-/* Soft purple wash behind the asset so it feels staged, not pasted. */
+/* soft purple wash behind the asset so it feels staged, not pasted */
 .ob-stage::before {
   content: "";
   position: absolute;
@@ -4348,30 +4277,25 @@ body.ui-blur-exit .app-body {
   -webkit-user-drag: none;
   filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.55));
 }
-/* Per-asset framing, derived from each file's measured alpha bounding box so
-   the solid content always lands inside the stage while only transparent
-   padding and glow hang off the edges (stage is ~592px wide at full size).
-   overlay.webp 1317w: card spans x270-1046 -> right -198 puts the card's
-   right edge flush with the panel border, glow streak bleeds past. */
+  /* per-asset framing derived from each file's measured alpha bounding box (stage ~592px wide at full size)
+     overlay.webp 1317w: card x270-1046, right -198 flush with panel border, glow bleeds past */
 .ob-stage-clipdip img {
   width: 960px;
   right: -198px;
   top: 46%;
 }
-/* mixer png 1273x1162: video frame runs to the file's right edge, so it must
-   sit flush (right 0), never past it. Content is vertically balanced. */
+  /* mixer.png 1273x1162: video frame runs to the right edge, must sit flush (right 0); content is vertically balanced */
 .ob-stage-mixer img {
   width: 700px;
   right: 0;
 }
-/* pills png 1067w: content ends at x877, the last 190px are transparent ->
-   right -157 aligns the card's right edge with the panel border. */
+  /* pills.png 1067w: content ends at x877 (190px transparent after); right -157 aligns the card's edge with the panel border */
 .ob-stage-pills img {
   width: 880px;
   right: -157px;
 }
 
-/* -- Feature list (welcome) -- */
+/* feature list (welcome) */
 .ob-features {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -4407,7 +4331,7 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-secondary);
 }
 
-/* -- Setting-style rows inside steps -- */
+/* setting-style rows inside steps */
 .ob-rows {
   display: flex;
   flex-direction: column;
@@ -4461,7 +4385,7 @@ body.ui-blur-exit .app-body {
   color: #f0b2a8;
 }
 
-/* -- Discord status -- */
+/* discord status */
 .ob-status-dot {
   width: 8px;
   height: 8px;
@@ -4478,7 +4402,7 @@ body.ui-blur-exit .app-body {
   box-shadow: 0 0 8px rgba(227, 192, 107, 0.5);
 }
 
-/* -- Compact audio source rows -- */
+/* compact audio source rows */
 .ob-audio-source {
   display: flex;
   align-items: center;
@@ -4531,14 +4455,14 @@ body.ui-blur-exit .app-body {
   gap: 8px;
 }
 
-/* -- Single-column steps (hotkeys, done): centered both ways. -- */
+/* single-column steps (hotkeys, done): centered both ways */
 .ob-single {
   margin: auto;
   padding: 44px 48px;
   width: min(760px, 100%);
 }
 
-/* -- "Also new" cards on the done step -- */
+/* "also new" cards on the done step */
 .ob-cards {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -4573,7 +4497,7 @@ body.ui-blur-exit .app-body {
   margin-top: 22px;
 }
 
-/* -- Footer -- */
+/* footer */
 .ob-footer {
   flex: none;
   display: flex;
@@ -4585,7 +4509,7 @@ body.ui-blur-exit .app-body {
   background: rgba(255, 255, 255, 0.015);
 }
 
-/* Equal-width side slots keep the dots truly centered on every step. */
+/* equal-width side slots keep the dots truly centered on every step */
 .ob-footer > :first-child {
   flex: 1;
   display: flex;
@@ -4622,34 +4546,22 @@ body.ui-blur-exit .app-body {
 
 
 
-/* ---------- Boot reveal (src/renderer/boot/bootReveal.ts) ----------
-   The camera flies through the launcher's logo inside a bloom of the accent
-   colour while the whole library body pushes in from 1.5x to rest; the
-   rail, group headers and cards land from their own depths, every card's
-   colour glow blooms and settles, a vignette lifts, and a few motes of light
-   drift up across the library. Transform and opacity only, on layers that
-   exist before the reveal (.boot-pre promotion and the overlay's static base
-   state); the .run, .boot-dolly and .boot-par classes only start the
-   animations. A will-change layer keeps the raster scale it was created
-   with, so the 14x logo, the 4.5x bloom and the 1.5x body are the GPU
-   upscaling textures rasterised at rest, never a re-raster mid-flight. */
+/* boot reveal (src/renderer/boot/bootReveal.ts): camera flies through the logo in a bloom while the body scales 1.5x to rest; rail/headers/cards land from their own depths, glow blooms, vignette lifts, motes drift
+   transform/opacity only, on layers that exist pre-reveal (.boot-pre, overlay static base); .run/.boot-dolly/.boot-par only start animations
+   will-change keeps raster scale: the 14x logo, 4.5x bloom, 1.5x body are GPU-upscaled textures rasterized at rest, never re-rastered mid-flight */
 .boot-pre {
   will-change: transform, opacity;
 }
-/* No hover while the intro plays: the cursor often sits on the grid when the
-   window appears, and a card's hover style repaints its tile inside the
-   moving body. Any pointer press still ends the intro (bootHold). */
+  /* no hover while the intro plays: cursor often sits on the grid at window-open, and hover style would repaint a tile mid-animation
+     any pointer press still ends the intro (bootHold) */
 .app-body.boot-nohover {
   pointer-events: none;
 }
 .app-shell.boot-clip {
   overflow: hidden;
 }
-/* A 3D push, not scale(): for a scale() animation the compositor rasters
-   the layer at the animation's largest scale (1.5x of the whole library:
-   a 32 MB texture and every thumbnail decoded again, measured as 200 to 380 ms
-   stalls). A perspective push has no computable maximum scale, so the layer
-   keeps its 1x raster and the GPU upscales it. 1200 / (1200 - 400) = 1.5x. */
+  /* 3D push, not scale(): scale() rasters at the largest scale (1.5x of the library: 32 MB texture, every thumbnail redecoded, measured 200-380ms stalls)
+     perspective push has no max scale, so the layer stays at 1x raster and the GPU upscales it; 1200/(1200-400) = 1.5x */
 .app-body.boot-dolly {
   animation: boot-dolly 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 40ms both;
 }
@@ -4657,8 +4569,7 @@ body.ui-blur-exit .app-body {
   from { transform: perspective(1200px) translateZ(400px); }
   to { transform: perspective(1200px) translateZ(0); }
 }
-/* Depth parallax inside the push: the rail from the left, headers from
-   above, cards from below and a hair bigger, each on its own --boot-d. */
+  /* depth parallax: rail from the left, headers from above, cards from below and a hair bigger, each on its own --boot-d */
 .rail.boot-par {
   animation: boot-par-rail 700ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
 }
@@ -4680,9 +4591,8 @@ body.ui-blur-exit .app-body {
   from { opacity: 0; transform: translateY(28px) scale(1.04); }
   to { opacity: 1; transform: none; }
 }
-/* Grid glow: one canvas behind the cards with the blur already baked in
-   (see buildGlowCanvas); only its opacity moves. Same blend as the hover
-   glow so it reads as the same light. */
+  /* grid glow: one canvas behind the cards with blur baked in (buildGlowCanvas), only opacity moves
+     same blend as the hover glow so it reads as the same light */
 .clip-grid > canvas.boot-glow {
   position: absolute;
   z-index: 0;
@@ -4706,8 +4616,7 @@ body.ui-blur-exit .app-body {
   pointer-events: none;
   overflow: hidden;
 }
-/* The body's opacity ride is a solid cover fading out instead, so the body
-   never needs an offscreen surface of its own. */
+  /* body's opacity ride is a solid cover fading out, so the body never needs its own offscreen surface */
 #boot-reveal .boot-cover {
   position: absolute;
   inset: 0;
@@ -4742,8 +4651,7 @@ body.ui-blur-exit .app-body {
   from { opacity: 1; }
   to { opacity: 0; }
 }
-/* Afterglow: mounted before the reveal at its starting scale (see the
-   note on raster scale above). */
+  /* afterglow mounted before the reveal at its starting scale (see the raster-scale note above) */
 #boot-reveal .boot-flash {
   position: absolute;
   border-radius: 50%;
@@ -4768,8 +4676,7 @@ body.ui-blur-exit .app-body {
   opacity: 0;
   will-change: transform, opacity;
 }
-/* Linear drift; the opacity ramps up quickly, holds, then eases out over
-   the second half so a mote fades away rather than switching off. */
+  /* linear drift; opacity ramps up quickly, holds, eases out over the second half so a mote fades rather than switches off */
 #boot-reveal .boot-mote.run {
   animation: boot-mote var(--boot-dur, 2200ms) linear var(--boot-d, 0ms) both;
 }
@@ -4781,20 +4688,13 @@ body.ui-blur-exit .app-body {
   100% { opacity: 0; transform: translate(var(--boot-dx, 0px), var(--boot-dy, -60px)) scale(1.15); }
 }
 
-/* Scroll activity (ClipGrid): no hover on the cards until it settles; the
-   card under the cursor is re-entered when it does. */
+  /* scroll activity (ClipGrid): no card hover until scrolling settles; the card under the cursor re-enters then */
 .clip-scroll.is-scrolling .clip-item {
   pointer-events: none;
 }
 
-/* Offscreen groups are skipped by the browser: no layout, paint or
-   compositing work for them, so a compositing update costs what is near the
-   viewport rather than the whole library (scrolling with the cursor on the
-   grid measured at one vsync with this, 12 ms without). --group-h is the
-   height reserved for a group not yet laid out (ClipGroup, from the
-   measured columns and row height); once rendered, auto keeps the real one.
-   The padding, cancelled by the margin, keeps the hover shadow (30 px blur,
-   10 px down) inside the containment box so it is not clipped at the edges. */
+  /* offscreen groups are skipped (no layout/paint/compositing): scrolling measured at 1 vsync with this, 12ms without
+     --group-h reserves height before layout (ClipGroup metrics); padding cancelled by margin keeps the 30px/10px hover shadow from clipping at the edges */
 .clip-group-content {
   content-visibility: auto;
   contain-intrinsic-block-size: auto var(--group-h, 1200px);
@@ -4802,15 +4702,12 @@ body.ui-blur-exit .app-body {
   margin: -20px -20px -32px;
 }
 
-/* During the boot intro (bootReveal.markLiveGroups): the groups near the
-   viewport stay as they are; every other group is hidden outright, so the
-   moving body cannot pull them into layout and paint mid-animation. */
+  /* boot intro (bootReveal.markLiveGroups): only groups near the viewport render; others are hidden outright so the moving body can't pull them into layout/paint */
 .app-body.boot-nohover .clip-group-content:not(.boot-live) {
   content-visibility: hidden;
 }
 
-/* The motes share one layer so the scroll wind can move them together
-   (bootReveal.attachWind). */
+  /* motes share one layer so the scroll wind can move them together (bootReveal.attachWind) */
 #boot-reveal .boot-motes {
   position: absolute;
   inset: 0;

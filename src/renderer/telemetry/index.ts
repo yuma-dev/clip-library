@@ -1,17 +1,6 @@
-// Renderer telemetry client.
-//
-// The renderer bundle is plain ESM (Vite) and cannot `require('electron')`, so
-// everything batches here and leaves through `window.clips.telemetryReport`,
-// which preload forwards on the `telemetry-report` channel. The real work
-// (coalescing, disk queue, upload, opt-out) lives in main/telemetry.
-//
-// Rules for call sites:
-//   - nothing in this module may throw into app code, so every entry point
-//     swallows its own errors and returns void;
-//   - context carries numbers, booleans and enum strings ONLY. No clip names,
-//     file names, tag text, search queries, paths or account identifiers.
-//     Error *messages* are deliberately never sent: they routinely embed the
-//     file name that failed. Frames and the error name are enough to group.
+// Renderer telemetry client: batches, then sends via window.clips.telemetryReport
+// (preload forwards it on the telemetry-report IPC channel to main/telemetry).
+// Context/dims: numbers, booleans, enum strings only, never names/paths/error messages.
 
 import type { Route } from "../routes";
 import type {
@@ -26,14 +15,13 @@ import type {
 const CODE_PATTERN = /^[a-z0-9_]{3,64}$/;
 
 const FLUSH_INTERVAL_MS = 5000;
-// Same window main/telemetry uses, so a code that slips past one gate is still
-// caught by the other.
+// same window main/telemetry uses, so either gate catches a code the other misses
 const DEDUPE_WINDOW_MS = 60000;
 const MAX_EVENTS_PER_SESSION = 100;
-// main drops anything past these per message, so we chunk instead of losing it.
+// main drops overflow past these per message; chunk here instead of losing it
 const MAX_EVENTS_PER_MESSAGE = 50;
 const MAX_METRICS_PER_MESSAGE = 100;
-// Backstop for a pathological loop recording metrics faster than we flush.
+// backstop for a pathological loop recording metrics faster than we flush
 const MAX_PENDING_METRICS = 400;
 const MAX_FRAMES = 3;
 const MAX_FRAME_CHARS = 200;
@@ -66,13 +54,11 @@ let installed = false;
 let currentRoute: string = "library";
 
 const lastSeen = new Map<string, number>();
-// Long tasks are counted per route and drained as one sample per flush; a
-// sample per task would swamp the batch during a bad frame storm.
+// counted per route, drained as one sample per flush, not one per task
 const longTaskCounts = new Map<string, number>();
 
-// ---------------------------------------------------------------- helpers ---
 
-/** djb2, mirroring `hash32` in main/telemetry/index.js exactly. */
+/** djb2, mirrors hash32 in main/telemetry/index.js */
 function hash32(input: string): string {
   let h = 5381;
   const s = String(input);
@@ -114,8 +100,6 @@ export function fingerprint(code: string, error?: unknown): string {
 export function setTelemetryRoute(route: Route): void {
   currentRoute = route;
 }
-
-// --------------------------------------------------------------- transport ---
 
 function transport(payload: TelemetryReport): void {
   window.clips?.telemetryReport?.(payload);
@@ -161,14 +145,8 @@ function scheduleFlush(): void {
   }, FLUSH_INTERVAL_MS);
 }
 
-// ------------------------------------------------------------------- api ---
-
-/**
- * Record an event. Never throws, never returns anything to await.
- *
- * Same code + fingerprint inside DEDUPE_WINDOW_MS is dropped locally, so a
- * render loop cannot flood the IPC channel.
- */
+/** Never throws. Same code+fingerprint within DEDUPE_WINDOW_MS is dropped locally
+ * so a render loop cannot flood the IPC channel. */
 export function reportEvent(code: string, opts: ReportEventOptions = {}): void {
   try {
     if (typeof code !== "string" || !CODE_PATTERN.test(code)) return;
@@ -181,7 +159,7 @@ export function reportEvent(code: string, opts: ReportEventOptions = {}): void {
     lastSeen.set(key, now);
 
     if (eventsThisSession >= MAX_EVENTS_PER_SESSION) {
-      // One explicit event rather than silent truncation, then nothing more.
+      // one explicit cap event, then nothing more
       if (capReported) return;
       capReported = true;
       pendingEvents.push({
@@ -217,8 +195,7 @@ export function reportEvent(code: string, opts: ReportEventOptions = {}): void {
       ...(opts.coalesceMs !== undefined ? { coalesceMs: opts.coalesceMs } : {}),
     });
 
-    // Anything at error or above goes out now: the next thing to happen may be
-    // the window dying, and beforeunload does not fire on a hard crash.
+    // error/fatal flush now: a hard crash never fires beforeunload
     if (severity === "error" || severity === "fatal") flushTelemetry();
     else scheduleFlush();
   } catch {
@@ -244,13 +221,10 @@ export function reportMetric(name: string, value: number, opts: ReportMetricOpti
   }
 }
 
-// ------------------------------------------------------------ installation ---
-
 function installErrorHandlers(): void {
   try {
     window.addEventListener("error", (event: ErrorEvent) => {
-      // Resource errors (a thumbnail 404, a video that won't load) also fire
-      // here with the element as target and no Error object. Not our signal.
+      // resource errors (404 thumbnail, bad video) also land here with no Error object
       if (event.target && event.target !== window) return;
       reportEvent("js_uncaught_error", { kind: "error", severity: "error", error: event.error });
     });
@@ -277,11 +251,8 @@ function installLifecycleHooks(): void {
   }
 }
 
-/**
- * Label for an interaction, from the closest `[data-perf]` ancestor. Same
- * convention as src/renderer/perf/interactions.ts, copied rather than imported:
- * that whole tree is dev-only and gets stripped from production builds.
- */
+/** Label from closest [data-perf] ancestor; same convention as
+ * perf/interactions.ts, copied since that tree is dev-only and stripped from prod. */
 function interactionAction(entry: PerformanceEntry): string {
   try {
     const target = (entry as unknown as { target?: unknown }).target;
@@ -298,8 +269,7 @@ function interactionAction(entry: PerformanceEntry): string {
 }
 
 function installPerformanceObservers(): void {
-  // Entry types vary by Chromium version, so each observer is guarded on its
-  // own: an unsupported one must not take the other down with it.
+  // each observer guarded separately: an unsupported type must not kill the other
   try {
     const longTasks = new PerformanceObserver((list) => {
       const count = list.getEntries().length;
@@ -328,7 +298,7 @@ function installPerformanceObservers(): void {
   }
 }
 
-/** Install the global handlers, flush hooks and observers. Idempotent. */
+/** Install handlers, flush hooks and observers once. */
 export function initTelemetry(): void {
   try {
     if (installed) return;

@@ -56,7 +56,7 @@ async function resolveSharingConfig(settings, overrides = {}) {
 
   const legacyToken = sanitizeToken(sharing.apiToken);
   if (legacyToken) {
-    // Seamless migration path from prior plaintext settings token.
+    // migrate prior plaintext settings token to secure storage
     try {
       await authStore.setToken(legacyToken);
     } catch (error) {
@@ -190,18 +190,15 @@ async function parseJsonSafe(text) {
   }
 }
 
-// Segments we know are route names. Anything else is treated as an id and
-// masked, so a clip id, a user id or a username can never reach telemetry.
+// known route segments; anything else is treated as an id and masked so a
+// clip id, user id, or username never reaches telemetry
 const KNOWN_API_SEGMENTS = new Set([
   'auth', 'me', 'token', 'tokens', 'users', 'banner', 'clips', 'comments',
   'reactions', 'favorite', 'share', 'notifications', 'feed', 'tags', 'stats'
 ]);
 
-/**
- * Turn a request path into a low-cardinality template for telemetry:
- * `/clips/abc123/comments?limit=20` -> `/clips/:id/comments`. The query string
- * is dropped entirely (it carries search text).
- */
+// low-cardinality telemetry template, e.g. /clips/abc123/comments?limit=20
+// becomes /clips/:id/comments; query string dropped (carries search text)
 function normalizeApiEndpoint(requestPath) {
   if (typeof requestPath !== 'string' || !requestPath.startsWith('/')) return 'unknown';
   const withoutQuery = requestPath.split(/[?#]/)[0];
@@ -220,8 +217,7 @@ function statusClassOf(status) {
 async function fetchWithTimeout(url, options = {}, timeoutMs = CONNECTION_TIMEOUT_MS, endpoint = null) {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
-    // Nothing in this file retries, so a timeout is the end of the road for
-    // whatever the user was doing.
+    // nothing in this file retries; a timeout ends whatever the user was doing
     telemetry.event('share_api_timeout', {
       kind: telemetry.KIND.DEGRADED,
       severity: telemetry.SEVERITY.WARNING,
@@ -380,9 +376,8 @@ async function postMultipartClip({
   onProgress,
   timeoutMs = UPLOAD_TIMEOUT_MS,
   redirectCount = 0,
-  // Optional out-param filled in for telemetry. The progress bar counts bytes
-  // written into the socket, not bytes acked, so it sits at 100% for the whole
-  // server-side ingest; requestEndAt/responseAt make that window measurable.
+  // telemetry out-param: progress counts bytes written not acked, so it sits at
+  // 100% through server ingest; requestEndAt/responseAt make that measurable
   stats = null
 }) {
   const target = new URL(endpoint);
@@ -618,8 +613,7 @@ async function shareClip(payload, getSettings, ffmpegModule, onProgress) {
 
     const fileStats = await fsp.stat(exportedPath);
     if (fileStats.size > MAX_UPLOAD_BYTES) {
-      // Only checked after a full ffmpeg export, so the user has already paid
-      // for the whole thing by the time this fires.
+      // checked only after the full ffmpeg export, so the user already paid for it
       telemetry.event('share_upload_too_large', {
         kind: telemetry.KIND.ERROR,
         severity: telemetry.SEVERITY.WARNING,
@@ -769,12 +763,8 @@ function getBannerMimeType(filePath) {
   }
 }
 
-/**
- * Upload a profile banner image to POST /users/me/banner (multipart, field
- * "file"). Mirrors the website EditProfileModal banner upload. Sends BOTH auth
- * forms (Bearer + `token` cookie) like apiRequest, since banner is a write
- * route and some server routes only accept the cookie form.
- */
+// POST /users/me/banner (multipart, field "file"); mirrors the website's
+// EditProfileModal upload; sends Bearer + `token` cookie like apiRequest
 async function uploadProfileBanner(getSettings, filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     return { success: false, error: 'No banner file selected.' };
@@ -909,12 +899,9 @@ async function fetchMentionableUsers(getSettings, overrides = {}) {
 }
 
 /**
- * Generic authenticated JSON request against the ClipLib share API, used by
- * the in-app feed (list clips, reactions, comments, profiles). Keeps the
- * Bearer token main-side; the renderer only ever sees response payloads.
+ * authenticated JSON request against the ClipLib API; Bearer token stays main-side
  * @param {Function} getSettings
- * @param {{method?: string, path?: string, body?: any}} request - path is
- *   relative to `/api`, e.g. '/clips?limit=20'
+ * @param {{method?: string, path?: string, body?: any}} request - path relative to `/api`
  * @returns {Promise<{success: boolean, status?: number, data?: any, error?: string}>}
  */
 async function apiRequest(getSettings, request = {}) {
@@ -931,9 +918,8 @@ async function apiRequest(getSettings, request = {}) {
     return { success: false, status: 400, error: 'Invalid API path.' };
   }
 
-  // Bearer covers most GET routes, but several routes (reaction/comment
-  // writes, thumbnails) only accept cookie auth — the API token is valid as a
-  // `token` cookie, so send both (same as installMediaAuthHeaders).
+  // some routes (reaction/comment writes, thumbnails) only accept cookie auth;
+  // the API token is valid as a `token` cookie too, so send both
   const options = {
     method,
     headers: { Authorization: `Bearer ${apiToken}`, Cookie: `token=${apiToken}` }
@@ -943,9 +929,7 @@ async function apiRequest(getSettings, request = {}) {
     options.body = JSON.stringify(request.body);
   }
 
-  // One choke point for 25+ endpoints, so this is where the feed's error rate
-  // and latency actually become visible. Never send the raw path: it carries
-  // clip ids, user ids and search text.
+  // one choke point for 25+ endpoints; never send the raw path, it carries ids and search text
   const endpoint = normalizeApiEndpoint(requestPath);
   const startedAt = Date.now();
 
@@ -999,14 +983,8 @@ async function apiRequest(getSettings, request = {}) {
 }
 
 /**
- * Attach the ClipLib token to renderer-originated requests for the share
- * server (video streams, thumbnails, banners loaded via <video>/<img> src).
- * JSON API calls go through apiRequest() instead; this only exists so media
- * elements can hit authenticated endpoints directly.
- *
- * Sends BOTH auth forms: `Authorization: Bearer` (accepted by /stream) and a
- * `token` cookie — some server routes (e.g. /clips/:id/thumbnail) only accept
- * cookie auth, and the API token is valid as a `token` cookie value.
+ * attaches the ClipLib token to renderer media requests (<video>/<img> src); JSON
+ * calls use apiRequest() instead. Sends Bearer + `token` cookie (some routes need cookie)
  * @param {Electron.Session} session
  */
 function installMediaAuthHeaders(session) {
@@ -1022,8 +1000,7 @@ function installMediaAuthHeaders(session) {
         callback({ requestHeaders: details.requestHeaders });
       })
       .catch((error) => {
-        // Every media request from here on goes out unauthenticated, which the
-        // user only ever sees as broken thumbnails and videos.
+        // media requests go out unauthenticated; user just sees broken thumbnails/video
         telemetry.event('media_request_unauthenticated', {
           kind: telemetry.KIND.SILENT_FAILURE,
           severity: telemetry.SEVERITY.ERROR,

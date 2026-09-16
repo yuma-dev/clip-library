@@ -3,17 +3,15 @@ const bootTrace = require('./main/boot-trace');
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen, crashReporter } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 
-// ClipLib rebrand keeps the pre-rename data: packaged Electron derives
-// userData from productName ("Clips" -> "ClipLib"), which would silently
-// abandon settings/thumbnails in %APPDATA%\Clips. Pin the old folder while it
-// exists. Must run before ANY userData consumer (incl. the logger below).
+// Clips->ClipLib rename: Electron derives userData from productName, which would
+// abandon settings/thumbnails in the old %APPDATA%\Clips. Pin it if present; must run before any
+// userData use (incl. logger below).
 {
   const path = require('path');
   const fs = require('fs');
   const legacyUserData = path.join(app.getPath('appData'), 'Clips');
   if (process.env.CLIPLIB_PROFILE_DIR) {
-    // Benchmark harness (benchmark/cold-start.js): an isolated profile so
-    // runs never touch the real one.
+    // benchmark harness (benchmark/cold-start.js): isolated profile so runs never touch the real one.
     app.setPath('userData', path.resolve(process.env.CLIPLIB_PROFILE_DIR));
   } else if (fs.existsSync(legacyUserData)) {
     app.setPath('userData', legacyUserData);
@@ -24,13 +22,11 @@ const logger = require('./utils/logger');
 const consoleBuffer = require('./utils/console-log-buffer');
 consoleBuffer.patchConsole();
 
-// Anonymous diagnostics. Required this early so the process-level handlers
-// below can report; init() lands once settings are loaded (createWindow).
-// Events recorded before init are buffered and replayed there.
+// diagnostics: needed early for the crash handlers below to report; telemetry.init() runs
+// later in createWindow(), events recorded before that are buffered and replayed.
 const telemetry = require('./main/telemetry');
 
-// Start of the module-load phase, mirroring the benchmark harness mark below.
-// Kept unconditionally so startup timings exist in production too.
+// start of the module-load phase; kept unconditionally so startup timings exist in production too.
 const moduleLoadStartedAt = Date.now();
 
 // ms since process start (perf_hooks' timeOrigin), the baseline for
@@ -40,14 +36,12 @@ const perfNow = () => require('perf_hooks').performance.now();
 // Coarse startup/running split for the crash handlers below.
 let appIsReady = false;
 
-// Native crashes (Electron/Node/GPU) bypass the logger entirely; Crashpad
-// minidumps in userData\Crashpad are the only trace, so keep them locally.
-// Never uploaded; the diagnostics zip surfaces their metadata.
+// native crashes (Electron/Node/GPU) bypass the logger; Crashpad minidumps in
+// userData\Crashpad are the only trace. Never uploaded; the diagnostics zip surfaces their metadata.
 crashReporter.start({ uploadToServer: false });
 
-// A main-process JS crash would otherwise kill the process before anything
-// reaches userData\logs. Log it first, then exit; the timeout guarantees we
-// don't hang on a broken async logger.
+// a main-process crash would otherwise kill the process before userData\logs gets written.
+// log first then exit; the timeout guards against hanging on a broken async logger.
 process.on('uncaughtException', (error) => {
   // Recorded first: the queue append is synchronous, so it survives the
   // process.exit(1) below even when the logger never resolves.
@@ -74,7 +68,6 @@ process.on('unhandledRejection', (reason) => {
   logger.error('[fatal] unhandledRejection in main process (continuing):', error);
 });
 
-// Benchmark mode detection and harness initialization
 const isBenchmarkMode = process.env.CLIPS_BENCHMARK === '1';
 let benchmarkHarness = null;
 if (isBenchmarkMode) {
@@ -87,18 +80,15 @@ if (isBenchmarkMode) {
     logger.error('[Benchmark] Failed to load harness:', e);
   }
 }
-// Performance profiler (main side) — ONLY active on `npm run dev:trace`, which
-// sets CLIPS_PERF_STARTUP=1. Not in normal `npm run dev`, not in packaged
-// builds. Must run BEFORE any ipcMain.handle registration so it can wrap every
-// handler for timing. See benchmark/perf-main.js.
+// active only under npm run dev:trace (CLIPS_PERF_STARTUP=1), never in dev or packaged builds.
+// must run before any ipcMain.handle registration so it wraps every handler; see benchmark/perf-main.js.
 if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
   try {
     const perf = require('./benchmark/perf-main');
     perf.initPerfMain({ isDev: true });
     logger.info('[perf] dev:trace profiler initialized');
-    // Feed the startup mark sites already placed below (settingsLoad /
-    // fileWatcherSetup / windowCreation / appReady) by standing in as
-    // `benchmarkHarness` when the offline benchmark isn't running.
+    // stands in as `benchmarkHarness` for the mark sites below (settingsLoad/fileWatcherSetup/
+    // windowCreation/appReady) when the offline benchmark isn't running.
     if (!benchmarkHarness) {
       benchmarkHarness = perf.getStartupRecorder();
       benchmarkHarness.markStartup('moduleLoad');
@@ -108,17 +98,11 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
   }
 }
 
-// Time and report every ipcMain.handle body. Installed once, here, before the
-// first registration below; it composes with the dev-only perf wrapper above
-// rather than replacing it (whichever installed first ends up on the inside).
-// Channel names are a fixed enum from our own code, so they are safe as a dim.
-// Arguments and return values are never recorded.
+// times every ipcMain.handle body; installed before the dev-only perf wrapper above so they
+// compose (first installed ends up innermost). channel names only as dims; args/results never recorded.
 {
-  // Channels whose duration is user think time or a network transfer, not the
-  // app being slow: native dialogs the user has to answer, the OAuth round trip
-  // through the browser, uploads/downloads, and export jobs that run as long as
-  // the encode takes. They still report ipc.handler_ms, they just never fire
-  // the slow-call event.
+  // these channels are slow because of user think-time or network/encode duration, not app
+  // slowness (dialogs, oauth, uploads, exports). still timed, just never fire the slow-call event.
   const SLOW_EVENT_EXEMPT = new Set([
     'open-save-dialog',
     'open-folder-dialog',
@@ -171,26 +155,21 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
   };
 }
 
-// Defer heavy, non-startup-critical modules (axios/electron-updater,
-// discord-rpc, archiver) to first use — together they account for a
-// large slice of the ~530ms module-load phase before the window can open.
-// The Proxy loads the real module on first property access; require() caches.
+// axios/electron-updater, discord-rpc, archiver deferred to first use: together ~530ms of
+// module-load before the window can open. Proxy loads the real module on first property access.
 const lazyModule = (modulePath) =>
   new Proxy({}, { get: (_t, prop) => require(modulePath)[prop] });
 
 const updaterModule = lazyModule('./main/updater');
 const isDev = !app.isPackaged;
-// Unpackaged Electron is used by both the Vite development workflow and the
-// source benchmark runner. Only the former has a dev server. The benchmark
-// explicitly selects the built renderer so `electron .` never silently loads
-// (or waits for) an unrelated server on port 5173.
+// unpackaged electron is used by dev (vite server) and the source benchmark (built renderer);
+// the benchmark explicitly picks the built renderer so `electron .` never waits on port 5173.
 const useViteRenderer = isDev && process.env.CLIPLIB_RENDERER_MODE !== 'built';
 const path = require("path");
 const fs = require("fs").promises;
 const { loadSettings, saveSettings, updateSettings, getDefaultKeybindings, getClipLocation, setClipLocation } = require("./utils/settings-manager");
-// Modules that nothing needs before the library is on screen load on first
-// use (the Proxy defers the require); each one costs tens of ms at boot and
-// the browser thread cannot serve the renderer while it loads.
+// lazy: nothing needs these before the library is on screen; each costs tens of ms at boot
+// and the browser thread can't serve the renderer while one loads.
 const steelSeriesModule = lazyModule('./main/steelseries-processor');
 const { logActivity } = require('./utils/activity-tracker');
 const diagnosticsModule = lazyModule('./diagnostics/collector');
@@ -210,17 +189,13 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
-// FFmpeg module (fluent-ffmpeg and the binary paths; first needed for
-// thumbnails, well after the window is up)
+// fluent-ffmpeg + binary paths; not needed until thumbnails, well after the window is up
 const ffmpegModule = lazyModule('./main/ffmpeg');
 
-// Thumbnails module
 const thumbnailsModule = lazyModule('./main/thumbnails');
 
-// Metadata module
 const metadataModule = lazyModule('./main/metadata');
 
-// File watcher module
 const fileWatcherModule = require('./main/file-watcher');
 
 // Warms the slow, cacheable part of opening a clip ahead of the click.
@@ -228,19 +203,16 @@ const clipWarmer = require('./main/clip-warmer');
 // Library order (newest first) from the last get-clips, for the warmer.
 let lastClipNames = [];
 
-// Discord RPC module (lazy — discord-rpc is heavy and not needed to open the window)
+// lazy: discord-rpc is heavy, not needed to open the window
 const discordModule = lazyModule('./main/discord');
 
 // Discord profile widget pusher (lazy; inert without its userData token file)
 const discordWidgetModule = lazyModule('./main/discord-widget');
 
-// Renderer console ring buffer for diagnostics (log upload + zip)
 const rendererConsoleCapture = require('./main/renderer-console-capture');
 
-// Clips module
 const clipsModule = lazyModule('./main/clips');
 
-// Dialogs Module - handles all Electron dialog interactions
 const dialogsModule = lazyModule('./main/dialogs');
 
 // Integrated clipdip (clipdip binary): process lifecycle + TOML config bridge
@@ -255,7 +227,6 @@ function sendLog(window, type, message) {
   }
 }
 
-// Log ffmpeg version
 ipcMain.handle('get-ffmpeg-version', async (event) => {
   try {
     const version = await ffmpegModule.getFFmpegVersion();
@@ -277,10 +248,8 @@ let mainWindow;
 let mainWindowRevealed = false;
 let settings;
 
-// Side work that is not needed to show the library: it spawns processes
-// (ffmpeg, PowerShell, tasklist, clipdip) or blocks on COM, and on the
-// startup path it competed with the renderer and GPU process for the first
-// seconds of every launch. Runs once, shortly after the library is visible.
+// spawns processes (ffmpeg, powershell, tasklist, clipdip) or blocks on COM; on the startup
+// path it competed with the renderer/GPU for the first seconds. Runs once, after the library shows.
 let deferredServicesScheduled = false;
 function scheduleDeferredServices() {
   if (deferredServicesScheduled) return;
@@ -329,15 +298,12 @@ async function runDeferredServices() {
   });
   bootTrace.mark('deferred_ffmpeg_started');
 
-  // Machine block for the heartbeat. The collector needs the clip folder
-  // (volume class + free space, never the path itself) and is a no-op until
-  // telemetry.init() has run, which it has by now.
+  // machine block for the heartbeat: collector needs the clip folder (volume class + free
+  // space, never the path itself); no-op until telemetry.init() has run, which it has by now.
   if (!skip.has('machine')) void telemetry.collectMachine({ app, screen, clipLocation: settings.clipLocation });
 
-  // Bring the integrated clipdip up. Opt-out: the first launch where the
-  // user never chose (no clipdip.enabled key) auto-enables it — supported
-  // hardware only; a failed start records enabled=false so it never loops.
-  // Later launches just start it if it's enabled but not running.
+  // first launch with no clipdip.enabled key auto-enables clipdip (supported hardware only); a
+  // failed start records enabled=false so it never loops. later launches just start if enabled.
   if (!skip.has('clipdip')) clipdipModule
     .autoEnableIfUnconfigured(async (value) => {
       settings.clipdip = { ...(settings.clipdip || {}), enabled: value };
@@ -348,46 +314,25 @@ async function runDeferredServices() {
     })
     .catch((error) => logger.warn(`Clipdip bootstrap failed: ${error.message}`));
 
-  // The Clips → ClipLib rebrand renamed the exe, which orphans taskbar pins
-  // (their .lnk targets the old Clips.exe path). Retarget any pin whose
-  // Clips.exe target no longer exists to the running exe. Idempotent; cheap
-  // no-op when there's nothing to repair.
+  // Clips->ClipLib renamed the exe, orphaning taskbar pins (.lnk targets the old Clips.exe).
+  // retarget pins whose target no longer exists; idempotent, cheap no-op otherwise.
   bootTrace.mark('deferred_machine_clipdip_started');
   if (!skip.has('pins')) repairTaskbarPins().catch((error) => {
     logger.warn(`Taskbar pin repair failed: ${error.message}`);
   });
   bootTrace.mark('deferred_pins_done');
 
-  // Newest clips are the likeliest first opens; warm them once the other
-  // deferred work has had its moment.
+  // newest clips are the likeliest first opens; warm them once other deferred work settles.
   if (!skip.has('warm')) setTimeout(() => clipWarmer.warmMany(lastClipNames, 12), 3000);
 }
 
-// The window is created hidden and shown once, as soon as the renderer has
-// painted the library (or shortly after its first paint, whichever comes
-// first). There used to be a separate splash window here: its own renderer
-// process competed with the main window's, and its dismiss animation added a
-// fixed 300 ms between "library painted" and "library visible".
-// The window is created hidden and revealed once the compositor has framed
-// the library grid with its thumbnails (the renderer reports that state as
-// renderer-ready). Two facts drove this, both measured with a screen pixel
-// probe:
-//  - ready-to-show fires when the renderer submits its first frame, but the
-//    GPU process still needs time to compile shaders and raster before that
-//    frame can be presented; showing the window earlier means a white window
-//    until then. A tiny DevTools screencast of the hidden window reports each
-//    frame the compositor actually produces, so the reveal waits for the
-//    second one.
-//  - Windows presents one white frame for a window it has never shown. The
-//    window is shown at opacity 0 and made opaque one frame later.
-// The grid's first frame is expensive (about 600 ms of GPU work on a fast
-// machine), so the reveal lands at about 1.5 s after launch; anything earlier
-// is a white or empty window, not a faster app.
+// hidden until the compositor frames the painted library (renderer-ready), not just ready-to-show
+// (fires before the GPU rasters): wait for the 2nd screencast frame; opacity 0->1 avoids Windows'
+// first white frame; reveal ~1.5s (~600ms GPU work).
 const REVEAL_FALLBACK_MS = 1500;
 let framesSincePaint = 0;
-// screencastActive: the reveal still waits for compositor frames.
-// frameWatchAttached: the DevTools session is attached and must be torn down
-// whatever path the reveal took (a fallback clears screencastActive first).
+// screencastActive: reveal still waits for compositor frames. frameWatchAttached: dev tools
+// session is attached, must be torn down regardless of path (a fallback clears screencastActive first).
 let screencastActive = false;
 let frameWatchAttached = false;
 // Boot-trace only: compositor frame timestamps during the reveal animation.
@@ -440,9 +385,8 @@ function maybeReveal() {
 function revealMainWindow() {
   if (mainWindowRevealed) return;
   mainWindowRevealed = true;
-  // Only a reveal the compositor confirmed gets the animation: on the timer
-  // fallback the GPU is still busy with the first frame and would drop the
-  // animation's frames too.
+  // only a compositor-confirmed reveal gets the animation; on the timer fallback the GPU is
+  // still busy with the first frame and would drop the animation's frames too.
   const framed = screencastActive && framesSincePaint >= 2;
   scheduleDeferredServices();
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -460,11 +404,8 @@ function revealMainWindow() {
     if (bootTrace.enabled && frameWatchAttached) watchRevealFrames();
     else stopFrameWatch();
   };
-  // The renderer puts the library into the animation's first frame (cards
-  // turned away, the launcher's logo drawn in its place) and reports back once
-  // the compositor has that frame; only then is the window made opaque, so the
-  // hand-over from the launcher is seamless. A short cap keeps a slow renderer
-  // from delaying the reveal.
+  // renderer draws cards turned away + the launcher's logo in the first frame and reports back
+  // once the compositor has it; only then does the window go opaque. a timeout caps a slow renderer.
   const makeOpaque = (secondFrameSeen) => {
     if (opaque || mainWindow.isDestroyed()) return;
     opaque = true;
@@ -494,14 +435,13 @@ function revealMainWindow() {
     };
     dbg.on('message', onFrame);
   }
-  // The window is at opacity 0 meanwhile (the launcher's splash still covers
-  // it), so waiting a little longer for the two frames costs nothing visible.
+  // window is at opacity 0 meanwhile (launcher's splash still covers it), so waiting a little
+  // longer costs nothing visible.
   setTimeout(() => makeOpaque(false), 400);
 }
 
-// Boot-trace only: keep the tiny screencast running through the reveal
-// animation and record when the compositor produced each frame, so the bench
-// can tell whether the animation actually ran at the display's rate.
+// boot-trace only: keeps the screencast running through the reveal animation, recording each
+// compositor frame so the bench can tell if it ran at the display's rate.
 function watchRevealFrames() {
   revealFrameLog = [];
   setTimeout(() => {
@@ -533,9 +473,8 @@ let isProcessingProtocolQueue = false;
 const queuedProtocolUrls = [];
 const queuedCliplibAuthEvents = [];
 
-// Getter for cached settings (used by modules instead of loadSettings which reads from disk)
-// Settings load in parallel with the first window; anything that asks
-// before they land waits for that load instead of seeing undefined.
+// cached settings, used instead of loadSettings (disk read). settings load in parallel with
+// the first window; anything asking before they land awaits that load instead of seeing undefined.
 let settingsLoading = null;
 const getSettings = async () => settings ?? (await settingsLoading);
 clipWarmer.init(getSettings);
@@ -553,8 +492,7 @@ function registerCliplibProtocol() {
     }
     app.setAsDefaultProtocolClient(CLIPLIB_PROTOCOL);
   } catch (error) {
-    // Login can never complete without the protocol handler, and nothing in
-    // the UI says so.
+    // login can never complete without the protocol handler, and nothing in the UI says so.
     telemetry.event('protocol_registration_failed', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.ERROR,
@@ -595,9 +533,8 @@ function queueCliplibAuthEvent(eventPayload) {
   mainWindow.webContents.send('cliplib-auth-event', eventPayload);
 }
 
-// Generic main->renderer event queue for events that may fire before the
-// renderer is loaded (same lifecycle as the auth queue above, but not tied
-// to one channel). Used by cliplib://settings/... navigation deep links.
+// generic main->renderer event queue for events that may fire before the renderer loads (same
+// lifecycle as the auth queue above, not tied to one channel); used by cliplib://settings/... deep links.
 const queuedRendererEvents = [];
 
 function queueRendererEvent(channel, payload) {
@@ -674,9 +611,8 @@ function hasValidPendingCliplibSession() {
 }
 
 async function handleCliplibProtocolUrl(protocolUrl) {
-  // Navigation deep links (e.g. cliplib://settings/clipdip from the
-  // clipdip's tray icon) — everything else falls through to the original
-  // auth-callback handling.
+  // navigation deep links (e.g. cliplib://settings/clipdip from the tray icon); everything
+  // else falls through to the original auth-callback handling.
   try {
     const url = new URL(protocolUrl);
     if (url.host === 'settings') {
@@ -686,7 +622,7 @@ async function handleCliplibProtocolUrl(protocolUrl) {
       return;
     }
   } catch (_) {
-    // not a parseable URL — let the auth parser produce the error
+    // not a parseable URL, let the auth parser produce the error
   }
 
   const parsed = shareModule.parseDesktopAuthCallbackUrl(protocolUrl);
@@ -728,8 +664,8 @@ async function handleCliplibProtocolUrl(protocolUrl) {
     });
 
     if (!verify?.success) {
-      // The token itself may well be good: any transient blip on /auth/me
-      // throws it away and sends the user back to the login flow.
+      // the token itself may well be good: any transient blip on /auth/me throws it away and sends
+      // the user back to login.
       telemetry.event('auth_verify_discarded_token', {
         kind: telemetry.KIND.ERROR,
         severity: telemetry.SEVERITY.ERROR,
@@ -765,10 +701,9 @@ async function handleCliplibProtocolUrl(protocolUrl) {
   }
 }
 
-// Retarget taskbar pins orphaned by the Clips → ClipLib exe rename. Windows
-// taskbar pins are .lnk files whose target is the exe's full path; renaming
-// the exe leaves them pointing at a file the upgrade deleted. Only touches
-// pins that target a now-missing Clips.exe.
+// retargets taskbar pins orphaned by the Clips->ClipLib exe rename: .lnk targets the exe's
+// full path, which the rename left pointing at a deleted file. Only touches pins targeting a
+// missing Clips.exe.
 async function repairTaskbarPins() {
   if (!app.isPackaged) return;
   const fss = require('fs');
@@ -780,17 +715,13 @@ async function repairTaskbarPins() {
   try {
     entries = await fs.readdir(pinDir);
   } catch {
-    return; // no pin folder — nothing pinned
+    return; // no pin folder, nothing pinned
   }
   let scanned = 0;
   let repaired = 0;
   let failed = 0;
-  // shell.readShortcutLink resolves a link through COM, synchronously on the
-  // main thread, and a blocked main thread freezes every window's rendering:
-  // reading every pin that way was a 2 s freeze after each launch. The
-  // target path is stored in the .lnk bytes (ANSI and UTF-16), so an async
-  // read decides which links can be ours at all; only those go through COM,
-  // and a pin already on the launcher never does.
+  // shell.readShortcutLink runs through COM synchronously on the main thread; reading every pin
+  // that way was a 2s freeze per launch. an async byte read filters candidates first; only those hit COM.
   const execLower = process.execPath.toLowerCase();
   const launcherLower = path.join(path.dirname(process.execPath), 'ClipLib Launcher.exe').toLowerCase();
   const candidates = [];
@@ -818,13 +749,12 @@ async function repairTaskbarPins() {
       const details = shell.readShortcutLink(lnkPath);
       const target = details?.target || '';
       const lowered = target.toLowerCase();
-      // Prefer the native launcher next to the app (instant splash); the
-      // Electron binary itself is the fallback.
+      // prefers the native launcher next to the app (instant splash), else the Electron binary.
       const launcher = path.join(path.dirname(process.execPath), 'ClipLib Launcher.exe');
       const haveLauncher = fss.existsSync(launcher);
       const orphanedLegacy = lowered.endsWith('\\clips.exe') && !fss.existsSync(target);
-      // A pin created from the running window targets the Electron exe;
-      // move it to the launcher once, so pinned launches get the splash.
+      // a pin created from the running window targets the Electron exe; move it to the launcher
+      // once so pinned launches get the splash.
       const pinnedElectron = haveLauncher && lowered === process.execPath.toLowerCase();
       if (!orphanedLegacy && !pinnedElectron) continue;
       const newTarget = haveLauncher ? launcher : process.execPath;
@@ -839,13 +769,12 @@ async function repairTaskbarPins() {
       repaired += 1;
       logger.info(`Repaired orphaned taskbar pin: ${name}`);
     } catch {
-      // unreadable/foreign .lnk — skip
+      // unreadable/foreign .lnk, skip
       failed += 1;
     }
   }
   if (failed > 0) {
-    // A pin that stays orphaned launches nothing when clicked, and the user
-    // never learns why.
+    // a pin that stays orphaned launches nothing when clicked, and the user never learns why.
     telemetry.event('taskbar_pin_repair_failed', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.WARNING,
@@ -886,8 +815,8 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 const initialProtocolUrl = extractCliplibProtocolUrl(process.argv);
 
-// The native launcher passes where it drew its logo (physical screen pixels)
-// so the renderer can take the logo over in place when the window is revealed.
+// native launcher passes where it drew its logo (physical screen pixels) so the renderer can take
+// it over in place on reveal.
 const splashLogoRect = (() => {
   const arg = process.argv.find((a) => a.startsWith('--splash-logo='));
   if (!arg) return null;
@@ -934,15 +863,14 @@ app.on('open-url', (event, protocolUrl) => {
   queueProtocolUrl(protocolUrl);
 });
 
-// Renderer death. The window goes white or blank and the app keeps running,
-// so without this the only trace is a user saying "it froze".
+// renderer death: window goes white/blank and the app keeps running; without this the only trace is
+// a user saying "it froze".
 app.on('render-process-gone', (event, webContents, details) => {
   telemetry.event('renderer_process_gone', {
     kind: telemetry.KIND.CRASH,
     severity: telemetry.SEVERITY.FATAL,
-    // A one-line summary so the issue list is readable without opening the
-    // event. These lifecycle codes carry no natural error message, and without
-    // one the dashboard row is just the code name.
+    // one-line summary so the issue list is readable without opening the event; these lifecycle
+    // codes carry no natural error message otherwise.
     message: `renderer process gone: ${details?.reason || 'unknown'} (exit ${details?.exitCode ?? '?'})`,
     context: {
       reason: details?.reason,
@@ -952,8 +880,7 @@ app.on('render-process-gone', (event, webContents, details) => {
   });
 });
 
-// GPU / utility / pepper plugin processes. A dead GPU process is the usual
-// cause of "video plays black" reports.
+// GPU/utility/pepper plugin processes. A dead GPU process is the usual cause of "video plays black" reports.
 app.on('child-process-gone', (event, details) => {
   telemetry.event('child_process_gone', {
     kind: telemetry.KIND.CRASH,
@@ -968,16 +895,14 @@ app.on('child-process-gone', (event, details) => {
   });
 });
 
-// Windows logoff/shutdown. Distinguishes an OS shutdown from a crash, which
-// otherwise both look like a session that stopped heartbeating.
+// Windows logoff/shutdown, distinguished from a crash: both otherwise look like a session that
+// stopped heartbeating.
 app.on('session-end', () => {
   telemetry.sessionEnd('shutdown');
 });
 
-// clipdip's anonymous install id, resolved the same way main/clipdip.js builds
-// its data dir. Sharing the id is what joins a cliplib session to the clipdip
-// crash reports from the same machine. Returns a path that may not exist; the
-// telemetry core falls back to a local id then.
+// clipdip's anonymous install id (same resolution as main/clipdip.js's data dir); sharing it
+// joins a cliplib session to clipdip crash reports. path may not exist; telemetry falls back to a local id.
 function clipdipInstallIdPath() {
   try {
     const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local');
@@ -987,8 +912,7 @@ function clipdipInstallIdPath() {
   }
 }
 
-// The heartbeat's `app` block, from settings only. Never carries clipLocation,
-// binaryPath, apiToken or serverUrl.
+// heartbeat's `app` block, from settings only. Never carries clipLocation, binaryPath, apiToken or serverUrl.
 function reportAppInfo() {
   try {
     if (!settings) return;
@@ -1015,8 +939,7 @@ function reportAppInfo() {
   }
 }
 
-// Library size as a bucket. The raw count is a fingerprint-grade number and is
-// never sent; the bucket answers every question we actually ask of it.
+// library size as a bucket: the raw count is fingerprint-grade and never sent.
 function clipCountBucket(count) {
   if (count <= 0) return '0';
   if (count <= 50) return '1_50';
@@ -1027,11 +950,8 @@ function clipCountBucket(count) {
   return '20k_plus';
 }
 
-// The dynamic half of the `app` block: state that only exists at runtime, so
-// it cannot come from settings the way reportAppInfo's fields do. Every probe
-// is guarded on its own, because one unreachable clip folder must not cost us
-// the other five fields. A field that will not resolve is omitted rather than
-// sent as null. Never throws and is never awaited.
+// dynamic half of the `app` block (state settings can't provide); each probe is guarded alone so
+// one failure doesn't cost the other fields. unresolved fields are omitted, not null. never throws/awaited.
 async function reportDynamicAppInfo() {
   const info = {};
 
@@ -1041,8 +961,7 @@ async function reportDynamicAppInfo() {
   } catch (_) { /* no successful scan yet */ }
 
   try {
-    // 4 min TTL cache behind this, so it is a memory read on all but the
-    // first call of the session.
+    // 4 min TTL cache behind this; a memory read on all but the first call of the session.
     const { bytes } = await clipsModule.getClipsFolderSize(getSettings);
     if (Number.isFinite(bytes)) info.library_bytes_gb = Math.round((bytes / 1e9) * 10) / 10;
   } catch (_) { /* folder unreadable */ }
@@ -1074,10 +993,8 @@ async function reportDynamicAppInfo() {
   telemetry.setAppInfo(info);
 }
 
-// Off the startup path deliberately: the first pass is late enough that the
-// library scan and the ffmpeg probe have already happened, so it reads caches
-// instead of warming them. The heartbeat only transmits `app` when a value
-// changed, so re-running it on the interval is nearly free.
+// off the startup path deliberately: by the first pass the library scan and ffmpeg probe have
+// already run, so it reads caches. heartbeat only sends `app` on change, so reruns are nearly free.
 const DYNAMIC_APP_INFO_FIRST_MS = 60000;
 const DYNAMIC_APP_INFO_INTERVAL_MS = 600000;
 
@@ -1093,8 +1010,8 @@ function scheduleDynamicAppInfo() {
 }
 
 async function createWindow() {
-  // The window needs nothing from settings, and its renderer process takes a
-  // few hundred ms to come up: start it first and load settings meanwhile.
+  // window needs nothing from settings and its renderer takes a few hundred ms to come up: start it
+  // first, load settings meanwhile.
   if (benchmarkHarness) benchmarkHarness.markStartup('settingsLoad');
   const settingsLoadStartedAt = Date.now();
   settingsLoading = loadSettings().then((loaded) => {
@@ -1105,10 +1022,8 @@ async function createWindow() {
     return loaded;
   });
 
-  // Discord RPC starts after the renderer loads (below).
-  // Sized to the work area before it is ever shown: the window always opens
-  // maximized, and the renderer lays the library out once at its final width
-  // instead of once at 1024x768 and again on maximize.
+  // discord RPC starts after the renderer loads (below). window is sized to the work area before
+  // showing, since it always opens maximized, so the renderer lays out once at final width, not twice.
   const workArea = screen.getPrimaryDisplay().workArea;
   mainWindow = new BrowserWindow({
     x: workArea.x,
@@ -1122,9 +1037,8 @@ async function createWindow() {
     titleBarOverlay: {
       color: '#050608',
       symbolColor: '#c8c8c8',
-      // 1px shorter than the 34px titlebar strip: the overlay is opaque and
-      // drawn over the page, so this lets the titlebar's bottom border run
-      // uninterrupted beneath the min/max/close buttons.
+      // 1px shorter than the 34px titlebar strip: overlay is opaque and drawn over the page, so
+      // the titlebar's bottom border runs uninterrupted beneath the min/max/close buttons.
       height: 33
     },
     show: false,
@@ -1134,9 +1048,8 @@ async function createWindow() {
       spellcheck: false,
       enableRemoteModule: true,
       preload: path.join(__dirname, "preload.js"),
-      // Dev serves the renderer from http://127.0.0.1:5173, so file:// thumbnails
-      // /videos would be blocked as cross-origin. Relax only in dev; the packaged
-      // app loads from file:// where same-scheme access already works.
+      // dev serves the renderer from http://127.0.0.1:5173, so file:// thumbnails/videos would be
+      // cross-origin; relaxed only in dev, packaged app already loads from file://.
       webSecurity: !useViteRenderer,
     },
   });
@@ -1146,11 +1059,8 @@ async function createWindow() {
   let rendererDidFinishLoad = false;
   rendererConsoleCapture.attach(mainWindow.webContents);
 
-  // Renderer rewrite: the React renderer draws its own titlebar strip; native
-  // window controls come from `titleBarOverlay` above. custom-electron-titlebar
-  // is no longer used (its renderer-side Titlebar went away with the legacy UI).
-  // Renderer rewrite (plan D9): plain Vite serves the React renderer.
-  // Dev -> Vite dev server; packaged/source-benchmark -> the built bundle.
+  // React renderer draws its own titlebar; native controls come from titleBarOverlay above
+  // (custom-electron-titlebar is gone). dev uses the vite server, packaged/benchmark use the built bundle.
   if (useViteRenderer) {
     mainWindow.loadURL("http://127.0.0.1:5173");
   } else {
@@ -1158,11 +1068,9 @@ async function createWindow() {
   }
   Menu.setApplicationMenu(null);
 
-  // Safety fallback in case the renderer never signals ready. Armed before
-  // any await below: if one of them throws, the window must still appear.
+  // safety fallback in case the renderer never signals ready; armed before any await below.
   const splashFallback = setTimeout(() => {
-    // The fallback firing means the renderer never reported ready: the user is
-    // looking at a window that may be empty. It used to fire with no log at all.
+    // fallback fired = renderer never reported ready; the user may be staring at an empty window.
     if (!mainWindowRevealed) {
       telemetry.event('renderer_never_ready', {
         kind: telemetry.KIND.CRASH,
@@ -1181,13 +1089,12 @@ async function createWindow() {
   try {
     await settingsLoading;
   } catch (error) {
-    // loadSettings falls back to defaults internally; a throw here means even
-    // that failed. The window is up and must not be orphaned by a rejection.
+    // loadSettings falls back to defaults internally; a throw here means even that failed.
     logger.error('Settings failed to load; continuing with defaults:', error);
     settings = settings || {};
   }
-  // Telemetry knows the user's choice only once settings exist, so init runs
-  // here; everything recorded earlier is replayed.
+  // telemetry knows the user's choice only once settings exist, so init runs here; earlier events
+  // are replayed.
   telemetry.init({
     userDataDir: app.getPath('userData'),
     appVersion: app.getVersion(),
@@ -1198,8 +1105,7 @@ async function createWindow() {
   reportAppInfo();
   scheduleDynamicAppInfo();
 
-  // Cheap async setup that must exist before the renderer asks for
-  // thumbnails or a new clip lands; the renderer is still loading.
+  // cheap async setup that must exist before the renderer asks for thumbnails or a new clip lands.
   migrateLegacySharingTokenIfPresent().catch((error) => {
     logger.warn(`Legacy sharing token migration failed: ${error.message}`);
   });
@@ -1215,8 +1121,8 @@ async function createWindow() {
         mainWindow.webContents.send('new-clip-added', fileName);
       }
     },
-    // The single recursive watch has one change buffer; when it overflows,
-    // events were lost. Walk the library and announce anything not yet known.
+    // the single recursive watch has one change buffer; on overflow, walk the library and announce
+    // anything not yet known.
     onOverflow: async () => {
       const known = new Set(lastClipNames);
       const clips = await clipsModule.getClips(getSettings);
@@ -1231,26 +1137,23 @@ async function createWindow() {
   if (benchmarkHarness) benchmarkHarness.endStartup('fileWatcherSetup');
 
 
-  // Renderer signals when clips are loaded and UI is fully ready
-  // The renderer reports when the library grid is painted with its visible
-  // thumbnails loaded (it fades its brand screen out at the same moment).
+  // renderer reports when the grid is painted with its visible thumbnails loaded (it fades
+  // its brand screen out at the same moment).
   ipcMain.once('renderer-ready', () => {
     bootTrace.mark('renderer_ready');
-    // Process start to a usable library. The only startup number a user ever
-    // notices; startup.window_visible_ms is the brand screen before it.
+    // process start to a usable library; the only startup number a user ever notices.
     telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
     firstPaintSeen = true;
     maybeReveal();
-    // The compositor normally frames this state within a few dozen ms;
-    // never keep the window hidden for long if it does not.
+    // compositor normally frames this within a few dozen ms; never keep the window hidden long if not.
     setTimeout(() => {
       screencastActive = false;
       maybeReveal();
     }, REVEAL_FALLBACK_MS);
   });
 
-  // Without a snapshot the renderer only reports ready after the folder
-  // scan; if even that never comes, show the window with whatever it has.
+  // without a snapshot the renderer only reports ready after the folder scan; if that never comes,
+  // show it anyway.
   mainWindow.once('ready-to-show', () => {
     bootTrace.mark('ready_to_show');
     setTimeout(() => {
@@ -1269,8 +1172,8 @@ async function createWindow() {
     }
   });
 
-  // The page itself failed to load — in packaged builds that is a blank
-  // window with no way forward. Sub-frame failures are not fatal, skip them.
+  // page itself failed to load: in packaged builds that's a blank window with no way forward.
+  // sub-frame failures aren't fatal, skip them.
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
     if (!isMainFrame) return;
     telemetry.event('renderer_load_failed', {
@@ -1281,8 +1184,7 @@ async function createWindow() {
     });
   });
 
-  // Main-thread hangs. Paired with 'responsive' so the event carries how long
-  // the freeze actually lasted instead of just "it happened".
+  // main-thread hangs; paired with 'responsive' so the event carries how long the freeze actually lasted.
   let unresponsiveSince = 0;
   mainWindow.webContents.on('unresponsive', () => {
     unresponsiveSince = Date.now();
@@ -1301,8 +1203,7 @@ async function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     rendererDidFinishLoad = true;
-    // Trace marker: splits the window-created -> renderer-running "dark gap"
-    // into page-load (Chromium + module serving) vs renderer boot.
+    // trace marker: splits the window-created -> renderer-running "dark gap" into page-load vs renderer boot.
     if (global.__perf?.now && global.__perf?.fsSpan) {
       global.__perf.fsSpan('renderer-did-finish-load', global.__perf.now(), 0, {});
     }
@@ -1393,38 +1294,34 @@ app.whenReady().then(async () => {
 
   if (benchmarkHarness) benchmarkHarness.endStartup('windowCreation');
 
-  // Feed media (<video>/<img> pointed at the share server) needs the Bearer
-  // token attached main-side; JSON API calls go through share-api-request.
+  // feed media (<video>/<img> pointed at the share server) needs the Bearer token attached main-side.
   shareModule.installMediaAuthHeaders(win.webContents.session);
 
-  // Heavy optional subsystems (updater -> axios, Discord RPC) start after the
-  // renderer has loaded so their requires never sit on the startup path.
+  // heavy optional subsystems (updater -> axios, Discord RPC) start after the renderer loads so
+  // their requires never sit on the startup path.
   win.webContents.once('did-finish-load', () => {
     logger.info('Renderer did-finish-load event fired');
-    // Updater (axios, semver), Discord RPC and the profile widget used to
-    // start here, which is while the renderer is booting and waiting on this
-    // thread for its first IPC replies. They run from runDeferredServices().
+    // updater/discord/profile widget moved to runDeferredServices(): running here blocked the
+    // renderer's first IPC replies while it was still booting.
   });
   
-  // Start periodic saves to prevent data loss
   clipsModule.startPeriodicSave(getSettings);
 
-  // clipdip bootstrap, ffmpeg verification and taskbar pin repair run from
-  // runDeferredServices() once the library is visible.
+  // clipdip bootstrap, ffmpeg verification and taskbar pin repair run from runDeferredServices()
+  // once visible.
   processQueuedProtocolUrls().catch((error) => {
     logger.error('Failed processing startup protocol queue:', error);
   });
 
-  // Prune stale settings backups and diagnostics zips well after startup;
-  // lazyModule keeps the require itself off the startup path too.
+  // prunes stale settings backups and diagnostics zips well after startup; lazyModule keeps the
+  // require off the startup path too.
   setTimeout(() => {
     lazyModule('./main/storage-maintenance')
       .run()
       .catch((error) => logger.warn(`Storage maintenance failed: ${error.message}`));
   }, 10_000);
 }).catch((error) => {
-  // Boot never got past window creation: there is no UI to show an error in,
-  // so this was previously an unhandled rejection and nothing else.
+  // boot never got past window creation, so there's no UI to show an error in.
   telemetry.event('boot_window_create_failed', {
     kind: telemetry.KIND.CRASH,
     severity: telemetry.SEVERITY.FATAL,
@@ -1466,7 +1363,7 @@ ipcMain.handle('get-settings', () => {
   return settings;
 });
 
-// --- Integrated clipdip -----------------------------------------------------
+// integrated clipdip
 
 ipcMain.handle('clipdip-get-config', () => clipdipModule.getConfig());
 
@@ -1480,9 +1377,8 @@ ipcMain.handle('clipdip-stop', () => clipdipModule.quit());
 
 ipcMain.handle('clipdip-restart', () => clipdipModule.restart());
 
-// Side effects only — the renderer persists clipdip.enabled/autostart through
-// its normal settings path (SettingsContext -> save-settings), which replaces
-// the whole settings object; writing settings here too would race that copy.
+// side effects only: the renderer persists clipdip.enabled/autostart via SettingsContext ->
+// save-settings, which replaces the whole settings object; writing here too would race it.
 ipcMain.handle('clipdip-set-autostart', async (event, enabled) => {
   await clipdipModule.setAutostart(enabled);
   return { success: true };
@@ -1500,8 +1396,7 @@ ipcMain.handle('clipdip-filename-variables', () => clipdipModule.getFilenameVari
 ipcMain.handle('clipdip-preview-filename', (event, template) =>
   clipdipModule.previewFilename(template));
 
-// Control-server call against the running instance ({ok:false,error:"not_running"}
-// when it isn't up).
+// control-server call against the running instance ({ok:false,error:"not_running"} when it isn't up).
 ipcMain.handle('clipdip-control', (event, payload) =>
   clipdipModule.control(payload?.cmd, payload?.args));
 
@@ -1581,10 +1476,8 @@ ipcMain.handle("get-trim", async (event, clipName) => {
   return metadataModule.getTrimData(clipName, getSettings);
 });
 
-// Hover-preview start time in one round trip: trim.start when set, else
-// mid-clip from the cached thumbnail-metadata duration. Never probes — a
-// cache miss returns 0 and the preview simply starts at the beginning
-// (the full probe happens when the clip is actually opened).
+// hover-preview start in one round trip: trim.start if set, else mid-clip from cached
+// thumbnail duration. never probes; a cache miss returns 0 (full probe happens on open).
 ipcMain.handle("get-preview-start-time", async (event, clipName) => {
   try {
     const trim = await metadataModule.getTrimData(clipName, getSettings);
@@ -1603,9 +1496,8 @@ ipcMain.handle("get-preview-start-time", async (event, clipName) => {
   return 0;
 });
 
-// Everything the player needs to open a clip, gathered in one round trip
-// (the player used to fire ~9 read-only IPCs per open across several waves,
-// each paying queueing latency on a busy main process).
+// everything the player needs to open a clip in one round trip; used to be ~9 read-only IPCs
+// per open across several waves, each paying queueing latency on a busy main process.
 ipcMain.handle("warm-clip-open", (_event, clipName) => {
   clipWarmer.warm(clipName, true);
 });
@@ -1613,12 +1505,11 @@ ipcMain.handle("warm-clip-open", (_event, clipName) => {
 ipcMain.handle("get-clip-open-state", async (event, clipName) => {
   const startedAt = Date.now();
   clipWarmer.pause();
-  // Each fallback below is indistinguishable from a real value once it reaches
-  // the player: no trim, no tags, default volume. The slot name turns "the clip
-  // opened wrong" into "these two reads failed" without naming the clip.
+  // each fallback is indistinguishable from a real value once it reaches the player. slot names
+  // turn a vague "clip opened wrong" into "these two reads failed" without naming the clip.
   const missing = [];
-  // Why the probe failed, for the clip_open_partial context. The clip name is
-  // stripped out (it is user content) and telemetry scrubs paths on top.
+  // why the probe failed, for clip_open_partial context; clip name is stripped (user content),
+  // telemetry scrubs paths too.
   let probeError;
   const swallow = (slot, promise, fallback) => {
     const slotStartedAt = Date.now();
@@ -1792,8 +1683,7 @@ ipcMain.handle('share-api-request', async (event, request) => {
   return shareModule.apiRequest(getSettings, request || {});
 });
 
-// Profile banner upload: pick an image via the native dialog, then multipart
-// POST it to /users/me/banner. Returns { success, error?, canceled? }.
+// profile banner upload: pick an image via the native dialog, multipart POST to /users/me/banner.
 ipcMain.handle('share-upload-banner', async (event) => {
   const owner = event.sender.getOwnerBrowserWindow?.() || mainWindow;
   const result = await dialog.showOpenDialog(owner, {
@@ -1841,13 +1731,8 @@ ipcMain.handle("get-thumbnail-paths-batch", async (event, clipNames) => {
 app.on('before-quit', () => {
   telemetry.sessionEnd('quit');
 
-  // Stop periodic saves
   clipsModule.stopPeriodicSave();
-
-  // Stop thumbnail queue processing
   thumbnailsModule.stopQueue();
-
-  // Save current clip list for next session comparison
   clipsModule.saveCurrentClipList(getSettings);
   bootTrace.flush();
 });
@@ -1856,7 +1741,6 @@ ipcMain.handle("regenerate-thumbnail-for-trim", async (event, clipName, startTim
   return thumbnailsModule.regenerateThumbnailForTrim(clipName, startTime, getSettings);
 });
 
-// In main.js
 ipcMain.handle('save-settings', async (event, newSettings) => {
   try {
     const updated = await updateSettings(newSettings);
@@ -1871,13 +1755,11 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
   }
 });
 
-// Get default keybindings from settings-manager
 ipcMain.handle('get-default-keybindings', () => {
   return getDefaultKeybindings();
 });
 
 ipcMain.handle("generate-thumbnails-progressively", async (event, clipNames) => {
-  // Wrapper to call metadata module's getTrimData with getSettings
   const getTrimDataWrapper = (clipName) => metadataModule.getTrimData(clipName, getSettings);
   return thumbnailsModule.generateThumbnailsProgressively(clipNames, event, getSettings, getTrimDataWrapper);
 });
@@ -1911,7 +1793,6 @@ ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
   return clipsModule.deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer);
 });
 
-// Reveal clip in File Explorer
 ipcMain.handle('reveal-clip', async (event, clipName) => {
   return clipsModule.revealClip(clipName, getSettings);
 });
@@ -1993,12 +1874,10 @@ ipcMain.handle('get-volume-range', async (event, clipName) => {
   return metadataModule.getVolumeRange(clipName, getSettings);
 });
 
-// Handler to log watch sessions from the renderer
 ipcMain.handle('log-watch-session', (event, sessionData) => {
   if (sessionData && sessionData.durationSeconds > 0) {
     logActivity('watch_session', sessionData);
   }
-  // No return value needed
 });
 
 ipcMain.handle("get-game-icon", async (event, clipName) => {
@@ -2013,8 +1892,7 @@ ipcMain.handle("get-clip-participants", async (event, clipNames) => {
   return metadataModule.getClipParticipants(clipNames, getSettings);
 });
 
-// The renderer passes the names it just got from get-clips, so this does not
-// walk the library a second time.
+// renderer passes the names it just got from get-clips, so this doesn't walk the library twice.
 ipcMain.handle('get-new-clips-info', async (_event, knownNames) => {
   return await clipsModule.getNewClipsInfo(getSettings, Array.isArray(knownNames) ? knownNames : undefined);
 });

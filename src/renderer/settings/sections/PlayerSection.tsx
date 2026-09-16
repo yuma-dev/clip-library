@@ -23,14 +23,14 @@ const FPS_OPTIONS = [
 
 export default function PlayerSection({ sampleThumb }: { sampleThumb: string | null }) {
   const { settings, set } = useSettings();
-  // Drag-in-progress overrides so the previews react live before commit.
+  // drag-in-progress overrides so the previews react live before commit
   const [glowDraft, setGlowDraft] = useState<Partial<AmbientGlowSettings>>({});
   const [cardDraft, setCardDraft] = useState<Partial<CardGlowSettings>>({});
   const glow: AmbientGlowSettings = { ...settings.ambientGlow, ...glowDraft };
   const card: CardGlowSettings = { ...settings.cardGlow, ...cardDraft };
   const volume = settings.previewVolume ?? 0.1;
 
-  // Provider side effects push committed values into the player / grid glow.
+  // provider side effects push committed values into the player/grid glow
   const commitGlow = (key: keyof AmbientGlowSettings, value: number | boolean) => {
     setGlowDraft((d) => {
       const next = { ...d };

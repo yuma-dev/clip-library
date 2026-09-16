@@ -1,11 +1,6 @@
-// Grid navigation — port of legacy grid-navigation.js / clip-grid.js, extended
-// with first-class keyboard support (legacy was gamepad-only in practice).
-//
-// Selection is a `grid-focused` class on one `.clip-item`; movement is
-// index ±1 for left/right and a same-column linear scan for up/down (first
-// card whose left edge is within one card-width of the current card's left).
-// Any mouse move/press tears the focus ring down, matching the legacy
-// controller-vs-mouse handoff.
+// Grid navigation, port of legacy grid-navigation.js/clip-grid.js with added
+// keyboard support (legacy was gamepad-only). Selection is a `grid-focused`
+// class; left/right move by index, up/down scan the same column by left edge.
 
 const NAVIGATION_THROTTLE = 150; // ms between moves (legacy GRID_NAVIGATION_THROTTLE)
 
@@ -70,7 +65,7 @@ function findCardInDirection(cards: HTMLElement[], currentIndex: number, directi
   return currentIndex;
 }
 
-// Mouse takes over → drop the focus ring (legacy setupMouseKeyboardDetection).
+// Mouse takes over, drop the focus ring (legacy setupMouseKeyboardDetection).
 function onMouseInput(): void {
   disableGridNavigation();
 }
@@ -161,11 +156,8 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 let keyboardInstalled = false;
 
-/**
- * Keyboard grid navigation (new over legacy, which was gamepad-only): arrows
- * move/summon the focus ring, Enter opens, Escape dismisses. Inactive while
- * the player overlay, a modal, or a text input has the stage.
- */
+/** New over legacy (gamepad-only): arrows move/summon the focus ring, Enter
+ * opens, Escape dismisses; inactive while the player/modal/input has the stage. */
 export function initGridKeyboardNavigation(): void {
   if (keyboardInstalled) return;
   keyboardInstalled = true;

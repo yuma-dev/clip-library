@@ -4,18 +4,14 @@ import { useAppNav } from "./appNav";
 import { fetchMe } from "../feed/me";
 import fallbackAvatar from "../../../assets/logo.png";
 
-/**
- * Rail profile card wired to the real ClipLib account (test-share-connection).
- * Connected: avatar + username (clicking opens your own ClipLib profile) + a
- * sign-out button. Not connected: a sign-in button that starts the auth flow.
- */
+/** wired to the real ClipLib account (test-share-connection)
+ * connected: avatar/username + sign-out; not connected: sign-in button starts the auth flow */
 export default function RailProfile() {
   const profile = useProfile();
   const { openProfile } = useAppNav();
 
-  // Connected: clicking the avatar/name opens the signed-in user's own public
-  // ClipLib profile from any route. The sign-out button stops propagation so it
-  // never triggers this.
+  // avatar/name opens the signed-in user's own public profile from any route
+  // sign-out button stops propagation so it doesn't trigger this
   const openOwnProfile = async () => {
     const me = await fetchMe();
     if (me) openProfile(me.id);

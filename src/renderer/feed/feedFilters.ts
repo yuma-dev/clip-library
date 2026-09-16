@@ -1,7 +1,6 @@
-// Feed filter state as a module-scope store: the SIDEBAR renders the filter
-// controls while the feed route is active (replacing the library's
-// collections/tags sections) and FeedPage derives its query + persist key from
-// the same state. sessionStorage-persisted like the website (feed:filters:v1).
+// Feed filter state as a module-scope store. Sidebar renders the controls
+// while the feed route is active (replacing library's collections/tags)
+// FeedPage derives query + persist key. sessionStorage key: feed:filters:v1.
 
 import { useSyncExternalStore } from "react";
 import { fetchShareUsersAll } from "./api";
@@ -88,7 +87,7 @@ function keyPart(value?: string): string {
   return value ? encodeURIComponent(value) : "all";
 }
 
-/** Cache/persist key for a filter combination — shared by FeedPage + prefetch. */
+/** Cache/persist key for a filter combination, shared by FeedPage + prefetch. */
 export function feedPersistKey(f: FeedFilters = filters): string {
   return `feed:v1:u=${keyPart(f.user)}:m=${keyPart(f.mention)}:g=${keyPart(f.game)}:s=${keyPart(f.sort)}`;
 }

@@ -1,4 +1,3 @@
-// Imports
 const { ipcRenderer } = require("electron");
 const path = require("path");
 const { Titlebar, TitlebarColor } = require("custom-electron-titlebar");
@@ -7,46 +6,35 @@ const consoleBuffer = require('./utils/console-log-buffer');
 consoleBuffer.patchConsole();
 const fs = require('fs').promises;
 
-// Keybinding manager to centralise shortcuts
 const keybinds = require('./renderer/keybinding-manager');
 const keybindingUiModule = require('./renderer/keybinding-ui');
 
-// Gamepad manager for controller support
 const gamepadManagerModule = require('./renderer/gamepad-manager');
 
-// Centralized state management
 const state = require('./renderer/state');
 
-// Video player module
 const videoPlayerModule = require('./renderer/video-player');
 
-// Tag manager module
 const tagManagerModule = require('./renderer/tag-manager');
 
-// Search manager module
 const searchManagerModule = require('./renderer/search-manager');
 
-// Export manager module
 const exportManagerModule = require('./renderer/export-manager');
 
-// Grid navigation module
 const gridNavigationModule = require('./renderer/grid-navigation');
 
-// Settings manager module
 const settingsManagerUiModule = require('./renderer/settings-manager-ui');
 const debugToolsModule = require('./renderer/debug-tools');
 const volumeRangeControlsModule = require('./renderer/volume-range-controls');
 
-// Discord/diagnostics/update managers
 const discordManagerModule = require('./renderer/discord-manager');
 const diagnosticsManagerModule = require('./renderer/diagnostics-manager');
 const updateManagerModule = require('./renderer/update-manager');
 const shareManagerModule = require('./renderer/share-manager');
 
-// Clip grid module
 const clipGridModule = require('./renderer/clip-grid');
 
-// Benchmark harness
+// benchmark harness
 const isBenchmarkMode = typeof process !== 'undefined' && process.env && process.env.CLIPS_BENCHMARK === '1';
 let benchmarkHarness = null;
 if (isBenchmarkMode) {
@@ -59,7 +47,6 @@ if (isBenchmarkMode) {
   }
 }
 
-// DOM references
 const clipGrid = document.getElementById("clip-grid");
 const fullscreenPlayer = document.getElementById("fullscreen-player");
 const videoPlayer = document.getElementById("video-player");
@@ -75,7 +62,7 @@ const videoClickTarget = document.getElementById("video-click-target");
 const ambientGlowCanvas = document.getElementById("ambient-glow-canvas");
 const previewElement = document.getElementById('timeline-preview');
 
-// UI blur manager (reference-counted)
+// reference-counted blur toggle
 const uiBlur = (() => {
   let count = 0;
   return {
@@ -99,9 +86,8 @@ const uiBlur = (() => {
 })();
 window.uiBlur = uiBlur;
 
-// UI constants
 const MAX_FRAME_RATE = 10;
-const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
+const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 min
 const volumeButton = document.getElementById("volume-button");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeContainer = document.getElementById("volume-container");
@@ -109,8 +95,8 @@ const speedButton = document.getElementById("speed-button");
 const speedSlider = document.getElementById("speed-slider");
 const speedContainer = document.getElementById("speed-container");
 const speedText = document.getElementById("speed-text");
-const THUMBNAIL_RETRY_DELAY = 2000; // 2 seconds
-const THUMBNAIL_INIT_DELAY = 1000; // 1 second delay before first validation
+const THUMBNAIL_RETRY_DELAY = 2000; // 2s
+const THUMBNAIL_INIT_DELAY = 1000; // delay before first thumbnail validation
 const UI_FONT_DEFAULT = 'modern_ui';
 const UI_FONT_STACKS = {
   modern_ui: '"Segoe UI", Inter, "DM Sans", "Public Sans", "Plus Jakarta Sans", Manrope, "Work Sans", Roboto, "Helvetica Neue", Arial, sans-serif',
@@ -132,16 +118,14 @@ const UI_FONT_STACKS = {
   roboto: 'Roboto, "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 };
 
-// Renderer-level state
 let settingsModal = null;
 let currentClipLocationSpan = null;
-let newClipsInfo = { newClips: [], totalNewCount: 0 }; // Track new clips info
+let newClipsInfo = { newClips: [], totalNewCount: 0 };
 let currentSessionStartTime = null;
 let currentSessionActiveDuration = 0;
 let lastPlayTimestamp = null;
 let lastSelectedClip = null;
 
-// Preview state
 let lastPreviewUpdateTime = 0;
 const PREVIEW_UPDATE_INTERVAL = 100; // Throttle frame updates, not positioning
 let previewHalfWidth = 0;
@@ -153,16 +137,14 @@ let lastPreviewEvent = null;
 const PREVIEW_VELOCITY_THRESHOLD = 1.2; // px/ms (~1200 px/s)
 const PREVIEW_IDLE_DELAY = 90; // ms after last move
 
-// DOM scaffolding
 previewElement.style.display = 'none';
 
-// Create a temporary video element for previews
 const tempVideo = document.createElement('video');
 tempVideo.crossOrigin = 'anonymous';
 tempVideo.preload = 'auto';
 tempVideo.muted = true;
-tempVideo.style.display = 'none'; // Hide the temp video
-document.body.appendChild(tempVideo); // Add to DOM
+tempVideo.style.display = 'none';
+document.body.appendChild(tempVideo);
 
 const selectionActions = document.createElement('div');
 selectionActions.id = 'selection-actions';
@@ -174,12 +156,7 @@ selectionActions.innerHTML = `
 `;
 document.body.appendChild(selectionActions);
 
-// All state variables moved to renderer/state.js
-// Access via state.getXxx() and state.setXxx() methods
-// Cache helpers
-/**
- * Get cached clip data or load fresh
- */
+// state vars live in renderer/state.js now (state.getXxx/setXxx)
 async function getCachedClipData(originalName) {
   const cached = state.clipDataCache.get(originalName);
   if (cached && (Date.now() - cached.timestamp) < state.CACHE_EXPIRY_MS) {
@@ -189,12 +166,7 @@ async function getCachedClipData(originalName) {
 }
 
 
-// Settings modal
-
-/**
- * Load the settings modal markup from templates/settings-modal.html
- * and wire the diagnostics controls once inserted.
- */
+/** loads templates/settings-modal.html, wires diagnostics controls after insert */
 async function loadSettingsModalTemplate() {
   const templatePath = path.join(__dirname, 'templates', 'settings-modal.html');
   let templateHtml = '';
@@ -229,14 +201,11 @@ async function loadSettingsModalTemplate() {
 }
 
 
-/**
- * Load settings from disk and ensure defaults.
- */
 async function fetchSettings() {
   state.settings = await ipcRenderer.invoke('get-settings');
-  logger.info('Fetched settings:', state.settings);  // Log the fetched settings
-  
-  // Set defaults if not present
+  logger.info('Fetched settings:', state.settings);
+
+  // set defaults if not present
   if (state.settings.previewVolume === undefined) state.settings.previewVolume = 0.1;
   if (state.settings.exportQuality === undefined) state.settings.exportQuality = 'high';
   if (state.settings.exportPreset === undefined) state.settings.exportPreset = 'balanced';
@@ -247,28 +216,26 @@ async function fetchSettings() {
   if (state.settings.uiFont === undefined) state.settings.uiFont = UI_FONT_DEFAULT;
   state.settings.uiFont = applyUiFontSetting(state.settings.uiFont);
   await ipcRenderer.invoke('save-settings', state.settings);
-  logger.info('Settings after defaults:', state.settings);  // Log after setting defaults
+  logger.info('Settings after defaults:', state.settings);
   return state.settings;
 }
 
 /**
- * Helper to update a nested setting value and save to disk.
- * @param {string} path - Dot-separated path to the setting (e.g., 'ambientGlow.fps')
- * @param {*} value - The new value to set
- * @returns {Promise<object>} The updated state.settings object
+ * @param {string} path - dot-separated, e.g. 'ambientGlow.fps'
+ * @param {*} value
+ * @returns {Promise<object>} updated state.settings
  */
 async function updateSettingValue(path, value) {
   const currentSettings = await ipcRenderer.invoke('get-settings');
   const keys = path.split('.');
   let target = currentSettings;
-  
-  // Navigate to parent object, creating nested objects if needed
+
+  // create nested objects if missing
   for (let i = 0; i < keys.length - 1; i++) {
     target[keys[i]] = target[keys[i]] || {};
     target = target[keys[i]];
   }
-  
-  // Set the value
+
   target[keys[keys.length - 1]] = value;
   
   await ipcRenderer.invoke('save-settings', currentSettings);
@@ -276,27 +243,20 @@ async function updateSettingValue(path, value) {
   return state.settings;
 }
 
-/**
- * Fade out and hide the loading overlay.
- */
 function hideLoadingScreen() {
-  // The startup loading visual is handled by a dedicated splash BrowserWindow
-  // in the main process. Notify it that the renderer is fully ready so it can
-  // dismiss the splash and reveal the main window.
+  // splash screen lives in a separate BrowserWindow in main; tell it we're
+  // ready so it can dismiss and reveal the main window
   try {
     ipcRenderer.send('renderer-ready');
   } catch (e) {
-    // ignore
   }
 }
 
-// IPC handlers
 ipcRenderer.on('log', (event, { type, message }) => {
   console[type](`[Main Process] ${message}`);
 });
 
 ipcRenderer.on('new-clip-added', async (event, fileName) => {
-  // Wait for state.settings to be loaded if they haven't been yet
   if (!state.settings) {
     try {
       state.settings = await ipcRenderer.invoke('get-settings');
@@ -311,7 +271,7 @@ ipcRenderer.on('new-clip-added', async (event, fileName) => {
 });
 
 ipcRenderer.on("thumbnail-validation-start", (event, { total }) => {
-  // Always reset state when validation starts
+  // reset even if a previous run didn't clean up
   state.isGeneratingThumbnails = false;
   state.currentGenerationTotal = 0;
   state.completedThumbnails = 0;
@@ -332,7 +292,6 @@ ipcRenderer.on("thumbnail-progress", (event, { current, total, clipName }) => {
 ipcRenderer.on("thumbnail-generation-complete", () => {
   hideThumbnailGenerationText();
   state.isGeneratingThumbnails = false;
-  // Clear any existing timeouts here as well
   if (window.thumbnailGenerationTimeout) {
     clearTimeout(window.thumbnailGenerationTimeout);
     window.thumbnailGenerationTimeout = null;
@@ -344,18 +303,14 @@ ipcRenderer.on("thumbnail-generation-failed", (event, { clipName, error }) => {
 });
 
 ipcRenderer.on("thumbnail-generated", (event, { clipName, thumbnailPath }) => {
-  // Update cache with newly generated thumbnail
   state.thumbnailPathCache.set(clipName, thumbnailPath);
   updateClipThumbnail(clipName, thumbnailPath);
 });
 
-/**
- * Show thumbnail generation progress for large batches.
- */
+// only show progress UI for batches larger than 12
 function showThumbnailGenerationText(totalToGenerate) {
   if (totalToGenerate <= 12) return;
-  
-  // Reset all state variables
+
   state.isGeneratingThumbnails = true;
   state.currentGenerationTotal = totalToGenerate;
   state.completedThumbnails = 0;
@@ -390,7 +345,6 @@ function updateClipCounter(count) {
   }
 }
 
-// Thumbnail generation status
 function updateThumbnailGenerationText(remaining) {
   if (!state.isGeneratingThumbnails) return;
   
@@ -406,16 +360,14 @@ function updateThumbnailGenerationText(remaining) {
 
   state.completedThumbnails = state.currentGenerationTotal - remaining;
   const percentage = Math.round((state.completedThumbnails / state.currentGenerationTotal) * 100);
-  
-  // Calculate time estimate based on actual progress
+
   let estimatedTimeRemaining = 0;
   if (state.completedThumbnails > 0) {
-    state.elapsedTime = (Date.now() - state.thumbnailGenerationStartTime) / 1000; // in seconds
+    state.elapsedTime = (Date.now() - state.thumbnailGenerationStartTime) / 1000; // seconds
     const averageTimePerThumbnail = state.elapsedTime / state.completedThumbnails;
-    // Calculate remaining time and convert to minutes, rounding up
     estimatedTimeRemaining = Math.ceil((averageTimePerThumbnail * remaining) / 60);
-    
-    // Ensure we show at least 1 minute if there's any time remaining
+
+    // show at least 1 min if any time remains
     if (remaining > 0 && estimatedTimeRemaining === 0) {
       estimatedTimeRemaining = 1;
     }
@@ -434,17 +386,11 @@ function hideThumbnailGenerationText() {
   state.completedThumbnails = 0;
 }
 
-// New clips indicators
-/**
- * Reposition "new clips" divider indicators within each group.
- */
 function positionNewClipsIndicators() {
   console.log('Attempting to position new clips indicators...');
-  
-  // Remove any existing positioned indicators first
+
   document.querySelectorAll('.new-clips-indicator.positioned').forEach(el => el.remove());
-  
-  // Check if new clips indicators are disabled
+
   if (!state.settings || state.settings.showNewClipsIndicators === false) {
     console.log('New clips indicators are disabled in state.settings');
     return;
@@ -580,19 +526,13 @@ function positionNewClipsIndicators() {
   console.log('Indicator created and added to content');
 }
 
-// Call after DOM changes to reposition indicators
+// call after DOM changes to reposition indicators
 function updateIndicatorsOnChange() {
-  // Debounce to avoid excessive calls
   clearTimeout(window.indicatorUpdateTimeout);
   window.indicatorUpdateTimeout = setTimeout(positionNewClipsIndicators, 50);
 }
 
-// Function to update new clips indicators when clips are added/removed
-/**
- * Refresh new-clip indicators after list changes.
- */
 function updateNewClipsIndicators() {
-  // Check if new clips indicators are disabled
   if (state.settings.showNewClipsIndicators === false) {
     console.log('New clips indicators are disabled, removing all indicators');
     document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
@@ -602,25 +542,20 @@ function updateNewClipsIndicators() {
     return;
   }
 
-  // Check if we still have new clips visible
   if (state.currentClipList && state.currentClipList.length > 0) {
     const hasVisibleNewClips = state.currentClipList.some(clip => clip.isNewSinceLastSession);
-    
+
     if (!hasVisibleNewClips) {
-      // No new clips visible, remove all indicators
       document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
       return;
     }
-    
-    // Re-render the current clips to update indicators
+
     clipGridModule.renderClips(state.currentClipList);
   } else {
-    // Remove all indicators if no clips
     document.querySelectorAll('.new-clips-indicator').forEach(el => el.remove());
   }
 }
 
-// Window events
 window.addEventListener('beforeunload', () => {
   if (window.thumbnailGenerationTimeout) {
     clearTimeout(window.thumbnailGenerationTimeout);
@@ -628,62 +563,54 @@ window.addEventListener('beforeunload', () => {
   hideThumbnailGenerationText();
 });
 
-// Resize: preview + indicator layout
 window.addEventListener('resize', () => {
   previewNeedsMeasure = true;
   updateIndicatorsOnChange();
 });
 
-// Dev helpers
+// dev helpers, callable from the devtools console
 window.setNewClipsCount = function(count) {
   if (!state.allClips || state.allClips.length === 0) {
     console.log('No clips loaded yet');
     return;
   }
-  
+
   if (count < 0 || count > state.allClips.length) {
     console.log(`Invalid count. Must be between 0 and ${state.allClips.length}`);
     return;
   }
-  
-  // Reset all clips to not new
+
   state.allClips.forEach(clip => {
     clip.isNewSinceLastSession = false;
   });
-  
-  // Mark the first 'count' clips as new
+
   for (let i = 0; i < count; i++) {
     state.allClips[i].isNewSinceLastSession = true;
   }
-  
-  // Update the global newClipsInfo
+
   newClipsInfo = {
     newClips: state.allClips.slice(0, count).map(clip => clip.originalName),
     totalNewCount: count
   };
-  
-  // Also update state.currentClipList if it exists
+
   if (state.currentClipList && state.currentClipList.length > 0) {
     state.currentClipList.forEach(clip => {
       clip.isNewSinceLastSession = state.allClips.find(ac => ac.originalName === clip.originalName)?.isNewSinceLastSession || false;
     });
   }
-  
-  // Re-render to show the changes
+
   if (state.currentClipList) {
     clipGridModule.renderClips(state.currentClipList);
-    
-    // Position indicators after render completes
+
     setTimeout(() => {
       positionNewClipsIndicators();
     }, 100);
   }
-  
+
   console.log(`Set ${count} clips as new. Green line should appear after clip ${count} (if visible).`);
   console.log('New clips:', newClipsInfo.newClips);
 };
 
-// Also add a helper to see current state
 window.debugNewClips = function() {
   console.log('Current new clips info:', newClipsInfo);
   console.log('Clips marked as new:', state.allClips.filter(clip => clip.isNewSinceLastSession).map(c => c.originalName));
@@ -691,13 +618,11 @@ window.debugNewClips = function() {
   console.log('Current filtered clips:', state.currentClipList.length);
 };
 
-// And a helper to reset
 window.resetNewClips = function() {
   setNewClipsCount(0);
   console.log('Reset all clips to not new');
 };
 
-// Debug helper to check data attributes
 window.checkIndicatorData = function() {
   const contentAreas = document.querySelectorAll('.clip-group-content');
   console.log('All content areas:', contentAreas.length);
@@ -710,8 +635,7 @@ window.checkIndicatorData = function() {
       clipCount: content.querySelectorAll('.clip-item').length
     });
   });
-  
-  // Also try positioning
+
   positionNewClipsIndicators();
 };
 
@@ -1021,9 +945,7 @@ window.runAllExportCombinations = async (options = {}) => {
   };
 };
 
-/**
- * Trigger FFmpeg version lookup (for UI display).
- */
+// for UI display
 async function getFfmpegVersion() {
   try {
     await ipcRenderer.invoke('get-ffmpeg-version');
@@ -1032,9 +954,6 @@ async function getFfmpegVersion() {
   }
 }
 
-/**
- * Replace a clip's thumbnail image after generation.
- */
 function updateClipThumbnail(clipName, thumbnailPath) {
   const clipElement = document.querySelector(
     `.clip-item[data-original-name="${clipName}"]`
@@ -1042,13 +961,12 @@ function updateClipThumbnail(clipName, thumbnailPath) {
   if (clipElement) {
     const imgElement = clipElement.querySelector("img");
     if (imgElement) {
-      // Create a new image element
       const newImg = new Image();
       newImg.onload = () => {
-        // Only replace the src after the new image has loaded
+        // swap only after the new image loads, avoids a flash of the broken image
         imgElement.src = newImg.src;
       };
-      // Add cache busting and random number to ensure unique URL
+      // cache-bust so the browser doesn't show a stale thumbnail
       newImg.src = `file://${thumbnailPath}?t=${Date.now()}-${Math.random()}`;
     } else {
       logger.warn(`Image element not found for clip: ${clipName}`);
@@ -1058,7 +976,6 @@ function updateClipThumbnail(clipName, thumbnailPath) {
   }
 }
 
-// Time grouping helpers
 function getTimeGroup(timestamp) {
   const now = new Date();
   const date = new Date(timestamp);
@@ -1072,13 +989,11 @@ function getTimeGroup(timestamp) {
   if (date.getFullYear() === now.getFullYear()) {
     return 'This Year';
   }
-  
-  // Return the specific year for any past year
+
   return date.getFullYear().toString();
 }
 
 function getGroupOrder(groupName) {
-  // Handle special groups first
   const specialGroups = {
     'Today': 0,
     'Yesterday': 1,
@@ -1091,15 +1006,13 @@ function getGroupOrder(groupName) {
     return specialGroups[groupName];
   }
 
-  // For year groups, make them ordered after special groups
   const year = parseInt(groupName);
   if (!isNaN(year)) {
-    // Start years at 100 to ensure they come after special groups
-    // Subtract from a future year (e.g., 3000) to make recent years come first
+    // years start at 100 (after special groups); subtracting from 3000 puts recent years first
     return 100 + (3000 - year);
   }
 
-  return 999; // Fallback for any unexpected group names
+  return 999; // unexpected group name
 }
 
 function loadCollapsedState() {
@@ -1245,7 +1158,6 @@ function setupContextMenu() {
     });
   }
 
-  // Close context menu when clicking outside
   document.addEventListener("click", () => {
     contextMenu.style.display = "none";
   });
@@ -1255,19 +1167,15 @@ function setupContextMenu() {
 
 
 
-// Export progress toast
 const toast = document.getElementById('export-toast');
 if (toast && toast.parentElement !== document.body) {
-  // Keep export toast outside blurred app-content so it stays visible over player overlay.
+  // keep outside blurred app-content so the toast stays visible over the player overlay
   document.body.appendChild(toast);
 }
 const content = toast?.querySelector('.export-toast-content');
 const progressText = toast?.querySelector('.export-progress-text');
 const title = toast?.querySelector('.export-title');
 
-/**
- * Update the export progress toast.
- */
 function showExportProgress(current, total, isClipboardExport = false) {
   if (!toast || !content || !progressText || !title) {
     logger.warn('Export toast elements missing; cannot show export progress UI.');
@@ -1310,13 +1218,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     showCustomConfirm
   });
 
-  // Ensure keybindings are loaded before we attach any listeners that use them
+  // keybinds must load before we attach listeners that use them
   await keybinds.initKeybindings();
 
-  // Load state.settings before any initialization that depends on them
+  // settings must load before anything that depends on them
   await fetchSettings();
 
-  // Initialize video player module with DOM elements and callbacks
   videoPlayerModule.init({
     videoPlayer: document.getElementById("video-player"),
     clipTitle: document.getElementById("clip-title"),
@@ -1344,7 +1251,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     previewElement: previewElement,
     tempVideo: tempVideo,
   }, {
-    // Callbacks for module to trigger renderer.js functions
+    // callbacks for the module to trigger renderer.js functions
     logCurrentWatchSession: logCurrentWatchSession,
       initializeVolumeControls: null,
     getCachedClipData: getCachedClipData,
@@ -1375,7 +1282,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     getVisibleClips: clipGridModule.getVisibleClips
   });
 
-  // Initialize search manager with dependencies
   searchManagerModule.init({
     state: state,
     renderClips: clipGridModule.renderClips,
@@ -1386,7 +1292,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     videoPlayerModule: videoPlayerModule
   });
 
-  // Initialize export manager with dependencies
   exportManagerModule.init({
     videoPlayerModule: videoPlayerModule,
     showExportProgress: showExportProgress,
@@ -1395,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     getPlaybackRate: () => videoPlayer.playbackRate
   });
 
-  // Initialize share manager (button + auth state + upload flow)
+  // button + auth state + upload flow
   shareManagerModule.init({
     showCustomAlert,
     getSharePayload: buildSharePayload,
@@ -1404,7 +1309,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await shareManagerModule.refreshAuthState({ forceVerify: true });
 
-  // Initialize settings manager with dependencies
   settingsManagerUiModule.init({
     videoPlayerModule: videoPlayerModule,
     searchManagerModule: searchManagerModule,
@@ -1430,10 +1334,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   updateManagerModule.init();
 
-  // Initialize grid navigation module
   gridNavigationModule.init({});
 
-  // Initialize clip grid module with dependencies
   clipGridModule.init({
     showCustomConfirm: showCustomConfirm,
     showCustomAlert: showCustomAlert,
@@ -1469,11 +1371,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     clipGrid: clipGrid
   });
 
-  // Initialize state.settings modal and enhanced search
   searchManagerModule.initializeEnhancedSearch();
   await settingsManagerUiModule.initializeSettingsModal();
-  
-  // Initialize gamepad manager
+
   await gamepadManagerModule.init({
     videoPlayer: document.getElementById("video-player"),
     playerOverlay: document.getElementById("player-overlay"),
@@ -1530,16 +1430,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       const result = await ipcRenderer.invoke('import-steelseries-clips', sourcePath);
   
       if (result.success) {
-        // Add "Imported" to state.selectedTags if not already present
         if (!state.selectedTags.has("Imported")) {
           state.selectedTags.add("Imported");
           await saveTagPreferences();
         }
-  
+
         await showCustomAlert('Import completed successfully!');
-        // Reload clips to show new imports
         await clipGridModule.loadClips();
-        updateFilterDropdown(); // Update the dropdown with new tag
+        updateFilterDropdown();
       } else {
         await showCustomAlert(`Import failed: ${result.error}`);
       }
@@ -1566,7 +1464,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   new Titlebar(titlebarOptions);
 
-  // Register app functions for benchmark harness
   if (benchmarkHarness) {
     benchmarkHarness.registerFunctions({
       loadClips: clipGridModule.loadClips,
@@ -1574,11 +1471,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       openClip: videoPlayerModule.openClip,
       closePlayer: videoPlayerModule.closePlayer,
       performSearch: searchManagerModule.performSearch,
-      allClips: () => state.allClips  // Getter function for current clips
+      allClips: () => state.allClips
     });
   }
 
-  // Run loadClips with benchmark timing if enabled
   if (benchmarkHarness) {
     await benchmarkHarness.metrics.measure('initialLoadClips', clipGridModule.loadClips);
   } else {
@@ -1612,14 +1508,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   state.loadingScreen = document.getElementById('loading-screen');
 
-  // Run benchmark scenarios if in benchmark mode
   if (isBenchmarkMode && benchmarkHarness) {
-    // Allow UI to fully render before running benchmarks
+    // let UI render before benchmarks start
     setTimeout(async () => {
       try {
         logger.info('[Benchmark] Starting automated benchmark scenarios');
-        
-        // Parse scenarios from environment
+
         const scenariosJson = process.env.CLIPS_BENCHMARK_SCENARIOS;
         let scenarioIds = ['load_clips', 'open_clip', 'close_player', 'search_simple'];
         
@@ -1632,12 +1526,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         logger.info(`[Benchmark] Scenarios to run: ${scenarioIds.join(', ')}`);
-        
-        // Audio-track comparison benches live in their own module so the
-        // harness stays focused on single-clip scenarios.
+
+        // audio-track benches live in their own module; harness stays single-clip
         const audioTrackBench = require('./benchmark/audio-track-bench');
 
-        // Map scenario IDs to harness methods
         const scenarioMap = {
           'load_clips': () => benchmarkHarness.benchmarkLoadClips(),
           'render_clips': () => benchmarkHarness.benchmarkRenderClips(),
@@ -1656,8 +1548,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           'seek_burst_compare': () => audioTrackBench.benchmarkSeekBurstCompare(benchmarkHarness),
           'memory_footprint_compare': () => audioTrackBench.benchmarkMemoryFootprintCompare(benchmarkHarness)
         };
-        
-        // Run each requested scenario
+
         for (const scenarioId of scenarioIds) {
           const scenarioFn = scenarioMap[scenarioId];
           if (scenarioFn) {
@@ -1675,17 +1566,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 details: result
               };
               
-              // Send result to main process for stdout output
               await ipcRenderer.invoke('benchmark:outputResult', resultData);
-              
+
               logger.info(`[Benchmark] Scenario ${scenarioId} completed in ${duration.toFixed(1)}ms`);
-              
-              // Small delay between scenarios
+
               await new Promise(r => setTimeout(r, 500));
             } catch (error) {
               logger.error(`[Benchmark] Scenario ${scenarioId} failed:`, error);
-              
-              // Send error result to main
+
               await ipcRenderer.invoke('benchmark:outputResult', {
                 scenario: scenarioId,
                 error: error.message
@@ -1695,27 +1583,25 @@ document.addEventListener('DOMContentLoaded', async () => {
             logger.warn(`[Benchmark] Unknown scenario: ${scenarioId}`);
           }
         }
-        
-        // Get final results from main process
+
         const mainResults = await ipcRenderer.invoke('benchmark:getResults');
-        
-        // Send complete signal to main for stdout output
+
         await ipcRenderer.invoke('benchmark:outputComplete', {
           renderer: benchmarkHarness.getMetrics(),
           main: mainResults
         });
-        
+
         logger.info('[Benchmark] All scenarios completed');
-        
-        // Close app after benchmarks complete (with delay for output flushing)
+
+        // delay lets stdout flush before quit
         setTimeout(() => {
           ipcRenderer.invoke('benchmark:quit');
         }, 1000);
-        
+
       } catch (error) {
         logger.error('[Benchmark] Benchmark execution failed:', error);
       }
-    }, 3000); // Wait 3 seconds for initial load to complete
+    }, 3000); // let initial load finish first
   }
 });
 
@@ -1730,7 +1616,7 @@ async function changeClipLocation() {
       await ipcRenderer.invoke("set-clip-location", newLocation);
       state.clipLocation = newLocation;
       currentClipLocationSpan.textContent = newLocation;
-      await clipGridModule.loadClips(); // Reload clips with the new location
+      await clipGridModule.loadClips();
     } catch (error) {
       logger.error("Error changing clip location:", error);
       await showCustomAlert(`Failed to change clip location: ${error.message}`);
@@ -1740,7 +1626,6 @@ async function changeClipLocation() {
 
 
 function updateAllPreviewVolumes(newVolume) {
-  // Find all video elements inside clip-item elements
   const previewVideos = document.querySelectorAll('.clip-item video');
   previewVideos.forEach(video => {
     video.volume = newVolume;
@@ -1748,21 +1633,15 @@ function updateAllPreviewVolumes(newVolume) {
 }
 
 
-// Settings modal UI
-// Add click-outside-to-close functionality for state.settings modal
 document.addEventListener('click', (e) => {
   const settingsModal = document.getElementById('settingsModal');
   if (settingsModal && settingsModal.style.display !== 'none') {
-    // Check if we clicked on the modal background (settingsModal div) and not inside the content
     if (e.target.id === 'settingsModal' && !e.target.closest('.settings-modal-content')) {
       settingsManagerUiModule.closeSettingsModal();
     }
   }
 });
 
-/**
- * Format a timestamp into a relative "time ago" string.
- */
 function getRelativeTimeString(timestamp) {
   const date = new Date(timestamp);
   const now = new Date();
@@ -1794,7 +1673,6 @@ function getRelativeTimeString(timestamp) {
 
 
 
-// Player navigation / export
 const exportButton = document.getElementById("export-button");
 const deleteButton = document.getElementById("delete-button");
 
@@ -1812,16 +1690,12 @@ exportButton.addEventListener("click", (e) => {
 });
 
 ipcRenderer.on("close-video-player", () => {
-  // Stop ambient glow effect
   if (ambientGlowManager) {
     ambientGlowManager.stop();
   }
   videoPlayerModule.releaseVideoElement();
 });
 
-/**
- * Enable/disable prev/next buttons based on current clip index.
- */
 function updateNavigationButtons() {
   const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === state.currentClip.originalName);
   document.getElementById('prev-video').disabled = currentIndex <= 0;
@@ -1829,9 +1703,6 @@ function updateNavigationButtons() {
 }
 
 
-/**
- * Open the adjacent clip in the current list.
- */
 function navigateToVideo(direction) {
   const currentIndex = state.currentClipList.findIndex(clip => clip.originalName === state.currentClip.originalName);
   const newIndex = currentIndex + direction;
@@ -1890,13 +1761,11 @@ function disableVideoThumbnail(clipName) {
   );
   if (!clipElement) return;
 
-  // Remove the video element if it exists
   const videoElement = clipElement.querySelector("video");
   if (videoElement) {
     videoElement.remove();
   }
 
-  // Remove event listeners that trigger video preview
   clipElement.removeEventListener(
     "mouseenter",
     clipElement.videoPreviewHandler,
@@ -1906,10 +1775,8 @@ function disableVideoThumbnail(clipName) {
     clipElement.videoPreviewHandler,
   );
 
-  // Add a class to indicate that video preview is disabled
   clipElement.classList.add("video-preview-disabled");
 
-  // Add a visual indicator that the clip is being deleted
   const deletingIndicator = document.createElement("div");
   deletingIndicator.className = "deleting-indicator";
   deletingIndicator.textContent = "Deleting...";
@@ -2008,8 +1875,6 @@ ipcRenderer.on("show-decode-fallback-notice", (event, payload) => {
   exportManagerModule.showDecodeFallbackNotice(payload);
 });
 
-// Clip title editing
-// Add this new function to handle overlay clicks
 function handleOverlayClick(e) {
   if (e.target === playerOverlay && !window.justFinishedDragging) {
     videoPlayerModule.closePlayer();
@@ -2077,20 +1942,12 @@ function clipTitleKeydownHandler(e) {
   }
 }
 
-// Make sure this event listener is present on the fullscreenPlayer
 fullscreenPlayer.addEventListener("click", (e) => {
   e.stopPropagation();
 });
 
-// Close the player on backdrop click — but ignore "clicks" synthesized by a
-// drag that started inside the player and released outside. The browser fires
-// a click on the common ancestor of mousedown+mouseup, which means a drag
-// from e.g. a volume slider that releases over the overlay would otherwise
-// be interpreted as a backdrop click and close the player.
-//
-// Stays on `click` (not mouseup) so existing stopPropagation on
-// #fullscreen-player and the prev/next buttons keeps working — only clicks
-// that genuinely bubble up to the overlay reach this handler.
+// browser fires click on the mousedown/mouseup common ancestor; ignore it if the
+// drag started inside the player, or it'd close on drag-release over the overlay
 let mouseDownInsidePlayer = false;
 playerOverlay.addEventListener("mousedown", (e) => {
   mouseDownInsidePlayer = !!e.target.closest('#fullscreen-player');
@@ -2118,8 +1975,8 @@ function clearSaveTitleTimeout() {
 async function saveTitleChange(originalName, oldCustomName, newCustomName, immediate = false) {
   if (!originalName) return;
 
-  // Trim BOTH sides — a stored name with stray whitespace must not make the
-  // unchanged-guard in saveOperation fail and re-save on every navigation.
+  // trim both sides: stray whitespace in a stored name would break the
+  // unchanged-guard below and re-save every navigation
   const previousName = typeof oldCustomName === "string" ? oldCustomName.trim() : "";
   const nextName = typeof newCustomName === "string" ? newCustomName.trim() : "";
 
@@ -2139,19 +1996,16 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
       if (result.success) {
         clipGridModule.updateClipNameInLibrary(originalName, nextName);
         logger.info(`Title successfully changed to: ${nextName}`);
-        
-        // Update the state.currentClip object
+
         if (state.currentClip && state.currentClip.originalName === originalName) {
           state.currentClip.customName = nextName;
         }
-        
-        // Update the clip in state.allClips array
+
         const clipIndex = state.allClips.findIndex(clip => clip.originalName === originalName);
         if (clipIndex !== -1) {
           state.allClips[clipIndex].customName = nextName;
         }
 
-        // Update the clip element in the grid
         const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
         if (clipElement) {
           const clipNameElement = clipElement.querySelector('.clip-name');
@@ -2167,7 +2021,6 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
       await showCustomAlert(
         `Failed to save custom name. Please try again later. Error: ${error.message}`
       );
-      // Revert to the original name in the grid
       const clipElement = document.querySelector(`.clip-item[data-original-name="${CSS.escape(originalName)}"]`);
       if (clipElement) {
         const clipNameElement = clipElement.querySelector('.clip-name');
@@ -2185,10 +2038,6 @@ async function saveTitleChange(originalName, oldCustomName, newCustomName, immed
   }
 }
 
-/**
- * Show a simple alert modal.
- */
-// Modal dialogs
 function showCustomAlert(message) {
   return new Promise((resolve) => {
     const modal = document.getElementById("custom-modal");
@@ -2209,9 +2058,6 @@ function showCustomAlert(message) {
   });
 }
 
-/**
- * Show a confirm modal and resolve to true/false.
- */
 function showCustomConfirm(message) {
   return new Promise((resolve) => {
     const modal = document.getElementById("custom-modal");
@@ -2239,7 +2085,6 @@ function showCustomConfirm(message) {
 }
 
 
-// Clip filtering
 const debouncedFilterClips = videoPlayerModule.debounce((filter) => {
   logger.info("Filtering clips with filter:", filter);
   logger.info("state.allClips length before filtering:", state.allClips.length);
@@ -2271,11 +2116,9 @@ const debouncedFilterClips = videoPlayerModule.debounce((filter) => {
   validateClipLists();
   updateClipCounter(filteredClips.length);
   discordManagerModule.updateDiscordPresence('Browsing clips', `Filter: ${filter}, Total: ${state.currentClipList.length}`);
-}, 300);  // 300ms debounce time
+}, 300);
 
-/**
- * Apply tag/temporary selection filters to build the visible list.
- */
+// tag selection, or temporary focus-mode tags, builds the visible list
 function filterClips() {
   if (state.selectedTags.size === 0) {
     state.currentClipList = [];
@@ -2283,30 +2126,25 @@ function filterClips() {
     state.currentClipList = state.allClips.filter(clip => {
       const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
 
-      // Check if clip is unnamed
       const baseFileName = clip.originalName.replace(/\.[^/.]+$/, '');
       const isUnnamed = clip.customName === baseFileName;
-      
-      // Check if clip is untagged
+
       const isUntagged = clipTags.length === 0;
 
-      // If clip is untagged and "Untagged" is not selected, exclude it
       if (isUntagged && !state.selectedTags.has('Untagged')) {
         return false;
       }
 
-      // If clip is unnamed and "Unnamed" is not selected, exclude it
       if (isUnnamed && !state.selectedTags.has('Unnamed')) {
         return false;
       }
 
-      // For clips with tags, check regular tag filtering
       if (clipTags.length > 0) {
         if (state.isInTemporaryMode) {
-          // In temporary mode (focus mode), show clips that have ANY of the temporary selected tags
+          // focus mode: match ANY selected tag
           return clipTags.some(tag => state.temporaryTagSelections.has(tag));
         } else {
-          // In normal mode, clips must have ALL their tags selected to be shown
+          // normal mode: clip's tags must ALL be selected
           return clipTags.every(tag => state.selectedTags.has(tag));
         }
       }
@@ -2320,9 +2158,6 @@ function filterClips() {
   updateClipCounter(state.currentClipList.length);
 }
 
-/**
- * Remove duplicate clips by original name.
- */
 function removeDuplicates(clips) {
   const seen = new Map();
   return clips.filter(clip => {
@@ -2334,10 +2169,8 @@ function removeDuplicates(clips) {
 
 
 
-// Preview hover handling
 progressBarContainer.addEventListener('mousemove', (e) => {
-  // Add this check - if we're hovering over volume controls, don't show preview
-  if (e.target.classList.contains('volume-start') || 
+  if (e.target.classList.contains('volume-start') ||
       e.target.classList.contains('volume-end') || 
       e.target.classList.contains('volume-region') ||
       e.target.classList.contains('volume-drag-control') ||
@@ -2358,7 +2191,7 @@ progressBarContainer.addEventListener('mousemove', (e) => {
     }
   }
 
-  // Position immediately for responsive hover (use transform to avoid layout churn)
+  // transform avoids layout churn, keeps hover responsive
   const rect = progressBarContainer.getBoundingClientRect();
   const cursorXRelative = e.clientX - rect.left;
   previewElement.style.position = 'absolute';
@@ -2374,7 +2207,6 @@ progressBarContainer.addEventListener('mousemove', (e) => {
   lastPreviewMoveTime = now;
   lastPreviewMoveX = e.clientX;
   lastPreviewEvent = { clientX: e.clientX };
-
   if (previewFrameTimeout) {
     clearTimeout(previewFrameTimeout);
   }
@@ -2394,7 +2226,6 @@ progressBarContainer.addEventListener('mousemove', (e) => {
   }
 });
 
-// Optimize the seeked event handler
 tempVideo.addEventListener('seeked', () => {
   const previewCanvas = document.getElementById('preview-canvas');
   const ctx = previewCanvas?.getContext('2d');
@@ -2403,9 +2234,6 @@ tempVideo.addEventListener('seeked', () => {
   }
 });
 
-/**
- * Prepare the hidden preview video and canvas sizing.
- */
 async function initializePreviewVideo(videoSource) {
   return new Promise((resolve) => {
     tempVideo.src = videoSource;
@@ -2420,14 +2248,11 @@ async function initializePreviewVideo(videoSource) {
   });
 }
 
-// Modify the video player's loadedmetadata event handler
 videoPlayer.addEventListener('loadedmetadata', async () => {
   await initializePreviewVideo(videoPlayer.src);
-  // Hide preview by default when loading a new video
   previewElement.style.display = 'none';
 });
 
-// Add this after the mousemove event listener for progressBarContainer
 progressBarContainer.addEventListener('mouseleave', () => {
   const previewElement = document.getElementById('timeline-preview');
   if (previewElement) {
@@ -2437,28 +2262,19 @@ progressBarContainer.addEventListener('mouseleave', () => {
     clearTimeout(previewFrameTimeout);
     previewFrameTimeout = null;
   }
-  // Reset temp video
   tempVideo.currentTime = 0;
 });
 
-/**
- * Apply multi-select rules for a clip item click.
- */
-// Selection helpers
 function handleClipSelection(clipItem, event) {
-  // Get all visible clip items
   const clipItems = Array.from(document.querySelectorAll('.clip-item:not([style*="display: none"])'));
   const currentIndex = clipItems.indexOf(clipItem);
 
   if (event.shiftKey && lastSelectedClip) {
-    // Get index of last selected clip
     const lastSelectedIndex = clipItems.indexOf(lastSelectedClip);
-    
+
     if (currentIndex >= 0 && lastSelectedIndex >= 0) {
-      // Clear existing selection
-      clearSelection(false); // Don't reset lastSelectedClip
-      
-      // Select all clips between last selected and current
+      clearSelection(false); // don't reset lastSelectedClip
+
       const [start, end] = [lastSelectedIndex, currentIndex].sort((a, b) => a - b);
       
       for (let i = start; i <= end; i++) {
@@ -2472,25 +2288,20 @@ function handleClipSelection(clipItem, event) {
       }
     }
   } else {
-    // Single selection with Ctrl/Cmd
     if (currentIndex >= 0) {
       const originalName = clipItem.dataset.originalName;
-      
+
       if (!event.ctrlKey && !event.metaKey) {
-        // Clear other selections if not using Ctrl/Cmd
         clearSelection(false);
       }
-      
+
       if (state.selectedClips.has(originalName) && (event.ctrlKey || event.metaKey)) {
-        // Deselect if already selected and using Ctrl/Cmd
         state.selectedClips.delete(originalName);
         clipItem.classList.remove('selected');
-        
-        // Update lastSelectedClip to the previous selected clip if exists
+
         const selectedElements = Array.from(document.querySelectorAll('.clip-item.selected'));
         lastSelectedClip = selectedElements[selectedElements.length - 1] || null;
       } else {
-        // Select the clip
         state.selectedClips.add(originalName);
         clipItem.classList.add('selected');
         lastSelectedClip = clipItem;
@@ -2501,10 +2312,7 @@ function handleClipSelection(clipItem, event) {
   updateSelectionUI();
 }
 
-/**
- * Clear current selection.
- * @param {boolean} resetLastSelected - Whether to reset the range anchor.
- */
+/** @param {boolean} resetLastSelected - reset the shift-select range anchor */
 function clearSelection(resetLastSelected = true) {
   document.querySelectorAll('.clip-item.selected').forEach(clip => {
     clip.classList.remove('selected');
@@ -2517,7 +2325,6 @@ function clearSelection(resetLastSelected = true) {
   updateSelectionUI();
 }
 
-// Helper function to check if a clip is selectable
 function isClipSelectable(clip) {
   return clip &&
          clip.dataset &&
@@ -2526,7 +2333,6 @@ function isClipSelectable(clip) {
          !clip.classList.contains('video-preview-disabled');
 }
 
-// Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   const shareModal = document.getElementById('clip-share-modal');
   if (shareModal && shareModal.classList.contains('is-open')) return;
@@ -2539,9 +2345,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-/**
- * Update the selection action bar UI.
- */
 function updateSelectionUI() {
   const selectionActions = document.getElementById('selection-actions');
   const selectionCount = document.getElementById('selection-count');
@@ -2554,9 +2357,6 @@ function updateSelectionUI() {
   }
 }
 
-/**
- * Delete all currently selected clips with progress UI.
- */
 async function deleteSelectedClips() {
   if (state.selectedClips.size === 0) return;
 
@@ -2569,22 +2369,19 @@ async function deleteSelectedClips() {
   const totalClips = state.selectedClips.size;
   let completed = 0;
 
-  // Show initial progress
   showDeletionTooltip();
 
   try {
     const clipsToDelete = Array.from(state.selectedClips);
-    
+
     for (const originalName of clipsToDelete) {
       const clipElement = document.querySelector(
         `.clip-item[data-original-name="${originalName}"]`
       );
 
       if (clipElement) {
-        // Update group before removing the clip
         updateGroupAfterDeletion(clipElement);
-        
-        // Immediately add visual feedback
+
         disableVideoThumbnail(originalName);
 
         try {
@@ -2593,16 +2390,14 @@ async function deleteSelectedClips() {
             throw new Error(result.error);
           }
 
-          // Remove from data structures
           const allClipsIndex = state.allClips.findIndex(clip => clip.originalName === originalName);
           const currentClipListIndex = state.currentClipList.findIndex(clip => clip.originalName === originalName);
-          
+
           if (allClipsIndex > -1) state.allClips.splice(allClipsIndex, 1);
           if (currentClipListIndex > -1) state.currentClipList.splice(currentClipListIndex, 1);
 
-          // Remove from UI
           clipElement.remove();
-          
+
           completed++;
           updateDeletionProgress(completed, totalClips);
           
@@ -2616,11 +2411,9 @@ async function deleteSelectedClips() {
     clearSelection();
     updateClipCounter(state.currentClipList.length);
     hideDeletionTooltip();
-    
-    // Update new clips indicators after bulk deletion
+
     updateNewClipsIndicators();
-    
-    // Save clip list immediately after bulk deletion
+
     try {
       await ipcRenderer.invoke('save-clip-list-immediately');
     } catch (error) {
@@ -2629,7 +2422,6 @@ async function deleteSelectedClips() {
   }
 }
 
-// Update deletion tooltip to show progress
 function updateDeletionProgress(completed, total) {
   state.deletionTooltip = document.querySelector('.deletion-tooltip');
   if (state.deletionTooltip) {
@@ -2637,13 +2429,9 @@ function updateDeletionProgress(completed, total) {
   }
 }
 
-// Add event listeners for the action buttons
 document.getElementById('delete-selected')?.addEventListener('click', deleteSelectedClips);
 document.getElementById('clear-selection')?.addEventListener('click', clearSelection);
 
-/**
- * Smoothly scroll to the given element if possible.
- */
 function smoothScrollToElement(element) {
   if (!element) {
     logger.warn('smoothScrollToElement called with no element');
@@ -2657,7 +2445,6 @@ function smoothScrollToElement(element) {
     windowHeight: window.innerHeight
   });
 
-  // Try both approaches - first the native scrollIntoView
   try {
     element.scrollIntoView({ behavior: "smooth", block: "end", inline: "nearest" });
     logger.info('Used native scrollIntoView');
@@ -2668,28 +2455,24 @@ function smoothScrollToElement(element) {
 }
 
 
-/**
- * Persist the current watch session duration for the active clip.
- */
 async function logCurrentWatchSession() {
   if (!currentSessionStartTime) {
-    return; // No active session to log
+    return;
   }
 
-  // If the video was playing when the session ended, add the last active interval
+  // add final active interval if still playing when session ended
   if (lastPlayTimestamp) {
     currentSessionActiveDuration += Date.now() - lastPlayTimestamp;
-    lastPlayTimestamp = null; // Ensure it's reset
+    lastPlayTimestamp = null;
   }
 
   const durationSeconds = Math.round(currentSessionActiveDuration / 1000);
 
-  // Only log if duration is meaningful (e.g., > 1 second)
   if (durationSeconds > 1 && state.currentClip) {
     try {
       await ipcRenderer.invoke('log-watch-session', {
         originalName: state.currentClip.originalName,
-        customName: clipTitle.value, // Use current title value
+        customName: clipTitle.value,
         durationSeconds: durationSeconds,
       });
     } catch (error) {
@@ -2697,15 +2480,11 @@ async function logCurrentWatchSession() {
     }
   }
 
-  // Reset session state
   currentSessionStartTime = null;
   currentSessionActiveDuration = 0;
   lastPlayTimestamp = null;
 }
 
-/**
- * Toggle greyscale styling for game icons.
- */
 function applyIconGreyscale(enabled) {
   document.querySelectorAll('.game-icon').forEach(icon => {
     icon.classList.toggle('greyscale-icon', enabled);
@@ -2713,9 +2492,8 @@ function applyIconGreyscale(enabled) {
 }
 
 /**
- * Apply selected UI font stack through a global CSS variable.
  * @param {string} uiFontKey
- * @returns {string} The normalized key that was applied
+ * @returns {string} normalized key that was applied
  */
 function applyUiFontSetting(uiFontKey) {
   const normalizedKey = UI_FONT_STACKS[uiFontKey] ? uiFontKey : UI_FONT_DEFAULT;
@@ -2724,12 +2502,9 @@ function applyUiFontSetting(uiFontKey) {
   return normalizedKey;
 }
 
-// Startup side effects
-// inside DOMContentLoaded handler after state.settings loaded
 tagManagerModule.loadGlobalTags();
 applyIconGreyscale(state.settings?.iconGreyscale);
 
-// After initial requires
 if (document && document.fonts) {
   document.fonts.load('24px "Material Symbols Rounded"').then(()=>{
     document.body.classList.add('icons-ready');

@@ -1,18 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 // Frame-level view of the boot reveal animation from a Chromium trace recorded
-// with `cold-start.js --trace` and CLIPLIB_TRACE_CATEGORIES including
-// "benchmark,viz" (the frame pipeline reporter).
+// with `cold-start.js --trace` and CLIPLIB_TRACE_CATEGORIES including "benchmark,viz".
 //
 //   node benchmark/analyze-reveal.js benchmark/results/chromium-trace-x-2.json [--window MS] [--discover]
 //
-// Aligns on the renderer's user-timing mark `reveal_anim_start` (set by
-// src/renderer/boot/bootReveal.ts) and, for the next --window ms (1300):
-//  - lists renderer main-thread tasks over 8 ms with what they ran;
-//  - counts compositor frames from PipelineReporter events: presented,
-//    dropped, and the gaps between presented frames.
-// --discover prints the event names seen in the window instead (for finding
-// the right names when Chromium renames things).
+// aligns on renderer user-timing mark `reveal_anim_start` (src/renderer/boot/bootReveal.ts);
+// for the next --window ms (1300) lists main-thread tasks over 8ms and compositor frame
+// presented/dropped counts plus gaps. --discover prints event names instead (Chromium renames things)
 
 const fs = require('node:fs');
 
@@ -25,8 +20,7 @@ const opt = (name, dflt) => {
 };
 const windowMs = Number(opt('--window', 1300));
 const discover = args.includes('--discover');
-// --around MS: list the longest events on every thread from MS-5 to MS+90
-// (ms after reveal_anim_start), to see what all processes did in a stall.
+// --around MS: longest events on every thread from MS-5 to MS+90 (after reveal_anim_start), for stalls
 const around = opt('--around') ? Number(opt('--around')) : null;
 
 const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -77,7 +71,7 @@ const main = events.filter((e) => e.pid === rendererPid && tname(e) === 'CrRende
 const tasks = main.filter((e) => e.name === 'ThreadControllerImpl::RunTask' || e.name === 'RunTask' || e.name === 'MessageLoop::RunTask').sort((a, b) => a.ts - b.ts);
 const long = tasks.filter((e) => e.dur >= 8000);
 console.log(`\nrenderer main thread: ${tasks.length} tasks, ${long.length} over 8 ms, busy ${Math.round(tasks.reduce((s, e) => s + e.dur, 0) / 1000)} ms of ${windowMs}`);
-// What the main thread spent its time on (nested events double count).
+// nested events double count
 const byName = new Map();
 const taskSet = new Set(tasks);
 for (const e of main) {
@@ -93,8 +87,8 @@ for (const t of long) {
   console.log(`  +${String(ms(t.ts)).padStart(7)} ms  ${String(Math.round(t.dur / 100) / 10).padStart(6)} ms  ${children.join(' | ')}`);
 }
 
-// Compositor frames: PipelineReporter async events (benchmark,viz) carry the
-// frame's fate in args.chrome_frame_reporter.state on the end event.
+// PipelineReporter async events (benchmark,viz) carry frame fate in
+// args.chrome_frame_reporter.state on the end event
 const reporters = events.filter((e) => e.name === 'PipelineReporter' && (e.ph === 'b' || e.ph === 'e' || e.ph === 'S' || e.ph === 'F') && e.pid === rendererPid);
 const byId = new Map();
 for (const e of reporters) {

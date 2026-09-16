@@ -1,11 +1,6 @@
-// In-app ClipLib feed. Ported from the reference website FeedPage, adapted to
-// the app's shell conventions (custom classes + design tokens; scrolls in a
-// .clip-scroll container like LibraryView).
-//
-// Filters live in the SIDEBAR while this route is active (FeedRailFilters ↔
-// feedFilters store); this page only renders the grid. The clip fetch starts
-// immediately — it does NOT wait for the auth verification round-trip; a 401
-// (not connected) falls through to the connect prompt.
+// In-app ClipLib feed, ported from FeedPage. Filters live in the sidebar
+// (FeedRailFilters / feedFilters store); this page only renders the grid. The clip
+// fetch starts immediately, without waiting on auth verification; a 401 falls through.
 
 import { useEffect, useMemo } from "react";
 import { Film } from "lucide-react";
@@ -27,7 +22,7 @@ export default function FeedPage() {
   const profile = useProfile();
   const filters = useFeedFilters();
   const { gridRef, canvasRef } = useCardGlow();
-  // Offscreen culling — same .cv-offscreen mechanism as the library grid.
+  // offscreen culling, same .cv-offscreen mechanism as the library grid
   const observe = useVisibilityObserver();
 
   const options = useMemo(
@@ -67,9 +62,8 @@ export default function FeedPage() {
       onClipUpdated: patchClip,
     });
 
-  // Connect prompt: shown whenever we know we're logged out (verified) or the
-  // fetch itself came back 401 — cached clips must NOT keep an unauthenticated
-  // feed browsable. `verifying` keeps the first fetch unblocked on startup.
+  // shown when logged out (verified) or the fetch came back 401, so cached clips
+  // never keep an unauthenticated feed browsable; `verifying` unblocks the first fetch
   const notConnected = (!profile.connected && !profile.verifying) || error?.status === 401;
 
   if (notConnected) {

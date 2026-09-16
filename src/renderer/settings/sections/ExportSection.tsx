@@ -50,7 +50,7 @@ const TUNING_ROWS: {
   },
 ];
 
-/** Resolve an option value to its display label. */
+/** resolves an option value to its display label */
 function optLabel(options: { value: string; label: string }[], value: string): string {
   return options.find((o) => o.value === value)?.label ?? value;
 }
@@ -71,11 +71,11 @@ export default function ExportSection() {
   };
 
   const changeTuning = (key: TuningKey, value: string) => {
-    // Touching any tuning knob takes the preset to Custom (legacy behavior).
+    // touching any tuning knob takes the preset to Custom (legacy behavior)
     void patch({ [key]: value, exportPreset: "custom" });
   };
 
-  // --- SteelSeries import ---
+  // SteelSeries import
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<{ tone: "info" | "progress" | "success" | "error"; text: string } | null>(null);
   const importingRef = useRef(false);
@@ -86,7 +86,7 @@ export default function ExportSection() {
       const pct = total > 0 ? Math.round((current / total) * 100) : 0;
       setImportStatus({ tone: "progress", text: `Importing clips… ${pct}%` });
     });
-    // Import log lines go to the console (legacy behavior) for diagnostics.
+    // import log lines go to the console (legacy behavior) for diagnostics
     const offLog = window.clips.onSteelseriesLog(({ message }: { message?: string }) => {
       if (importingRef.current && message) console.info(`[SteelSeries] ${message}`);
     });
@@ -108,8 +108,7 @@ export default function ExportSection() {
       if (result?.success) {
         setImportStatus({ tone: "success", text: "Import complete — reloading library…" });
         toast.show("SteelSeries import complete", "success");
-        // Imported files land on disk outside the live list; reload picks
-        // them all up (and their thumbnails) in one pass.
+        // imported files land on disk outside the live list; reload picks them all up, thumbnails included
         window.setTimeout(() => window.location.reload(), 900);
       } else {
         setImportStatus({ tone: "error", text: `Import failed: ${result?.error ?? "unknown error"}` });

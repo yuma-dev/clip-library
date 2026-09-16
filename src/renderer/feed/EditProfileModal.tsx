@@ -1,12 +1,7 @@
-// Edit-profile modal — in-app port of the reference website EditProfileModal.tsx.
-// Lets the signed-in user set their bio, accent colour, and banner (gradient
-// preset OR uploaded image). Reuses the shared `.share-modal-*` styling plus a
-// few `.edit-profile-*` extras in profile.css.
-//
-// Banner image upload differs from the website: instead of threading a File
-// through the DOM, "Upload image" invokes the main-process native picker
-// (window.clips.shareUploadBanner), which uploads immediately; on success we
-// refetch the profile via onSaved.
+// Edit-profile modal, in-app port of the website EditProfileModal.tsx. Sets bio
+// accent colour, and banner (gradient preset or uploaded image). Banner upload
+// differs from the website: "Upload image" calls the native picker
+// (window.clips.shareUploadBanner) which uploads immediately, then onSaved refetches.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -30,7 +25,7 @@ interface EditProfileModalProps {
   onClose: () => void;
   /** Called after the Save button succeeds (closes + refreshes the profile). */
   onSaved: () => void;
-  /** Called after a banner upload/remove — refresh the profile, keep the modal open. */
+  /** Called after a banner upload/remove: refresh the profile, keep the modal open. */
   onRefresh: () => void;
   initialBio: string | null;
   initialAccentColor: string | null;
@@ -81,12 +76,8 @@ export default function EditProfileModal({
         bio: bio || null,
         accentColor: accentColor || null,
       };
-      // Only touch the banner gradient when the banner ISN'T an uploaded image.
-      // Sending `bannerGradient: null` alongside an image banner makes the server
-      // clear the banner entirely (resetting it to the default accent gradient),
-      // which wiped the freshly-uploaded image. Omitting the key leaves the
-      // uploaded image untouched. Picking a gradient preset flips bannerType to
-      // "gradient", so switching image → gradient still works.
+      // skip bannerGradient when the banner is an image: sending null there made the
+      // server reset the banner and wipe the upload; a picked preset flips bannerType to "gradient"
       if (bannerType !== "image") {
         body.bannerGradient = bannerGradient || null;
       }

@@ -1,7 +1,6 @@
-// When did the user last touch the app? Background work that would cost a
-// frame (card streaming) yields while input is recent, so scrolling and
-// typing never share a frame with it. One set of passive listeners for the
-// whole renderer.
+// background work costing a frame (card streaming) yields while input is recent
+// so scrolling/typing never share a frame with it. one set of passive listeners
+// for the whole renderer
 let lastInputAt = -Infinity;
 let installed = false;
 

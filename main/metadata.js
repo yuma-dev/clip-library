@@ -1,25 +1,15 @@
-/**
- * Metadata module - handles .clip_metadata file I/O
- *
- * Provides atomic file writes, and read/write operations for all clip metadata:
- * custom names, trim data, speed, volume, volume range, and tags.
- */
-
-// Imports
+/** .clip_metadata file I/O: atomic writes, read/write for names, trim, speed,
+ * volume, volume range, tags. */
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 const { logActivity } = require('../utils/activity-tracker');
 
-// ============================================================================
-// File Utilities
-// ============================================================================
+// file utilities
 
 /**
- * Fixed `kind` enum for telemetry, derived from the metadata file extension.
- * Extension only: the file name itself carries the clip name and never leaves
- * this process.
+ * telemetry kind from file extension; the filename (with clip name) never leaves this process
  * @param {string} filePath
  * @returns {string} trim|tags|custom_name|speed|volume|volume_range|track_state|track_prefs|gameinfo|other
  */
@@ -40,10 +30,6 @@ function metadataKind(filePath) {
   }
 }
 
-/**
- * Ensure a directory exists, creating it if necessary
- * @param {string} dirPath - Path to directory
- */
 async function ensureDirectoryExists(dirPath) {
   try {
     await fs.access(dirPath);
@@ -56,12 +42,6 @@ async function ensureDirectoryExists(dirPath) {
   }
 }
 
-/**
- * Write file with retry logic for permission errors
- * @param {string} filePath - Path to file
- * @param {string} data - Data to write
- * @param {number} retries - Number of retry attempts
- */
 async function writeFileWithRetry(filePath, data, retries = 4) {
   const startedAt = Date.now();
   let retryErrno;
@@ -69,7 +49,7 @@ async function writeFileWithRetry(filePath, data, retries = 4) {
     try {
       await fs.writeFile(filePath, data, { flag: 'w' });
       if (attempt > 0) {
-        // Antivirus pressure costing retries on every save is invisible today.
+        // AV pressure costing retries on every save is invisible without this.
         telemetry.event('metadata_write_retried', {
           kind: telemetry.KIND.DEGRADED,
           severity: telemetry.SEVERITY.INFO,
@@ -95,9 +75,8 @@ async function writeFileWithRetry(filePath, data, retries = 4) {
           });
           throw error;
         }
-        // Short exponential backoff (25/50/100ms — tolerates AV holds up to
-        // ~175ms like the old schedule did, without the flat 100ms sleep that
-        // put a visible ~110ms floor under every metadata save).
+        // 25/50/100ms backoff, tolerates AV holds to ~175ms; old flat 100ms
+        // sleep put a visible floor under every metadata save
         await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
       } else {
         throw error;
@@ -106,11 +85,6 @@ async function writeFileWithRetry(filePath, data, retries = 4) {
   }
 }
 
-/**
- * Write file atomically using temp file + rename
- * @param {string} filePath - Path to file
- * @param {string} data - Data to write
- */
 async function writeFileAtomically(filePath, data) {
   const tempPath = `${filePath}.tmp`;
   const dir = path.dirname(filePath);
@@ -140,50 +114,31 @@ async function writeFileAtomically(filePath, data) {
   }
 }
 
-/**
- * Get the metadata folder path for a clip location
- * @param {string} clipLocation - Base clip folder path
- * @returns {string} Path to .clip_metadata folder
- */
 function getMetadataFolder(clipLocation) {
   return path.join(clipLocation, '.clip_metadata');
 }
 
-/**
- * Convert a clip's relative path (originalName) into a flat filename
- * safe for use as a metadata file key in .clip_metadata/.
- * e.g., "highlights/gameplay.mp4" -> "highlights--gameplay.mp4"
- * Root clips like "gameplay.mp4" are returned unchanged.
- */
+// flat filename key for .clip_metadata/: e.g. highlights/gameplay.mp4 becomes
+// highlights--gameplay.mp4; root clips pass through unchanged
 function metadataSafeName(clipName) {
   return clipName.replace(/\//g, '--');
 }
 
-// ============================================================================
-// Custom Name
-// ============================================================================
+// custom name
 
-/**
- * Save custom name for a clip
- * @param {string} clipName - Original clip filename
- * @param {string} customName - Custom display name
- * @param {Function} getSettings - Function to get settings
- */
 async function saveCustomName(clipName, customName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const customNameFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.customname`);
 
-  // No-op guard: the player flushes the title on every navigation/close, so
-  // most calls carry an unchanged name. Reading is ~100x cheaper than the
-  // atomic write (which eats an AV-scan retry penalty on Windows).
+  // no-op guard: title flushes on every nav/close, so most calls are unchanged.
+  // read is ~100x cheaper than the atomic write (AV-scan retry penalty on Windows)
   try {
     const existing = await fs.readFile(customNameFilePath, 'utf8');
     if (existing === customName) return;
   } catch (error) {
     if (error.code === 'ENOENT') {
-      // No custom name stored and the incoming name is just the default
-      // (filename without extension) -> nothing worth persisting.
+      // default name (no extension) with nothing stored yet: nothing to persist
       const defaultName = path.basename(clipName, path.extname(clipName));
       if (customName === defaultName) return;
     }
@@ -200,12 +155,6 @@ async function saveCustomName(clipName, customName, getSettings) {
   }
 }
 
-/**
- * Get custom name for a clip
- * @param {string} clipName - Original clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {string|null} Custom name or null if not set
- */
 async function getCustomName(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -219,16 +168,8 @@ async function getCustomName(clipName, getSettings) {
   }
 }
 
-// ============================================================================
-// Trim Data
-// ============================================================================
+// trim data
 
-/**
- * Save trim data for a clip
- * @param {string} clipName - Clip filename
- * @param {object} trimData - Trim data { start, end }
- * @param {Function} getSettings - Function to get settings
- */
 async function saveTrimData(clipName, trimData, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -245,12 +186,6 @@ async function saveTrimData(clipName, trimData, getSettings) {
   }
 }
 
-/**
- * Get trim data for a clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {object|null} Trim data or null if not set
- */
 async function getTrimData(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -262,8 +197,7 @@ async function getTrimData(clipName, getSettings) {
     return JSON.parse(trimData);
   } catch (error) {
     if (error.code === 'ENOENT') return null;
-    // trimData set means the read worked and the parse didn't: the user's
-    // trim points are unrecoverable.
+    // read worked, parse failed: trim points are gone
     if (trimData !== undefined) {
       telemetry.event('metadata_parse_failed', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -275,11 +209,6 @@ async function getTrimData(clipName, getSettings) {
   }
 }
 
-/**
- * Delete trim data for a clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- */
 async function deleteTrimData(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -297,16 +226,8 @@ async function deleteTrimData(clipName, getSettings) {
   }
 }
 
-// ============================================================================
-// Speed
-// ============================================================================
+// speed
 
-/**
- * Save playback speed for a clip
- * @param {string} clipName - Clip filename
- * @param {number} speed - Playback speed multiplier
- * @param {Function} getSettings - Function to get settings
- */
 async function saveSpeed(clipName, speed, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -324,12 +245,6 @@ async function saveSpeed(clipName, speed, getSettings) {
   }
 }
 
-/**
- * Get playback speed for a clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {number} Speed multiplier (default 1)
- */
 async function getSpeed(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -352,16 +267,8 @@ async function getSpeed(clipName, getSettings) {
   }
 }
 
-// ============================================================================
-// Volume
-// ============================================================================
+// volume
 
-/**
- * Save volume level for a clip
- * @param {string} clipName - Clip filename
- * @param {number} volume - Volume level
- * @param {Function} getSettings - Function to get settings
- */
 async function saveVolume(clipName, volume, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -379,12 +286,6 @@ async function saveVolume(clipName, volume, getSettings) {
   }
 }
 
-/**
- * Get volume level for a clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {number} Volume level (default 1)
- */
 async function getVolume(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -407,12 +308,9 @@ async function getVolume(clipName, getSettings) {
   }
 }
 
-// ============================================================================
-// Per-Track Audio State (multi-track playback)
-// ============================================================================
+// per-track audio state (multi-track playback)
 
 /**
- * Save per-track audio state for a clip.
  * @param {string} clipName
  * @param {object} trackState - { tracks: { [ordinal]: { volume, muted, name } } }
  */
@@ -430,14 +328,8 @@ async function saveTrackState(clipName, trackState, getSettings) {
   }
 }
 
-/**
- * Global track preferences keyed by track *name* (e.g. "Mic In (Elgato Wave:XLR)").
- * Holds color + hidden state — both shared across every clip that contains a
- * track with the same name. Volume stays per-clip.
- * Stored in userData/trackPreferences.json: { [trackName]: { color, hidden } }
- */
-// In-memory mirror of trackPreferences.json — the file is read on every clip
-// open, and only this module ever writes it, so a simple cache is safe.
+// track prefs keyed by name: color+hidden shared across clips, volume stays per-clip.
+// stored at userData/trackPreferences.json; cached since only this module writes it
 let trackPrefsCache = null;
 
 async function getTrackPreferences(getAppPath) {
@@ -470,7 +362,6 @@ async function saveTrackPreferences(trackName, patch, getAppPath) {
     const existing = { ...(await getTrackPreferences(getAppPath)) };
     const current = existing[trackName] || {};
     const next = { ...current, ...(patch || {}) };
-    // Strip null/undefined entries so the file stays tidy.
     Object.keys(next).forEach((k) => { if (next[k] == null) delete next[k]; });
     if (Object.keys(next).length === 0) {
       delete existing[trackName];
@@ -501,7 +392,7 @@ async function getTrackState(clipName, getSettings) {
   } catch (error) {
     if (error.code === 'ENOENT') return { tracks: {} };
     logger.error(`Error reading track state for ${clipName}:`, error);
-    // Per-track volumes/mutes fall back to defaults and the next save overwrites.
+    // volumes/mutes fall back to defaults; next save overwrites the bad file
     if (data !== undefined) {
       telemetry.event('metadata_parse_failed', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -513,24 +404,15 @@ async function getTrackState(clipName, getSettings) {
   }
 }
 
-// ============================================================================
-// Volume Range
-// ============================================================================
+// volume range
 
-/**
- * Save volume range adjustment data for a clip
- * @param {string} clipName - Clip filename
- * @param {object} volumeData - Volume range data { start, end, level }
- * @param {Function} getSettings - Function to get settings
- */
 async function saveVolumeRange(clipName, volumeData, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
 
-  // null means "remove the range" — delete the file instead of writing the
-  // literal string "null", and skip entirely when there's nothing to remove
-  // (the player used to trigger this on every clip open).
+  // null = remove range: delete file instead of writing literal "null".
+  // player used to call this on every clip open even with nothing to remove
   if (volumeData == null) {
     try {
       await fs.unlink(volumeRangeFilePath);
@@ -554,12 +436,6 @@ async function saveVolumeRange(clipName, volumeData, getSettings) {
   }
 }
 
-/**
- * Get volume range adjustment data for a clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {object|null} Volume range data or null if not set
- */
 async function getVolumeRange(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -579,10 +455,9 @@ async function getVolumeRange(clipName, getSettings) {
   try {
     return JSON.parse(volumeData);
   } catch {
-    // Self-heal a corrupt file (the player used to overwrite it on the next
-    // open; now that opens don't write, clean it up here instead).
+    // self-heal: opens no longer overwrite this file, so delete it here.
+    // record what we destroyed since it's the user's data
     logger.error(`Corrupt volume range file for ${clipName}; removing it`);
-    // We delete the user's file to recover, so record what we destroyed.
     telemetry.event('volume_range_self_deleted', {
       kind: telemetry.KIND.DATA_LOSS,
       severity: telemetry.SEVERITY.WARNING,
@@ -593,16 +468,8 @@ async function getVolumeRange(clipName, getSettings) {
   }
 }
 
-// ============================================================================
-// Clip Tags
-// ============================================================================
+// clip tags
 
-/**
- * Get tags for a specific clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {string[]} Array of tag names
- */
 async function getClipTags(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -632,11 +499,9 @@ async function getClipTags(clipName, getSettings) {
 }
 
 /**
- * Run an async mapper over items with bounded concurrency. Keeps thousands of
- * tiny metadata reads from flooding the libuv thread pool at once (which is
- * what made per-clip IPC fan-outs average 70ms+ per call).
+ * bounded-concurrency async map; unbounded fan-out made per-clip IPC average 70ms+/call
  * @param {Array} items
- * @param {number} limit - Max in-flight operations
+ * @param {number} limit - max in-flight
  * @param {Function} mapper - async (item) => result
  * @returns {Promise<Array>} results in input order
  */
@@ -654,10 +519,9 @@ async function mapWithConcurrency(items, limit, mapper) {
 }
 
 /**
- * Get tags for many clips in one call.
- * @param {string[]} clipNames - Clip filenames
- * @param {Function} getSettings - Function to get settings
- * @returns {Promise<Object<string, string[]>>} clipName -> tags (missing file -> [])
+ * @param {string[]} clipNames
+ * @param {Function} getSettings
+ * @returns {Promise<Object<string, string[]>>} clipName to tags (missing file: empty array)
  */
 async function getClipTagsBatch(clipNames, getSettings) {
   const settings = await getSettings();
@@ -674,8 +538,7 @@ async function getClipTagsBatch(clipNames, getSettings) {
     } catch (error) {
       if (error.code !== 'ENOENT') {
         logger.error('Error reading tags:', error);
-        // Same loss as the single-clip path; coalescing keeps a bad batch to
-        // one event with an occurrence count.
+        // same loss as single-clip path; coalesced to one event per bad batch
         telemetry.event('tags_lost_on_parse', {
           kind: telemetry.KIND.DATA_LOSS,
           severity: telemetry.SEVERITY.ERROR,
@@ -692,12 +555,6 @@ async function getClipTagsBatch(clipNames, getSettings) {
   return Object.fromEntries(entries);
 }
 
-/**
- * Save tags for a specific clip
- * @param {string} clipName - Clip filename
- * @param {string[]} tags - Array of tag names
- * @param {Function} getSettings - Function to get settings
- */
 async function saveClipTags(clipName, tags, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -713,15 +570,8 @@ async function saveClipTags(clipName, tags, getSettings) {
   }
 }
 
-// ============================================================================
-// Global Tags
-// ============================================================================
+// global tags
 
-/**
- * Load global tags list
- * @param {Function} getAppPath - Function to get app paths (app.getPath)
- * @returns {string[]} Array of global tag names
- */
 async function loadGlobalTags(getAppPath) {
   const tagsFilePath = path.join(getAppPath('userData'), 'global_tags.json');
   try {
@@ -736,11 +586,6 @@ async function loadGlobalTags(getAppPath) {
   }
 }
 
-/**
- * Save global tags list
- * @param {string[]} tags - Array of global tag names
- * @param {Function} getAppPath - Function to get app paths (app.getPath)
- */
 async function saveGlobalTags(tags, getAppPath) {
   const tagsFilePath = path.join(getAppPath('userData'), 'global_tags.json');
   try {
@@ -753,11 +598,6 @@ async function saveGlobalTags(tags, getAppPath) {
   }
 }
 
-/**
- * Remove a tag from all clips
- * @param {string} tagToRemove - Tag name to remove
- * @param {Function} getSettings - Function to get settings
- */
 async function removeTagFromAllClips(tagToRemove, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -793,8 +633,7 @@ async function removeTagFromAllClips(tagToRemove, getSettings) {
     }
   } catch (error) {
     logger.info('No metadata folder found or couldn\'t read it');
-    // A missing folder is normal. Anything else means we did nothing at all
-    // and still told the user it worked.
+    // missing folder is normal; any other error means nothing ran but success is still reported
     if (error.code !== 'ENOENT') {
       telemetry.event('tag_migration_partial', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -806,7 +645,7 @@ async function removeTagFromAllClips(tagToRemove, getSettings) {
     return { success: true, modifiedCount: 0 };
   }
 
-  // Skipped files keep the deleted tag while the UI reports success.
+  // skipped files keep the deleted tag while the UI reports success
   if (failedCount > 0) {
     telemetry.event('tag_migration_partial', {
       kind: telemetry.KIND.DATA_LOSS,
@@ -819,12 +658,6 @@ async function removeTagFromAllClips(tagToRemove, getSettings) {
   return { success: true, modifiedCount };
 }
 
-/**
- * Update a tag name in all clips
- * @param {string} oldTag - Current tag name
- * @param {string} newTag - New tag name
- * @param {Function} getSettings - Function to get settings
- */
 async function updateTagInAllClips(oldTag, newTag, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -860,8 +693,7 @@ async function updateTagInAllClips(oldTag, newTag, getSettings) {
     }
   } catch (error) {
     logger.info('No metadata folder found or couldn\'t read it');
-    // A missing folder is normal. Anything else means we did nothing at all
-    // and still told the user it worked.
+    // missing folder is normal; any other error means nothing ran but success is still reported
     if (error.code !== 'ENOENT') {
       telemetry.event('tag_migration_partial', {
         kind: telemetry.KIND.DATA_LOSS,
@@ -873,7 +705,7 @@ async function updateTagInAllClips(oldTag, newTag, getSettings) {
     return { success: true, modifiedCount: 0 };
   }
 
-  // Skipped files keep the old tag name while the UI reports success.
+  // skipped files keep the old tag name while the UI reports success
   if (failedCount > 0) {
     telemetry.event('tag_migration_partial', {
       kind: telemetry.KIND.DATA_LOSS,
@@ -886,11 +718,6 @@ async function updateTagInAllClips(oldTag, newTag, getSettings) {
   return { success: true, modifiedCount };
 }
 
-/**
- * Restore missing global tags from clip tag files
- * @param {Function} getSettings - Function to get settings
- * @param {Function} getAppPath - Function to get app paths (app.getPath)
- */
 async function restoreMissingGlobalTags(getSettings, getAppPath) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -916,7 +743,6 @@ async function restoreMissingGlobalTags(getSettings, getAppPath) {
     return { success: true, restoredCount: 0 };
   }
 
-  // Load current global tags
   const tagsFilePath = path.join(getAppPath('userData'), 'global_tags.json');
   let currentGlobalTags = [];
   try {
@@ -930,7 +756,6 @@ async function restoreMissingGlobalTags(getSettings, getAppPath) {
   }
   const currentGlobalTagsSet = new Set(currentGlobalTags);
 
-  // Find missing tags
   const missingTags = [...allClipTags].filter(tag => !currentGlobalTagsSet.has(tag));
 
   if (missingTags.length > 0) {
@@ -947,16 +772,8 @@ async function restoreMissingGlobalTags(getSettings, getAppPath) {
   }
 }
 
-// ============================================================================
-// Game Info (read-only for now)
-// ============================================================================
+// game info (read-only for now)
 
-/**
- * Get game icon info for a clip
- * @param {string} clipName - Clip filename
- * @param {Function} getSettings - Function to get settings
- * @returns {object|null} Game icon info { path, title } or null
- */
 async function getGameIcon(clipName, getSettings) {
   const settings = await getSettings();
   const metadataFolder = getMetadataFolder(settings.clipLocation);
@@ -999,7 +816,7 @@ async function getGameIcon(clipName, getSettings) {
       await fs.access(iconPath);
       response.path = iconPath;
     } catch {
-      // icon missing -> leave null
+      // icon missing: leave null
       telemetry.event('gameinfo_unreadable', {
         kind: telemetry.KIND.SILENT_FAILURE,
         severity: telemetry.SEVERITY.WARNING,
@@ -1013,9 +830,8 @@ async function getGameIcon(clipName, getSettings) {
 }
 
 /**
- * Validate/normalize the optional `discord` block the recorder writes into
- * .gameinfo (voice-call context: channel + participants at record time).
- * @param {any} raw - Parsed `discord` value from the .gameinfo JSON
+ * normalizes the recorder's `discord` block in .gameinfo (channel + call participants)
+ * @param {any} raw
  * @returns {object|null} { channel_id, channel_name, guild_id, participants[] } or null
  */
 function normalizeDiscordInfo(raw) {
@@ -1042,11 +858,9 @@ function normalizeDiscordInfo(raw) {
 }
 
 /**
- * Get game icon info for many clips in one call. One bounded-concurrency pass
- * over the .gameinfo files; icon-file existence checks are deduped per icon
- * path (a library typically has few distinct games but thousands of clips).
- * @param {string[]} clipNames - Clip filenames
- * @param {Function} getSettings - Function to get settings
+ * icon existence checks deduped per icon path (few distinct games, many clips)
+ * @param {string[]} clipNames
+ * @param {Function} getSettings
  * @returns {Promise<Object<string, {path: string|null, title: string|null}|null>>}
  */
 async function getGameIconsBatch(clipNames, getSettings) {
@@ -1054,7 +868,7 @@ async function getGameIconsBatch(clipNames, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const names = Array.isArray(clipNames) ? clipNames : [];
 
-  // iconPath -> Promise<boolean> (exists); shared across all clips in the batch.
+  // iconPath to Promise<boolean> (exists), shared across the batch
   const iconExists = new Map();
   const checkIcon = (iconPath) => {
     let pending = iconExists.get(iconPath);
@@ -1076,7 +890,7 @@ async function getGameIconsBatch(clipNames, getSettings) {
     try {
       parsed = JSON.parse(await fs.readFile(gameInfoPath, 'utf8'));
     } catch (error) {
-      // No .gameinfo at all is the normal case for most clips.
+      // no .gameinfo is normal for most clips
       if (error.code !== 'ENOENT') unreadable += 1;
       return [clipName, null];
     }
@@ -1107,16 +921,10 @@ async function getGameIconsBatch(clipNames, getSettings) {
 }
 
 /**
- * Aggregate every human Discord participant that appears in the given clips'
- * .gameinfo files — the source for the search bar's `@mention` autocomplete
- * ("everyone who's ever been in a call when you clipped"). Bots are dropped.
- *
- * Returns the deduped people (keyed by Discord id, newest snapshot wins so a
- * renamed user shows their current name) plus a per-clip id list so the
- * renderer can filter the grid by `@mention` without a second scan.
- *
- * @param {string[]} clipNames - Clip filenames
- * @param {Function} getSettings - Function to get settings
+ * every human Discord participant across the clips' .gameinfo, for @mention search.
+ * Newest snapshot per id wins (renamed user shows current name); bots dropped.
+ * @param {string[]} clipNames
+ * @param {Function} getSettings
  * @returns {Promise<{ people: object[], byClip: Object<string,string[]> }>}
  */
 async function getClipParticipants(clipNames, getSettings) {
@@ -1124,10 +932,9 @@ async function getClipParticipants(clipNames, getSettings) {
   const metadataFolder = getMetadataFolder(settings.clipLocation);
   const names = Array.isArray(clipNames) ? clipNames : [];
 
-  // id -> { at, participant, count }; `at` = newest clip mtime seen for the id.
+  // id to { at, participant, count }; at = newest clip mtime seen for the id
   const people = new Map();
   const byClip = {};
-  // Tallied across the batch, same as getGameIconsBatch.
   let unreadable = 0;
 
   await mapWithConcurrency(names, 32, async (clipName) => {
@@ -1137,11 +944,10 @@ async function getClipParticipants(clipNames, getSettings) {
     let mtime = 0;
     try {
       raw = await fs.readFile(gameInfoPath, 'utf8');
-      // File mtime stands in for record time — good enough to pick the freshest
-      // identity snapshot without threading each clip's createdAt through IPC.
+      // mtime stands in for record time, avoids threading createdAt through IPC
       mtime = (await fs.stat(gameInfoPath).catch(() => null))?.mtimeMs ?? 0;
     } catch (error) {
-      // No .gameinfo at all is the normal case for most clips.
+      // no .gameinfo is normal for most clips
       if (error.code !== 'ENOENT') unreadable += 1;
       return;
     }
@@ -1174,7 +980,7 @@ async function getClipParticipants(clipNames, getSettings) {
   });
 
   if (unreadable > 0) {
-    // These clips drop out of @mention search with nothing shown to the user.
+    // these clips drop out of @mention search silently
     telemetry.event('gameinfo_unreadable', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.WARNING,
@@ -1190,15 +996,8 @@ async function getClipParticipants(clipNames, getSettings) {
   return { people: list, byClip };
 }
 
-// ============================================================================
-// Tag Preferences
-// ============================================================================
+// tag preferences
 
-/**
- * Get tag preferences from userData
- * @param {Function} getAppPath - Function to get app path (app.getPath.bind(app))
- * @returns {Promise<Object|null>} Tag preferences object or null if not found
- */
 async function getTagPreferences(getAppPath) {
   try {
     const prefsPath = path.join(getAppPath('userData'), 'tagPreferences.json');
@@ -1212,12 +1011,6 @@ async function getTagPreferences(getAppPath) {
   }
 }
 
-/**
- * Save tag preferences to userData
- * @param {Object} preferences - Tag preferences to save
- * @param {Function} getAppPath - Function to get app path (app.getPath.bind(app))
- * @returns {Promise<boolean>} True if saved successfully
- */
 async function saveTagPreferences(preferences, getAppPath) {
   try {
     const prefsPath = path.join(getAppPath('userData'), 'tagPreferences.json');

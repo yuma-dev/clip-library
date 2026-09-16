@@ -1,13 +1,6 @@
-// IPC instrumentation (dev-only).
-//
-// Wraps every window.clips.* invoke method so each call is timed from dispatch
-// to promise settle — this is backend latency AS THE FRONTEND SEES IT (main
-// handler time + IPC round-trip), with no cooperation needed from main. Pairs
-// with perf-main.js, which times the handler body on the other side; the two
-// spans nest in the flame graph so you can tell IPC overhead from real work.
-//
-// Each call is tagged with the active interaction and refreshes its watchdog, so
-// an async chain stays attributed to the click that started it.
+// dev-only: wraps every window.clips.* method, timing dispatch to promise settle
+// (backend latency as the frontend sees it: handler time + round-trip). pairs with
+// perf-main.js timing the handler body, so spans nest and separate IPC overhead from real work
 
 import { span, reportIpcInFlight, TID, wallMs } from "./trace";
 import { currentInteraction, noteActivity } from "./interactions";
@@ -22,7 +15,7 @@ function argBytes(args: unknown[]): number {
 }
 
 function resultSize(value: unknown): number | undefined {
-  // Cheap only: arrays report length; skip byte-sizing big/opaque results.
+  // cheap only: arrays report length, skip byte-sizing big/opaque results
   if (Array.isArray(value)) return value.length;
   return undefined;
 }
@@ -32,8 +25,7 @@ export function instrumentIpc(): void {
   if (!clips) return;
 
   for (const key of Object.keys(clips)) {
-    // Skip event subscriptions (onX return an unsubscribe fn — timing is
-    // meaningless) and the fire-and-forget signal.
+    // skip event subscriptions (onX returns an unsubscribe fn, timing is meaningless)
     if (key.startsWith("on") || key === "rendererReady") continue;
     const orig = clips[key];
     if (typeof orig !== "function") continue;
@@ -68,7 +60,7 @@ export function instrumentIpc(): void {
           },
         );
       }
-      // Synchronous return — still record it.
+      // synchronous return, still recorded
       span(`ipc:${key}`, TID.ipc, start, wallMs() - start, { channel: key, argBytes: argBytes(args), interaction });
       return ret;
     };

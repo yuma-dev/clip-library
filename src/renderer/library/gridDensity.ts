@@ -1,6 +1,5 @@
-// Live grid-density tuning via the DevTools console (temporary dev aid until
-// the Phase 6 settings zoom slider). Sets the `--clip-col` CSS variable that
-// `.clip-group-content` uses for its column min-width, and persists the choice.
+// Live grid-density tuning via the DevTools console (dev aid until the Phase
+// 6 zoom slider). Sets `--clip-col`, which `.clip-group-content` uses for column min-width, and persists it.
 //
 //   window.clipGrid.size(240)   // set column min-width in px
 //   window.clipGrid.cols(6)     // approx. fit N columns in the current width

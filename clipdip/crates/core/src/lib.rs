@@ -1,4 +1,4 @@
-//! `clipdip-core` — shared types and the capture-pipeline orchestrator.
+//! `clipdip-core`: shared types and the capture-pipeline orchestrator.
 //!
 //! - [`config`] is the user-tunable settings model persisted as TOML.
 //! - [`pipeline::Pipeline`] owns the running capture: ring buffer, video

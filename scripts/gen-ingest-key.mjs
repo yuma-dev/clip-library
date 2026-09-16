@@ -1,11 +1,7 @@
 // Embeds the diagnostics ingest key into the Electron build.
-//
-// The key lives only in the gitignored clipdip/.cargo/config.toml ([env]
-// CLIPDIP_INGEST_KEY), where cargo compiles it into the clipdip binary. The
-// Electron side needs it too for uploading unified diagnostic bundles to
-// /v1/bundles, so the build writes it to a gitignored JSON file that ships
-// inside the asar. Missing key is not a build failure: the uploader falls
-// back to the text log upload.
+// Key lives in gitignored clipdip/.cargo/config.toml ([env] CLIPDIP_INGEST_KEY);
+// this writes it to a gitignored JSON shipped in the asar for /v1/bundles uploads.
+// Missing key isn't a build failure: uploader falls back to text log upload.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
