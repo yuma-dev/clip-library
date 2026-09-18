@@ -1,58 +1,103 @@
-# ClipLib
-![Title Image](https://github.com/user-attachments/assets/0fee853d-ef4d-4706-b9ac-cf64b43dd0c2)
-ClipLib is a desktop app for managing game clips. Record with OBS or whatever you like, then use ClipLib to trim, tag, and export.
+<p align="center">
+  <img src="assets/title.png" width="88" alt="ClipLib logo">
+</p>
+<h1 align="center">ClipLib</h1>
+<p align="center">Record, organize, trim, and mix your clips in one Windows app.<br>Use the built-in ClipDip recorder, or bring clips from OBS and others.</p>
+<p align="center">
+  <a href="https://github.com/yuma-dev/clip-library/releases/latest"><strong>Download for Windows</strong></a>
+  &nbsp;·&nbsp; <a href="https://github.com/yuma-dev/clip-library/issues">Report an issue</a>
+</p>
+
+<!-- media:hero — replace this block with the hosted walkthrough after publishing media. -->
+<p align="center">
+  
+
+https://github.com/user-attachments/assets/d89d87ab-a51d-4c95-9e15-b1fe48553f6f
 
 
-## Why
+</p>
+<!-- /media:hero -->
 
-OBS records great clips but has nothing for trimming, sorting or exporting them. Tools like SteelSeries GG Moments have that, but:
+## Save the moment. Keep the context.
 
- - they only handle videos made by their own recorder
- - no consistent automatic desktop capture
- - large libraries get slow
- - watermarks
+**ClipDip saves the last few moments with a hotkey.** Set your replay length, capture quality, audio sources, and shortcuts, then rename a new clip straight from the save notification.
 
-So: record with OBS (or anything else), manage with ClipLib.
+Already have a recording setup? Point ClipLib at your clip folder. You can also import clips from SteelSeries Moments in the settings.
 
-## Features
+<table>
+  <tr>
+    <td width="45%" valign="middle">
+      <h3>Easy to use Trimming</h3>
+      <p>Drag the trim handles, preview the cut, and export. Trims are saved separately, so you can come back later and restore the full clip.</p>
+      <p><strong>Your original recording stays intact.</strong></p>
+    </td>
+    <td width="55%" align="center">
+     <img width="480" height="240" alt="02-trimming" src="https://github.com/user-attachments/assets/e1f61e53-bcce-4e8e-bc96-2d4269061bab" />
+    </td>
+  </tr>
+  <tr>
+    <td width="45%" valign="middle">
+      <h3>Find it again</h3>
+      <p>Hover to preview, give a clip a name, and add your own tags. Browse by time, filter new or trimmed clips, or search by name, <code>#tag</code>, and <code>@user</code>.</p>
+    </td>
+    <td width="55%" align="center">
+     <img width="480" height="287" alt="01-rename-and-tag" src="https://github.com/user-attachments/assets/e4ab0ada-32dc-41f7-ab30-77f0d63b874d" />
+    </td>
+  </tr>
+  <tr>
+    <td width="45%" valign="middle">
+      <h3>Get the audio right</h3>
+      <p>Turn the game down, bring your microphone up, or quiet voice chat. Adjust recorded audio tracks individually and export with your mix.</p>
+      <p>Available for clips recorded with separate audio tracks. (hint hint our own app does it best)</p>
+    </td>
+    <td width="55%" align="center">
+     <img width="480" height="361" alt="03-audio-tracks" src="https://github.com/user-attachments/assets/340a0982-8e7f-4be4-b8db-ef640dc6a977" />
+    </td>
+  </tr>
+  <tr>
+    <td width="45%" valign="middle">
+      <h3>Remember who was there</h3>
+      <p>Connect Discord and ClipDip can attach voice-channel participants when you save a clip. Their avatars stay with the clip, and <code>@user</code> search helps you find moments together.</p>
+      <p>Discord integration is part of CLipDip, other Software will not have the Discord integration.</p>
+    </td>
+    <td width="55%" align="center">
+     <img width="480" height="338" alt="04-user-mentions" src="https://github.com/user-attachments/assets/f7af771c-89c5-433e-9411-5ad70b0f553c" />
+    </td>
+  </tr>
+</table>
 
-### Quick Trim
-Trim in the built-in player.
+## Export it. Share it wherever you like.
 
-![Trim Feature](https://github.com/user-attachments/assets/a5f75f6f-056f-48cb-b418-ce83bf24b074)
+Copy a trimmed clip to the clipboard for quick sharing, or export a video or audio file. Export presets let you choose the balance between quality, resolution, frame rate, and file size.
 
-### Tag and Categorize
-Tag clips however you want.
+**No ClipLib account is needed to export and share your files yourself.**
 
-![Tagging System](https://github.com/user-attachments/assets/54ca206e-aa62-4715-bb75-fd226b356887)
+## Make it feel like your setup
 
-### Easy Export
-Export in a few formats.
+Tune the player, previews, ambient glow, interface font, keyboard shortcuts, export presets, and recording settings. ClipLib remembers per-clip settings such as volume and playback speed.
 
-![Export Options](https://github.com/user-attachments/assets/a140fdff-38ee-4f92-a8f0-e5bf84f96075)
-_(the last export saved the video into my clipboard instead of saving as a file, for easy sharing)_
+<img width="480" height="360" alt="05-settings" src="https://github.com/user-attachments/assets/d0df76f0-4d05-4794-a4ed-f5218bcb666a" />
 
-### Persistent Clip Settings
-Volume, name and playback speed are saved per clip, so a clip opens the way you left it.
 
-### Reversible Edits
-Edits are stored next to the video, the file itself is never touched.
+<details>
+<summary><strong>A few more useful details</strong></summary>
 
-`Except deletion. That really deletes the file.`
+- **Reversible trims:** trim metadata is kept separately from the source recording. Deleting a clip still deletes the file.
+- **A cleaner library:** collections for new, untagged, and trimmed clips, plus time-based groups.
+- **Your existing clips:** use a local folder or the SteelSeries Moments importer.
+- **Help when something breaks:** Settings → About → Generate Diagnostics Zip creates a bundle for a bug report.
 
-### Diagnostics Bundle
-Settings > About > Generate Diagnostics Zip collects recent logs, settings and system details into one archive you can attach to a bug report.
+</details>
 
-## Getting Started
+## Get started
 
-1. Download the latest release from the [Releases](https://github.com/yuma-dev/clip-library/releases) page.
-2. Install the application on your system.
-3. Launch ClipLib and set your clip folder location in the settings.
-4. Done.
+1. [Download the latest Windows release](https://github.com/yuma-dev/clip-library/releases/latest) and install ClipLib.
+2. Choose your clip folder.
+3. Set up ClipDip’s replay length, audio, and hotkeys. Or keep using your existing recorder.
+4. Optionally connect Discord to capture who was in the call.
 
-[VirusTotal Scan](https://www.virustotal.com/gui/file/3f0e9493f8529d93b22f976ec11e16905731a6024265c04914223d0fa4abcf38?nocache=1) (might be out of date, run your own)
+ClipDip’s built-in recording currently requires Windows and an NVIDIA GPU. You can use ClipLib with recordings from another recorder if your machine cannot run ClipDip.
 
-## Legal
+---
 
-- [Privacy Policy](PRIVACY.md)
-- [Terms of Service](TERMS.md)
+[Development](DEVELOPMENT.md) · [Report an issue](https://github.com/yuma-dev/clip-library/issues) · [Privacy](PRIVACY.md) · [Terms](TERMS.md)
