@@ -1,7 +1,4 @@
-<p align="center">
-  <img src="assets/title.png" width="88" alt="ClipLib logo">
-</p>
-<h1 align="center">ClipLib</h1>
+![Title Image](https://github.com/user-attachments/assets/0fee853d-ef4d-4706-b9ac-cf64b43dd0c2)
 <p align="center">Record, organize, trim, and mix your clips in one Windows app.<br>Use the built-in ClipDip recorder, or bring clips from OBS and others.</p>
 <p align="center">
   <a href="https://github.com/yuma-dev/clip-library/releases/latest"><strong>Download for Windows</strong></a>
