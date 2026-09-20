@@ -367,21 +367,23 @@
   height: 16px;
   fill: currentColor;
 }
-/* loudness matched: a small badge next to the icon, gone the moment a level is set by hand */
-.pl-auto-pill {
+/* loudness matched: a sparkle on the icon's top left corner, gone the moment a level is set by hand */
+.pl-auto-mark {
   display: none;
-  margin-right: 6px;
-  padding: 1px 5px;
-  border-radius: 6px;
-  font: 500 9.5px var(--font-sans);
-  letter-spacing: 0.02em;
+  position: absolute;
+  left: -3px;
+  top: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  place-items: center;
   color: var(--analysis-clr);
-  background: color-mix(in srgb, var(--analysis-clr) 14%, transparent);
-  border: 0.5px solid color-mix(in srgb, var(--analysis-clr) 30%, transparent);
+  background: #0a0a0c;
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--analysis-clr) 40%, transparent);
   pointer-events: none;
 }
-#volume-container:has(#volume-button.normalized) .pl-auto-pill {
-  display: inline-block;
+#volume-container:has(#volume-button.normalized) .pl-auto-mark {
+  display: grid;
 }
 #volume-slider {
   position: absolute;

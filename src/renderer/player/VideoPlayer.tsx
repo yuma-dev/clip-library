@@ -1,6 +1,6 @@
 import ExportProgress from './ExportProgress';
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Maximize, Sparkles, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
 import type { ClipWaveform } from "../../types/clips";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
@@ -765,8 +765,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             <div id="bottom-controls" className="pl-pill pl-bar">
               <div id="volume-container">
                 <div id="audio-tracks-panel" className="hidden" />
-                {/* legacy toggles .normalized on the button; the badge reads it through the container */}
-                <span className="pl-auto-pill" aria-hidden="true">auto</span>
                 <button
                   id="volume-button"
                   type="button"
@@ -779,6 +777,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                     else window.legacyPlayer?.changeVolume(delta);
                   }}
                 />
+                {/* loudness matched: legacy toggles .normalized on the button, the sparkle sits on its corner */}
+                <span className="pl-auto-mark" aria-hidden="true">
+                  <Sparkles size={9} strokeWidth={2.4} />
+                </span>
                 <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>
               <div id="current-time">0:00</div>
