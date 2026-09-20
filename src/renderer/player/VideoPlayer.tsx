@@ -391,7 +391,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       setTracks(null);
     };
     document.addEventListener("clip-open-state", onOpenState);
-    const offReady = window.clips.onWaveformReady(({ clipName, waveform }) => {
+    const offReady = window.clips.onAnalysisReady(({ clipName, waveform }) => {
       setSession((s) => (s && s.originalName === clipName ? { ...s, waveform } : s));
     });
     // fired by the mixer on init, colour/hide/mute changes and dispose (empty list)

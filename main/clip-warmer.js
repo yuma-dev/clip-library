@@ -2,8 +2,8 @@
 /**
  * Pre-runs the slow, cacheable part of opening a clip: ffprobe (~250ms) and
  * for multi-track clips, audio extraction (~200-350ms), cached to thumbnail
- * .meta and .clip_metadata/audio_tracks_v3, then hands the clip to the waveform
- * queue. One clip at a time with a gap, so it never competes with the user.
+ * .meta and .clip_metadata/audio_tracks_v3, then hands the clip to the audio
+ * analysis queue. One clip at a time with a gap, so it never competes with the user.
  */
 const logger = require('../utils/logger');
 
@@ -57,8 +57,8 @@ async function warmOne(clipName) {
   const info = await ffmpeg.getClipInfo(clipName, getSettings, thumbnails);
   const tracks = Array.isArray(info?.audioTracks) ? info.audioTracks : [];
   if (tracks.length > 1) await ffmpeg.extractAudioTracks(clipName, getSettings, thumbnails);
-  // timeline envelope has its own queue and pause; not awaited so the gap here stays short
-  require('./waveform').warm(clipName);
+  // the listen has its own queue and pause; not awaited so the gap here stays short
+  require('./audio-analysis').warm(clipName);
 }
 
 async function drain() {

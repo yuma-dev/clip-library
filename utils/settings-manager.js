@@ -38,6 +38,13 @@ const DEFAULT_SETTINGS = {
   // constant in OnboardingWizard.tsx to re-show for a release
   onboardingVersion: 0,
   iconGreyscale: false,
+  // loudness matching: clips without a custom volume play at targetLufs; null target
+  // means the library median. levels come from the audio analysis every clip gets once
+  // (<clips>/.clip_metadata/analysis_v1), indexed in loudness_v1.json
+  loudness: {
+    enabled: true,
+    targetLufs: null
+  },
   // green lines + group styling for new clips
   showNewClipsIndicators: true,
   // mirrors CARD_GLOW_DEFAULTS in glowConfig.ts; must exist here too for type

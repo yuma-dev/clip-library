@@ -8,6 +8,7 @@ import RailTags from "./RailTags";
 import RailProfile from "./RailProfile";
 import RailSearch from "./RailSearch";
 import UpdatePill from "./UpdatePill";
+import AnalysisPill from "./AnalysisPill";
 import FeedRailFilters from "../feed/FeedRailFilters";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 import type { Collection } from "../library/filter";
@@ -189,6 +190,8 @@ function Sidebar({
 
       {/* only renders while an update is available or in flight */}
       <UpdatePill />
+      {/* only renders during the one-time library listen */}
+      <AnalysisPill />
 
       <RailProfile />
     </aside>

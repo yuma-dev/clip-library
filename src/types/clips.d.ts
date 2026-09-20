@@ -82,7 +82,7 @@ export interface VolumeDetail {
   capped?: boolean;
 }
 
-export interface LoudnessScanProgress {
+export interface AnalysisProgress {
   running: boolean;
   /** workers hold while a clip plays or an export runs */
   paused: boolean;
@@ -122,7 +122,7 @@ export interface LoudnessSummary {
   maxGainDb: number;
   measured: number;
   entries: LoudnessEntry[];
-  scan: LoudnessScanProgress;
+  scan: AnalysisProgress;
 }
 
 /** WASAPI endpoint from `clipdip --list-audio-devices`. */
@@ -300,6 +300,10 @@ export interface ClipsApi {
   warmClipOpen(clipName: string): Promise<void>;
   /** Per-track level envelope for the timeline; null while it is being measured. */
   getClipWaveform(clipName: string): Promise<ClipWaveform | null>;
+  /** queue state plus how many clips already have a sidecar, out of the library size */
+  getAnalysisProgress(): Promise<AnalysisProgress & { analyzed: number; total: number }>;
+  /** drops every analysis and the loudness index, then listens to the whole library again */
+  resetAudioAnalysis(): Promise<{ ok: boolean }>;
 
   extractAudioTracks(...args: any[]): Promise<any>;
   getTrackState(...args: any[]): Promise<any>;
@@ -437,9 +441,9 @@ export interface ClipsApi {
 
   onLog(cb: ClipsEventCallback): ClipsUnsubscribe;
   onNewClipAdded(cb: ClipsEventCallback): ClipsUnsubscribe;
-  onLoudnessProgress(cb: (p: LoudnessScanProgress) => void): ClipsUnsubscribe;
+  onAnalysisProgress(cb: (p: AnalysisProgress) => void): ClipsUnsubscribe;
+  onAnalysisReady(cb: (p: { clipName: string; waveform: ClipWaveform }) => void): ClipsUnsubscribe;
   onLoudnessMeasured(cb: (p: { clipName: string; gain: number; gainDb: number; lufs: number | null }) => void): ClipsUnsubscribe;
-  onWaveformReady(cb: (p: { clipName: string; waveform: ClipWaveform }) => void): ClipsUnsubscribe;
   onCheckActivityState(cb: ClipsEventCallback): ClipsUnsubscribe;
   onCliplibAuthEvent(cb: ClipsEventCallback): ClipsUnsubscribe;
   /** Navigation deep links (cliplib://settings/<section>) forwarded by main. */

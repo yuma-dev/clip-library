@@ -60,6 +60,11 @@ export default function App() {
         setProfileUserId(null);
         setRoute("library");
       },
+      openSettings: (section?: string) => {
+        setProfileUserId(null);
+        setRoute("settings");
+        setSettingsIntent({ section, nonce: Date.now() });
+      },
     }),
     [],
   );

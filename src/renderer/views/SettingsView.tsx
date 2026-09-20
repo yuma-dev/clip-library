@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AudioLines,
   Bell,
   Clapperboard,
   FolderOpen,
@@ -18,6 +19,8 @@ import {
 import GeneralSection from "../settings/sections/GeneralSection";
 import AppearanceSection from "../settings/sections/AppearanceSection";
 import PlayerSection from "../settings/sections/PlayerSection";
+import LoudnessSection from "../settings/sections/LoudnessSection";
+import AnalysisSection from "../settings/sections/AnalysisSection";
 import ExportSection from "../settings/sections/ExportSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
@@ -38,6 +41,7 @@ type SectionId =
   | "general"
   | "appearance"
   | "player"
+  | "audio"
   | "export"
   | "shortcuts"
   | "cliplib"
@@ -56,12 +60,13 @@ interface SectionDef {
   blurb: string;
 }
 
-const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
+export const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
   {
     items: [
       { id: "general", label: "General", icon: Settings2, blurb: "Library location, integrations, and tags" },
       { id: "appearance", label: "Appearance", icon: Palette, blurb: "Font and library visuals" },
       { id: "player", label: "Player", icon: MonitorPlay, blurb: "Previews and the ambient glow" },
+      { id: "audio", label: "Audio", icon: AudioLines, blurb: "Waveforms and even loudness across clips" },
       { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
       { id: "shortcuts", label: "Shortcuts", icon: Keyboard, blurb: "Player keyboard bindings" },
       { id: "cliplib", label: "ClipLib", icon: Share2, blurb: "Account, invite codes, and API tokens" },
@@ -146,6 +151,12 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
     general: () => <GeneralSection lib={lib} filter={filter} />,
     appearance: () => <AppearanceSection />,
     player: () => <PlayerSection sampleThumb={sampleThumb} />,
+    audio: () => (
+      <>
+        <AnalysisSection />
+        <LoudnessSection lib={lib} />
+      </>
+    ),
     export: () => <ExportSection />,
     shortcuts: () => <ShortcutsSection />,
     cliplib: () => <CliplibSection />,
