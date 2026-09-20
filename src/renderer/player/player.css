@@ -43,7 +43,6 @@
   height: 96%;
   filter: blur(calc(var(--glow-blur) + 10px)) saturate(var(--glow-sat));
   opacity: calc(var(--glow-opacity) * 0.7);
-  animation: pl-hue 40s linear infinite;
 }
 /* stage: the inset area; frame and its glow share its centre and the video's aspect. legacy
    restores top/left/transform inline when leaving fullscreen, hence !important on those */
@@ -75,14 +74,13 @@
 }
 .pl-glow-frame {
   position: relative;
+  filter: blur(var(--glow-blur)) saturate(var(--glow-sat));
   animation: pl-breathe 7s ease-in-out infinite;
 }
+/* opacity only: a blur radius that changes per frame re-filters the whole image every frame */
 @keyframes pl-breathe {
-  0%, 100% { opacity: calc(var(--glow-opacity) * 0.7); filter: blur(var(--glow-blur)) saturate(var(--glow-sat)); }
-  50% { opacity: var(--glow-opacity); filter: blur(calc(var(--glow-blur) + 8px)) saturate(calc(var(--glow-sat) + 0.3)); }
-}
-@keyframes pl-hue {
-  to { filter: blur(calc(var(--glow-blur) + 10px)) saturate(var(--glow-sat)) hue-rotate(360deg); }
+  0%, 100% { opacity: calc(var(--glow-opacity) * 0.7); }
+  50% { opacity: var(--glow-opacity); }
 }
 
 /* prev/next: bare chevrons hanging off the frame's edges with a tall hit zone, nudge outward on hover */
@@ -210,17 +208,23 @@
   100% { opacity: 0; transform: scale(1.25); }
 }
 
-/* chrome layer over the frame; pills re-enable pointer events */
+/* chrome layer over the frame; pills re-enable pointer events. faded out it also leaves layout:
+   the playhead and time keep being written every frame, and at opacity 0 that still cost a
+   layout per frame. the discrete flip waits for the fade, and comes back at once on show */
 #video-controls {
   position: absolute;
   inset: 0;
   z-index: 20;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.4s;
+  content-visibility: hidden;
+  transition: opacity 0.4s, content-visibility 0s 0.4s allow-discrete;
 }
 #video-controls.visible {
   opacity: 1;
+  content-visibility: visible;
+  /* the delay above is for the way out only; this rule's transition runs on the way in */
+  transition: opacity 0.4s, content-visibility 0s allow-discrete;
 }
 
 .pl-pill {
