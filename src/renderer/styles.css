@@ -5200,3 +5200,68 @@ body.ui-blur-exit .app-body {
   padding: 0 10px;
   font-size: 12px;
 }
+
+/* analysis step: centred, the logo on a soft aqua-violet wash, cards with a tinted icon badge */
+.ob-analysis {
+  position: relative;
+  text-align: center;
+}
+.ob-analysis::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -10px;
+  width: 420px;
+  height: 260px;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse 60% 55% at 50% 30%, color-mix(in srgb, var(--analysis-clr) 22%, transparent), transparent 70%),
+    radial-gradient(ellipse 45% 40% at 62% 38%, color-mix(in srgb, var(--analysis-clr-2) 20%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.ob-analysis > * {
+  position: relative;
+}
+.ob-analysis-logo {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 18px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-bg-card) 70%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--analysis-clr) 35%, var(--color-border));
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--analysis-clr) 8%, transparent), 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+.ob-analysis-logo img {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+.ob-analysis .ob-lede {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 460px;
+}
+.ob-analysis .ob-cards {
+  margin-left: auto;
+  margin-right: auto;
+  text-align: left;
+}
+.ob-analysis .ob-card {
+  border-color: color-mix(in srgb, var(--analysis-clr) 18%, var(--color-border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--analysis-clr) 5%, transparent), transparent 70%);
+}
+.ob-analysis-ico {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  color: var(--analysis-clr);
+  background: color-mix(in srgb, var(--analysis-clr) 14%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--analysis-clr) 30%, transparent);
+}
+.ob-analysis .ob-outro {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
