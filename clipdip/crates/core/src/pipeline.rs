@@ -1407,7 +1407,8 @@ fn save_clip_with_stem(
             .inspect_err(|e| report_disk_error("packet", e))
             .with_context(|| format!("write {}", video_path.display()))?;
     }
-    vf.sync_all().ok();
+    // no fsync: ffmpeg reads the sidecars back through the page cache and they are
+    // deleted after the mux, flushing 200MB first only delayed the encode
 
     let mut audio_tracks: Vec<AudioTrack> = Vec::new();
     for AudioMeta {
@@ -1579,6 +1580,5 @@ fn write_wav(path: &PathBuf, fmt: WaveFormat, pkts: &[&EncodedPacket]) -> Result
     f.write_all(&(total as u32 - 8).to_le_bytes())?;
     f.seek(SeekFrom::Start(40))?;
     f.write_all(&(data_bytes as u32).to_le_bytes())?;
-    f.sync_all().ok();
     Ok(total)
 }

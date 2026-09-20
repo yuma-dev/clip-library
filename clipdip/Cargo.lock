@@ -476,10 +476,9 @@ dependencies = [
 
 [[package]]
 name = "clipdip"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "clipdip-audio",
  "clipdip-core",
  "clipdip-diagnostics",
@@ -511,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-audio"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "clipdip-diagnostics",
@@ -528,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-capture"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "clipdip-diagnostics",
@@ -543,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-core"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "chrono",
@@ -569,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-diagnostics"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -589,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-discord"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -603,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-encoder"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "clipdip-profile",
@@ -618,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-hotkey"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -630,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-muxer"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "anyhow",
  "clipdip-diagnostics",
@@ -638,11 +637,12 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "clipdip-profile"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "parking_lot",
  "tracing",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-ringbuf"
-version = "3.5.36"
+version = "3.5.37"
 dependencies = [
  "parking_lot",
  "tracing",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "cliplib-launcher"
-version = "3.5.19"
+version = "3.5.37"
 dependencies = [
  "png 0.17.16",
  "windows 0.58.0",

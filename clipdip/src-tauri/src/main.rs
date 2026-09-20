@@ -4,12 +4,10 @@ mod machine_profile;
 mod metadata;
 mod shutdown_watch;
 
-use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use base64::Engine as _;
 use crossbeam_channel::unbounded;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -277,13 +275,6 @@ struct ClipSavedPayload {
     title: String,
     /// Same convention as [`ClipSavingPayload::kind`].
     kind: String,
-}
-
-/// out-of-band thumbnail; ffmpeg's gdigrab pays ~1-2s startup the first run
-/// so phase-1 doesn't block on it, the overlay slots it in whenever it arrives.
-#[derive(Clone, Serialize)]
-struct ClipThumbnailPayload {
-    thumbnail: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -2505,65 +2496,11 @@ fn run_capture_loop(
                 let rename_hint = format!("Press {} to rename", cur.hotkey.rename_clip);
                 let corner = corner_slug(&cur.notifications.corner);
 
-                // screenshot and mux run in parallel via thread::scope (lets them borrow
-                // `pipeline` without 'static); phase 1 emits immediately, before either
-                // runs, with thumbnail null (a later `clip-thumbnail` event slots it in once
-                // gdigrab finishes).
-                if notifs_enabled {
-                    let saving_payload = ClipSavingPayload {
-                        thumbnail: None,
-                        rename_hotkey: rename_hint.clone(),
-                        auto_dismiss_secs: cur.notifications.auto_dismiss_secs,
-                        corner: corner.clone(),
-                        sound: cur.notifications.sound,
-                        profile: prof,
-                        kind: save_kind.as_str().into(),
-                    };
-                    // stash before creating the window: `clip-saving` below races React's
-                    // listener, overlay reads the stash via `overlay_get_pending` instead.
-                    // also clear a stale saved payload so it doesn't hydrate the wrong flow.
-                    if let Some(state) = app.try_state::<AppState>() {
-                        *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
-                        *state.pending_saved.lock().unwrap() = None;
-                        *state.pending_notice.lock().unwrap() = None;
-                    }
-                    if let Some(overlay) = ensure_overlay_window(&app, &corner) {
-                        let _ = overlay.emit("clip-saving", saving_payload);
-                    }
-                    if prof { info!("emit clip-saving [t+{}ms]", t0.elapsed().as_millis()); }
-                }
-
+                // mux and metadata run in parallel via thread::scope (lets them borrow
+                // `pipeline` without 'static)
                 std::thread::scope(|s| {
-                    // thumbnail thread emits `clip-thumbnail` itself, independent of the
-                    // save flow; scope still joins it but we don't gate on the result.
-                    let _thumb_thread = if notifs_enabled {
-                        let app = &app;
-                        Some(s.spawn(move || {
-                            let t_start = t0.elapsed().as_millis();
-                            let r = capture_desktop_thumbnail();
-                            if prof {
-                                let t_end = t0.elapsed().as_millis();
-                                info!(
-                                    "thumbnail [t+{}ms .. t+{}ms = {}ms]",
-                                    t_start, t_end, t_end - t_start
-                                );
-                            }
-                            if let Some(thumbnail) = r {
-                                if let Some(overlay) = app.get_webview_window("overlay") {
-                                    let _ = overlay.emit(
-                                        "clip-thumbnail",
-                                        ClipThumbnailPayload { thumbnail },
-                                    );
-                                }
-                                if prof {
-                                    info!("emit clip-thumbnail [t+{}ms]", t0.elapsed().as_millis());
-                                }
-                            }
-                        }))
-                    } else {
-                        None
-                    };
-
+                    // save thread first: it only needs the pipeline and the config snapshot,
+                    // everything below (overlay, metadata) runs alongside the mux
                     let save_dir = cur.output.directory.clone();
                     let stem_template = cur.output.filename_stem.clone();
                     let save_thread = s.spawn(move || {
@@ -2601,6 +2538,34 @@ fn run_capture_loop(
                         }
                         r
                     });
+
+                    // phase 1 emits with thumbnail null; overlay.html never used one and the
+                    // gdigrab grab that filled it cost ~2s of cpu beside the mux. the overlay
+                    // webview is built here, after the save thread is already running: cold
+                    // WebView2 creation used to sit between the hotkey and the ring snapshot.
+                    if notifs_enabled {
+                        let saving_payload = ClipSavingPayload {
+                            thumbnail: None,
+                            rename_hotkey: rename_hint.clone(),
+                            auto_dismiss_secs: cur.notifications.auto_dismiss_secs,
+                            corner: corner.clone(),
+                            sound: cur.notifications.sound,
+                            profile: prof,
+                            kind: save_kind.as_str().into(),
+                        };
+                        // stash before creating the window: `clip-saving` below races React's
+                        // listener, overlay reads the stash via `overlay_get_pending` instead.
+                        // also clear a stale saved payload so it doesn't hydrate the wrong flow.
+                        if let Some(state) = app.try_state::<AppState>() {
+                            *state.pending_saving.lock().unwrap() = Some(saving_payload.clone());
+                            *state.pending_saved.lock().unwrap() = None;
+                            *state.pending_notice.lock().unwrap() = None;
+                        }
+                        if let Some(overlay) = ensure_overlay_window(&app, &corner) {
+                            let _ = overlay.emit("clip-saving", saving_payload);
+                        }
+                        if prof { info!("emit clip-saving [t+{}ms]", t0.elapsed().as_millis()); }
+                    }
 
                     // metadata resolution runs parallel to the mux; the two 200ms
                     // SendMessageTimeoutW calls + GDI icon walk would otherwise add ~0.5s if run
@@ -2947,45 +2912,6 @@ fn run_capture_loop(
     // stop the health monitor (and its thread) before tearing down hotkeys
     drop(monitor.take());
     drop(listener);
-}
-
-/// grabs one frame via ffmpeg's gdigrab as a small low-quality JPEG data URL;
-/// runs parallel to save_clip() so it reflects the hotkey moment, not post-mux.
-fn capture_desktop_thumbnail() -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    let mut child = Command::new("ffmpeg")
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .args([
-            "-loglevel", "error",
-            "-f", "gdigrab",
-            "-framerate", "1",
-            "-i", "desktop",
-            "-frames:v", "1",
-            // ~240px wide preserving aspect ratio, even height (yuv420 friendly).
-            "-vf", "scale=240:-2",
-            // High q value = low quality / small file (MJPEG q range 2..31).
-            "-q:v", "18",
-            "-f", "image2pipe",
-            "-vcodec", "mjpeg",
-            "pipe:1",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let mut bytes = Vec::new();
-    child.stdout.as_mut()?.read_to_end(&mut bytes).ok()?;
-    let _ = child.wait();
-
-    if bytes.is_empty() {
-        return None;
-    }
-
-    Some(format!(
-        "data:image/jpeg;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&bytes)
-    ))
 }
 
 // helpers

@@ -32,7 +32,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender = "0.2"
 crossbeam-channel.workspace = true
-base64 = "0.22"
 getrandom = "0.3"
 png = "0.17"
 windows.workspace = true
