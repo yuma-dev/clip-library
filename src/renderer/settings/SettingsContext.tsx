@@ -74,6 +74,7 @@ export const SETTINGS_DEFAULTS: AppSettings = {
   iconGreyscale: true,
   showNewClipsIndicators: true,
   onboardingVersion: 0,
+  analysisIntroSeen: false,
   previewVolume: 0.1,
   ambientGlow: { ...AMBIENT_GLOW_DEFAULTS },
   cardGlow: { ...CARD_GLOW_DEFAULTS },

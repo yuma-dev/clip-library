@@ -60,6 +60,9 @@ body {
 /* structural (non-color) tokens for the shell chrome */
 :root {
   --line: rgba(255, 255, 255, 0.08);
+  /* audio analysis and everything it drives: the rail pill, matched volume, the loudness page */
+  --analysis-clr: #ff7ad9;
+  --analysis-clr-2: #c774e0;
   --rail-width: 300px;
   --rail-collapsed: 58px;
   /* snappy-but-smooth easing for the rail collapse/expand */
@@ -4786,7 +4789,7 @@ body.ui-blur-exit .app-body {
   color: #6bd18a;
 }
 .loud-status.scanning {
-  color: #7cc4ff;
+  color: var(--analysis-clr);
 }
 .loud-spin {
   animation: loud-spin 1s linear infinite;
@@ -4806,7 +4809,7 @@ body.ui-blur-exit .app-body {
 .loud-progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: #7cc4ff;
+  background: var(--analysis-clr);
   transition: width 300ms ease;
 }
 .loud-chart-wrap {
@@ -4821,17 +4824,17 @@ body.ui-blur-exit .app-body {
   height: 120px;
 }
 .loud-band {
-  fill: rgba(124, 196, 255, 0.08);
+  fill: color-mix(in srgb, var(--analysis-clr) 8%, transparent);
 }
 .loud-bar {
   fill: rgba(255, 255, 255, 0.28);
   transition: fill 150ms ease;
 }
 .loud-bar.boost {
-  fill: rgba(124, 196, 255, 0.55);
+  fill: color-mix(in srgb, var(--analysis-clr) 55%, transparent);
 }
 .loud-bar.near {
-  fill: #7cc4ff;
+  fill: var(--analysis-clr);
 }
 .loud-bar.cut {
   fill: rgba(255, 255, 255, 0.22);
@@ -4843,7 +4846,7 @@ body.ui-blur-exit .app-body {
   vector-effect: non-scaling-stroke;
 }
 .loud-target {
-  stroke: #7cc4ff;
+  stroke: var(--analysis-clr);
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
@@ -4853,8 +4856,8 @@ body.ui-blur-exit .app-body {
   transform: translateX(-50%);
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(124, 196, 255, 0.16);
-  color: #7cc4ff;
+  background: color-mix(in srgb, var(--analysis-clr) 16%, transparent);
+  color: var(--analysis-clr);
   font-size: 10.5px;
   font-weight: 600;
   white-space: nowrap;
@@ -4887,10 +4890,10 @@ body.ui-blur-exit .app-body {
   margin-left: 8px;
 }
 .loud-legend i.boost {
-  background: rgba(124, 196, 255, 0.55);
+  background: color-mix(in srgb, var(--analysis-clr) 55%, transparent);
 }
 .loud-legend i.near {
-  background: #7cc4ff;
+  background: var(--analysis-clr);
 }
 .loud-legend i.cut {
   background: rgba(255, 255, 255, 0.22);
@@ -4943,8 +4946,8 @@ body.ui-blur-exit .app-body {
 }
 .loud-auto.on {
   border-color: transparent;
-  background: rgba(124, 196, 255, 0.16);
-  color: #7cc4ff;
+  background: color-mix(in srgb, var(--analysis-clr) 16%, transparent);
+  color: var(--analysis-clr);
 }
 .loud-auto:disabled {
   opacity: 0.4;
@@ -4988,8 +4991,8 @@ body.ui-blur-exit .app-body {
   transition: background 120ms ease, color 120ms ease;
 }
 .loud-ab button.on {
-  background: rgba(124, 196, 255, 0.2);
-  color: #7cc4ff;
+  background: color-mix(in srgb, var(--analysis-clr) 20%, transparent);
+  color: var(--analysis-clr);
 }
 .loud-samples {
   display: grid;
@@ -5052,7 +5055,7 @@ body.ui-blur-exit .app-body {
   opacity: 1;
 }
 .loud-sample.playing .loud-sample-media {
-  outline: 2px solid #7cc4ff;
+  outline: 2px solid var(--analysis-clr);
   outline-offset: 1px;
 }
 .loud-sample-info {
@@ -5086,8 +5089,8 @@ body.ui-blur-exit .app-body {
 .loud-gain {
   padding: 1px 7px;
   border-radius: 999px;
-  background: rgba(124, 196, 255, 0.16);
-  color: #7cc4ff;
+  background: color-mix(in srgb, var(--analysis-clr) 16%, transparent);
+  color: var(--analysis-clr);
   font-weight: 600;
 }
 .loud-gain.off {
@@ -5106,16 +5109,60 @@ body.ui-blur-exit .app-body {
   pointer-events: none;
 }
 
-/* audio analysis: the one-time library listen. rail pill reuses the update pill look in its own
-   colour, the settings card mirrors the loudness chart card */
+/* audio analysis: the one-time library listen. rail pill reuses the update pill layout with a pink
+   gradient fill for the progress and a slow sheen drifting across it; the fill stays dim so the
+   label keeps its contrast. the settings card mirrors the loudness chart card */
 .rail > .rail-update--analysis {
-  --update-clr: #7cc4ff;
+  --update-clr: var(--analysis-clr);
+  overflow: hidden;
+  cursor: pointer;
+  color: #f4f4f6;
+  border-color: color-mix(in srgb, var(--analysis-clr) 28%, transparent);
+  background: color-mix(in srgb, var(--analysis-clr) 5%, transparent);
+}
+.rail > .rail-update--analysis::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--rail-update-pct, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--analysis-clr-2) 34%, transparent), color-mix(in srgb, var(--analysis-clr) 34%, transparent));
+  transition: width 350ms ease;
+}
+.rail > .rail-update--analysis::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--analysis-clr) 18%, transparent) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: rail-analysis-sheen 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes rail-analysis-sheen {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+.rail > .rail-update--analysis .rail-update-pct-label {
+  color: color-mix(in srgb, #f4f4f6 70%, transparent);
 }
 .rail > .rail-update--analysis-done {
-  cursor: pointer;
   color: #6bd18a;
   border-color: color-mix(in srgb, #6bd18a 30%, transparent);
   background: color-mix(in srgb, #6bd18a 8%, transparent);
+}
+.rail > .rail-update--analysis-done::before,
+.rail > .rail-update--analysis-done::after {
+  display: none;
+}
+
+/* the analysis card for people past the tour: the wizard panel, sized to one step */
+.ob-panel--intro {
+  width: min(720px, 92vw);
+  height: auto;
+  max-height: 90vh;
 }
 .analysis-card {
   border: 0.5px solid var(--color-border);
