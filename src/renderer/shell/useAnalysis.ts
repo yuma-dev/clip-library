@@ -33,7 +33,7 @@ function setState(next: Partial<AnalysisState>): void {
 export function refreshAnalysis(): void {
   window.clips
     ?.getAnalysisProgress()
-    .then((p) => setState({ ...p, analyzed: p.analyzed, libraryTotal: p.total, loaded: true }))
+    .then((p) => setState({ ...p, loaded: true }))
     .catch(() => undefined);
 }
 

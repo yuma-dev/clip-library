@@ -301,7 +301,7 @@ export interface ClipsApi {
   /** Per-track level envelope for the timeline; null while it is being measured. */
   getClipWaveform(clipName: string): Promise<ClipWaveform | null>;
   /** queue state plus how many clips already have a sidecar, out of the library size */
-  getAnalysisProgress(): Promise<AnalysisProgress & { analyzed: number; total: number }>;
+  getAnalysisProgress(): Promise<AnalysisProgress & { analyzed: number; libraryTotal: number }>;
   /** drops every analysis and the loudness index, then listens to the whole library again */
   resetAudioAnalysis(): Promise<{ ok: boolean }>;
 
