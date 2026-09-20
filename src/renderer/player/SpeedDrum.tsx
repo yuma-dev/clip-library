@@ -53,8 +53,8 @@ export default function SpeedDrum() {
         const move = (ev: MouseEvent) => {
           const dy = ev.clientY - y0;
           if (Math.abs(dy) >= DRAG_STEP) {
-            // drag up = the entry above = faster
-            step(dy > 0 ? 1 : -1);
+            // a real thumb wheel: pulling down rolls the drum so the entry above comes in, which is faster
+            step(dy > 0 ? -1 : 1);
             y0 = ev.clientY;
           }
         };

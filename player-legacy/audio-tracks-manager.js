@@ -386,8 +386,6 @@ class AudioTracksManager {
     const value = row.querySelector('.mixer__value');
     const dot = row.querySelector('.mixer__dot');
     this._paintRow(track, { row, value, dot });
-    // the timeline waveform scales each band with its track's level
-    this._emitChange();
   }
 
   _paintRow(track, els) {
@@ -401,6 +399,8 @@ class AudioTracksManager {
     els.value.textContent = `${Math.round(v * 100)}%`;
     els.row.classList.toggle('mixer__row--matched', !!track.normalized);
     els.row.title = track.normalized ? 'Loudness matched. Drag to set your own level, double-click to go back.' : '';
+    // the timeline waveform scales each band with its track's level; drags paint straight through here
+    this._emitChange();
   }
 
   /** marks a track as user-set; matching leaves it alone from now on */
@@ -408,8 +408,13 @@ class AudioTracksManager {
     if (track.custom && !track.normalized) return;
     track.custom = true;
     track.normalized = false;
-    // the player's "auto" badge goes the moment any level is set by hand
-    document.dispatchEvent(new CustomEvent('audio-track-custom'));
+    this._emitCustomState();
+  }
+
+  /** the player's "auto" badge: gone the moment any level is set by hand, back when every track is matched again */
+  _emitCustomState() {
+    const allAuto = this.tracks.every((t) => !t.custom);
+    document.dispatchEvent(new CustomEvent(allAuto ? 'audio-tracks-auto' : 'audio-track-custom'));
   }
 
   /** new matched gain for every track without its own level (measurement landed, target changed) */
@@ -585,6 +590,7 @@ class AudioTracksManager {
       track._trueVolume = reset;
       track.custom = false;
       track.normalized = this.normalizedGain != null;
+      this._emitCustomState();
       this._paintRow(track, els);
       if (!track.hidden && !track.muted) {
         track.gainNode.gain.setValueAtTime(reset, this.audioContext.currentTime);
