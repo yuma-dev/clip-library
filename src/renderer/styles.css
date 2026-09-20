@@ -5224,8 +5224,6 @@ body.ui-blur-exit .app-body {
   height: 30px;
   margin-left: 10px;
   overflow: visible;
-  mask-image: linear-gradient(90deg, #0000, #000 8%, #000 92%, #0000);
-  -webkit-mask-image: linear-gradient(90deg, #0000, #000 8%, #000 92%, #0000);
 }
 .ob-analysis-ico {
   width: 30px;
