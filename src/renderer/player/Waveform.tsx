@@ -8,6 +8,8 @@ export interface TrackView {
   color: string;
   hidden: boolean;
   muted: boolean;
+  /** mixer level 0..2; the band scales with it */
+  volume?: number;
 }
 
 // bins across the full clip; the trim only reveals a part of the same path so trimming never
@@ -108,16 +110,18 @@ interface WaveformProps {
   trimEnd: number;
   /** tallest band per bin, or null when nothing draws */
   onEnvelope?: (env: number[] | null) => void;
+  /** master level 0..2 for single-track clips; multi-track bands read their own track's level */
+  gain?: number;
 }
 
 /** per-track level bands behind the timeline; ahead of the playhead grey, behind it coloured with a
  * bloom. clip-path on the two wrappers is driven by css vars the timeline's rAF loop sets. */
-function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope }: WaveformProps) {
+function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1 }: WaveformProps) {
   const bands = useMemo(() => {
     if (!waveform || waveform.tracks.length === 0) return [];
     if (waveform.tracks.length === 1) {
-      const halves = bandHalves(binLevels(waveform.tracks[0].peak), 12);
-      return [{ key: "mono", halves, d: bandPath(binLevels(waveform.tracks[0].peak), 12, trimStart, trimEnd), ahead: "#ffffff40", played: "#fff", opacity: 1 }];
+      const levels = binLevels(waveform.tracks[0].peak).map((lv) => lv * gain);
+      return [{ key: "mono", halves: bandHalves(levels, 12), d: bandPath(levels, 12, trimStart, trimEnd), ahead: "#ffffff40", played: "#fff", opacity: 1 }];
     }
     if (!tracks) return [];
     const visible = tracks.filter((t) => !t.hidden);
@@ -125,7 +129,8 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope }: Waveform
       const data = waveform.tracks.find((w) => w.ordinal === t.ordinal);
       if (!data) return null;
       // muted: a flat white thread at the silence floor, its level no longer matters
-      const levels = t.muted ? SILENT : binLevels(data.peak);
+      const level = Number.isFinite(t.volume) ? (t.volume as number) : 1;
+      const levels = t.muted ? SILENT : binLevels(data.peak).map((lv) => lv * level);
       const amp = AMPS[Math.min(i, AMPS.length - 1)];
       return {
         key: String(t.ordinal),
@@ -136,7 +141,7 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope }: Waveform
         opacity: 0.8,
       };
     }).filter((b): b is NonNullable<typeof b> => b !== null);
-  }, [waveform, tracks, trimStart, trimEnd]);
+  }, [waveform, tracks, trimStart, trimEnd, gain]);
 
   useEffect(() => {
     onEnvelope?.(bands.length ? envelopeOf(bands) : null);

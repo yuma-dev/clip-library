@@ -371,7 +371,7 @@ class AudioTracksManager {
 
   /** what the timeline waveform draws: colour and visibility per track, nothing about gain */
   getTracksView() {
-    return this.tracks.map((t) => ({ ordinal: t.ordinal, name: t.name, color: t.color, hidden: !!t.hidden, muted: !!t.muted }));
+    return this.tracks.map((t) => ({ ordinal: t.ordinal, name: t.name, color: t.color, hidden: !!t.hidden, muted: !!t.muted, volume: t.volume }));
   }
 
   /** carries the view itself: during init the player has not stored this manager yet */
@@ -386,6 +386,8 @@ class AudioTracksManager {
     const value = row.querySelector('.mixer__value');
     const dot = row.querySelector('.mixer__dot');
     this._paintRow(track, { row, value, dot });
+    // the timeline waveform scales each band with its track's level
+    this._emitChange();
   }
 
   _paintRow(track, els) {
@@ -406,6 +408,8 @@ class AudioTracksManager {
     if (track.custom && !track.normalized) return;
     track.custom = true;
     track.normalized = false;
+    // the player's "auto" badge goes the moment any level is set by hand
+    document.dispatchEvent(new CustomEvent('audio-track-custom'));
   }
 
   /** new matched gain for every track without its own level (measurement landed, target changed) */

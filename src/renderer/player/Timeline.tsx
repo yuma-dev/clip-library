@@ -10,13 +10,15 @@ interface TimelineProps {
   waveform: ClipWaveform | null;
   tracks: TrackView[] | null;
   open: boolean;
+  /** master level, single-track clips scale their band with it */
+  gain: number;
 }
 
 /** the bar inside the bottom pill. legacy still owns seeking on click, trim-handle drags, the
  * playhead and the volume-range widgets (it writes inline left/right on #playhead, #progress-bar,
  * #trim-start, #trim-end); this component adds the waveform, drag-to-seek and a rAF loop that
  * mirrors trim + playhead into css vars so the hairlines and waveform clip-paths follow. */
-export default function Timeline({ waveform, tracks, open }: TimelineProps) {
+export default function Timeline({ waveform, tracks, open, gain }: TimelineProps) {
   const ref = useRef<HTMLDivElement>(null);
   // fractions of the full duration; only the waveform's end rounding needs them as state
   const [trim, setTrim] = useState({ start: 0, end: 1 });
@@ -108,7 +110,7 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
       <div className="tl-out tl-out-start" />
       <div className="tl-out tl-out-end" />
       <div id="progress-bar" />
-      <Waveform waveform={waveform} tracks={tracks} trimStart={trim.start} trimEnd={trim.end} onEnvelope={onEnvelope} />
+      <Waveform waveform={waveform} tracks={tracks} trimStart={trim.start} trimEnd={trim.end} onEnvelope={onEnvelope} gain={gain} />
       <div id="playhead" />
       <div id="trim-start" title="Trim start">
         <i />
