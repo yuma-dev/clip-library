@@ -478,7 +478,12 @@ export interface LegacyPlayerModule {
   applyAmbientGlowSettings(settings: unknown): void;
   changeSpeed(speed: number): void;
   resetControlsTimeout(): void;
-  getActiveAudioTracksManager(): { getExportMix(): Array<{ streamIndex: number; ordinal: number; volume: number }> } | null;
+  changeVolume(delta: number): void;
+  getActiveAudioTracksManager(): {
+    getExportMix(): Array<{ streamIndex: number; ordinal: number; volume: number }>;
+    /** shifts every unhidden track by delta, keeping their offsets */
+    nudgeAll(delta: number): void;
+  } | null;
   handleKeyPress(e: KeyboardEvent): void;
   handleKeyRelease(e: KeyboardEvent): void;
   [key: string]: any;

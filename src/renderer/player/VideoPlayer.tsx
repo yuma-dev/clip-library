@@ -85,6 +85,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   // body.player-open mirrored into state; legacy toggles it on open and every close path
   const [isOpen, setIsOpen] = useState(false);
   const [tracks, setTracks] = useState<TrackView[] | null>(null);
+  const [masterVolume, setMasterVolume] = useState(1);
   // click-to-toggle glyph; the counter restarts the animation, playing picks the glyph
   const [flash, setFlash] = useState({ n: 0, playing: false });
   // width / height of the loaded video; the frame takes this shape inside the stage
@@ -394,7 +395,13 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     const offReady = window.clips.onAnalysisReady(({ clipName, waveform }) => {
       setSession((s) => (s && s.originalName === clipName ? { ...s, waveform } : s));
     });
-    // fired by the mixer on init, colour/hide/mute changes and dispose (empty list)
+    // master level, from legacy's slider updates
+    const onVolume = (e: Event) => {
+      const v = (e as CustomEvent<number>).detail;
+      if (Number.isFinite(v)) setMasterVolume(v);
+    };
+    document.addEventListener("player-volume", onVolume);
+    // fired by the mixer on init, colour/hide/mute/level changes and dispose (empty list)
     const onTracks = (e: Event) => {
       const view = (e as CustomEvent<TrackView[]>).detail;
       setTracks(view && view.length > 0 ? view : null);
@@ -412,6 +419,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
     return () => {
       document.removeEventListener("clip-open-state", onOpenState);
+      document.removeEventListener("player-volume", onVolume);
       document.removeEventListener("audio-tracks-changed", onTracks);
       offReady();
       observer.disconnect();
@@ -563,8 +571,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     // points the temp video at each newly-loaded clip; sizes the canvas once
     const onLoaded = () => {
       if (video.src && temp.src !== video.src) temp.src = video.src;
-      canvas.width = 160;
-      canvas.height = 90;
+      canvas.width = 320;
+      canvas.height = 180;
       preview.style.display = "none";
     };
     video.addEventListener("loadedmetadata", onLoaded);
@@ -757,11 +765,24 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             <div id="bottom-controls" className="pl-pill pl-bar">
               <div id="volume-container">
                 <div id="audio-tracks-panel" className="hidden" />
-                <button id="volume-button" type="button" aria-label="Volume" />
+                <button
+                  id="volume-button"
+                  type="button"
+                  aria-label="Volume"
+                  onWheel={(e) => {
+                    // wheel nudges every track together, or the master level on single-track clips
+                    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+                    const manager = window.legacyPlayer?.getActiveAudioTracksManager?.();
+                    if (manager) manager.nudgeAll(delta);
+                    else window.legacyPlayer?.changeVolume(delta);
+                  }}
+                />
+                {/* legacy toggles .normalized on the button; the badge shows next to it */}
+                <span className="pl-auto-pill" aria-hidden="true">auto</span>
                 <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>
               <div id="current-time">0:00</div>
-              <Timeline waveform={session?.waveform ?? null} tracks={tracks} open={isOpen} />
+              <Timeline waveform={session?.waveform ?? null} tracks={tracks} open={isOpen} gain={masterVolume} />
               <div id="total-time">0:00</div>
               <div id="speed-container">
                 {/* legacy writes these two; the drum is what the user sees */}

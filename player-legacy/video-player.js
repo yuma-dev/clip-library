@@ -508,6 +508,8 @@ function changeVolume(delta) {
 
 function updateVolumeSlider(volume) {
   elements.volumeSlider.value = volume;
+  // the timeline waveform scales with the master level on single-track clips
+  document.dispatchEvent(new CustomEvent('player-volume', { detail: Number(volume) }));
 
   if (volume > 1) {
     elements.volumeSlider.classList.add('boosted');
@@ -2672,6 +2674,8 @@ function setupEventListeners() {
   }
 
   ipcRenderer.on('loudness-measured', (_event, payload) => onLoudnessMeasured(payload));
+  // a track level set by hand in the mixer counts as a manual volume too
+  document.addEventListener('audio-track-custom', () => markVolumeCustom());
 
   if (elements.volumeButton) {
     elements.volumeButton.addEventListener("contextmenu", (e) => {
