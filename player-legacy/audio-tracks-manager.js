@@ -185,6 +185,8 @@ class AudioTracksManager {
     this.videoEl.muted = true;
 
     this._renderPanel();
+    // saved hand-set levels take the badge off; the open put it on from the clip's volume detail
+    this._emitCustomState();
     this._startMirrorLoop();
     this._attachPaletteOutsideClose();
     this._attachSeekFastPath();
@@ -415,6 +417,15 @@ class AudioTracksManager {
   _emitCustomState() {
     const allAuto = this.tracks.every((t) => !t.custom);
     document.dispatchEvent(new CustomEvent(allAuto ? 'audio-tracks-auto' : 'audio-track-custom'));
+  }
+
+  /** right-click on the volume icon: every track back on the matched gain, hand-set levels dropped */
+  revertAllToMatched(gain) {
+    if (!Number.isFinite(gain)) return;
+    for (const t of this.tracks) t.custom = false;
+    this.applyNormalizedGain(gain, true);
+    this._emitCustomState();
+    this._schedulePersistClip();
   }
 
   /** new matched gain for every track without its own level (measurement landed, target changed) */
