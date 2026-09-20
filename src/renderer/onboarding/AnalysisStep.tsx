@@ -1,12 +1,11 @@
 import { AudioLines, Volume2 } from "lucide-react";
 import logoUrl from "../../../assets/logo.png";
 
-// three bands like the player timeline draws them; fixed shapes so the step looks the same every time
+// a white band with cyan poking out behind it; fixed shapes so the step looks the same every time
 const BARS = 56;
 const BANDS = [
-  { color: "#f43f5e", amp: 11, seed: 1.7 },
-  { color: "#ec4899", amp: 8, seed: 4.1 },
-  { color: "#3b82f6", amp: 6, seed: 9.3 },
+  { color: "var(--analysis-clr)", amp: 12, seed: 4.1 },
+  { color: "#f4f4f6", amp: 9, seed: 1.7 },
 ];
 function bandPath(amp: number, seed: number): string {
   const top: string[] = [];
@@ -36,12 +35,12 @@ export default function AnalysisStep() {
       <p className="ob-lede">
         It runs in the background and only while nothing is playing or exporting. You get two things
         out of it:
+        <svg className="ob-analysis-wave" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
+          {BANDS.map((b) => (
+            <path key={b.color} d={bandPath(b.amp, b.seed)} fill={b.color} />
+          ))}
+        </svg>
       </p>
-      <svg className="ob-analysis-wave" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
-        {BANDS.map((b, i) => (
-          <path key={b.color} d={bandPath(b.amp, b.seed)} fill={b.color} opacity={0.8} style={i ? { mixBlendMode: "plus-lighter" } : undefined} />
-        ))}
-      </svg>
       <div className="ob-cards">
         <div className="ob-card">
           <span className="ob-analysis-ico">
