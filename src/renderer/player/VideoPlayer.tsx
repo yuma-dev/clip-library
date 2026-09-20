@@ -1,6 +1,8 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import ExportProgress from './ExportProgress';
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
+import type { ClipWaveform } from "../../types/clips";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
 import {
   exportAudio,
@@ -14,6 +16,7 @@ import { installUiBlur } from "../ui/uiBlur";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
 import { useProfile } from "../shell/useProfile";
+import { useSettings } from "../settings/SettingsContext";
 import {
   initDiscordPresence,
   updateDiscordPresence,
@@ -31,6 +34,9 @@ import {
   type GridDirection,
 } from "../library/gridNavigation";
 import ShareModal from "./ShareModal";
+import SpeedDrum from "./SpeedDrum";
+import Timeline from "./Timeline";
+import type { TrackView } from "./Waveform";
 import { fingerprint, reportEvent } from "../telemetry";
 import "./player.css";
 
@@ -58,6 +64,13 @@ interface VideoPlayerProps {
   markClipsWatched: (names: string[]) => void;
 }
 
+/** what react keeps per opened clip, taken from legacy's clip-open-state event */
+interface OpenSession {
+  originalName: string;
+  thumbnailPath: string | null;
+  waveform: ClipWaveform | null;
+}
+
 /** renders the legacy #player-overlay DOM; window.legacyPlayer.init() drives it imperatively
  * (React never re-renders it). card clicks call legacyPlayer.openClip() */
 function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWatched }: VideoPlayerProps) {
@@ -65,7 +78,16 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   const { confirm } = useConfirm();
   const toast = useToast();
   const { connected: shareConnected } = useProfile();
+  const { settings } = useSettings();
   const [shareOpen, setShareOpen] = useState(false);
+  const [session, setSession] = useState<OpenSession | null>(null);
+  // body.player-open mirrored into state; legacy toggles it on open and every close path
+  const [isOpen, setIsOpen] = useState(false);
+  const [tracks, setTracks] = useState<TrackView[] | null>(null);
+  // click-to-toggle glyph; the counter restarts the animation, playing picks the glyph
+  const [flash, setFlash] = useState({ n: 0, playing: false });
+  // width / height of the loaded video; the frame takes this shape inside the stage
+  const [aspect, setAspect] = useState(16 / 9);
   // avoids stale closures in the once-only init callbacks
   const renameRef = useRef(renameClip);
   renameRef.current = renameClip;
@@ -235,7 +257,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       loadingOverlay: byId("loading-overlay"),
       playerOverlay: byId("player-overlay"),
       videoClickTarget: byId("video-click-target"),
-      ambientGlowCanvas: byId("ambient-glow-canvas"),
+      // the frame-sampling glow canvas is gone; the thumbnail glow below replaces it
+      ambientGlowCanvas: null,
       fullscreenPlayer: byId("fullscreen-player"),
       videoControls: byId("video-controls"),
       volumeButton: byId("volume-button"),
@@ -352,11 +375,57 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (window.legacyState) window.legacyState.clipLocation = clipLocation;
   }, [clipLocation]);
 
+  // legacy fires clip-open-state once its batched IPC lands; the waveform can trail it by a
+  // measurement when the clip was never warmed
+  useEffect(() => {
+    const onOpenState = (e: Event) => {
+      const { originalName, openState } = (e as CustomEvent<{ originalName: string; openState: Record<string, unknown> }>).detail;
+      setSession({
+        originalName,
+        thumbnailPath: (openState.thumbnailPath as string | null) ?? null,
+        waveform: (openState.waveform as ClipWaveform | null) ?? null,
+      });
+      setTracks(null);
+      // chrome starts visible instead of waiting for the first mouse move
+      window.legacyPlayer?.resetControlsTimeout();
+    };
+    document.addEventListener("clip-open-state", onOpenState);
+    const offReady = window.clips.onWaveformReady(({ clipName, waveform }) => {
+      setSession((s) => (s && s.originalName === clipName ? { ...s, waveform } : s));
+    });
+    // fired by the mixer on init, colour/hide/mute changes and dispose (empty list)
+    const onTracks = (e: Event) => {
+      const view = (e as CustomEvent<TrackView[]>).detail;
+      setTracks(view && view.length > 0 ? view : null);
+    };
+    document.addEventListener("audio-tracks-changed", onTracks);
+    // open/close both go through body.player-open in legacy
+    const observer = new MutationObserver(() => {
+      const open = document.body.classList.contains("player-open");
+      setIsOpen(open);
+      if (!open) {
+        setSession(null);
+        setTracks(null);
+      }
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    return () => {
+      document.removeEventListener("clip-open-state", onOpenState);
+      document.removeEventListener("audio-tracks-changed", onTracks);
+      offReady();
+      observer.disconnect();
+    };
+  }, []);
+
   // play/pause drives watch-session active-time + discord presence (ticker while playing, frozen
   // while paused); pause also fires before ended and on switch/close
   useEffect(() => {
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
     if (!video) return;
+    const onMeta = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) setAspect(video.videoWidth / video.videoHeight);
+    };
+    video.addEventListener("loadedmetadata", onMeta);
     const onPlay = () => {
       watchRef.current.lastPlay = Date.now();
       const clip = window.legacyState?.currentClip;
@@ -374,6 +443,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     return () => {
+      video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
     };
@@ -546,6 +616,14 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     };
   }, []);
 
+  const glow = settings.ambientGlow;
+  const thumbUrl = session?.thumbnailPath ? `file://${session.thumbnailPath}` : null;
+  const glowStyle = {
+    "--glow-blur": `${glow.blur}px`,
+    "--glow-sat": glow.saturation,
+    "--glow-opacity": glow.opacity,
+  } as CSSProperties;
+
   return (
     <>
     <div
@@ -558,7 +636,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         }
       }}
     >
-      <div id="player-container">
+      <div id="player-container" style={glowStyle}>
+        {/* the clip's own thumbnail bled out behind the frame; two layers, a wide slow hue drift
+            and a tight one breathing with the frame */}
+        {glow.enabled && thumbUrl ? <img className="pl-glow pl-glow-wide" src={thumbUrl} alt="" aria-hidden="true" /> : null}
         <button
           id="prev-video"
           className="video-nav-button"
@@ -569,7 +650,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             navigate(-1);
           }}
         >
-          <ChevronLeft size={24} />
+          <ChevronLeft size={18} strokeWidth={2.2} />
         </button>
         <button
           id="next-video"
@@ -581,27 +662,45 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             navigate(1);
           }}
         >
-          <ChevronRight size={24} />
+          <ChevronRight size={18} strokeWidth={2.2} />
         </button>
-        <canvas id="ambient-glow-canvas" className="hidden" width={10} height={6} aria-hidden="true" />
-        <div id="fullscreen-player">
+        {/* stage is the inset area; the frame takes the video's own aspect inside it so no letterbox
+            ever shows as black, the glow fills the rest */}
+        <div className="pl-stage">
+        {glow.enabled && thumbUrl ? <img className="pl-glow pl-glow-frame" src={thumbUrl} alt="" aria-hidden="true" /> : null}
+        <div id="fullscreen-player" style={{ "--ar": aspect } as CSSProperties}>
           <div id="video-container">
-            <div id="video-click-target" />
+            <div
+              id="video-click-target"
+              onClick={() => {
+                // legacy's native listener toggled play/pause before this ran, so paused is already the new state
+                const video = document.getElementById("video-player") as HTMLVideoElement | null;
+                setFlash((f) => ({ n: f.n + 1, playing: !!video && !video.paused }));
+              }}
+            />
             {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
             <video id="video-player" />
             <div id="loading-overlay">
               <div className="loading-spinner" />
             </div>
+            {flash.n > 0 ? (
+              <div key={flash.n} className="pl-flash" aria-hidden="true">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="#fff">
+                  <path d={flash.playing ? "M7 5l12 7-12 7z" : "M7 5h4v14H7zM13 5h4v14h-4z"} />
+                </svg>
+              </div>
+            ) : null}
           </div>
           <div id="video-controls">
-            {/* top: title + action buttons */}
+            {/* top: title pill left, actions pill right */}
             <div id="top-controls">
-              <input type="text" id="clip-title" placeholder="Clip Title" />
-              <div className="player-actions">
+              <div className="pl-pill pl-title">
+                <input type="text" id="clip-title" placeholder="Clip title" spellCheck={false} />
+              </div>
+              <div className="pl-pill pl-actions">
                 <button
                   id="export-button"
                   type="button"
-                  aria-label="Export"
                   title="Export (Ctrl: video file · Shift: audio to clipboard · Ctrl+Shift: audio file)"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -611,20 +710,21 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                     else runExport(exportTrimmedVideo);
                   }}
                 >
-                  <Copy size={18} />
+                  <Copy size={12} />
+                  Copy
                 </button>
                 <button
                   id="share-button"
                   className={shareConnected ? undefined : "share-hidden"}
                   type="button"
-                  aria-label="Publish"
                   title="Publish to ClipLib"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShareOpen(true);
                   }}
                 >
-                  <Upload size={18} />
+                  <Upload size={12} />
+                  Post to feed
                 </button>
                 <button
                   id="delete-button"
@@ -636,67 +736,41 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                     void handleDelete();
                   }}
                 >
-                  <Trash2 size={18} />
+                  <Trash2 size={12} />
                 </button>
               </div>
             </div>
 
-            {/* bottom: playback row, progress bar, time */}
-            <div id="bottom-controls">
-              <div className="playback-row">
-                <div id="volume-container">
-                  <div id="audio-tracks-panel" className="hidden" />
-                  <button id="volume-button" type="button" aria-label="Volume" />
-                  <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
-                </div>
-                <div className="playback-right">
-                  <div id="speed-container">
-                    <button id="speed-button" type="button" title="Playback Speed">
-                      <span id="speed-text">1x</span>
-                    </button>
-                    <input type="range" id="speed-slider" min="0.5" max="2" step="0.25" defaultValue="1" className="collapsed" />
-                  </div>
-                  <button id="fullscreen-button" type="button" aria-label="Fullscreen">
-                    <Maximize size={19} />
-                  </button>
-                </div>
+            {/* bottom pill: volume, time, timeline, duration, speed, fullscreen */}
+            <div id="bottom-controls" className="pl-pill pl-bar">
+              <div id="volume-container">
+                <div id="audio-tracks-panel" className="hidden" />
+                <button id="volume-button" type="button" aria-label="Volume" />
+                <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>
-              <div id="trim-controls">
-                <div id="progress-bar-container">
-                  <div id="progress-bar" />
-                  <div id="trim-start" />
-                  <div id="trim-end" />
-                  <div id="playhead" />
-                  <div id="timeline-preview" className="timeline-preview">
-                    <canvas id="preview-canvas" width={160} height={90} />
-                    <div id="preview-timestamp" />
-                  </div>
-                </div>
+              <div id="current-time">0:00</div>
+              <Timeline waveform={session?.waveform ?? null} tracks={tracks} open={isOpen} />
+              <div id="total-time">0:00</div>
+              <div id="speed-container">
+                {/* legacy writes these two; the drum is what the user sees */}
+                <button id="speed-button" type="button" tabIndex={-1} aria-hidden="true">
+                  <span id="speed-text">1x</span>
+                </button>
+                <input type="range" id="speed-slider" min="0.5" max="2" step="0.25" defaultValue="1" className="collapsed" aria-hidden="true" />
+                <SpeedDrum />
               </div>
-              <div className="time-row">
-                <div id="current-time">0:00</div>
-                <div id="total-time">0:00</div>
-              </div>
+              <button id="fullscreen-button" type="button" aria-label="Fullscreen">
+                <Maximize size={14} />
+              </button>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
 
     {/* legacy markup, positioned fixed at document level (outside the overlay stacking context) so it stays visible */}
-    <div id="export-toast" className="export-toast">
-      <div className="export-toast-content">
-        <div className="export-toast-header">
-          <svg className="export-icon" viewBox="0 0 24 24">
-            <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-          </svg>
-          <div className="export-text">
-            <h3 className="export-title">Exporting...</h3>
-            <p className="export-progress-text">0%</p>
-          </div>
-        </div>
-      </div>
-    </div>
+    <ExportProgress/>
 
     <ShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
     </>

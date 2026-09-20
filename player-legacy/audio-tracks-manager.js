@@ -111,6 +111,9 @@ class AudioTracksManager {
 
     const persisted = (persistedState && persistedState.tracks) || {};
     const prefs = globalPrefs || {};
+    // loudness-matched gain for tracks without their own level; null when matching is off
+    // or the clip has a custom master volume
+    this.normalizedGain = Number.isFinite(persistedState?.normalizedGain) ? persistedState.normalizedGain : null;
 
     for (const meta of trackMetas) {
       // prefer a pre-warmed <audio> element from hover: already in DOM, past readyState>=2
@@ -136,7 +139,11 @@ class AudioTracksManager {
       gainNode.connect(this.masterGainNode);
 
       const saved = persisted[meta.ordinal] || {};
-      const volume = Number.isFinite(saved.volume) ? saved.volume : 1;
+      // a saved level of exactly 1 from before the custom flag existed counts as unset
+      const custom = Number.isFinite(saved.volume) && (saved.custom === true || saved.volume !== 1);
+      const normalized = !custom && this.normalizedGain != null;
+      const trueVolume = custom ? saved.volume : (normalized ? this.normalizedGain : 1);
+      const volume = clamp(trueVolume, 0, 2);
       const muted = !!saved.muted;
       const trackName = meta.name || `Track ${meta.ordinal + 1}`;
       const globalPref = prefs[trackName] || {};
@@ -147,7 +154,8 @@ class AudioTracksManager {
         ? globalPref.color
         : COLOR_PALETTE[meta.ordinal % COLOR_PALETTE.length];
 
-      gainNode.gain.setValueAtTime((hidden || muted) ? 0 : volume, this.audioContext.currentTime);
+      // matched gains above 2x reach the node unclamped; the row shows the clamp
+      gainNode.gain.setValueAtTime((hidden || muted) ? 0 : (normalized ? trueVolume : volume), this.audioContext.currentTime);
 
       this.tracks.push({
         ordinal: meta.ordinal,
@@ -162,7 +170,10 @@ class AudioTracksManager {
         volume,
         // unclamped "true" volume; displayed `volume` is its [0,2] clamp. lets a track pushed
         // below 0 by a shift-drag return to the right level when the group shifts up again (session-local)
-        _trueVolume: volume,
+        _trueVolume: trueVolume,
+        // custom: the user set this track's level, persisted and never overwritten by matching
+        custom,
+        normalized,
         color
       });
     }
@@ -355,6 +366,17 @@ class AudioTracksManager {
     } else {
       tray.hidden = true;
     }
+    this._emitChange();
+  }
+
+  /** what the timeline waveform draws: colour and visibility per track, nothing about gain */
+  getTracksView() {
+    return this.tracks.map((t) => ({ ordinal: t.ordinal, name: t.name, color: t.color, hidden: !!t.hidden, muted: !!t.muted }));
+  }
+
+  /** carries the view itself: during init the player has not stored this manager yet */
+  _emitChange() {
+    document.dispatchEvent(new CustomEvent('audio-tracks-changed', { detail: this.disposed ? [] : this.getTracksView() }));
   }
 
   _repaintTrackRow(track) {
@@ -375,6 +397,39 @@ class AudioTracksManager {
     els.row.style.setProperty('--c2', above ? `${BOOSTED_COLOR}aa` : `${track.color}88`);
     els.row.style.color = track.color;
     els.value.textContent = `${Math.round(v * 100)}%`;
+    els.row.classList.toggle('mixer__row--matched', !!track.normalized);
+    els.row.title = track.normalized ? 'Loudness matched. Drag to set your own level, double-click to go back.' : '';
+  }
+
+  /** marks a track as user-set; matching leaves it alone from now on */
+  _setCustom(track) {
+    if (track.custom && !track.normalized) return;
+    track.custom = true;
+    track.normalized = false;
+  }
+
+  /** new matched gain for every track without its own level (measurement landed, target changed) */
+  applyNormalizedGain(gain, ramp) {
+    if (!Number.isFinite(gain)) return;
+    this.normalizedGain = gain;
+    const now = this.audioContext.currentTime;
+    for (const t of this.tracks) {
+      if (t.custom) continue;
+      t.normalized = true;
+      t._trueVolume = gain;
+      t.volume = clamp(gain, 0, 2);
+      if (!t.hidden && !t.muted) {
+        const param = t.gainNode.gain;
+        if (ramp) {
+          param.cancelScheduledValues(now);
+          param.setValueAtTime(param.value, now);
+          param.linearRampToValueAtTime(gain, now + 0.1);
+        } else {
+          param.setValueAtTime(gain, now);
+        }
+      }
+      this._repaintTrackRow(t);
+    }
   }
 
   _buildRow(track) {
@@ -446,6 +501,7 @@ class AudioTracksManager {
           t._trueVolume = newTrue;
           if (newDisplay !== t.volume) {
             t.volume = newDisplay;
+            this._setCustom(t);
             if (!t.hidden && !t.muted) {
               t.gainNode.gain.setValueAtTime(newDisplay, this.audioContext.currentTime);
             }
@@ -458,6 +514,7 @@ class AudioTracksManager {
       } else if (next !== track.volume) {
         track.volume = next;
         track._trueVolume = next;
+        this._setCustom(track);
         this._paintRow(track, els);
         if (!track.hidden && !track.muted) {
           track.gainNode.gain.setValueAtTime(next, this.audioContext.currentTime);
@@ -518,11 +575,15 @@ class AudioTracksManager {
 
     row.addEventListener('dblclick', (e) => {
       if (e.target.closest('.mixer__dot, .mixer__hide')) return;
-      track.volume = 1;
-      track._trueVolume = 1;
+      // back to the matched gain when matching is on, else unity
+      const reset = this.normalizedGain != null ? this.normalizedGain : 1;
+      track.volume = clamp(reset, 0, 2);
+      track._trueVolume = reset;
+      track.custom = false;
+      track.normalized = this.normalizedGain != null;
       this._paintRow(track, els);
       if (!track.hidden && !track.muted) {
-        track.gainNode.gain.setValueAtTime(1, this.audioContext.currentTime);
+        track.gainNode.gain.setValueAtTime(reset, this.audioContext.currentTime);
       }
       this._schedulePersistClip();
     });
@@ -533,6 +594,7 @@ class AudioTracksManager {
       const next = clamp(track.volume + (e.deltaY < 0 ? step : -step), 0, 2);
       track.volume = detentSnap(next);
       track._trueVolume = track.volume;
+      this._setCustom(track);
       this._paintRow(track, els);
       if (!track.hidden && !track.muted) {
         track.gainNode.gain.setValueAtTime(track.volume, this.audioContext.currentTime);
@@ -644,6 +706,7 @@ class AudioTracksManager {
     const row = this.panelEl && this.panelEl.querySelector(`.mixer__row[data-ordinal="${track.ordinal}"]`);
     if (row) row.classList.toggle('mixer__row--muted', next);
     this._schedulePersistClip();
+    this._emitChange();
   }
 
   /** Nudge all non-hidden tracks by `delta`, preserving relative offsets via _trueVolume. */
@@ -659,6 +722,7 @@ class AudioTracksManager {
       t._trueVolume = newTrue;
       if (newDisplay !== t.volume) {
         t.volume = newDisplay;
+        this._setCustom(t);
         if (!t.muted) {
           t.gainNode.gain.setValueAtTime(newDisplay, this.audioContext.currentTime);
         }
@@ -678,7 +742,8 @@ class AudioTracksManager {
       .map((t) => ({
         streamIndex: t.streamIndex,
         ordinal: t.ordinal,
-        volume: Number.isFinite(t.volume) ? t.volume : 1
+        // matched tracks export at the real gain, which can sit above the 2x row clamp
+        volume: t.normalized && Number.isFinite(t._trueVolume) ? t._trueVolume : (Number.isFinite(t.volume) ? t.volume : 1)
       }));
   }
 
@@ -698,8 +763,11 @@ class AudioTracksManager {
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
       const state = { tracks: {} };
+      // only user-set levels are written; matched tracks stay unset so the target can move them
       this.tracks.forEach((t) => {
-        state.tracks[t.ordinal] = { volume: t.volume, muted: !!t.muted };
+        state.tracks[t.ordinal] = t.custom
+          ? { volume: t.volume, muted: !!t.muted, custom: true }
+          : { muted: !!t.muted };
       });
       try {
         this.onPersistClip(state);
@@ -768,6 +836,7 @@ class AudioTracksManager {
     }
 
     try { this.videoEl.muted = false; } catch (_) {}
+    this._emitChange();
   }
 }
 

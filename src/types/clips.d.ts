@@ -70,6 +70,61 @@ export interface ClipdipConfig {
   [key: string]: unknown;
 }
 
+/** Where a clip's playback volume comes from; gain fields only when source is normalized. */
+export interface VolumeDetail {
+  volume: number;
+  source: "custom" | "normalized" | "default";
+  measured: boolean;
+  gain?: number;
+  gainDb?: number;
+  lufs?: number;
+  /** headroom cap kept the clip under target so its peaks stay below -1 dBTP */
+  capped?: boolean;
+}
+
+export interface LoudnessScanProgress {
+  running: boolean;
+  /** workers hold while a clip plays or an export runs */
+  paused: boolean;
+  pending: number;
+  total: number;
+  done: number;
+  /** from the recent pace; null until a few clips have finished */
+  etaSeconds: number | null;
+}
+
+export interface LoudnessEntry {
+  name: string;
+  lufs: number;
+  peak: number | null;
+}
+
+/** one audio stream's level envelope, `rate` windows per second, dBFS (-90 is silence) */
+export interface WaveformTrack {
+  ordinal: number;
+  streamIndex: number;
+  peak: number[];
+  rms: number[];
+}
+
+export interface ClipWaveform {
+  rate: number;
+  tracks: WaveformTrack[];
+}
+
+export interface LoudnessSummary {
+  enabled: boolean;
+  /** null means auto (library median) */
+  targetLufs: number | null;
+  effectiveTarget: number;
+  median: number | null;
+  headroomDbtp: number;
+  maxGainDb: number;
+  measured: number;
+  entries: LoudnessEntry[];
+  scan: LoudnessScanProgress;
+}
+
 /** WASAPI endpoint from `clipdip --list-audio-devices`. */
 export interface AudioDeviceInfo {
   /** Stable WASAPI device ID; pin it via audio.sources[].device_id. */
@@ -234,10 +289,17 @@ export interface ClipsApi {
   saveClipTags(clipName: string, tags: string[]): Promise<any>;
   /** Hover-preview start seconds (trim.start or cached-duration midpoint); never probes. */
   getPreviewStartTime(clipName: string): Promise<number>;
+  /** Effective volume: the custom .volume file, else the loudness-matched gain, else 1. */
+  getVolumeDetail(clipName: string): Promise<VolumeDetail>;
+  /** Drops the custom level; resolves to the detail that now applies. */
+  resetVolume(clipName: string): Promise<VolumeDetail>;
+  getLoudnessSummary(): Promise<LoudnessSummary>;
   /** One-round-trip bundle of everything the player reads on clip open. */
   getClipOpenState(clipName: string): Promise<any>;
   /** Probe and extract audio tracks for a clip at idle so its open is a cache hit. */
   warmClipOpen(clipName: string): Promise<void>;
+  /** Per-track level envelope for the timeline; null while it is being measured. */
+  getClipWaveform(clipName: string): Promise<ClipWaveform | null>;
 
   extractAudioTracks(...args: any[]): Promise<any>;
   getTrackState(...args: any[]): Promise<any>;
@@ -375,6 +437,9 @@ export interface ClipsApi {
 
   onLog(cb: ClipsEventCallback): ClipsUnsubscribe;
   onNewClipAdded(cb: ClipsEventCallback): ClipsUnsubscribe;
+  onLoudnessProgress(cb: (p: LoudnessScanProgress) => void): ClipsUnsubscribe;
+  onLoudnessMeasured(cb: (p: { clipName: string; gain: number; gainDb: number; lufs: number | null }) => void): ClipsUnsubscribe;
+  onWaveformReady(cb: (p: { clipName: string; waveform: ClipWaveform }) => void): ClipsUnsubscribe;
   onCheckActivityState(cb: ClipsEventCallback): ClipsUnsubscribe;
   onCliplibAuthEvent(cb: ClipsEventCallback): ClipsUnsubscribe;
   /** Navigation deep links (cliplib://settings/<section>) forwarded by main. */
@@ -407,6 +472,9 @@ export interface LegacyPlayerModule {
   closePlayer(): Promise<void>;
   getElements(): Record<string, HTMLElement | null>;
   applyAmbientGlowSettings(settings: unknown): void;
+  changeSpeed(speed: number): void;
+  resetControlsTimeout(): void;
+  getActiveAudioTracksManager(): { getExportMix(): Array<{ streamIndex: number; ordinal: number; volume: number }> } | null;
   handleKeyPress(e: KeyboardEvent): void;
   handleKeyRelease(e: KeyboardEvent): void;
   [key: string]: any;
@@ -427,6 +495,8 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     legacyState?: Record<string, any>;
     legacyVolumeRange?: { init(opts: Record<string, unknown>): void };
+    /** set for 100ms after a timeline drag so the release is not read as a backdrop close */
+    justFinishedDragging?: boolean;
   }
 }
 

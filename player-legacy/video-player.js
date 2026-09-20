@@ -500,6 +500,7 @@ function changeVolume(delta) {
 
   if (state.currentClip) {
     debouncedSaveVolume(state.currentClip.originalName, newVolume);
+    markVolumeCustom();
   }
 
   showVolumeContainer();
@@ -549,6 +550,91 @@ async function loadVolume(clipName) {
   }
 }
 
+async function loadVolumeDetail(clipName) {
+  try {
+    return await ipcRenderer.invoke("get-volume-detail", clipName);
+  } catch (error) {
+    logger.error("Error loading volume detail:", error);
+    return { volume: 1, source: 'default', measured: false };
+  }
+}
+
+// where the current clip's level came from; drives the volume button tint and right-click revert
+let volumeSource = { source: 'default', gainDb: 0 };
+
+function loudnessEnabled() {
+  return !!(state.settings && state.settings.loudness && state.settings.loudness.enabled);
+}
+
+function formatDb(db) {
+  const n = Number(db) || 0;
+  return `${n >= 0 ? '+' : ''}${n.toFixed(1)} dB`;
+}
+
+function setVolumeSource(detail) {
+  volumeSource = { source: detail?.source || 'default', gainDb: detail?.gainDb || 0 };
+  if (!elements.volumeButton) return;
+  const matched = volumeSource.source === 'normalized';
+  elements.volumeButton.classList.toggle('normalized', matched);
+  if (matched) {
+    elements.volumeButton.title = `Loudness matched (${formatDb(volumeSource.gainDb)}). Drag the slider to set your own level.`;
+  } else if (volumeSource.source === 'custom' && loudnessEnabled()) {
+    elements.volumeButton.title = 'Your own level. Right-click to go back to matched loudness.';
+  } else {
+    elements.volumeButton.removeAttribute('title');
+  }
+}
+
+/** slider touched: the saved level is now the clip's own */
+function markVolumeCustom() {
+  if (volumeSource.source === 'custom') return;
+  setVolumeSource({ source: 'custom' });
+}
+
+/** apply a matched gain to whatever is playing: the master node, or each unset track on a multi-track clip */
+function applyMatchedGain(gain, ramp) {
+  if (!state.audioContext) setupAudioContext();
+  const now = state.audioContext.currentTime;
+  if (activeAudioTracksManager) {
+    activeAudioTracksManager.applyNormalizedGain(gain, ramp);
+    return;
+  }
+  const param = state.gainNode.gain;
+  if (ramp) {
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(gain, now + 0.1);
+  } else {
+    param.setValueAtTime(gain, now);
+  }
+  const max = elements.volumeSlider ? Number(elements.volumeSlider.max) : 2;
+  updateVolumeSlider(Math.min(gain, max));
+}
+
+/** right-click on the volume button: drop the custom level, back to matched loudness */
+async function revertToMatchedVolume() {
+  if (!state.currentClip || !loudnessEnabled() || volumeSource.source === 'normalized') return;
+  const clipName = state.currentClip.originalName;
+  try {
+    const detail = await ipcRenderer.invoke('reset-volume', clipName);
+    if (!state.currentClip || state.currentClip.originalName !== clipName) return;
+    if (detail.source === 'normalized') applyMatchedGain(detail.gain, true);
+    else applyMatchedGain(1, true);
+    setVolumeSource(detail);
+    showVolumeContainer();
+  } catch (error) {
+    logger.error('Error reverting volume:', error);
+  }
+}
+
+/** measurement finished for the open clip: ease its level in, no reopen needed */
+function onLoudnessMeasured(payload) {
+  if (!payload || !state.currentClip || state.currentClip.originalName !== payload.clipName) return;
+  if (volumeSource.source === 'custom' || !loudnessEnabled()) return;
+  applyMatchedGain(payload.gain, true);
+  setVolumeSource({ source: 'normalized', gainDb: payload.gainDb });
+}
+
 function showVolumeContainer() {
   elements.volumeSlider.classList.remove("collapsed");
 
@@ -579,7 +665,7 @@ function showControls() {
 function hideControls() {
   if (state.isGamepadActive) return;
   if (!elements.videoPlayer.paused && !state.isMouseOverControls && !document.activeElement.closest('#video-controls')) {
-    elements.videoControls.style.transition = 'opacity 0.5s';
+    elements.videoControls.style.transition = 'opacity 0.4s';
     elements.videoControls.classList.remove("visible");
   }
 }
@@ -595,7 +681,7 @@ function resetControlsTimeout() {
   if (state.isGamepadActive) return;
   state.controlsTimeout = setTimeout(() => {
     hideControls();
-  }, 3000);
+  }, 1800);
 }
 
 function showLoadingOverlay() {
@@ -1428,6 +1514,7 @@ async function closePlayer() {
 
   document.removeEventListener("keydown", handleKeyPress);
   document.removeEventListener("keyup", handleKeyRelease);
+  setVolumeSource({ source: 'default' });
 
   const originalName = state.currentClip ? state.currentClip.originalName : null;
   const oldCustomName = state.currentClip ? state.currentClip.customName : null;
@@ -1941,6 +2028,8 @@ async function openClip(originalName, customName) {
         }
       } catch (_) { /* placeholder is cosmetic */ }
       openState = await openStatePromise;
+      // the react timeline takes duration, thumbnail and waveform from here
+      document.dispatchEvent(new CustomEvent('clip-open-state', { detail: { originalName, openState } }));
       clipInfo = openState.clipInfo;
       trimData = openState.trimData;
       clipTags = openState.clipTags;
@@ -2122,24 +2211,34 @@ async function openClip(originalName, customName) {
     mark('afterLoadPromise');
 
     // already fetched in the open-state batch unless served from the hover cache
-    const [loadedVolume, loadedSpeed] = openState
-      ? [openState.volume, openState.speed]
+    const [volumeDetail, loadedSpeed] = openState
+      ? [openState.volumeDetail || { volume: openState.volume, source: 'default' }, openState.speed]
       : await Promise.all([
-          loadVolume(originalName),
+          loadVolumeDetail(originalName),
           loadSpeed(originalName)
         ]);
+
+    const audioTracks = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks : [];
+    // a matched gain on a multi-track clip goes onto each unset track instead of the master,
+    // so a track with its own saved level keeps it
+    const matchedOnTracks = audioTracks.length > 1 && volumeDetail.source === 'normalized';
 
     // apply clip-specific volume/speed so prior clip's state does not leak
     const volumeMin = elements.volumeSlider ? Number(elements.volumeSlider.min) : 0;
     const volumeMax = elements.volumeSlider ? Number(elements.volumeSlider.max) : 2;
-    const normalizedVolume = Number.isFinite(Number(loadedVolume)) ? Number(loadedVolume) : 1;
-    const targetVolume = Math.min(Math.max(normalizedVolume, volumeMin), volumeMax);
+    const loadedVolume = matchedOnTracks ? 1 : Number(volumeDetail.volume);
+    const normalizedVolume = Number.isFinite(loadedVolume) ? loadedVolume : 1;
+    // matched gains can pass the slider's 2x; the slider shows the clamp, the gain node gets the real value
+    const targetVolume = volumeDetail.source === 'normalized'
+      ? Math.max(normalizedVolume, volumeMin)
+      : Math.min(Math.max(normalizedVolume, volumeMin), volumeMax);
 
-    updateVolumeSlider(targetVolume);
+    updateVolumeSlider(Math.min(targetVolume, volumeMax));
     if (state.audioContext || targetVolume !== 1) {
       setupAudioContext();
       state.gainNode.gain.setValueAtTime(targetVolume, state.audioContext.currentTime);
     }
+    setVolumeSource(volumeDetail);
 
     const speedMin = elements.speedSlider ? Number(elements.speedSlider.min) : 0.5;
     const speedMax = elements.speedSlider ? Number(elements.speedSlider.max) : 2;
@@ -2158,7 +2257,6 @@ async function openClip(originalName, customName) {
     // multi-track clips: extract each stream to its own .m4a, mute the <video>
     // build a per-track audio graph. Awaited before play(), a brief delay beats
     // playing the wrong (native default) track for a second then swapping it out
-    const audioTracks = Array.isArray(clipInfo?.audioTracks) ? clipInfo.audioTracks : [];
     if (audioTracks.length > 1) {
       try {
         setupAudioContext();
@@ -2212,7 +2310,10 @@ async function openClip(originalName, customName) {
                 .catch((err) => logger.warn(`[audio-tracks] save global failed: ${err.message}`));
             }
           });
-          await manager.init(trackMetas, persisted, globalPrefs, warm ? warm.audioEls : null);
+          const persistedWithGain = matchedOnTracks
+            ? { ...(persisted || {}), normalizedGain: volumeDetail.gain }
+            : persisted;
+          await manager.init(trackMetas, persistedWithGain, globalPrefs, warm ? warm.audioEls : null);
           if (openGen !== clipOpenGeneration) {
             logger.info(`[${originalName}] Multi-track init completed too late, disposing (gen ${openGen} vs ${clipOpenGeneration})`);
             try { manager.dispose(); } catch (_) {}
@@ -2579,11 +2680,18 @@ function setupEventListeners() {
 
       if (state.currentClip) {
         debouncedSaveVolume(state.currentClip.originalName, newVolume);
+        markVolumeCustom();
       }
     });
   }
 
+  ipcRenderer.on('loudness-measured', (_event, payload) => onLoudnessMeasured(payload));
+
   if (elements.volumeButton) {
+    elements.volumeButton.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      void revertToMatchedVolume();
+    });
     elements.volumeButton.addEventListener("click", () => {
       if (activeAudioTracksManager && elements.audioTracksPanel) {
         elements.audioTracksPanel.classList.toggle('hidden');
@@ -2696,11 +2804,19 @@ function setupEventListeners() {
     });
   }
 
+  // chromium fires a synthetic mousemove when the cursor style changes under a still pointer
+  // (hiding the chrome hides the cursor), so only real movement counts as activity
+  let lastMove = { x: -1, y: -1 };
+  const onRealMove = (e) => {
+    if (e.clientX === lastMove.x && e.clientY === lastMove.y) return;
+    lastMove = { x: e.clientX, y: e.clientY };
+    resetControlsTimeout();
+  };
   if (elements.playerOverlay) {
-    elements.playerOverlay.addEventListener("mousemove", resetControlsTimeout);
+    elements.playerOverlay.addEventListener("mousemove", onRealMove);
   }
   if (elements.videoControls) {
-    elements.videoControls.addEventListener("mousemove", resetControlsTimeout);
+    elements.videoControls.addEventListener("mousemove", onRealMove);
 
     elements.videoControls.addEventListener("mouseenter", () => {
       state.isMouseOverControls = true;
