@@ -657,31 +657,17 @@ function togglePlayPause() {
   }
 }
 
+// chrome visibility lives in the react player (VideoPlayer.tsx); these only report activity
 function showControls() {
-  elements.videoControls.style.transition = 'none';
-  elements.videoControls.classList.add('visible');
+  document.dispatchEvent(new CustomEvent('player-activity'));
 }
 
-function hideControls() {
-  if (state.isGamepadActive) return;
-  if (!elements.videoPlayer.paused && !state.isMouseOverControls && !document.activeElement.closest('#video-controls')) {
-    elements.videoControls.style.transition = 'opacity 0.4s';
-    elements.videoControls.classList.remove("visible");
-  }
-}
+function hideControls() {}
 
-function hideControlsInstantly() {
-  elements.videoControls.classList.remove("visible");
-  clearTimeout(state.controlsTimeout);
-}
+function hideControlsInstantly() {}
 
 function resetControlsTimeout() {
   showControls();
-  clearTimeout(state.controlsTimeout);
-  if (state.isGamepadActive) return;
-  state.controlsTimeout = setTimeout(() => {
-    hideControls();
-  }, 1800);
 }
 
 function showLoadingOverlay() {
@@ -2804,31 +2790,6 @@ function setupEventListeners() {
     });
   }
 
-  // chromium fires a synthetic mousemove when the cursor style changes under a still pointer
-  // (hiding the chrome hides the cursor), so only real movement counts as activity
-  let lastMove = { x: -1, y: -1 };
-  const onRealMove = (e) => {
-    if (e.clientX === lastMove.x && e.clientY === lastMove.y) return;
-    lastMove = { x: e.clientX, y: e.clientY };
-    resetControlsTimeout();
-  };
-  if (elements.playerOverlay) {
-    elements.playerOverlay.addEventListener("mousemove", onRealMove);
-  }
-  if (elements.videoControls) {
-    elements.videoControls.addEventListener("mousemove", onRealMove);
-
-    elements.videoControls.addEventListener("mouseenter", () => {
-      state.isMouseOverControls = true;
-      showControls();
-      clearTimeout(state.controlsTimeout);
-    });
-
-    elements.videoControls.addEventListener("mouseleave", () => {
-      state.isMouseOverControls = false;
-      resetControlsTimeout();
-    });
-  }
 }
 
 function cleanupVideoPreview() {

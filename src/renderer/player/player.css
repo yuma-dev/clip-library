@@ -56,6 +56,11 @@
   display: grid;
   place-items: center;
   container-type: size;
+  /* the stage is wider than the frame; a click beside the frame must reach the backdrop */
+  pointer-events: none;
+}
+#fullscreen-player {
+  pointer-events: auto;
 }
 .pl-glow-frame,
 #fullscreen-player {
@@ -619,6 +624,10 @@
   background: #ffffff33;
   pointer-events: none;
 }
+/* the waveform's silence thread replaces the baseline once it is drawn */
+#progress-bar-container.has-wave #progress-bar {
+  opacity: 0;
+}
 .tl-wave {
   position: absolute;
   left: 0;
@@ -641,9 +650,11 @@
 .tl-wave-played {
   clip-path: inset(0 calc(100% - var(--pos)) 0 var(--ts));
 }
+/* height follows the tallest band under it; the timeline loop sets top and height */
 #playhead {
   position: absolute;
   left: var(--pos);
+  top: 5px;
   width: 2px;
   height: 30px;
   margin-left: -1px;
@@ -698,6 +709,7 @@ body.dragging #trim-end i {
   text-align: center;
   pointer-events: none;
   z-index: 6;
+  /* opacity only: VideoPlayer positions the chip with an inline transform */
   animation: pl-rise 0.15s ease-out forwards;
 }
 #preview-canvas {
@@ -713,8 +725,8 @@ body.dragging #trim-end i {
   color: #f4f4f6;
 }
 @keyframes pl-rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* volume range (legacy, v key): a level applied between two handles on the bar */
