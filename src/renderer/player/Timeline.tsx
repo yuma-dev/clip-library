@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import Waveform, { type TrackView } from "./Waveform";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import Waveform, { BINS, type TrackView } from "./Waveform";
 import type { ClipWaveform } from "../../types/clips";
+
+// px; above the silence thread (2 x 0.6 units) so the playhead never vanishes in quiet parts
+const PLAYHEAD_MIN = 8;
 
 interface TimelineProps {
   /** null while no clip is open */
@@ -17,13 +20,21 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
   const ref = useRef<HTMLDivElement>(null);
   // fractions of the full duration; only the waveform's end rounding needs them as state
   const [trim, setTrim] = useState({ start: 0, end: 1 });
+  // tallest band per bin in svg units (1 unit = 1px here); the playhead grows and shrinks with it
+  const envelopeRef = useRef<number[] | null>(null);
+  const [hasWave, setHasWave] = useState(false);
+  const onEnvelope = useCallback((env: number[] | null) => {
+    envelopeRef.current = env;
+    setHasWave(env !== null);
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
-    if (!el || !video || !open) return;
+    const playhead = document.getElementById("playhead");
+    if (!el || !video || !playhead || !open) return;
     let raf = 0;
-    let last = { pos: -1, ts: -1, te: -1 };
+    let last = { pos: -1, ts: -1, te: -1, h: -1 };
     const loop = () => {
       const d = video.duration;
       const state = window.legacyState;
@@ -32,12 +43,26 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
         const ts = Math.min(1, Math.max(0, (state.trimStartTime ?? 0) / d));
         const te = Math.min(1, Math.max(ts, (state.trimEndTime ?? d) / d));
         if (pos !== last.pos) el.style.setProperty("--pos", `${(pos * 100).toFixed(3)}%`);
+        // band half-height under the playhead, interpolated between bins; the svg centre sits at 20px
+        const env = envelopeRef.current;
+        let h = 30;
+        if (env) {
+          const x = pos * (BINS - 1);
+          const i = Math.floor(x);
+          const half = env[i] + (env[Math.min(BINS - 1, i + 1)] - env[i]) * (x - i);
+          h = Math.max(PLAYHEAD_MIN, Math.round(half * 2 + 4));
+        }
+        if (h !== last.h) {
+          playhead.style.height = `${h}px`;
+          playhead.style.top = `${20 - h / 2}px`;
+        }
+        last.h = h;
         if (ts !== last.ts || te !== last.te) {
           el.style.setProperty("--ts", `${(ts * 100).toFixed(3)}%`);
           el.style.setProperty("--te", `${(te * 100).toFixed(3)}%`);
           setTrim({ start: ts, end: te });
         }
-        last = { pos, ts, te };
+        last = { pos, ts, te, h };
       }
       raf = requestAnimationFrame(loop);
     };
@@ -55,7 +80,6 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
     if (!state || !video || !el || state.isDragging) return;
     const t = e.target as HTMLElement;
     if (t.closest(".volume-drag-control, .volume-start, .volume-end")) return;
-    let moved = false;
     const seek = (clientX: number) => {
       const r = el.getBoundingClientRect();
       const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
@@ -64,19 +88,10 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
       state.isAutoResetDisabled = time < state.trimStartTime || time > state.trimEndTime;
       video.currentTime = time;
     };
-    const move = (ev: MouseEvent) => {
-      moved = true;
-      seek(ev.clientX);
-    };
+    const move = (ev: MouseEvent) => seek(ev.clientX);
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
-      if (!moved) return;
-      // a release over the backdrop would otherwise read as a close click
-      window.justFinishedDragging = true;
-      window.setTimeout(() => {
-        window.justFinishedDragging = false;
-      }, 100);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -85,6 +100,7 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
   return (
     <div
       id="progress-bar-container"
+      className={hasWave ? "has-wave" : undefined}
       ref={ref}
       onMouseDown={onMouseDown}
       style={{ "--pos": "0%", "--ts": "0%", "--te": "100%" } as CSSProperties}
@@ -92,7 +108,7 @@ export default function Timeline({ waveform, tracks, open }: TimelineProps) {
       <div className="tl-out tl-out-start" />
       <div className="tl-out tl-out-end" />
       <div id="progress-bar" />
-      <Waveform waveform={waveform} tracks={tracks} trimStart={trim.start} trimEnd={trim.end} />
+      <Waveform waveform={waveform} tracks={tracks} trimStart={trim.start} trimEnd={trim.end} onEnvelope={onEnvelope} />
       <div id="playhead" />
       <div id="trim-start" title="Trim start">
         <i />

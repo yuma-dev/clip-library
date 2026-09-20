@@ -35,6 +35,7 @@ import {
 } from "../library/gridNavigation";
 import ShareModal from "./ShareModal";
 import SpeedDrum from "./SpeedDrum";
+import { installChromeVisibility } from "./chromeVisibility";
 import Timeline from "./Timeline";
 import type { TrackView } from "./Waveform";
 import { fingerprint, reportEvent } from "../telemetry";
@@ -88,6 +89,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   const [flash, setFlash] = useState({ n: 0, playing: false });
   // width / height of the loaded video; the frame takes this shape inside the stage
   const [aspect, setAspect] = useState(16 / 9);
+  // where the last mousedown landed; only a press and release both on the backdrop close
+  const backdropPressRef = useRef(false);
   // avoids stale closures in the once-only init callbacks
   const renameRef = useRef(renameClip);
   renameRef.current = renameClip;
@@ -386,8 +389,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         waveform: (openState.waveform as ClipWaveform | null) ?? null,
       });
       setTracks(null);
-      // chrome starts visible instead of waiting for the first mouse move
-      window.legacyPlayer?.resetControlsTimeout();
     };
     document.addEventListener("clip-open-state", onOpenState);
     const offReady = window.clips.onWaveformReady(({ clipName, waveform }) => {
@@ -416,6 +417,9 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       observer.disconnect();
     };
   }, []);
+
+  // chrome show/hide rules, one place for keys, mouse, open and drags
+  useEffect(() => installChromeVisibility(), []);
 
   // play/pause drives watch-session active-time + discord presence (ticker while playing, frozen
   // while paused); pause also fires before ended and on switch/close
@@ -628,12 +632,17 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     <>
     <div
       id="player-overlay"
-      onClick={(e) => {
-        // click on the backdrop (outside the video/controls) closes the player
+      onMouseDown={(e) => {
         const t = e.target as HTMLElement;
-        if (t.id === "player-overlay" || t.id === "player-container") {
-          void window.legacyPlayer?.closePlayer();
-        }
+        backdropPressRef.current = t.id === "player-overlay" || t.id === "player-container";
+      }}
+      onClick={(e) => {
+        // a click on the backdrop closes the player, but only when the press started there too: a
+        // drag (trim, speed, mixer) released outside the frame lands its click on the backdrop
+        const t = e.target as HTMLElement;
+        const onBackdrop = t.id === "player-overlay" || t.id === "player-container";
+        if (onBackdrop && backdropPressRef.current) void window.legacyPlayer?.closePlayer();
+        backdropPressRef.current = false;
       }}
     >
       <div id="player-container" style={glowStyle}>

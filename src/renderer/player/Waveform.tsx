@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import type { ClipWaveform } from "../../types/clips";
 
 /** what the mixer knows about a track that the timeline needs to draw it */
@@ -12,7 +12,7 @@ export interface TrackView {
 
 // bins across the full clip; the trim only reveals a part of the same path so trimming never
 // stretches it
-const BINS = 240;
+export const BINS = 240;
 // symmetric band half-heights in a 26 unit tall box, first visible track widest
 const AMPS = [12, 9, 7, 6, 5, 4.5, 4, 3.5];
 const MAX_HALF = 12.5;
@@ -85,6 +85,20 @@ function desaturate(hex: string): string {
   return `#${((mix(r) << 16) | (mix(g) << 8) | mix(b)).toString(16).padStart(6, "0")}`;
 }
 
+/** half-height of a band per bin, in svg units, before the trim taper */
+function bandHalves(levels: number[], amp: number): number[] {
+  return levels.map((lv) => Math.max(FLOOR, Math.min(MAX_HALF, lv * amp)));
+}
+
+/** the tallest band under each bin, in svg units, what the playhead sizes itself to */
+export function envelopeOf(bands: Array<{ halves: number[] }>): number[] {
+  const out = new Array<number>(BINS).fill(0);
+  for (const b of bands) for (let i = 0; i < BINS; i++) if (b.halves[i] > out[i]) out[i] = b.halves[i];
+  return out;
+}
+
+const SILENT = new Array<number>(BINS).fill(0);
+
 interface WaveformProps {
   waveform: ClipWaveform | null;
   /** mixer view for multi-track clips; null until the mixer is up, then only visible tracks draw */
@@ -92,30 +106,41 @@ interface WaveformProps {
   /** fractions of the full duration */
   trimStart: number;
   trimEnd: number;
+  /** tallest band per bin, or null when nothing draws */
+  onEnvelope?: (env: number[] | null) => void;
 }
 
 /** per-track level bands behind the timeline; ahead of the playhead grey, behind it coloured with a
  * bloom. clip-path on the two wrappers is driven by css vars the timeline's rAF loop sets. */
-function Waveform({ waveform, tracks, trimStart, trimEnd }: WaveformProps) {
+function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope }: WaveformProps) {
   const bands = useMemo(() => {
     if (!waveform || waveform.tracks.length === 0) return [];
     if (waveform.tracks.length === 1) {
-      return [{ key: "mono", d: bandPath(binLevels(waveform.tracks[0].peak), 12, trimStart, trimEnd), ahead: "#ffffff40", played: "#fff", opacity: 1 }];
+      const halves = bandHalves(binLevels(waveform.tracks[0].peak), 12);
+      return [{ key: "mono", halves, d: bandPath(binLevels(waveform.tracks[0].peak), 12, trimStart, trimEnd), ahead: "#ffffff40", played: "#fff", opacity: 1 }];
     }
     if (!tracks) return [];
     const visible = tracks.filter((t) => !t.hidden);
     return visible.map((t, i) => {
       const data = waveform.tracks.find((w) => w.ordinal === t.ordinal);
       if (!data) return null;
+      // muted: a flat white thread at the silence floor, its level no longer matters
+      const levels = t.muted ? SILENT : binLevels(data.peak);
+      const amp = AMPS[Math.min(i, AMPS.length - 1)];
       return {
         key: String(t.ordinal),
-        d: bandPath(binLevels(data.peak), AMPS[Math.min(i, AMPS.length - 1)], trimStart, trimEnd),
-        ahead: desaturate(t.color),
-        played: t.color,
-        opacity: t.muted ? 0.3 : 0.8,
+        halves: bandHalves(levels, amp),
+        d: bandPath(levels, amp, trimStart, trimEnd),
+        ahead: t.muted ? "#ffffff66" : desaturate(t.color),
+        played: t.muted ? "#fff" : t.color,
+        opacity: 0.8,
       };
     }).filter((b): b is NonNullable<typeof b> => b !== null);
   }, [waveform, tracks, trimStart, trimEnd]);
+
+  useEffect(() => {
+    onEnvelope?.(bands.length ? envelopeOf(bands) : null);
+  }, [bands, onEnvelope]);
 
   if (bands.length === 0) return null;
   const multi = bands[0].key !== "mono";

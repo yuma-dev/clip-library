@@ -495,8 +495,6 @@ declare global {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     legacyState?: Record<string, any>;
     legacyVolumeRange?: { init(opts: Record<string, unknown>): void };
-    /** set for 100ms after a timeline drag so the release is not read as a backdrop close */
-    justFinishedDragging?: boolean;
   }
 }
 

@@ -42,7 +42,8 @@ export default function SpeedDrum() {
       title="Playback speed"
       onWheel={(e) => {
         e.stopPropagation();
-        step(e.deltaY > 0 ? 1 : -1);
+        // wheel up = faster, like the drag
+        step(e.deltaY < 0 ? 1 : -1);
       }}
       onMouseDown={(e) => {
         e.preventDefault();
