@@ -7,6 +7,7 @@
  * .volume keep it; a value of exactly 1 counts as no custom level.
  */
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
@@ -19,17 +20,25 @@ const INDEX_VERSION = 3;
 const HEADROOM_DBTP = -1;
 const SAMPLE_PEAK_MARGIN_DB = 1;
 const MAX_GAIN_DB = 12;
+// ebur128 reports -70 for digital silence; at or under this a clip has nothing to match, and
+// boosting whatever noise floor it has by the full 12 dB helps nobody
+const SILENT_LUFS = -60;
 const DEFAULT_TARGET_LUFS = -16;
 const SAVE_DEBOUNCE_MS = 1500;
+// a library run records a clip every few hundred ms, which would hold the debounce off for the
+// whole run; a quit in between (dev restart, crash) then lost every entry since the last quiet gap
+const SAVE_MAX_WAIT_MS = 10000;
 
 let getSettings = null;
 let analysis = null;
 let send = null;
 
-// { location, clips: { [name]: { v, mtimeMs, size, lufs, peak, mode } } }
+// { location, clips: { [name]: { v, av, mtimeMs, size, lufs, peak, mode } } }; av is the analysis
+// sidecar version the entry came from
 let index = null;
 let indexPromise = null;
 let saveTimer = null;
+let dirtySince = 0;
 let medianCache = null;
 
 function init(deps) {
@@ -77,27 +86,35 @@ async function loadIndex() {
 
 function scheduleSave() {
   medianCache = null;
+  const now = Date.now();
+  if (!dirtySince) dirtySince = now;
   if (saveTimer) clearTimeout(saveTimer);
+  const wait = Math.max(0, Math.min(SAVE_DEBOUNCE_MS, dirtySince + SAVE_MAX_WAIT_MS - now));
   saveTimer = setTimeout(() => {
     saveTimer = null;
     void saveIndex();
-  }, SAVE_DEBOUNCE_MS);
+  }, wait);
+}
+
+function serialized() {
+  return JSON.stringify({ version: INDEX_VERSION, clips: index.clips });
 }
 
 async function saveIndex() {
   if (!index) return;
+  dirtySince = 0;
   const file = indexPath(index.location);
   const tmp = `${file}.tmp`;
   try {
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(tmp, JSON.stringify({ version: INDEX_VERSION, clips: index.clips }));
+    await fs.writeFile(tmp, serialized());
     await fs.rename(tmp, file);
   } catch (error) {
     logger.error(`[loudness] index save failed: ${error.message}`);
   }
 }
 
-/** flushes a pending debounced save (app quit) */
+/** flushes a pending debounced save */
 async function flush() {
   if (saveTimer) {
     clearTimeout(saveTimer);
@@ -106,13 +123,38 @@ async function flush() {
   }
 }
 
+/** before-quit cannot wait on a promise, so the pending save goes out synchronously */
+function flushSync() {
+  if (!saveTimer || !index) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  dirtySince = 0;
+  const file = indexPath(index.location);
+  const tmp = `${file}.tmp`;
+  try {
+    fsSync.mkdirSync(path.dirname(file), { recursive: true });
+    fsSync.writeFileSync(tmp, serialized());
+    fsSync.renameSync(tmp, file);
+  } catch (error) {
+    logger.error(`[loudness] index save at quit failed: ${error.message}`);
+  }
+}
+
+/** the index knows this clip at this mtime and size, from the current sidecar version; the
+ * library scan skips the sidecar read for these */
+async function has(clipName, stat, analysisVersion) {
+  const idx = await loadIndex();
+  const e = idx.clips[clipName];
+  return !!e && e.v === INDEX_VERSION && e.av === analysisVersion && e.mtimeMs === stat.mtimeMs && e.size === stat.size;
+}
+
 /** an analysis landed (or was found on disk); pushes the matched gain to an open player */
 async function record(clipName, entry, fresh) {
   const idx = await loadIndex();
   const prev = idx.clips[clipName];
   const loud = entry.loudness || {};
-  if (!prev || prev.mtimeMs !== entry.mtimeMs || prev.size !== entry.size || prev.v !== INDEX_VERSION) {
-    idx.clips[clipName] = { v: INDEX_VERSION, mtimeMs: entry.mtimeMs, size: entry.size, lufs: loud.lufs ?? null, peak: loud.peak ?? null, mode: loud.mode || 'none' };
+  if (!prev || prev.mtimeMs !== entry.mtimeMs || prev.size !== entry.size || prev.v !== INDEX_VERSION || prev.av !== entry.v) {
+    idx.clips[clipName] = { v: INDEX_VERSION, av: entry.v, mtimeMs: entry.mtimeMs, size: entry.size, lufs: loud.lufs ?? null, peak: loud.peak ?? null, mode: loud.mode || 'none' };
     scheduleSave();
   }
   if (!fresh || !send) return;
@@ -129,17 +171,21 @@ function targetFor(settings) {
   return Number.isFinite(median) ? median : DEFAULT_TARGET_LUFS;
 }
 
+function audible(lufs) {
+  return Number.isFinite(lufs) && lufs > SILENT_LUFS;
+}
+
 function libraryMedian() {
   if (medianCache !== null) return medianCache;
   if (!index) return NaN;
-  const values = Object.values(index.clips).map((e) => e.lufs).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  const values = Object.values(index.clips).map((e) => e.lufs).filter(audible).sort((a, b) => a - b);
   medianCache = values.length ? values[Math.floor(values.length / 2)] : NaN;
   return medianCache;
 }
 
 /** gain for one measured entry at a target; capped by true peak headroom and +-MAX_GAIN_DB */
 function gainFromEntry(entry, targetLufs) {
-  if (!entry || !Number.isFinite(entry.lufs)) return { gain: 1, gainDb: 0, capped: false, silent: true };
+  if (!entry || !audible(entry.lufs)) return { gain: 1, gainDb: 0, capped: false, silent: true };
   const wanted = targetLufs - entry.lufs;
   let gainDb = wanted;
   if (Number.isFinite(entry.peak)) gainDb = Math.min(gainDb, HEADROOM_DBTP - SAMPLE_PEAK_MARGIN_DB - entry.peak);
@@ -190,8 +236,9 @@ async function getSummary() {
   const settings = await getSettings();
   const idx = await loadIndex();
   const entries = [];
+  // silent clips are not matched, so they stay out of the chart and the samples too
   for (const [name, e] of Object.entries(idx.clips)) {
-    if (Number.isFinite(e.lufs)) entries.push({ name, lufs: e.lufs, peak: Number.isFinite(e.peak) ? e.peak : null });
+    if (audible(e.lufs)) entries.push({ name, lufs: e.lufs, peak: Number.isFinite(e.peak) ? e.peak : null });
   }
   const median = libraryMedian();
   return {
@@ -208,4 +255,4 @@ async function getSummary() {
   };
 }
 
-module.exports = { init, isEnabled, record, resolveVolume, gainFromEntry, remove, resetIndex, flush, getSummary };
+module.exports = { init, isEnabled, has, record, resolveVolume, gainFromEntry, remove, resetIndex, flush, flushSync, getSummary };
