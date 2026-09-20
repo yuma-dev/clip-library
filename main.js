@@ -200,6 +200,8 @@ const fileWatcherModule = require('./main/file-watcher');
 
 // Warms the slow, cacheable part of opening a clip ahead of the click.
 const clipWarmer = require('./main/clip-warmer');
+const loudnessModule = require('./main/loudness');
+const waveformModule = require('./main/waveform');
 // Library order (newest first) from the last get-clips, for the warmer.
 let lastClipNames = [];
 
@@ -324,6 +326,10 @@ async function runDeferredServices() {
 
   // newest clips are the likeliest first opens; warm them once other deferred work settles.
   if (!skip.has('warm')) setTimeout(() => clipWarmer.warmMany(lastClipNames, 12), 3000);
+  // resumes an unfinished loudness measurement; no-op once every clip is in the index
+  if (!skip.has('warm')) setTimeout(() => {
+    loudnessModule.scanAll().catch((error) => logger.warn(`loudness scan failed: ${error.message}`));
+  }, 8000);
 }
 
 // hidden until the compositor frames the painted library (renderer-ready), not just ready-to-show
@@ -478,6 +484,21 @@ const queuedCliplibAuthEvents = [];
 let settingsLoading = null;
 const getSettings = async () => settings ?? (await settingsLoading);
 clipWarmer.init(getSettings);
+loudnessModule.init({
+  getSettings,
+  getClipNames: async () => lastClipNames,
+  getClipInfo: (clipName) => ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule),
+  send: (channel, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  }
+});
+waveformModule.init({
+  getSettings,
+  getClipInfo: (clipName) => ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule),
+  send: (channel, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  }
+});
 // Wires the settings getter only (no process work): a cliplib://settings/clipdip
 // deep link can ask for clipdip status before the deferred services run.
 clipdipModule.init(getSettings);
@@ -1120,6 +1141,8 @@ async function createWindow() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('new-clip-added', fileName);
       }
+      // front of the queue so a fresh recording is matched before its first open
+      if (loudnessModule.isEnabled(settings)) loudnessModule.enqueue(fileName, true);
     },
     // the single recursive watch has one change buffer; on overflow, walk the library and announce
     // anything not yet known.
@@ -1449,6 +1472,8 @@ ipcMain.handle("extract-audio-tracks", async (event, clipName) => {
 ipcMain.handle("reset-clip-cache", async (event, clipName) => {
   try {
     clipWarmer.forget(clipName);
+    loudnessModule.forget(clipName).catch(() => undefined);
+    waveformModule.forget(clipName).catch(() => undefined);
     return await ffmpegModule.resetClipCache(clipName, getSettings, thumbnailsModule);
   } catch (error) {
     logger.error(`Error resetting cache for ${clipName}:`, error);
@@ -1505,6 +1530,8 @@ ipcMain.handle("warm-clip-open", (_event, clipName) => {
 ipcMain.handle("get-clip-open-state", async (event, clipName) => {
   const startedAt = Date.now();
   clipWarmer.pause();
+  loudnessModule.pause();
+  waveformModule.pause();
   // each fallback is indistinguishable from a real value once it reaches the player. slot names
   // turn a vague "clip opened wrong" into "these two reads failed" without naming the clip.
   const missing = [];
@@ -1534,18 +1561,21 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
       }
     );
   };
-  const [clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences] =
+  const [clipInfo, trimData, clipTags, thumbnailPath, volumeDetail, speed, volumeRange, trackState, trackPreferences, waveform] =
     await Promise.all([
       swallow('clip_info', ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule), null),
       swallow('trim', metadataModule.getTrimData(clipName, getSettings), null),
       swallow('tags', metadataModule.getClipTags(clipName, getSettings), []),
       swallow('thumbnail', thumbnailsModule.getThumbnailPath(clipName, getSettings), null),
-      swallow('volume', metadataModule.getVolume(clipName, getSettings), 1),
+      swallow('volume', resolveVolumeDetail(clipName), { volume: 1, source: 'default', measured: false }),
       swallow('speed', metadataModule.getSpeed(clipName, getSettings), 1),
       swallow('volume_range', metadataModule.getVolumeRange(clipName, getSettings), null),
       swallow('track_state', metadataModule.getTrackState(clipName, getSettings), null),
       swallow('track_prefs', metadataModule.getTrackPreferences(app.getPath.bind(app)), null),
+      // a miss queues the measurement and arrives later as waveform-ready
+      swallow('waveform', waveformModule.get(clipName), null),
     ]);
+  const volume = volumeDetail.volume;
   const totalMs = Date.now() - startedAt;
   telemetry.metric('clip_open_ms', totalMs, { unit: 'ms' });
   if (missing.length > 0) {
@@ -1555,7 +1585,30 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
       context: { missing, total_ms: totalMs, probe_error: probeError }
     });
   }
-  return { clipInfo, trimData, clipTags, thumbnailPath, volume, speed, volumeRange, trackState, trackPreferences };
+  return { clipInfo, trimData, clipTags, thumbnailPath, volume, volumeDetail, speed, volumeRange, trackState, trackPreferences, waveform };
+});
+
+ipcMain.handle("get-clip-waveform", async (event, clipName) => {
+  return waveformModule.get(clipName);
+});
+
+/** custom .volume wins, else the loudness-matched gain, else 1; every volume reader goes through here */
+async function resolveVolumeDetail(clipName) {
+  const raw = await metadataModule.getVolume(clipName, getSettings);
+  return loudnessModule.resolveVolume(clipName, raw);
+}
+
+ipcMain.handle("get-volume-detail", async (event, clipName) => {
+  return resolveVolumeDetail(clipName);
+});
+
+ipcMain.handle("reset-volume", async (event, clipName) => {
+  await metadataModule.deleteVolume(clipName, getSettings);
+  return resolveVolumeDetail(clipName);
+});
+
+ipcMain.handle("get-loudness-summary", async () => {
+  return loudnessModule.getSummary();
 });
 
 ipcMain.handle("save-speed", async (event, clipName, speed) => {
@@ -1571,7 +1624,8 @@ ipcMain.handle("save-volume", async (event, clipName, volume) => {
 });
 
 ipcMain.handle("get-volume", async (event, clipName) => {
-  return metadataModule.getVolume(clipName, getSettings);
+  // effective volume: exports, share and the player all hear the same level
+  return (await resolveVolumeDetail(clipName)).volume;
 });
 
 ipcMain.handle("get-clip-tags", async (event, clipName) => {
@@ -1734,6 +1788,7 @@ app.on('before-quit', () => {
   clipsModule.stopPeriodicSave();
   thumbnailsModule.stopQueue();
   clipsModule.saveCurrentClipList(getSettings);
+  loudnessModule.flush().catch(() => undefined);
   bootTrace.flush();
 });
 
@@ -1748,6 +1803,8 @@ ipcMain.handle('save-settings', async (event, newSettings) => {
     // The opt-out has to bite immediately, not on the next launch.
     telemetry.setEnabled(newSettings.telemetry?.enabled !== false);
     reportAppInfo();
+    // enabling loudness matching starts the one-time library measurement
+    loudnessModule.onSettingsChanged().catch((error) => logger.warn(`loudness scan failed to start: ${error.message}`));
     return updated;
   } catch (error) {
     logger.error('Error in save-settings handler:', error);
@@ -1790,6 +1847,8 @@ ipcMain.handle("delete-trim", async (event, clipName) => {
 });
 
 ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
+  loudnessModule.remove(clipName).catch(() => undefined);
+  waveformModule.remove(clipName).catch(() => undefined);
   return clipsModule.deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer);
 });
 
@@ -1824,10 +1883,14 @@ function buildExportProgressCallbacks(event) {
 // Exports own the CPU and the disk while they run; the clip warmer waits.
 async function withoutWarmer(work) {
   clipWarmer.pause(60 * 60 * 1000);
+  loudnessModule.pause(60 * 60 * 1000);
+  waveformModule.pause(60 * 60 * 1000);
   try {
     return await work();
   } finally {
     clipWarmer.resume();
+    loudnessModule.resume();
+    waveformModule.resume();
   }
 }
 

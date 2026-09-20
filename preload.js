@@ -156,9 +156,15 @@ const api = {
   getClipInfo: invoke("get-clip-info"),
   // hover-preview start time (trim.start or cached-duration midpoint); never triggers ffprobe
   getPreviewStartTime: invoke("get-preview-start-time"),
+  // effective volume with its source (custom file, loudness match, default)
+  getVolumeDetail: invoke("get-volume-detail"),
+  resetVolume: invoke("reset-volume"),
+  getLoudnessSummary: invoke("get-loudness-summary"),
   // one round trip, everything the player reads on clip open
   getClipOpenState: invoke("get-clip-open-state"),
   warmClipOpen: invoke("warm-clip-open"),
+  // per-track level envelope for the timeline; null while it is being measured
+  getClipWaveform: invoke("get-clip-waveform"),
   getTrim: invoke("get-trim"),
   saveTrim: invoke("save-trim"),
   deleteTrim: invoke("delete-trim"),
@@ -302,6 +308,9 @@ const api = {
   // events, main to renderer; each returns an unsubscribe fn
   onLog: subscribe("log"),
   onNewClipAdded: subscribe("new-clip-added"),
+  onLoudnessProgress: subscribe("loudness-progress"),
+  onLoudnessMeasured: subscribe("loudness-measured"),
+  onWaveformReady: subscribe("waveform-ready"),
   onCheckActivityState: subscribe("check-activity-state"),
   onCliplibAuthEvent: subscribe("cliplib-auth-event"),
   onCliplibNavigate: subscribe("cliplib-navigate"),
