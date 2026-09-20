@@ -4,9 +4,9 @@ import logoUrl from "../../../assets/logo.png";
 // three bands like the player timeline draws them; fixed shapes so the step looks the same every time
 const BARS = 56;
 const BANDS = [
-  { color: "#3b82f6", amp: 11, seed: 1.7 },
-  { color: "#10b981", amp: 8, seed: 4.1 },
-  { color: "#a855f7", amp: 6, seed: 9.3 },
+  { color: "#f43f5e", amp: 11, seed: 1.7 },
+  { color: "#ec4899", amp: 8, seed: 4.1 },
+  { color: "#3b82f6", amp: 6, seed: 9.3 },
 ];
 function bandPath(amp: number, seed: number): string {
   const top: string[] = [];
@@ -29,10 +29,10 @@ function bandPath(amp: number, seed: number): string {
 export default function AnalysisStep() {
   return (
     <div className="ob-copy ob-single ob-analysis">
-      <div className="ob-analysis-logo">
-        <img src={logoUrl} alt="" draggable={false} />
-      </div>
-      <h1 className="ob-title">ClipLib needs to analyze your clips.</h1>
+      <h1 className="ob-title ob-analysis-title">
+        <img className="ob-analysis-logo" src={logoUrl} alt="" draggable={false} />
+        ClipLib needs to analyze your clips.
+      </h1>
       <p className="ob-lede">
         It runs in the background and only while nothing is playing or exporting. You get two things
         out of it:
