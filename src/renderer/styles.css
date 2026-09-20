@@ -5111,16 +5111,14 @@ body.ui-blur-exit .app-body {
   pointer-events: none;
 }
 
-/* audio analysis: the one-time library listen. rail pill reuses the update pill layout with a pink
-   gradient fill for the progress and a slow sheen drifting across it; the fill stays dim so the
-   label keeps its contrast. the settings card mirrors the loudness chart card */
+/* audio analysis: the one-time library listen. rail pill is the update pill in the same purple, the
+   progress as a plain fill, no motion so the label stays readable */
 .rail > .rail-update--analysis {
-  --update-clr: var(--analysis-clr);
   overflow: hidden;
   cursor: pointer;
   color: #f4f4f6;
-  border-color: color-mix(in srgb, var(--analysis-clr) 28%, transparent);
-  background: color-mix(in srgb, var(--analysis-clr) 5%, transparent);
+  border-color: color-mix(in srgb, var(--update-clr) 28%, transparent);
+  background: color-mix(in srgb, var(--update-clr) 5%, transparent);
 }
 .rail > .rail-update--analysis::before {
   content: "";
@@ -5130,22 +5128,8 @@ body.ui-blur-exit .app-body {
   bottom: 0;
   width: var(--rail-update-pct, 0%);
   border-radius: inherit;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--analysis-clr) 30%, transparent), color-mix(in srgb, var(--analysis-clr-2) 34%, transparent));
+  background: color-mix(in srgb, var(--update-clr) 26%, transparent);
   transition: width 350ms ease;
-}
-.rail > .rail-update--analysis::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--analysis-clr) 18%, transparent) 50%, transparent 70%);
-  background-size: 250% 100%;
-  animation: rail-analysis-sheen 3.6s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes rail-analysis-sheen {
-  from { background-position: 120% 0; }
-  to { background-position: -120% 0; }
 }
 .rail > .rail-update--analysis .rail-update-pct-label {
   color: color-mix(in srgb, #f4f4f6 70%, transparent);
@@ -5155,8 +5139,7 @@ body.ui-blur-exit .app-body {
   border-color: color-mix(in srgb, #6bd18a 30%, transparent);
   background: color-mix(in srgb, #6bd18a 8%, transparent);
 }
-.rail > .rail-update--analysis-done::before,
-.rail > .rail-update--analysis-done::after {
+.rail > .rail-update--analysis-done::before {
   display: none;
 }
 
