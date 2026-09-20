@@ -115,6 +115,9 @@ function dbOf(linear) {
 /** peak and rms in dBFS per window from s16le mono pcm */
 function envelope(buf) {
   const samples = buf.length >> 1;
+  // a typed view is a few times faster than readInt16LE per sample; pool-backed buffers can start at an odd offset
+  const aligned = buf.byteOffset % 2 === 0 ? buf : Buffer.from(buf);
+  const pcm = new Int16Array(aligned.buffer, aligned.byteOffset, samples);
   const windows = Math.ceil(samples / WINDOW);
   const peak = new Array(windows);
   const rms = new Array(windows);
@@ -124,7 +127,7 @@ function envelope(buf) {
     let max = 0;
     let sum = 0;
     for (let i = start; i < end; i++) {
-      const s = buf.readInt16LE(i * 2) / 32768;
+      const s = pcm[i] / 32768;
       const a = s < 0 ? -s : s;
       if (a > max) max = a;
       sum += s * s;
@@ -249,8 +252,18 @@ function enqueue(clipName, isUrgent = false) {
   startWorkers();
 }
 
-/** clip-warmer hook: analyzed at idle so the open is a cache hit */
-function warm(clipName) {
+/** clip-warmer hook: analyzed at idle so the open is a cache hit. a clip the index already knows
+ * at its current mtime and size is skipped here: a no-op job would still count as pending and
+ * light the rail pill on every boot (the warmer runs the newest twelve at startup) */
+async function warm(clipName) {
+  if (typeof clipName !== 'string' || !clipName || queued.has(clipName) || inFlight.has(clipName)) return;
+  try {
+    const settings = await getSettings();
+    const stat = await fs.stat(path.join(settings.clipLocation, clipName));
+    if (loudness && await loudness.has(clipName, stat, VERSION)) return;
+  } catch (_) {
+    return;
+  }
   enqueue(clipName, false);
 }
 
@@ -329,7 +342,8 @@ async function worker() {
       } else {
         const wait = pausedUntil - Date.now();
         if (wait > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 1000)));
+          // short naps: an opened clip's urgent job should not sit behind a sleeping worker
+          await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 250)));
           continue;
         }
         clipName = warmQueue.shift();
@@ -381,7 +395,8 @@ function progressPayload() {
   }
   return {
     running: workersRunning > 0 && pending > 0,
-    paused: pausedUntil > Date.now(),
+    // urgent jobs (opened clips, cache resets) run through a pause, so it only shows once they are done
+    paused: pausedUntil > Date.now() && urgent.length === 0 && inFlight.size === 0,
     pending,
     total: scanTotal,
     done: scanDone,

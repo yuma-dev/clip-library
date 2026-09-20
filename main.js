@@ -1587,7 +1587,7 @@ ipcMain.handle("get-clip-waveform", async (event, clipName) => {
 });
 
 ipcMain.handle("get-analysis-progress", async () => {
-  return { ...analysisModule.progressPayload(), analyzed: await analysisModule.countAnalyzed(), total: lastClipNames.length };
+  return { ...analysisModule.progressPayload(), analyzed: await analysisModule.countAnalyzed(), libraryTotal: lastClipNames.length };
 });
 
 // drops every sidecar and the loudness index, then listens to the whole library again

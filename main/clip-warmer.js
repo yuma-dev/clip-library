@@ -58,7 +58,7 @@ async function warmOne(clipName) {
   const tracks = Array.isArray(info?.audioTracks) ? info.audioTracks : [];
   if (tracks.length > 1) await ffmpeg.extractAudioTracks(clipName, getSettings, thumbnails);
   // the listen has its own queue and pause; not awaited so the gap here stays short
-  require('./audio-analysis').warm(clipName);
+  void require('./audio-analysis').warm(clipName);
 }
 
 async function drain() {
