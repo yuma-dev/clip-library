@@ -1,14 +1,15 @@
-// In-app ClipLib feed player: same markup/IDs as the local player's #player-overlay
-// (player/VideoPlayer.tsx + player.css) so player.css applies verbatim, plus a
-// feed-specific bottom sheet below. Hard rules: React refs only, never
-// getElementById/querySelector or touch window.legacyPlayer/legacyState; never edit player/* or player.css.
+// In-app ClipLib feed player: same markup, ids and pill classes as the local player's
+// #player-overlay (player/VideoPlayer.tsx + player.css) so player.css applies verbatim, plus a
+// feed-specific bottom sheet below. Hard rules: React refs only, never getElementById/querySelector
+// or touch window.legacyPlayer/legacyState; never edit player/* or player.css. SpeedDrum is shared
+// in its controlled mode.
 //
-//   ┌──────────────────────────────┐
-//   │            player            │ from full-size stage, like the local player
-//   │                              │
-//   ├──────────────────────────────┤
-//   │ ▒ uploader · 🔥3 💬2      ˄ │ from sheet header peeks at the bottom
-//   └──────────────────────────────┘
+//   +------------------------------+
+//   |            player            | full-size stage, like the local player
+//   |                              |
+//   +------------------------------+
+//   | uploader . 3 . 2            ^ | sheet header peeks at the bottom
+//   +------------------------------+
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -34,6 +35,7 @@ import {
   createClipShareLink,
   deleteClip as apiDeleteClip,
   fetchClipDetail,
+  fetchClipWaveform,
   fetchComments,
   postComment,
   removeClipShareLink,
@@ -43,10 +45,14 @@ import {
 } from "./api";
 import { fetchMe, type Me } from "./me";
 import { setFeedOpenHandler, type FeedListSync } from "./feedPlayerBus";
+import SpeedDrum from "../player/SpeedDrum";
+import Waveform from "../player/Waveform";
+import type { ClipWaveform } from "../../types/clips";
 import {
   formatDuration,
   formatRelativeTime,
   getAvatarUrl,
+  mediaUrl,
   REACTION_EMOJI,
   REACTIONS,
   streamUrl,
@@ -123,6 +129,7 @@ export default function FeedPlayer() {
   const [list, setList] = useState<Clip[]>([]);
   const [detail, setDetail] = useState<ClipDetail | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [waveform, setWaveform] = useState<ClipWaveform | null>(null);
   const [me, setMe] = useState<Me | null>(null);
 
   const [playing, setPlaying] = useState(false);
@@ -134,7 +141,10 @@ export default function FeedPlayer() {
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const [volumeExpanded, setVolumeExpanded] = useState(false);
-  const [speedExpanded, setSpeedExpanded] = useState(false);
+  // width / height of the loaded video; the frame takes this shape inside the stage
+  const [aspect, setAspect] = useState(16 / 9);
+  // click-to-toggle glyph; the counter restarts the animation, playing picks the glyph
+  const [flash, setFlash] = useState({ n: 0, playing: false });
   // Hover controls, mirroring the legacy player's mousemove + idle-fade UX.
   const [controlsVisible, setControlsVisible] = useState(true);
   // Details sheet (bottom): derived from the overlay scroll position.
@@ -166,7 +176,6 @@ export default function FeedPlayer() {
   const [copied, setCopied] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const glowCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const fsPlayerRef = useRef<HTMLDivElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
@@ -214,6 +223,7 @@ export default function FeedPlayer() {
     setFavorited(Boolean(clip.isFavorited));
     setDetail(null);
     setComments([]);
+    setWaveform(null);
     setDraft("");
     setEditing(false);
     setCopied(false);
@@ -243,6 +253,12 @@ export default function FeedPlayer() {
         .then((c) => {
           if (openTokenRef.current !== token) return;
           setComments(c);
+        })
+        .catch(() => {});
+
+      fetchClipWaveform(clip.id)
+        .then((w) => {
+          if (openTokenRef.current === token) setWaveform(w);
         })
         .catch(() => {});
     }
@@ -343,48 +359,15 @@ export default function FeedPlayer() {
     }
   }, [playing, pokeControls]);
 
-  // ---- Ambient glow: tiny canvas behind the player sampling the video ----
-  // mirrors #ambient-glow-canvas (10x6 buffer, CSS scales+blurs); draws with temporal
-  // blending at the configured fps. Remote frames taint the canvas but pixels are never read back.
-  const glow = (settings.ambientGlow ?? {}) as {
-    enabled?: boolean;
-    smoothing?: number;
-    fps?: number;
-    blur?: number;
-    saturation?: number;
-    opacity?: number;
-  };
+  // glow: the clip's thumbnail bled out behind the frame, the local player's two layers
+  // (player.css .pl-glow-*), so the feed no longer samples video frames into a canvas every tick
+  const glow = settings.ambientGlow;
   const glowEnabled = glow.enabled !== false;
-
-  useEffect(() => {
-    if (!isOpen || !glowEnabled) return;
-    const canvas = glowCanvasRef.current;
-    const ctx = canvas?.getContext("2d", { alpha: false });
-    if (!canvas || !ctx) return;
-    const fps = Math.max(5, Math.min(60, glow.fps ?? 30));
-    const interval = 1000 / fps;
-    const blend = 1 - Math.max(0, Math.min(0.95, glow.smoothing ?? 0.5));
-    let raf = 0;
-    let last = 0;
-    let first = true;
-    const loop = (ts: number) => {
-      raf = requestAnimationFrame(loop);
-      const v = videoRef.current;
-      if (!v || v.readyState < 2) return;
-      if (ts - last < interval) return;
-      last = ts;
-      try {
-        ctx.globalAlpha = first ? 1 : blend;
-        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        ctx.globalAlpha = 1;
-        first = false;
-      } catch {
-        /* frame not ready */
-      }
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [isOpen, clip, glowEnabled, glow.fps, glow.smoothing]);
+  const glowStyle = {
+    "--glow-blur": `${glow.blur}px`,
+    "--glow-sat": glow.saturation,
+    "--glow-opacity": glow.opacity,
+  } as React.CSSProperties;
 
   const scrollToSheet = useCallback(() => {
     const el = overlayRef.current;
@@ -744,6 +727,7 @@ export default function FeedPlayer() {
       ? `${detail?.width ?? clip.width}×${detail?.height ?? clip.height}`
       : "";
   const totalDuration = duration || clip.duration || 0;
+  const thumbUrl = clip.thumbnailUrl ? mediaUrl(clip.thumbnailUrl) : null;
 
   const topReactions = Object.entries(reactionCounts)
     .filter(([, count]) => count > 0)
@@ -754,6 +738,7 @@ export default function FeedPlayer() {
     <div
       id="player-overlay"
       className="feed-player"
+      style={glowStyle}
       ref={overlayRef}
       onScroll={onOverlayScroll}
       onClick={(e) => {
@@ -763,46 +748,41 @@ export default function FeedPlayer() {
           close();
       }}
     >
-      {/* stage: the player, full size */}
+      {/* the wide glow sits behind the whole overlay, not inside the stage, so the sheet's strip
+          at the bottom does not cut it off */}
+      {glowEnabled && thumbUrl ? <img className="pl-glow pl-glow-wide fp-glow-wide" src={thumbUrl} alt="" aria-hidden="true" /> : null}
+      {/* stage: the player, full size. same layers as the local player (player.css): thumbnail
+          glow behind, the frame box with the chevrons, the frame at the video's own aspect */}
       <div className="fp-stage">
-        {glowEnabled && !processing && !fullscreen ? (
-          <canvas
-            ref={glowCanvasRef}
-            className="fp-ambient-glow"
-            width={10}
-            height={6}
-            aria-hidden="true"
-            style={{
-              filter: `blur(${glow.blur ?? 80}px) saturate(${glow.saturation ?? 1.5})`,
-              opacity: glow.opacity ?? 0.7,
-            }}
-          />
-        ) : null}
         <div id="player-container">
-          <button
-            className="video-nav-button fp-nav-prev"
-            type="button"
-            aria-label="Previous"
-            disabled={!hasPrev}
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(-1);
-            }}
-          >
-            <ChevronLeft size={24} />
-          </button>
-          <button
-            className="video-nav-button fp-nav-next"
-            type="button"
-            aria-label="Next"
-            disabled={!hasNext}
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(1);
-            }}
-          >
-            <ChevronRight size={24} />
-          </button>
+          <div className="pl-stage" style={{ "--ar": aspect } as React.CSSProperties}>
+            {glowEnabled && thumbUrl ? <img className="pl-glow pl-glow-frame" src={thumbUrl} alt="" aria-hidden="true" /> : null}
+            <div className="pl-frame-box">
+              <button
+                className="video-nav-button fp-nav-prev"
+                type="button"
+                aria-label="Previous"
+                disabled={!hasPrev}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(-1);
+                }}
+              >
+                <ChevronLeft size={18} strokeWidth={2.2} />
+              </button>
+              <button
+                className="video-nav-button fp-nav-next"
+                type="button"
+                aria-label="Next"
+                disabled={!hasNext}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(1);
+                }}
+              >
+                <ChevronRight size={18} strokeWidth={2.2} />
+              </button>
+            </div>
 
           <div
             id="fullscreen-player"
@@ -825,6 +805,9 @@ export default function FeedPlayer() {
                     onClick={(e) => {
                       e.stopPropagation();
                       togglePlay();
+                      const v = videoRef.current;
+                      // togglePlay just flipped it, so paused is the new state
+                      setFlash((f) => ({ n: f.n + 1, playing: !!v && !v.paused }));
                     }}
                   />
                   {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
@@ -838,6 +821,7 @@ export default function FeedPlayer() {
                     onLoadedMetadata={(e) => {
                       const v = e.currentTarget;
                       setDuration(v.duration || clip.duration || 0);
+                      if (v.videoWidth > 0 && v.videoHeight > 0) setAspect(v.videoWidth / v.videoHeight);
                       v.volume = volume;
                       v.muted = muted;
                       v.playbackRate = speed;
@@ -860,18 +844,26 @@ export default function FeedPlayer() {
                       <div className="loading-spinner" />
                     </div>
                   )}
+                  {flash.n > 0 ? (
+                    <div key={flash.n} className="pl-flash" aria-hidden="true">
+                      <svg width="30" height="30" viewBox="0 0 24 24" fill="#fff">
+                        <path d={flash.playing ? "M7 5l12 7-12 7z" : "M7 5h4v14H7zM13 5h4v14h-4z"} />
+                      </svg>
+                    </div>
+                  ) : null}
                 </>
               )}
 
               <div id="video-controls" className={controlsVisible ? "visible" : undefined}>
+                {/* top: title pill left, actions pill right */}
                 <div id="top-controls">
-                  <div className="fp-title" title={clip.title}>
+                  <div className="pl-pill pl-title fp-title" title={clip.title}>
                     {clip.title}
                   </div>
-                  <div className="player-actions">
+                  <div className="pl-pill pl-actions">
                     <button
                       type="button"
-                      className={`fp-action${favorited ? " fp-fav-active" : ""}`}
+                      className={favorited ? "fp-fav-active" : undefined}
                       aria-label={favorited ? "Remove favorite" : "Add favorite"}
                       title="Favorite"
                       onClick={(e) => {
@@ -879,23 +871,25 @@ export default function FeedPlayer() {
                         void onToggleFavorite();
                       }}
                     >
-                      <Bookmark size={18} fill={favorited ? "currentColor" : "none"} />
+                      <Bookmark size={12} fill={favorited ? "currentColor" : "none"} />
+                      {favorited ? "Saved" : "Save"}
                     </button>
                     <button
                       type="button"
-                      className={`fp-action${sheetOpen ? " fp-action-on" : ""}`}
+                      className={sheetOpen ? "fp-action-on" : undefined}
                       aria-label="Comments and details"
-                      title="Comments & details"
+                      title="Comments and details"
                       onClick={(e) => {
                         e.stopPropagation();
                         toggleSheet();
                       }}
                     >
-                      <MessageSquare size={18} />
+                      <MessageSquare size={12} />
+                      {comments.length > 0 ? comments.length : "Comments"}
                     </button>
                     <button
                       type="button"
-                      className="fp-action fp-close"
+                      className="fp-close"
                       aria-label="Close"
                       title="Close"
                       onClick={(e) => {
@@ -903,107 +897,82 @@ export default function FeedPlayer() {
                         close();
                       }}
                     >
-                      <X size={18} />
+                      <X size={12} />
                     </button>
                   </div>
                 </div>
 
-                <div id="bottom-controls">
-                  <div className="playback-row">
-                    <div
-                      id="volume-container"
-                      onMouseEnter={() => setVolumeExpanded(true)}
-                      onMouseLeave={() => setVolumeExpanded(false)}
+                {/* bottom pill: volume, time, timeline, duration, speed, fullscreen */}
+                <div id="bottom-controls" className="pl-pill pl-bar">
+                  <div
+                    id="volume-container"
+                    onMouseEnter={() => setVolumeExpanded(true)}
+                    onMouseLeave={() => setVolumeExpanded(false)}
+                  >
+                    <button
+                      id="volume-button"
+                      type="button"
+                      aria-label="Mute"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleMute();
+                      }}
+                      onWheel={(e) => changeVolume(e.deltaY < 0 ? 0.05 : -0.05)}
                     >
-                      <button
-                        id="volume-button"
-                        type="button"
-                        aria-label="Mute"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleMute();
-                        }}
-                      >
-                        <VolumeGlyph volume={volume} muted={muted} />
-                      </button>
-                      <input
-                        type="range"
-                        id="volume-slider"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={muted ? 0 : volume}
-                        className={volumeExpanded ? undefined : "collapsed"}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          setVolume(val);
-                          if (val > 0) setMuted(false);
-                          else setMuted(true);
-                        }}
-                      />
-                    </div>
-                    <div className="playback-right">
-                      <div
-                        id="speed-container"
-                        onMouseEnter={() => setSpeedExpanded(true)}
-                        onMouseLeave={() => setSpeedExpanded(false)}
-                      >
-                        <button
-                          id="speed-button"
-                          type="button"
-                          title="Playback Speed"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <span id="speed-text">{speed}x</span>
-                        </button>
-                        <input
-                          type="range"
-                          id="speed-slider"
-                          min="0.5"
-                          max="2"
-                          step="0.25"
-                          value={speed}
-                          className={speedExpanded ? undefined : "collapsed"}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setSpeed(Number(e.target.value))}
-                        />
-                      </div>
-                      <button
-                        id="fullscreen-button"
-                        type="button"
-                        aria-label="Fullscreen"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleFullscreen();
-                        }}
-                      >
-                        <Maximize size={19} />
-                      </button>
-                    </div>
+                      <VolumeGlyph volume={volume} muted={muted} />
+                    </button>
+                    <input
+                      type="range"
+                      id="volume-slider"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={muted ? 0 : volume}
+                      className={volumeExpanded ? undefined : "collapsed"}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        setVolume(val);
+                        if (val > 0) setMuted(false);
+                        else setMuted(true);
+                      }}
+                    />
                   </div>
-
-                  <div className="fp-progress-wrap">
-                    {/* no #progress-bar fill: that white bar is the local player's
-                        draggable trim region; feed clips only need track + playhead */}
-                    <div
-                      id="progress-bar-container"
-                      ref={progressRef}
-                      onPointerDown={onProgressPointerDown}
-                      onPointerMove={onProgressPointerMove}
-                      onPointerUp={onProgressPointerUp}
-                    >
-                      <div id="playhead" style={{ left: `${progressPct}%` }} />
-                    </div>
+                  <div id="current-time">{fmtTime(current)}</div>
+                  {/* the band when the server has an envelope, else a baseline with the played part brighter */}
+                  <div
+                    id="progress-bar-container"
+                    className={`fp-timeline${waveform ? " has-wave" : ""}`}
+                    ref={progressRef}
+                    style={{ "--pos": `${progressPct}%`, "--ts": "0%", "--te": "100%" } as React.CSSProperties}
+                    onPointerDown={onProgressPointerDown}
+                    onPointerMove={onProgressPointerMove}
+                    onPointerUp={onProgressPointerUp}
+                  >
+                    <div className="fp-track" />
+                    <div className="fp-played" />
+                    {waveform ? <Waveform waveform={waveform} tracks={null} trimStart={0} trimEnd={1} /> : null}
+                    <div id="playhead" />
                   </div>
-
-                  <div className="time-row">
-                    <div id="current-time">{fmtTime(current)}</div>
-                    <div id="total-time">{fmtTime(totalDuration)}</div>
+                  <div id="total-time">{fmtTime(totalDuration)}</div>
+                  <div id="speed-container">
+                    <SpeedDrum rate={speed} onChange={setSpeed} />
                   </div>
+                  <button
+                    id="fullscreen-button"
+                    type="button"
+                    aria-label="Fullscreen"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFullscreen();
+                    }}
+                  >
+                    <Maximize size={14} />
+                  </button>
                 </div>
               </div>
             </div>
+          </div>
           </div>
         </div>
       </div>
