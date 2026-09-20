@@ -7,6 +7,7 @@ interface LibraryViewProps {
   lib: UseClips;
   /** Clips after search + tag + collection filtering. */
   clips: LocalClip[];
+  shuffled?: boolean;
   grayscaleIcons: boolean;
   /** Settings: show new-clip indicators (card glow + border). */
   showNewIndicators: boolean;
@@ -21,6 +22,7 @@ interface LibraryViewProps {
 function LibraryView({
   lib,
   clips,
+  shuffled = false,
   grayscaleIcons,
   showNewIndicators,
   previewVolume,
@@ -41,6 +43,7 @@ function LibraryView({
       ) : (
         <ClipGrid
           clips={clips}
+          shuffled={shuffled}
           thumbnails={lib.thumbnails}
           grayscaleIcons={grayscaleIcons}
           showNewIndicators={showNewIndicators}

@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { useObserve } from "./visibility";
 import { useHover } from "./hoverContext";
 import { useSelection } from "./selectionContext";
@@ -16,9 +16,11 @@ interface ClipCardProps {
   thumbnailPath: string | null;
   grayscaleIcons: boolean;
   showNewIndicators: boolean;
+  mediaOverlay?: ReactNode;
+  nameEditor?: ReactNode;
 }
 
-function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: ClipCardProps) {
+function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators, mediaOverlay, nameEditor }: ClipCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const observe = useObserve();
   const hover = useHover();
@@ -89,6 +91,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
         />
         {/* Imperative hover-preview <video> mounts here (display:contents). */}
         <div className="clip-preview-mount" />
+        {mediaOverlay}
         {icon?.discord ? (
           <ParticipantAvatars discord={icon.discord} clipCreatedAt={clip.createdAt} />
         ) : null}
@@ -96,7 +99,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
 
       <div className="clip-foot">
         <div className="clip-info">
-          {editing ? (
+          {nameEditor ?? (editing ? (
             <input
               ref={editRef}
               className="clip-name clip-name-edit"
@@ -135,7 +138,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators }: Cl
             >
               {clip.customName}
             </p>
-          )}
+          ))}
 
           <div className="clip-meta-row">
             <span className="clip-time" title={absoluteTime(clip.createdAt)}>

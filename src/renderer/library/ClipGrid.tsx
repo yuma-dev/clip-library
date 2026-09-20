@@ -16,6 +16,7 @@ import type { LocalClip } from "./types";
 
 interface ClipGridProps {
   clips: LocalClip[];
+  shuffled?: boolean;
   thumbnails: Map<string, string | null>;
   grayscaleIcons: boolean;
   showNewIndicators: boolean;
@@ -40,6 +41,7 @@ function loadCollapsed(): Record<string, boolean> {
 
 function ClipGrid({
   clips,
+  shuffled = false,
   thumbnails,
   grayscaleIcons,
   showNewIndicators,
@@ -275,7 +277,7 @@ function ClipGrid({
   // reuse the previous group object when clips are ref-identical so memo(ClipGroup) skips it.
   const prevGroupsRef = useRef<Map<string, ClipGroupData>>(new Map());
   const groups = useMemo(() => {
-    const fresh = groupClips(clips, Date.now());
+    const fresh = shuffled ? (clips.length ? [{ name: "Shuffled clips", clips }] : []) : groupClips(clips, Date.now());
     const prev = prevGroupsRef.current;
     return fresh.map((g) => {
       const old = prev.get(g.name);
@@ -288,7 +290,7 @@ function ClipGrid({
       }
       return g;
     });
-  }, [clips]);
+  }, [clips, shuffled]);
   // Commit-phase write: a concurrent render that gets discarded must not
   // poison the identity baseline the next render stabilizes against.
   useEffect(() => {

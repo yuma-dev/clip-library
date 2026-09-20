@@ -1,6 +1,7 @@
 import { memo, useDeferredValue } from "react";
 import type React from "react";
 import ClipCard from "./ClipCard";
+import VirtualClipCards from "./VirtualClipCards";
 import { useStreamedSlice } from "../ui/useStreamedSlice";
 import type { ClipGroupData } from "./grouping";
 
@@ -28,7 +29,8 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, colla
   const expanded = !useDeferredValue(collapsed);
   // A small first commit: the window is revealed only after it has painted
   // and the rest of the group streams in on the following frames.
-  const shown = useStreamedSlice(group.clips, expanded, { initial: 12, perFrame: 80 });
+  const virtualized = group.clips.length > 80;
+  const shown = useStreamedSlice(group.clips, expanded && !virtualized, { initial: 12, perFrame: 80 });
 
   return (
     <section className="clip-group">
@@ -45,7 +47,10 @@ function ClipGroup({ group, thumbnails, grayscaleIcons, showNewIndicators, colla
         <span className="clip-group-divider" />
       </button>
 
-      {shown ? (
+      {expanded && virtualized ? (
+        <VirtualClipCards clips={group.clips} thumbnails={thumbnails}
+          grayscaleIcons={grayscaleIcons} showNewIndicators={showNewIndicators} />
+      ) : shown ? (
         // Reserved height for a group content-visibility:auto skips (styles.css)
         // before layout, from the measured columns + row height.
         <div

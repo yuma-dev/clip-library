@@ -259,13 +259,9 @@ async function getNewClipsInfo(getSettings, knownNames) {
       await saveWatchedClips();
     }
 
-    // prune deleted clips so the file doesn't grow forever
-    const current = new Set(currentClips);
-    const before = watchedClips.size;
-    for (const name of watchedClips) {
-      if (!current.has(name)) watchedClips.delete(name);
-    }
-    if (watchedClips.size !== before) await saveWatchedClips();
+    // Absence from a scan does not mean deletion: the user may have switched
+    // folders, disconnected a drive, or encountered an unreadable subtree.
+    // Keep watched history so returning clips retain their existing status.
 
     const newClips = currentClips.filter((clipName) => !watchedClips.has(clipName));
     logger.info(`Found ${newClips.length} unwatched clips`);

@@ -12,6 +12,8 @@ function clipFileUrl(clipLocation: string, originalName: string): string {
 
 interface PreviewContext {
   token: symbol;
+  /** effective clip volume multiplier applied on top of the preview setting */
+  gain?: number;
   video?: HTMLVideoElement;
   img?: HTMLImageElement | null;
 }
@@ -48,7 +50,9 @@ export class LibraryHover {
   /** Settings, preview volume; also applied live to a playing preview. */
   setPreviewVolume(volume: number): void {
     this.previewVolume = volume;
-    if (this.activePreview?.video) this.activePreview.video.volume = volume;
+    if (this.activePreview?.video) {
+      this.activePreview.video.volume = Math.min(1, volume * (this.activePreview.gain ?? 1));
+    }
   }
 
   enter(cardEl: HTMLElement, clip: LocalClip): void {
@@ -65,10 +69,17 @@ export class LibraryHover {
       if (this.activePreview !== ctx) return;
 
       let startTime = 0;
+      // the clip's effective level (custom or loudness matched) scales the preview volume
+      let clipGain = 1;
       try {
         // Cheap IPC (trim.start or cached midpoint); never getClipInfo here
         // cold cache runs a ~300ms ffprobe that serially stalls every hover.
-        startTime = Number(await window.clips.getPreviewStartTime(clip.originalName)) || 0;
+        const [start, detail] = await Promise.all([
+          window.clips.getPreviewStartTime(clip.originalName),
+          window.clips.getVolumeDetail?.(clip.originalName).catch(() => null),
+        ]);
+        startTime = Number(start) || 0;
+        if (detail && Number.isFinite(detail.volume)) clipGain = detail.volume;
       } catch {
         /* default to 0 */
       }
@@ -86,7 +97,9 @@ export class LibraryHover {
       video.className = "clip-preview-video";
       video.src = clipFileUrl(this.clipLocation, clip.originalName);
       video.loop = true;
-      video.volume = this.previewVolume;
+      // <video>.volume caps at 1, so a boosted clip can only get as loud as the preview setting allows
+      ctx.gain = clipGain;
+      video.volume = Math.min(1, this.previewVolume * clipGain);
       video.preload = "metadata";
       video.playsInline = true;
       if (img) video.poster = img.src;
