@@ -63,11 +63,15 @@
   pointer-events: auto;
 }
 .pl-glow-frame,
+.pl-frame-box,
 #fullscreen-player {
   grid-area: 1 / 1;
-  --ar: 1.7778;
-  aspect-ratio: var(--ar);
+  aspect-ratio: var(--ar, 1.7778);
   width: min(100%, calc(100cqh * var(--ar)));
+}
+.pl-frame-box {
+  position: relative;
+  pointer-events: none;
 }
 .pl-glow-frame {
   position: relative;
@@ -81,13 +85,13 @@
   to { filter: blur(calc(var(--glow-blur) + 10px)) saturate(var(--glow-sat)) hue-rotate(360deg); }
 }
 
-/* prev/next: bare chevrons at the window edge, nudge outward on hover */
+/* prev/next: bare chevrons hanging off the frame's edges with a tall hit zone, nudge outward on hover */
 .video-nav-button {
   position: absolute;
   top: 50%;
-  margin-top: -30px;
-  width: 24px;
-  height: 60px;
+  margin-top: -60px;
+  width: 40px;
+  height: 120px;
   display: grid;
   place-items: center;
   border: 0;
@@ -95,11 +99,12 @@
   background: none;
   color: #ffffff73;
   cursor: pointer;
+  pointer-events: auto;
   z-index: 5;
   transition: color 0.2s, transform 0.2s, opacity 0.4s;
 }
-#prev-video { left: 18px; }
-#next-video { right: 18px; }
+#prev-video { left: -48px; }
+#next-video { right: -48px; }
 .video-nav-button:hover { color: #f4f4f6; }
 #prev-video:hover { transform: translateX(-2px); }
 #next-video:hover { transform: translateX(2px); }

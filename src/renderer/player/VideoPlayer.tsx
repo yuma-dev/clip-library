@@ -649,35 +649,38 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         {/* the clip's own thumbnail bled out behind the frame; two layers, a wide slow hue drift
             and a tight one breathing with the frame */}
         {glow.enabled && thumbUrl ? <img className="pl-glow pl-glow-wide" src={thumbUrl} alt="" aria-hidden="true" /> : null}
-        <button
-          id="prev-video"
-          className="video-nav-button"
-          type="button"
-          aria-label="Previous"
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(-1);
-          }}
-        >
-          <ChevronLeft size={18} strokeWidth={2.2} />
-        </button>
-        <button
-          id="next-video"
-          className="video-nav-button"
-          type="button"
-          aria-label="Next"
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(1);
-          }}
-        >
-          <ChevronRight size={18} strokeWidth={2.2} />
-        </button>
         {/* stage is the inset area; the frame takes the video's own aspect inside it so no letterbox
             ever shows as black, the glow fills the rest */}
-        <div className="pl-stage">
+        <div className="pl-stage" style={{ "--ar": aspect } as CSSProperties}>
         {glow.enabled && thumbUrl ? <img className="pl-glow pl-glow-frame" src={thumbUrl} alt="" aria-hidden="true" /> : null}
-        <div id="fullscreen-player" style={{ "--ar": aspect } as CSSProperties}>
+        {/* same box as the frame, so the chevrons hang just outside its edges whatever its aspect */}
+        <div className="pl-frame-box">
+          <button
+            id="prev-video"
+            className="video-nav-button"
+            type="button"
+            aria-label="Previous"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(-1);
+            }}
+          >
+            <ChevronLeft size={18} strokeWidth={2.2} />
+          </button>
+          <button
+            id="next-video"
+            className="video-nav-button"
+            type="button"
+            aria-label="Next"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(1);
+            }}
+          >
+            <ChevronRight size={18} strokeWidth={2.2} />
+          </button>
+        </div>
+        <div id="fullscreen-player">
           <div id="video-container">
             <div
               id="video-click-target"
