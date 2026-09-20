@@ -633,6 +633,8 @@
 #progress-bar-container.has-wave #progress-bar {
   opacity: 0;
 }
+/* the layers mount once the bands exist, so the grow-in plays on every clip and when the
+   analysis lands a moment after the open */
 .tl-wave {
   position: absolute;
   left: 0;
@@ -640,6 +642,12 @@
   top: 5px;
   height: 30px;
   pointer-events: none;
+  transform-origin: 50% 50%;
+  animation: tl-grow 0.55s cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
+}
+@keyframes tl-grow {
+  from { transform: scaleY(0.04); opacity: 0.4; }
+  to { transform: scaleY(1); opacity: 1; }
 }
 .tl-wave svg {
   position: absolute;
@@ -927,4 +935,16 @@ body.dragging #trim-end i {
   font-size: 12px;
   margin: 0;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* not analyzed yet: the baseline reads as a placeholder for the waveform that is on its way */
+#progress-bar-container:not(.has-wave) #progress-bar {
+  background: repeating-linear-gradient(90deg, #ffffff33 0 6px, #0000 6px 10px);
+  mask-image: linear-gradient(90deg, #0000, #000 20%, #000 80%, #0000);
+  -webkit-mask-image: linear-gradient(90deg, #0000, #000 20%, #000 80%, #0000);
+  animation: pl-listen 2.4s ease-in-out infinite;
+}
+@keyframes pl-listen {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }

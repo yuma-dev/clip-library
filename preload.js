@@ -163,8 +163,10 @@ const api = {
   // one round trip, everything the player reads on clip open
   getClipOpenState: invoke("get-clip-open-state"),
   warmClipOpen: invoke("warm-clip-open"),
-  // per-track level envelope for the timeline; null while it is being measured
+  // per-track level envelope for the timeline; null while the clip is being analyzed
   getClipWaveform: invoke("get-clip-waveform"),
+  getAnalysisProgress: invoke("get-analysis-progress"),
+  resetAudioAnalysis: invoke("reset-audio-analysis"),
   getTrim: invoke("get-trim"),
   saveTrim: invoke("save-trim"),
   deleteTrim: invoke("delete-trim"),
@@ -308,9 +310,9 @@ const api = {
   // events, main to renderer; each returns an unsubscribe fn
   onLog: subscribe("log"),
   onNewClipAdded: subscribe("new-clip-added"),
-  onLoudnessProgress: subscribe("loudness-progress"),
+  onAnalysisProgress: subscribe("analysis-progress"),
+  onAnalysisReady: subscribe("analysis-ready"),
   onLoudnessMeasured: subscribe("loudness-measured"),
-  onWaveformReady: subscribe("waveform-ready"),
   onCheckActivityState: subscribe("check-activity-state"),
   onCliplibAuthEvent: subscribe("cliplib-auth-event"),
   onCliplibNavigate: subscribe("cliplib-navigate"),

@@ -29,6 +29,14 @@ export interface AmbientGlowSettings {
 
 export type { CardGlowSettings };
 
+/** targetLufs null = auto, the library median once measured */
+export interface LoudnessSettings {
+  enabled: boolean;
+  targetLufs: number | null;
+}
+
+export const LOUDNESS_DEFAULTS: LoudnessSettings = { enabled: true, targetLufs: null };
+
 export interface AppSettings {
   enableDiscordRPC: boolean;
   uiFont: string;
@@ -37,6 +45,7 @@ export interface AppSettings {
   previewVolume: number;
   ambientGlow: AmbientGlowSettings;
   cardGlow: CardGlowSettings;
+  loudness: LoudnessSettings;
   exportPreset: string;
   exportQuality: string;
   exportSizeGoal: string;
@@ -68,6 +77,7 @@ export const SETTINGS_DEFAULTS: AppSettings = {
   previewVolume: 0.1,
   ambientGlow: { ...AMBIENT_GLOW_DEFAULTS },
   cardGlow: { ...CARD_GLOW_DEFAULTS },
+  loudness: { ...LOUDNESS_DEFAULTS },
   ...EXPORT_SETTING_DEFAULTS,
 };
 
@@ -75,6 +85,7 @@ function withDefaults(raw: Record<string, unknown> | null | undefined): AppSetti
   const merged: AppSettings = { ...SETTINGS_DEFAULTS, ...(raw ?? {}) } as AppSettings;
   merged.ambientGlow = { ...AMBIENT_GLOW_DEFAULTS, ...((raw?.ambientGlow as object) ?? {}) };
   merged.cardGlow = { ...CARD_GLOW_DEFAULTS, ...((raw?.cardGlow as object) ?? {}) };
+  merged.loudness = { ...LOUDNESS_DEFAULTS, ...((raw?.loudness as object) ?? {}) };
   return merged;
 }
 
@@ -91,7 +102,7 @@ interface SettingsApi {
   redo: () => boolean;
 }
 
-const SettingsContext = createContext<SettingsApi | null>(null);
+export const SettingsContext = createContext<SettingsApi | null>(null);
 
 export function useSettings(): SettingsApi {
   const ctx = useContext(SettingsContext);
