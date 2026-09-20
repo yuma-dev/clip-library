@@ -60,9 +60,11 @@ body {
 /* structural (non-color) tokens for the shell chrome */
 :root {
   --line: rgba(255, 255, 255, 0.08);
-  /* audio analysis and everything it drives: the rail pill, matched volume, the loudness page */
-  --analysis-clr: #ff7ad9;
-  --analysis-clr-2: #c774e0;
+  /* audio analysis and everything it drives: the rail pill, matched volume, the loudness page.
+     aqua to violet, an even band across the library; solid uses take the aqua end */
+  --analysis-clr: #6ee7f0;
+  --analysis-clr-2: #a78bfa;
+  --analysis-grad: linear-gradient(90deg, var(--analysis-clr), var(--analysis-clr-2));
   --rail-width: 300px;
   --rail-collapsed: 58px;
   /* snappy-but-smooth easing for the rail collapse/expand */
@@ -4809,7 +4811,7 @@ body.ui-blur-exit .app-body {
 .loud-progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: var(--analysis-clr);
+  background: var(--analysis-grad);
   transition: width 300ms ease;
 }
 .loud-chart-wrap {
@@ -5128,7 +5130,7 @@ body.ui-blur-exit .app-body {
   bottom: 0;
   width: var(--rail-update-pct, 0%);
   border-radius: inherit;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--analysis-clr-2) 34%, transparent), color-mix(in srgb, var(--analysis-clr) 34%, transparent));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--analysis-clr) 30%, transparent), color-mix(in srgb, var(--analysis-clr-2) 34%, transparent));
   transition: width 350ms ease;
 }
 .rail > .rail-update--analysis::after {
@@ -5163,6 +5165,17 @@ body.ui-blur-exit .app-body {
   width: min(720px, 92vw);
   height: auto;
   max-height: 90vh;
+}
+/* the tour stacks steps absolutely for its slide transition; a single card sizes to its content */
+.ob-panel--intro .ob-body {
+  overflow: visible;
+}
+.ob-panel--intro .ob-step {
+  position: static;
+  overflow: visible;
+}
+.ob-panel--intro .ob-single {
+  padding: 40px 44px 28px;
 }
 .analysis-card {
   border: 0.5px solid var(--color-border);
