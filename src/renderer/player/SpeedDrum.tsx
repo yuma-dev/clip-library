@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+// fastest on top: up the wheel is up the list
+const SPEEDS = [2, 1.5, 1.25, 1, 0.75, 0.5];
 const ROW = 18;
 // vertical drag distance per detent
 const DRAG_STEP = 14;
 
 const nearest = (rate: number) => {
-  let best = 2;
+  let best = 3;
   for (let i = 0; i < SPEEDS.length; i++) if (Math.abs(SPEEDS[i] - rate) < Math.abs(SPEEDS[best] - rate)) best = i;
   return best;
 };
@@ -15,7 +16,7 @@ const nearest = (rate: number) => {
  * legacy's changeSpeed applies and persists the value, ratechange keeps the drum in sync with
  * whatever else sets the rate (clip open, space-hold boost). */
 export default function SpeedDrum() {
-  const [index, setIndex] = useState(2);
+  const [index, setIndex] = useState(3);
   const [tick, setTick] = useState(0);
   const indexRef = useRef(index);
   indexRef.current = index;
@@ -42,8 +43,8 @@ export default function SpeedDrum() {
       title="Playback speed"
       onWheel={(e) => {
         e.stopPropagation();
-        // wheel up = faster, like the drag
-        step(e.deltaY < 0 ? 1 : -1);
+        // wheel up = the entry above = faster
+        step(e.deltaY < 0 ? -1 : 1);
       }}
       onMouseDown={(e) => {
         e.preventDefault();
@@ -52,7 +53,8 @@ export default function SpeedDrum() {
         const move = (ev: MouseEvent) => {
           const dy = ev.clientY - y0;
           if (Math.abs(dy) >= DRAG_STEP) {
-            step(dy > 0 ? -1 : 1);
+            // drag up = the entry above = faster
+            step(dy > 0 ? 1 : -1);
             y0 = ev.clientY;
           }
         };
