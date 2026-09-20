@@ -1,6 +1,6 @@
 import ExportProgress from './ExportProgress';
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { ChevronLeft, ChevronRight, Copy, Maximize, Sparkles, Trash2, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Maximize, Sparkle, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
 import type { ClipWaveform } from "../../types/clips";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
@@ -779,7 +779,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                 />
                 {/* loudness matched: legacy toggles .normalized on the button, the sparkle sits on its corner */}
                 <span className="pl-auto-mark" aria-hidden="true">
-                  <Sparkles size={9} strokeWidth={2.4} />
+                  <Sparkle size={10} strokeWidth={2.2} fill="currentColor" />
                 </span>
                 <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>

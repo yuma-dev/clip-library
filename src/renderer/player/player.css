@@ -378,8 +378,6 @@
   border-radius: 50%;
   place-items: center;
   color: var(--analysis-clr);
-  background: #0a0a0c;
-  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--analysis-clr) 40%, transparent);
   pointer-events: none;
 }
 #volume-container:has(#volume-button.normalized) .pl-auto-mark {
