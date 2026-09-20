@@ -33,7 +33,7 @@ export async function syncVersions() {
   let nextCargoLock = cargoLockRaw;
   if (cargoLockRaw) {
     nextCargoLock = cargoLockRaw.replace(
-      /(name = "clipdip[a-z-]*"\nversion = ")([^"]+)(")/g,
+      /(name = "clipdip[a-z-]*"\r?\nversion = ")([^"]+)(")/g,
       `$1${version}$3`,
     );
   }
