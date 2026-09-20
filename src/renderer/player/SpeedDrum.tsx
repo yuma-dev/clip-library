@@ -12,29 +12,42 @@ const nearest = (rate: number) => {
   return best;
 };
 
+interface SpeedDrumProps {
+  /** controlled mode (feed player): the current rate and where a detent goes */
+  rate?: number;
+  onChange?: (rate: number) => void;
+}
+
 /** vertical wheel of playback speeds; scroll or drag a detent, the ring pulses on each step.
- * legacy's changeSpeed applies and persists the value, ratechange keeps the drum in sync with
- * whatever else sets the rate (clip open, space-hold boost). */
-export default function SpeedDrum() {
-  const [index, setIndex] = useState(3);
+ * uncontrolled, legacy's changeSpeed applies and persists the value and ratechange on
+ * #video-player keeps the drum in sync with whatever else sets the rate (clip open, space-hold
+ * boost). with onChange the caller owns the rate. */
+export default function SpeedDrum({ rate, onChange }: SpeedDrumProps) {
+  const controlled = typeof onChange === "function";
+  const [own, setOwn] = useState(3);
+  const index = controlled ? nearest(rate ?? 1) : own;
   const [tick, setTick] = useState(0);
   const indexRef = useRef(index);
   indexRef.current = index;
 
   useEffect(() => {
+    if (controlled) return;
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
     if (!video) return;
-    const sync = () => setIndex(nearest(video.playbackRate));
+    const sync = () => setOwn(nearest(video.playbackRate));
     video.addEventListener("ratechange", sync);
     return () => video.removeEventListener("ratechange", sync);
-  }, []);
+  }, [controlled]);
 
   const step = (dir: number) => {
     const next = Math.min(SPEEDS.length - 1, Math.max(0, indexRef.current + dir));
     if (next === indexRef.current) return;
-    setIndex(next);
     setTick((t) => t + 1);
-    window.legacyPlayer?.changeSpeed(SPEEDS[next]);
+    if (controlled) onChange(SPEEDS[next]);
+    else {
+      setOwn(next);
+      window.legacyPlayer?.changeSpeed(SPEEDS[next]);
+    }
   };
 
   return (

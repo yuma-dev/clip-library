@@ -1,76 +1,62 @@
-/* Feed player (FeedPlayer.tsx): reuses the local player's IDs so player.css provides
-   the base look. Scoped under .feed-player: overlay-as-scroll-container (stage + sheet),
-   re-anchored #fullscreen-player, and the fp-* feed-specific pieces. */
+/* Feed player (FeedPlayer.tsx): reuses the local player's ids and pill classes so player.css
+   provides the look. Scoped under .feed-player: overlay-as-scroll-container (stage + sheet), the
+   stage re-anchored inside the scroll flow, a plain timeline for clips without a waveform, and
+   the fp-* feed-specific pieces. */
 
-/* overlay: vertical scroll container with two snap regions */
+/* overlay: vertical scroll container with two snap regions. the local player's backdrop
+   colour; the blur stands in for the ui blur the local player asks the shell for */
 #player-overlay.feed-player {
   display: block;
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-snap-type: y proximity;
-  background: rgba(8, 8, 10, 0.72);
-  backdrop-filter: blur(22px) saturate(130%);
-  -webkit-backdrop-filter: blur(22px) saturate(130%);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
 }
 #player-overlay.feed-player::-webkit-scrollbar {
   display: none;
 }
+/* fixed to the window rather than the scrolling stage, so it runs under the sheet too */
+.feed-player .fp-glow-wide {
+  position: fixed;
+  z-index: 0;
+}
+.feed-player .fp-stage,
+.feed-player .fp-sheet {
+  position: relative;
+  z-index: 1;
+}
 
-/* Height reserved for the peeking sheet header below the stage. */
+/* height reserved for the peeking sheet header below the stage */
 .feed-player .fp-stage {
   position: relative;
   height: calc(100vh - 76px);
   scroll-snap-align: start;
 }
 
+/* the sheet peeks below, so the frame keeps a little less room at the bottom than the local
+   player. the local container clips its overflow because its overlay ends there; here the frame
+   glow must run on under the sheet strip, a hard edge at the stage's bottom shows otherwise */
 .feed-player #player-container {
-  width: 100%;
-  height: 100%;
+  --frame-bottom: 24px;
+  overflow: visible;
 }
 
-/* player re-anchored inside the stage (player.css makes it fixed); same 90%-width
-   16:9 look, capped to fit the shorter stage. Fullscreen keeps player.css's fixed rules. */
-.feed-player #fullscreen-player:not(.custom-fullscreen) {
-  position: absolute;
-  top: 50%;
-  width: min(90%, calc((100vh - 148px) * 1.7778));
-}
+/* chevrons: player.css places #prev-video/#next-video, the feed's carry classes instead of ids */
+.feed-player .fp-nav-prev { left: -48px; }
+.feed-player .fp-nav-next { right: -48px; }
+.feed-player .fp-nav-prev:hover { transform: translateX(-2px); }
+.feed-player .fp-nav-next:hover { transform: translateX(2px); }
 
 .feed-player .fp-video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  background: #000;
   transform: translateZ(0);
   backface-visibility: hidden;
-}
-
-/* nav chevrons: player.css positions #prev-video/#next-video at 3%; feed player is
-   narrower so 7% keeps them peeking the same way */
-.feed-player .fp-nav-prev {
-  left: 7%;
-}
-.feed-player .fp-nav-next {
-  right: 7%;
-}
-
-/* ambient glow behind the player, mirrors #ambient-glow-canvas (player.css): 10x6
-   buffer scaled to player-width+200px, blurred+saturated via inline style */
-.feed-player .fp-ambient-glow {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: calc(min(90%, (100vh - 148px) * 1.7778) + 200px);
-  height: auto;
-  aspect-ratio: 16 / 9;
-  z-index: 0;
-  pointer-events: none;
-  will-change: contents;
-  contain: strict;
-}
-.feed-player #player-container {
-  position: relative;
-  z-index: 1;
 }
 
 .feed-player .fp-processing {
@@ -82,47 +68,64 @@
   font-size: 14px;
 }
 
-/* Title: same metrics as the local #clip-title (14px/400). */
+/* title pill: the local one holds an input, this one plain text at the same metrics */
 .feed-player .fp-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 14px;
-  font-weight: 400;
   color: #f4f4f6;
-  padding: 4px 2px;
+  font: 500 12px var(--font-sans);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+}
+.feed-player .fp-title:hover {
+  border-color: #ffffff1a;
+}
+.feed-player .pl-actions .fp-fav-active,
+.feed-player .pl-actions .fp-action-on {
+  color: var(--color-accent-glyph);
+}
+.feed-player .pl-actions .fp-close {
+  padding: 0 7px;
+}
+.feed-player .pl-actions .fp-close:hover {
+  background: #7a2420;
+  color: #ffd9d3;
+}
+
+/* timeline without a waveform: a baseline, the played part in white, the playhead on top */
+.feed-player .fp-timeline {
+  touch-action: none;
+}
+.feed-player .fp-track,
+.feed-player .fp-played {
+  position: absolute;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
   pointer-events: none;
 }
-
-/* top-right action buttons (favorite/details/close), matches local player's export/delete feel */
-.feed-player .fp-action {
-  display: grid;
-  place-items: center;
-  padding: 8px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: #e0e0e0;
-  cursor: pointer;
-  transition: background-color 160ms ease, color 160ms ease;
+.feed-player .fp-track {
+  right: 0;
+  background: #ffffff33;
 }
-.feed-player .fp-action:hover {
-  background: rgba(255, 255, 255, 0.1);
+.feed-player .fp-played {
+  width: var(--pos);
+  background: #f4f4f6;
+  box-shadow: 0 0 8px #c774e066;
 }
-.feed-player .fp-action-on {
-  color: var(--color-accent-glyph);
+.feed-player #playhead {
+  height: 12px;
+  top: 14px;
 }
-.feed-player .fp-fav-active {
-  color: var(--color-accent-glyph);
+/* the server's envelope, when it has one: the band replaces the baseline, drawn by the same
+   Waveform as the local timeline, and the playhead grows to the band's height */
+.feed-player .fp-timeline.has-wave .fp-track,
+.feed-player .fp-timeline.has-wave .fp-played {
+  display: none;
 }
-.feed-player .fp-close:hover {
-  background: rgba(240, 80, 80, 0.25);
-}
-
-.feed-player .fp-progress-wrap {
-  width: 100%;
+.feed-player .fp-timeline.has-wave #playhead {
+  height: 30px;
+  top: 5px;
 }
 
 /* details sheet: content-sized (no artificial min-height), same width as
@@ -131,7 +134,7 @@
   scroll-snap-align: end;
   display: flex;
   flex-direction: column;
-  width: min(90%, calc((100vh - 148px) * 1.7778));
+  width: min(calc(100% - 120px), calc((100vh - 76px - var(--titlebar-height) - 28px) * 1.7778));
   margin: 0 auto;
   background:
     linear-gradient(180deg, rgba(24, 24, 30, 0.82) 0%, rgba(18, 18, 22, 0.92) 100%);

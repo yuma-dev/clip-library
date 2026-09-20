@@ -12,6 +12,7 @@ import type {
   InviteCode,
   ApiTokenInfo,
 } from "./types";
+import type { ClipWaveform } from "../../types/clips";
 
 export class FeedApiError extends Error {
   status?: number;
@@ -84,6 +85,17 @@ export async function fetchShareUsersAll(): Promise<ShareUser[]> {
 
 export async function fetchClipDetail(clipId: string): Promise<ClipDetail> {
   return request<ClipDetail>(`/clips/${clipId}`);
+}
+
+/** the server's level envelope for the timeline band; null while the clip has none (older
+ * uploads before the backfill, still processing) */
+export async function fetchClipWaveform(clipId: string): Promise<ClipWaveform | null> {
+  try {
+    return await request<ClipWaveform>(`/clips/${clipId}/waveform`);
+  } catch (err) {
+    if (err instanceof FeedApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 export async function fetchComments(clipId: string): Promise<Comment[]> {
