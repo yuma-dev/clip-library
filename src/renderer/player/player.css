@@ -515,7 +515,7 @@
   height: 5px;
   margin-right: 4px;
   border-radius: 50%;
-  background: var(--analysis-clr);
+  background: var(--analysis-grad);
   vertical-align: 1px;
 }
 .mixer__hide {
