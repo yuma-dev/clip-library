@@ -23,7 +23,7 @@ export function startBlobAnimation(
   let t = 0;
 
   const draw = (now: number) => {
-    raf = requestAnimationFrame(draw);
+    if (!window.__CLIPLIB_RENDER_CLOCK__) raf = requestAnimationFrame(draw);
     const interval = 1000 / (getFps() || 30);
     if (now - last < interval) return;
     last = now;
@@ -74,6 +74,19 @@ export function startBlobAnimation(
     }
   };
 
+  const clock = window.__CLIPLIB_RENDER_CLOCK__;
+  if (clock) {
+    const seek = (seconds: number) => {
+      const interval = 1000 / (getFps() || 30);
+      t = Math.max(0, seconds - interval / 1000);
+      hue = 280 + Math.sin(t * 0.5) * 120 + Math.sin(t * 0.13) * 60;
+      last = -Infinity;
+      draw(seconds * 1000);
+    };
+    clock.draws.add(seek);
+    seek(clock.time);
+    return () => { clock.draws.delete(seek); };
+  }
   raf = requestAnimationFrame(draw);
   return () => cancelAnimationFrame(raf);
 }

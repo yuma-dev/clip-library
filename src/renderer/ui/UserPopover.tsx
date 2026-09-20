@@ -199,7 +199,6 @@ export default function UserPopover(props: UserPopoverProps) {
     if (cliplibUserId) openProfile(cliplibUserId);
   };
 
-  const badges = profile?.badges ?? [];
 
   return (
     <span
@@ -224,6 +223,21 @@ export default function UserPopover(props: UserPopoverProps) {
               onMouseLeave={scheduleClose}
               onClick={(e) => e.stopPropagation()}
             >
+              <UserPopoverContent headName={headName} headHandle={headHandle} headAvatar={headAvatar} linkable={linkable} profile={profile} goToProfile={goToProfile} />
+            </div>,
+            document.body,
+          )
+        : null}
+    </span>
+  );
+}
+
+export function UserPopoverContent({ headName, headHandle, headAvatar, linkable, profile, goToProfile = () => {} }: {
+  headName: string; headHandle: string; headAvatar: string; linkable: boolean;
+  profile?: UserProfile | null; goToProfile?: () => void;
+}) {
+  const badges = profile?.badges ?? [];
+  return <>
               <button
                 type="button"
                 className={`user-popover-head${linkable ? " is-link" : ""}`}
@@ -273,17 +287,12 @@ export default function UserPopover(props: UserPopoverProps) {
                   </div>
                   <div className="user-popover-joined">{formatJoinDate(profile.createdAt)}</div>
                 </>
-              ) : shareUser ? (
+              ) : linkable ? (
                 // registered but profile not yet fetched / fetch failed
                 <div className="user-popover-cliplib">
                   <span className="user-popover-cliplib-dot" aria-hidden="true" />
                   On ClipLib{headHandle ? ` as @${headHandle}` : ""}
                 </div>
               ) : null}
-            </div>,
-            document.body,
-          )
-        : null}
-    </span>
-  );
+  </>;
 }

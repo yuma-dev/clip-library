@@ -66,6 +66,11 @@ npm run benchmark:verbose -- --suite multitrack
 
 ## Design exports
 
+For staged animations, cursors, transparent video and reusable AI recipes, see
+[ASSET-PIPELINE.md](ASSET-PIPELINE.md). `npm run assets -- list` lists presets;
+`npm run assets:test` checks the recipe/timeline contract. Generated files stay
+in ignored `export-out/`.
+
 | Command | Purpose |
 | --- | --- |
 | `npm run export:extract -- "<clip>"` | Extract a real clip into a component-mockup spec. |
