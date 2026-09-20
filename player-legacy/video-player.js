@@ -625,7 +625,9 @@ async function revertToMatchedVolume() {
   try {
     const detail = await ipcRenderer.invoke('reset-volume', clipName);
     if (!state.currentClip || state.currentClip.originalName !== clipName) return;
-    if (detail.source === 'normalized') applyMatchedGain(detail.gain, true);
+    // on a multi-track clip the hand-set levels live on the tracks, so those go too
+    if (detail.source === 'normalized' && activeAudioTracksManager) activeAudioTracksManager.revertAllToMatched(detail.gain);
+    else if (detail.source === 'normalized') applyMatchedGain(detail.gain, true);
     else applyMatchedGain(1, true);
     setVolumeSource(detail);
     showVolumeContainer();
