@@ -370,7 +370,7 @@
 /* loudness matched: a small badge next to the icon, gone the moment a level is set by hand */
 .pl-auto-pill {
   display: none;
-  margin-left: 4px;
+  margin-right: 6px;
   padding: 1px 5px;
   border-radius: 6px;
   font: 500 9.5px var(--font-sans);
@@ -380,7 +380,7 @@
   border: 0.5px solid color-mix(in srgb, var(--analysis-clr) 30%, transparent);
   pointer-events: none;
 }
-#volume-button.normalized + .pl-auto-pill {
+#volume-container:has(#volume-button.normalized) .pl-auto-pill {
   display: inline-block;
 }
 #volume-slider {

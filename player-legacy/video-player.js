@@ -573,8 +573,13 @@ function formatDb(db) {
   return `${n >= 0 ? '+' : ''}${n.toFixed(1)} dB`;
 }
 
+// the matched detail of the open clip, so the badge can come back once every track is matched again
+let lastMatchedSource = null;
+
 function setVolumeSource(detail) {
   volumeSource = { source: detail?.source || 'default', gainDb: detail?.gainDb || 0 };
+  if (volumeSource.source === 'normalized') lastMatchedSource = { ...volumeSource };
+  else if (volumeSource.source === 'default') lastMatchedSource = null;
   if (!elements.volumeButton) return;
   const matched = volumeSource.source === 'normalized';
   elements.volumeButton.classList.toggle('normalized', matched);
@@ -2674,8 +2679,12 @@ function setupEventListeners() {
   }
 
   ipcRenderer.on('loudness-measured', (_event, payload) => onLoudnessMeasured(payload));
-  // a track level set by hand in the mixer counts as a manual volume too
+  // a track level set by hand in the mixer counts as a manual volume too; every track back on its
+  // matched level restores the badge
   document.addEventListener('audio-track-custom', () => markVolumeCustom());
+  document.addEventListener('audio-tracks-auto', () => {
+    if (lastMatchedSource && volumeSource.source !== 'normalized') setVolumeSource(lastMatchedSource);
+  });
 
   if (elements.volumeButton) {
     elements.volumeButton.addEventListener("contextmenu", (e) => {

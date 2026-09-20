@@ -765,6 +765,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             <div id="bottom-controls" className="pl-pill pl-bar">
               <div id="volume-container">
                 <div id="audio-tracks-panel" className="hidden" />
+                {/* legacy toggles .normalized on the button; the badge reads it through the container */}
+                <span className="pl-auto-pill" aria-hidden="true">auto</span>
                 <button
                   id="volume-button"
                   type="button"
@@ -777,8 +779,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                     else window.legacyPlayer?.changeVolume(delta);
                   }}
                 />
-                {/* legacy toggles .normalized on the button; the badge shows next to it */}
-                <span className="pl-auto-pill" aria-hidden="true">auto</span>
                 <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>
               <div id="current-time">0:00</div>
