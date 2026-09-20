@@ -31,7 +31,9 @@
     "export:capture": "node scripts/export-capture.mjs",
     "export:overlay": "node scripts/export-overlay.mjs",
     "build:launcher": "cd clipdip && cargo build --release -p cliplib-launcher",
-    "vendor:launcher": "node scripts/vendor-launcher.mjs"
+    "vendor:launcher": "node scripts/vendor-launcher.mjs",
+    "assets": "node scripts/asset-pipeline.mjs",
+    "assets:test": "node --test scripts/asset-pipeline/*.test.mjs"
   },
   "build": {
     "appId": "com.yuma-dev.clips",
