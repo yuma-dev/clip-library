@@ -12,6 +12,8 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { Shuffle } from "lucide-react";
+import { SHUFFLE_OPTIONS } from "../library/shuffle";
 import { SYSTEM_TAGS } from "../library/filter";
 import { ensureParticipants, useParticipants, type Person } from "../library/participants";
 import { discordAvatarUrl } from "../ui/UserPopover";
@@ -26,7 +28,7 @@ interface RailSearchProps {
 
 /** The `#tag` / `@user` token straddling the caret, if any. */
 interface ActiveToken {
-  kind: "#" | "@";
+  kind: "#" | "@" | "?";
   /** text after the sigil, lowercased: the autocomplete needle */
   text: string;
   start: number;
@@ -44,7 +46,7 @@ function activeTokenAt(value: string, caret: number): ActiveToken | null {
   while (end < value.length && !/\s/.test(value[end])) end++;
   const token = value.slice(start, end);
   const kind = token[0];
-  if (kind === "#" || kind === "@") {
+  if (kind === "#" || kind === "@" || kind === "?") {
     return { kind, text: token.slice(1).toLowerCase(), start, end };
   }
   return null;
@@ -53,6 +55,7 @@ function activeTokenAt(value: string, caret: number): ActiveToken | null {
 function highlightRuns(value: string): { text: string; cls: string }[] {
   return value.split(/(\s+)/).map((run) => {
     if (/^\s+$/.test(run) || run === "") return { text: run, cls: "" };
+    if (run.startsWith("?")) return { text: run, cls: "tok-shuffle" };
     if (run.startsWith("#") && run.length > 1) return { text: run, cls: "tok-tag" };
     if (run.startsWith("@") && run.length > 1) return { text: run, cls: "tok-mention" };
     return { text: run, cls: "" };
@@ -71,17 +74,15 @@ function RailSearch({ filter, clips }: RailSearchProps) {
   const pendingCaret = useRef<number | null>(null);
 
   const query = filter.query;
-  const clipNames = useMemo(() => clips.map((c) => c.originalName), [clips]);
-
-  // warm participant roster on focus so the @ dropdown is ready when typed
-  useEffect(() => {
-    if (focused) ensureParticipants(clipNames);
-  }, [focused, clipNames]);
-
   const active = useMemo(
     () => (focused ? activeTokenAt(query, caret) : null),
     [focused, query, caret],
   );
+  // Don't scan every clip's Discord metadata just to focus search or shuffle.
+  const needsPeople = active?.kind === "@";
+  useEffect(() => {
+    if (needsPeople) ensureParticipants(clips.map((c) => c.originalName));
+  }, [needsPeople, clips]);
 
   const allTags = useMemo(
     () => [...SYSTEM_TAGS, ...filter.globalTags],
@@ -109,12 +110,21 @@ function RailSearch({ filter, clips }: RailSearchProps) {
     return matches.slice(0, MAX_SUGGESTIONS);
   }, [active, people]);
 
+  const shuffleSuggestions = useMemo(() => {
+    if (active?.kind !== "?") return [];
+    const needle = active.text;
+    // Completed choices still expose every alternative when clicked again.
+    if (SHUFFLE_OPTIONS.some((o) => o.token === needle)) return [...SHUFFLE_OPTIONS];
+    return SHUFFLE_OPTIONS.filter((o) => `${o.label} ${o.token}`.toLowerCase().includes(needle));
+  }, [active]);
+
   // @ also opens for the empty/loading state so the ClipDip hint can show
   const showTags = active?.kind === "#" && tagSuggestions.length > 0;
   const showPeople = active?.kind === "@";
-  const open = focused && (showTags || showPeople);
+  const showShuffle = active?.kind === "?";
+  const open = focused && (showTags || showPeople || showShuffle);
 
-  const rowCount = active?.kind === "#" ? tagSuggestions.length : peopleSuggestions.length;
+  const rowCount = showShuffle ? shuffleSuggestions.length : active?.kind === "#" ? tagSuggestions.length : peopleSuggestions.length;
   useEffect(() => {
     setHighlight((h) => (rowCount === 0 ? 0 : Math.min(h, rowCount - 1)));
   }, [rowCount, active?.kind, active?.text]);
@@ -170,6 +180,15 @@ function RailSearch({ filter, clips }: RailSearchProps) {
   const applySuggestion = useCallback(
     (value: string) => {
       if (!active) return;
+      if (active.kind === "?") {
+        // One shuffle choice at a time, preserving tag, person and text filters.
+        const before = query.slice(0, active.start).replace(/(^|\s)\?\S*/g, "$1");
+        const after = query.slice(active.end).replace(/(^|\s)\?\S*/g, "$1");
+        const insert = `?${value} `;
+        pendingCaret.current = before.length + insert.length;
+        filter.setQuery(`${before}${insert}${after.trimStart()}`);
+        return;
+      }
       const insert = `${active.kind}${value}`;
       const before = query.slice(0, active.start);
       const after = query.slice(active.end);
@@ -183,7 +202,10 @@ function RailSearch({ filter, clips }: RailSearchProps) {
   );
 
   const acceptHighlighted = useCallback(() => {
-    if (active?.kind === "#") {
+    if (active?.kind === "?") {
+      const option = shuffleSuggestions[highlight];
+      if (option) applySuggestion(option.token);
+    } else if (active?.kind === "#") {
       const t = tagSuggestions[highlight];
       if (t) applySuggestion(t);
     } else if (active?.kind === "@") {
@@ -191,7 +213,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
       // Insert the handle (no spaces) so it parses as one `@user` token.
       if (p) applySuggestion(p.username || p.displayName.replace(/\s+/g, ""));
     }
-  }, [active, highlight, tagSuggestions, peopleSuggestions, applySuggestion]);
+  }, [active, highlight, tagSuggestions, peopleSuggestions, shuffleSuggestions, applySuggestion]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -219,7 +241,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
   const runs = useMemo(() => highlightRuns(query), [query]);
 
   return (
-    <label className="r-search" data-rail-tip="Search clips">
+    <label className="r-search" data-rail-tip="Search clips · ? to shuffle">
       <img className="r-search-logo" src={logoUrl} alt="ClipLib" draggable={false} />
       <div className="r-search-field">
         <div className="r-search-hl" ref={overlayRef} aria-hidden="true">
@@ -251,11 +273,19 @@ function RailSearch({ filter, clips }: RailSearchProps) {
             setFocused(true);
             syncCaret();
           }}
-          // Delay so a mousedown on a suggestion row lands before we close.
-          onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+          // Suggestion mousedown preserves input focus; no stale blur timer to
+          // dismiss a freshly reopened menu after rapid refocus.
+          onBlur={() => setFocused(false)}
           placeholder="Search  Â·  #tag  Â·  @user"
         />
       </div>
+
+      {filter.shuffled && filter.reshuffle ? (
+        <button type="button" className="r-search-shuffle" title="Shuffle again" aria-label="Shuffle again"
+          onClick={(e) => { e.preventDefault(); filter.reshuffle?.(); }}>
+          <Shuffle size={15} aria-hidden="true" />
+        </button>
+      ) : null}
 
       {open && anchor
         ? createPortal(
@@ -265,7 +295,20 @@ function RailSearch({ filter, clips }: RailSearchProps) {
               // Keep focus on the input while clicking a row.
               onMouseDown={(e) => e.preventDefault()}
             >
-              {active?.kind === "#" ? (
+              {active?.kind === "?" ? (
+                <>
+                  <div className="search-suggest-head">Shuffle · hide recent clips</div>
+                  {shuffleSuggestions.map((option, i) => (
+                    <button key={option.token} type="button"
+                      className={`search-suggest-row${i === highlight ? " active" : ""}`}
+                      onMouseEnter={() => setHighlight(i)} onClick={() => applySuggestion(option.token)}>
+                      <Shuffle size={16} aria-hidden="true" />
+                      <span className="search-suggest-name">{option.label}</span>
+                    </button>
+                  ))}
+                  {shuffleSuggestions.length === 0 ? <div className="search-suggest-empty">Type ? to see shuffle options.</div> : null}
+                </>
+              ) : active?.kind === "#" ? (
                 <TagRows
                   tags={tagSuggestions}
                   highlight={highlight}

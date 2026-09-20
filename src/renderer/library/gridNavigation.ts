@@ -8,6 +8,7 @@ export type GridDirection = "up" | "down" | "left" | "right";
 
 let enabled = false;
 let focusIndex = 0;
+let focusedName: string | undefined;
 let lastNavTime = 0;
 let inputWatchInstalled = false;
 
@@ -42,6 +43,7 @@ function updateGridSelection(): void {
   clearFocusClass();
   const selected = cards[focusIndex];
   if (!selected) return;
+  focusedName = selected.dataset.originalName;
   selected.classList.add("grid-focused");
   selected.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
 }
@@ -92,6 +94,7 @@ export function enableGridNavigation(): void {
 
 export function disableGridNavigation(): void {
   enabled = false;
+  focusedName = undefined;
   clearFocusClass();
   removeInputWatch();
 }
@@ -104,7 +107,10 @@ export function moveGridSelection(direction: GridDirection): void {
 
   const cards = getVisibleCards();
   if (cards.length === 0) return;
-  if (focusIndex >= cards.length) focusIndex = cards.length - 1;
+  // Windowed rows change DOM indices as scrolling mounts/unmounts neighbors.
+  const current = cards.findIndex((card) => card.dataset.originalName === focusedName);
+  if (current >= 0) focusIndex = current;
+  else focusIndex = Math.min(focusIndex, cards.length - 1);
 
   let next = focusIndex;
   switch (direction) {
@@ -128,7 +134,7 @@ export function moveGridSelection(direction: GridDirection): void {
 /** Open the focused clip in the player (Enter / gamepad A). */
 export function openCurrentGridSelection(): void {
   if (!enabled) return;
-  const selected = getVisibleCards()[focusIndex];
+  const selected = getVisibleCards().find((card) => card.dataset.originalName === focusedName);
   const originalName = selected?.dataset.originalName;
   if (!originalName) return;
   const list = (window.legacyState?.currentClipList ?? []) as {

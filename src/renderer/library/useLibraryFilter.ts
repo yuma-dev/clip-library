@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   type Collection,
   type TagFilterState,
@@ -12,6 +12,7 @@ import {
   participantsLoaded,
   useParticipantsVersion,
 } from "./participants";
+import { shuffleClips, shuffleSettings } from "./shuffle";
 import type { LocalClip } from "./types";
 
 export interface UseLibraryFilter {
@@ -42,6 +43,8 @@ export interface UseLibraryFilter {
   removeGlobalTag: (tag: string) => void;
 
   filteredClips: LocalClip[];
+  shuffled?: boolean;
+  reshuffle?: () => void;
 }
 
 /** union of the persisted global-tags list and every tag present on a clip */
@@ -52,7 +55,17 @@ function deriveGlobalTags(loaded: string[], clips: LocalClip[]): string[] {
 }
 
 export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
-  const [query, setQuery] = useState("");
+  const [query, updateQuery] = useState("");
+  const queryRef = useRef("");
+  const [shuffleSession, setShuffleSession] = useState(() => ({ seed: Math.random() * 0xffffffff, now: Date.now() }));
+  const reshuffle = useCallback(() => {
+    setShuffleSession({ seed: Math.random() * 0xffffffff, now: Date.now() });
+  }, []);
+  const setQuery = useCallback((value: string) => {
+    if (shuffleSettings(value).enabled && !shuffleSettings(queryRef.current).enabled) reshuffle();
+    queryRef.current = value;
+    updateQuery(value);
+  }, [reshuffle]);
   const [collection, setCollection] = useState<Collection>("all");
   const [loadedTags, setLoadedTags] = useState<string[]>([]);
   const [saved, setSaved] = useState<Set<string>>(new Set());
@@ -85,14 +98,9 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       setLoadedTags(list);
 
       const savedPrefs: string[] | null = Array.isArray(prefs) ? prefs.map(String) : null;
-      if (savedPrefs && savedPrefs.length > 0) {
-        const set = new Set(savedPrefs);
-        // first-run migration: always surface Unnamed (legacy behavior)
-        if (!set.has("Unnamed")) {
-          set.add("Unnamed");
-          window.clips.saveTagPreferences([...set]).catch(() => {});
-        }
-        setSaved(set);
+      if (savedPrefs !== null) {
+        // Empty and Unnamed-disabled selections are deliberate preferences too.
+        setSaved(new Set(savedPrefs));
       } else {
         setSaved(new Set(["Untagged", "Unnamed", ...list]));
       }
@@ -279,19 +287,34 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       tags,
       collection,
       applyTags: ready,
+      now: shuffleSession.now,
+      shuffleSeed: shuffleSession.seed,
       // participantsVersion forces a re-run once the scan resolves
       mentionIndex:
         hasMentionQuery && participantsLoaded() ? getMentionIndex() : undefined,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [query, tags, collection, ready, hasMentionQuery, participantsVersion],
+    [query, tags, collection, ready, hasMentionQuery, participantsVersion, shuffleSession],
   );
   const deferredCriteria = useDeferredValue(criteria);
 
-  const filteredClips = useMemo(
-    () => filterClips(clips, deferredCriteria),
-    [clips, deferredCriteria],
+  const shuffled = shuffleSettings(deferredCriteria.query).enabled;
+  // Sort once per seed/library change, never per search or tag-filter edit.
+  const orderedClips = useMemo(
+    () => shuffled ? shuffleClips(clips, deferredCriteria.shuffleSeed) : clips,
+    [clips, shuffled, deferredCriteria.shuffleSeed],
   );
+  const matches = useMemo(
+    () => filterClips(orderedClips, deferredCriteria),
+    [orderedClips, deferredCriteria],
+  );
+  // Equivalent queries retain the committed result identity. Commit-phase writes
+  // keep abandoned concurrent renders from becoming the comparison baseline.
+  const previousMatches = useRef(matches);
+  const filteredClips = matches.length === previousMatches.current.length &&
+    matches.every((clip, i) => clip === previousMatches.current[i])
+    ? previousMatches.current : matches;
+  useEffect(() => { previousMatches.current = filteredClips; }, [filteredClips]);
 
   const selectedCount = useMemo(() => activeSelection(tags).size, [tags]);
 
@@ -316,8 +339,11 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       renameGlobalTag,
       removeGlobalTag,
       filteredClips,
+      shuffled,
+      reshuffle,
     }),
     [
+      setQuery,
       query,
       collection,
       allTags,
@@ -333,6 +359,8 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       renameGlobalTag,
       removeGlobalTag,
       filteredClips,
+      shuffled,
+      reshuffle,
     ],
   );
 }

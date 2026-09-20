@@ -1,3 +1,4 @@
+import { monthsBefore, shuffleSettings } from "./shuffle";
 import type { LocalClip } from "./types";
 
 // System tags the tag filter always shows alongside global tags.
@@ -23,7 +24,7 @@ export function isUnnamedClip(clip: LocalClip): boolean {
   return clip.customName === base;
 }
 
-// Two typed prefixes drive search: `#tag` filters clip tag, `@user` filters
+// Typed prefixes drive search (? controls shuffle): `#tag` filters clip tag, `@user` filters
 // Discord call participant; everything else is plain text.
 export interface SearchTerms {
   /** `#tag` terms, WITHOUT the leading `#` (lowercased). */
@@ -39,13 +40,25 @@ export function parseSearchTerms(raw: string): SearchTerms {
   return {
     tags: terms.filter((t) => t.startsWith("#") && t.length > 1).map((t) => t.slice(1)),
     mentions: terms.filter((t) => t.startsWith("@") && t.length > 1).map((t) => t.slice(1)),
-    text: terms.filter((t) => !t.startsWith("#") && !t.startsWith("@")),
+    text: terms.filter((t) => !t.startsWith("#") && !t.startsWith("@") && !t.startsWith("?")),
   };
 }
 
 /** Ported verbatim from legacy search-manager.matchesCurrentTagFilter: with
  * an empty selection nothing shows, deselecting a tag hides every clip carrying it. */
+// Both clip metadata and selection sets are immutable in the library hook.
+const tagMatchCache = new WeakMap<TagFilterState, WeakMap<LocalClip, boolean>>();
 export function matchesTagFilter(clip: LocalClip, tags: TagFilterState): boolean {
+  let cache = tagMatchCache.get(tags);
+  if (!cache) { cache = new WeakMap(); tagMatchCache.set(tags, cache); }
+  const cached = cache.get(clip);
+  if (cached !== undefined) return cached;
+  const matches = computeTagMatch(clip, tags);
+  cache.set(clip, matches);
+  return matches;
+}
+
+function computeTagMatch(clip: LocalClip, tags: TagFilterState): boolean {
   const clipTags = Array.isArray(clip.tags) ? clip.tags : [];
   const isUntagged = clipTags.length === 0;
 
@@ -87,6 +100,8 @@ export function matchesCollection(clip: LocalClip, collection: Collection): bool
 
 export interface FilterInput {
   query: string;
+  /** Reference time for relative shuffle exclusions. */
+  now?: number;
   tags: TagFilterState;
   collection: Collection;
   /** Skip the tag-dropdown filter until the persisted selection has loaded. */
@@ -96,48 +111,55 @@ export interface FilterInput {
   mentionIndex?: Map<string, Set<string>>;
 }
 
-/** Typed search terms first, then (only without a `#tag`/`@user` term) the
- * dropdown tag filter, then the active collection. Input order preserved. */
+// Clip objects are replaced by useClips when names/tags change. Weak keys let
+// old snapshots be collected and avoid lowercasing the library on every keypress.
+const searchCache = new WeakMap<LocalClip, { name: string; original: string; tags: string[] }>();
+function searchable(clip: LocalClip) {
+  let entry = searchCache.get(clip);
+  if (!entry) {
+    entry = { name: clip.customName.toLowerCase(), original: clip.originalName.toLowerCase(), tags: clip.tags.map((t) => t.toLowerCase()) };
+    searchCache.set(clip, entry);
+  }
+  return entry;
+}
+
+/** Search intersects saved/focus filters, except an explicit #tag overrides them.
+ * Input order is preserved, including a precomputed shuffle order. */
 export function filterClips(clips: LocalClip[], input: FilterInput): LocalClip[] {
   const { tags, mentions, text } = parseSearchTerms(input.query);
-  const hasSearch = tags.length > 0 || mentions.length > 0 || text.length > 0;
-  const applyTags = input.applyTags !== false;
+  const shuffle = shuffleSettings(input.query);
+  const cutoff = shuffle.months > 0 ? monthsBefore(input.now ?? Date.now(), shuffle.months) : null;
+  const applyTags = input.applyTags !== false && tags.length === 0;
   const mentionIndex = input.mentionIndex;
+  const result: LocalClip[] = [];
 
-  return clips.filter((clip) => {
-    if (hasSearch) {
-      const hasTags =
-        tags.length === 0 ||
-        tags.every((t) => clip.tags.some((ct) => ct.toLowerCase().includes(t)));
-      const hasText =
-        text.length === 0 ||
-        text.every(
-          (w) =>
-            clip.customName.toLowerCase().includes(w) ||
-            clip.originalName.toLowerCase().includes(w),
-        );
-      // Until the roster loads (mentionIndex undefined), mention filtering is a
-      // no-op so the grid stays full instead of flashing empty mid-scan.
-      const hasMentions =
-        mentions.length === 0 ||
-        !mentionIndex ||
-        (() => {
-          const toks = mentionIndex.get(clip.originalName);
-          if (!toks) return false;
-          return mentions.every((m) => [...toks].some((t) => t.includes(m)));
-        })();
-      if (!hasTags || !hasText || !hasMentions) return false;
+  clipLoop: for (const clip of clips) {
+    if (cutoff !== null && !(clip.createdAt < cutoff)) continue;
+    if (!matchesCollection(clip, input.collection)) continue;
+    if (applyTags && !matchesTagFilter(clip, input.tags)) continue;
+    if (text.length || tags.length) {
+      const entry = searchable(clip);
+      for (const word of text) {
+        if (!entry.name.includes(word) && !entry.original.includes(word)) continue clipLoop;
+      }
+      for (const tag of tags) {
+        if (!entry.tags.some((t) => t.includes(tag))) continue clipLoop;
+      }
     }
-
-    // A typed `#tag`/`@user` search bypasses the persisted dropdown exclusions.
-    if (
-      applyTags &&
-      tags.length === 0 &&
-      mentions.length === 0 &&
-      !matchesTagFilter(clip, input.tags)
-    )
-      return false;
-
-    return matchesCollection(clip, input.collection);
-  });
+    // The roster scan is asynchronous; preserve the existing loading behavior.
+    if (mentions.length && mentionIndex) {
+      const tokens = mentionIndex.get(clip.originalName);
+      if (!tokens) continue;
+      for (const mention of mentions) {
+        let found = false;
+        for (const token of tokens) {
+          if (token.includes(mention)) { found = true; break; }
+        }
+        if (!found) continue clipLoop;
+      }
+    }
+    result.push(clip);
+  }
+  // No-op queries (e.g. typing a partial ? command) must not reconcile the grid.
+  return result.length === clips.length ? clips : result;
 }

@@ -303,6 +303,7 @@ export default function App() {
               <LibraryView
                 lib={lib}
                 clips={filter.filteredClips}
+                shuffled={filter.shuffled}
                 grayscaleIcons={grayscaleIcons}
                 showNewIndicators={showNewIndicators}
                 previewVolume={previewVolume}

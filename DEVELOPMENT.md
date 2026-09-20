@@ -73,3 +73,67 @@ npm run benchmark:verbose -- --suite multitrack
 | `npm run export:overlay` | Render the Clipdip notification overlay to still and animated assets. |
 
 See `docs/component-mockups.md` for the export workflow and arguments.
+
+Animated WebP delivery from existing asset frames: `node scripts/asset-webp.mjs <render-directory> <new-output-directory> [max-bytes] [max-edge] [background] [full|crop|x,y,width,height] [standard|smooth|markdown|presentation]`. See `ASSET-PIPELINE.md` for the size and quality policy.
+
+## Watched clip history
+
+`main/clips.js` stores opened clip names in the profile's `watched-clips.json`.
+Library scans must never prune that history: a missing name can mean a folder
+switch, an offline drive or an incomplete scan. Returning clips keep their
+watched status; genuinely unseen names remain new until opened. History retains
+the existing relative-name identity (identical names in different folders share
+status) and can include files that no longer exist.
+
+Run `node --test benchmark/watched-history-regression.cjs` for isolated folder
+switch, partial/empty/unreadable scan, restart and newly watched regressions.
+For recovery after older versions erased history, back up `watched-clips.json`
+and `last-clips.json` with the app closed, then merge matching snapshot names
+into watched history. The snapshot records presence, not exact watched status.
+
+## Library shuffle search
+
+`src/renderer/library/shuffle.ts` owns the recommended `?` choices, calendar-month
+cutoffs and seeded per-file ordering. `RailSearch` inserts the selected command;
+`filter.ts` applies its age cutoff using `LocalClip.createdAt`, alongside existing
+search and collection rules. Bare or incomplete `?` commands preview shuffle.
+The last recognized shuffle choice wins; picking a suggestion replaces previous
+shuffle commands without removing other search terms.
+
+`useLibraryFilter` holds a seed and reference time for each shuffle session.
+Filtering and metadata updates preserve relative order; entering shuffle again or
+using **Shuffle again** renews the seed and reference time. Date exclusions are
+strictly older than the cutoff, with month-end clamping. `ClipGrid` displays a
+single mixed group during shuffle, and the player receives that same order.
+
+Manual verification: type `?`, choose **Exclude the last 2 months** by mouse and
+by arrow keys + Enter/Tab, combine with a tag/person/name, reshuffle, then remove
+the command to restore time groups. Check an empty result and month-end dates.
+The legacy `validate-renderer-modularization.js` referenced in ignored agent notes
+is no longer present; use `npm run typecheck` and `npm run build:renderer` for the
+current renderer's static validation.
+
+Shuffle performance: `useLibraryFilter` memoizes the full seeded order separately
+from query filtering. Weak caches reuse normalized names/tags and tag-selection
+matches for immutable clip/selection objects; equivalent results keep their array
+identity. Metadata/selection updates must replace objects rather than mutate them.
+Only `#tag` terms bypass the saved/focus tag selections. `?`, plain text and `@user`
+respect them, and saved empty/Unnamed-disabled selections survive reload.
+Participant metadata is requested only for `@` autocomplete/search.
+
+Groups over 80 clips use `VirtualClipCards`: measured CSS grid rows, three-row
+overscan, full-height padding and frame-coalesced scroll/resize updates. Smaller
+groups retain streamed mounting. This bounds mounted cards during reshuffling,
+filter changes and browsing; selection remains data-based and is restored when a
+card remounts. Keyboard/gamepad navigation tracks clip identity across row-window
+changes. The player still receives the complete filtered list.
+
+Regression checks:
+- `node benchmark/shuffle-regression.cjs`: search/tag/age/order checks and a
+  10,000-clip cached-order comparison.
+- `node benchmark/shuffle-grid-bench.cjs` after `npm run build:renderer`: isolated
+  Chromium fixture using production React components and built CSS, comparing
+  old mounting against windowed rows, then checking scrolling, resize, selection,
+  suggestions, exclusions and collapse. Requires Playwright's Chromium installed.
+  Timings are synthetic development-React measurements, not Electron user-library
+  input-to-paint numbers; no real library or preferences are accessed.
