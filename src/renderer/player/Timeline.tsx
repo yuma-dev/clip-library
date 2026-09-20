@@ -34,13 +34,16 @@ export default function Timeline({ waveform, tracks, open, gain }: TimelineProps
     const el = ref.current;
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
     const playhead = document.getElementById("playhead");
+    const controls = document.getElementById("video-controls");
     if (!el || !video || !playhead || !open) return;
     let raf = 0;
     let last = { pos: -1, ts: -1, te: -1, h: -1 };
     const loop = () => {
       const d = video.duration;
       const state = window.legacyState;
-      if (d > 0 && state) {
+      // chrome faded out: nothing here is visible, and the var writes cost a style pass per frame
+      const shown = !controls || controls.classList.contains("visible");
+      if (d > 0 && state && shown) {
         const pos = Math.min(1, Math.max(0, video.currentTime / d));
         const ts = Math.min(1, Math.max(0, (state.trimStartTime ?? 0) / d));
         const te = Math.min(1, Math.max(ts, (state.trimEndTime ?? d) / d));
