@@ -1,11 +1,16 @@
 import { AudioLines, Volume2 } from "lucide-react";
 import logoUrl from "../../../assets/logo.png";
 
-// a white band with cyan poking out behind it; fixed shapes so the step looks the same every time
+// a white band in front, colours poking out behind it, tallest at the back; fixed shapes so the
+// step looks the same every time
 const BARS = 56;
 const BANDS = [
-  { color: "var(--analysis-clr)", amp: 12, seed: 4.1 },
-  { color: "#f4f4f6", amp: 9, seed: 1.7 },
+  { color: "#ec4899", amp: 12.5, seed: 4.1 },
+  { color: "#f43f5e", amp: 11.5, seed: 7.9 },
+  { color: "#a855f7", amp: 11, seed: 2.3 },
+  { color: "#3b82f6", amp: 10.5, seed: 6.2 },
+  { color: "#6ee7f0", amp: 10, seed: 9.3 },
+  { color: "#f4f4f6", amp: 8, seed: 1.7 },
 ];
 function bandPath(amp: number, seed: number): string {
   const top: string[] = [];
