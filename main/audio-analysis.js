@@ -268,7 +268,14 @@ async function scanAll() {
     } catch (_) {
       continue;
     }
-    if (isCurrent(await readSidecar(sidecarPath(location, name)), stat)) continue;
+    // the index carries mtime and size too, so a clip it knows costs one stat, not a sidecar read
+    if (loudness && await loudness.has(name, stat, VERSION)) continue;
+    const entry = await readSidecar(sidecarPath(location, name));
+    if (isCurrent(entry, stat)) {
+      // the sidecar landed but its index save did not (quit mid-run): put the entry back
+      if (loudness) await loudness.record(name, entry, false);
+      continue;
+    }
     queued.add(name);
     warmQueue.push(name);
     added += 1;

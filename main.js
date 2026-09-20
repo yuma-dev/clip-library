@@ -1792,7 +1792,8 @@ app.on('before-quit', () => {
   clipsModule.stopPeriodicSave();
   thumbnailsModule.stopQueue();
   clipsModule.saveCurrentClipList(getSettings);
-  loudnessModule.flush().catch(() => undefined);
+  // the process is gone before an async write lands
+  loudnessModule.flushSync();
   bootTrace.flush();
 });
 
