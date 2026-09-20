@@ -308,6 +308,19 @@ async function getVolume(clipName, getSettings) {
   }
 }
 
+/** drops the custom level so loudness matching takes over again */
+async function deleteVolume(clipName, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  const volumeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volume`);
+  try {
+    await fs.unlink(volumeFilePath);
+    logActivity('volume_reset', { clipName });
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
 // per-track audio state (multi-track playback)
 
 /**
@@ -1044,6 +1057,7 @@ module.exports = {
   // Volume
   saveVolume,
   getVolume,
+  deleteVolume,
 
   // Volume range
   saveVolumeRange,
