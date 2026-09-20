@@ -37,6 +37,8 @@ const DEFAULT_SETTINGS = {
   // onboarding wizard version completed/dismissed; 0 = never seen. bump the
   // constant in OnboardingWizard.tsx to re-show for a release
   onboardingVersion: 0,
+  // the one-time audio analysis card for people past the tour; the tour sets it too
+  analysisIntroSeen: false,
   iconGreyscale: false,
   // loudness matching: clips without a custom volume play at targetLufs; null target
   // means the library median. levels come from the audio analysis every clip gets once

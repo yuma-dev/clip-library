@@ -51,7 +51,7 @@ function AnalysisPill() {
     <button
       type="button"
       data-rail-tip={tip}
-      className={`rail-update rail-update--analysis${showDone ? " rail-update--analysis-done" : " rail-update--downloading"}`}
+      className={`rail-update rail-update--analysis${showDone ? " rail-update--analysis-done" : ""}`}
       onClick={() => nav.openSettings("audio")}
       style={showDone ? undefined : ({ "--rail-update-pct": `${pct}%` } as CSSProperties)}
     >
