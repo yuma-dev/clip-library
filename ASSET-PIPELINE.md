@@ -21,7 +21,9 @@ npm run assets -- render export-out/my-trim/spec.json --formats frames,mov,webm,
 `clip-tag` (right click, manage tags, select Highlight, dismiss) and `audio-mixer`
 (change the game track's volume). No personal library, account or Electron IPC
 is needed. Replace the placeholder with your own local media before an ad.
-Existing extractors documented in `docs/component-mockups.md` still work.
+Existing extractors documented in `docs/component-mockups.md` still work. The
+`pillPlayer` scene (the redesigned player with the waveform timeline and mixer)
+has no starter or extractor yet; its props are in that document.
 
 ## Choose footage, a flat color, and a cursor
 
