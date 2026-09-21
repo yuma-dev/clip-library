@@ -1547,9 +1547,11 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
         missing.push(slot);
         if (slot === 'clip_info') {
           logger.error(`get-clip-open-state: clip info probe failed for ${clipName} (code ${error?.code ?? 'n/a'}):`, error);
+          // last line, the fluent probe's message starts with the ffprobe banner
           probeError = String(error?.message || error || 'unknown')
             .split(clipName).join('<clip>')
-            .slice(0, 120);
+            .split(/\r?\n/).map((line) => line.trim()).filter(Boolean).pop()
+            ?.slice(0, 160);
         }
         return fallback;
       }
