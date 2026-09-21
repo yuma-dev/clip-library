@@ -1,11 +1,12 @@
 ClipLib and Clipdip FFmpeg Attribution
 
-The bundled ffmpeg.exe and ffprobe.exe are the "essentials" build of FFmpeg 8.1.2
-from https://www.gyan.dev/ffmpeg/builds/, licensed under the GNU General Public
+The bundled ffmpeg.exe and ffprobe.exe are FFmpeg 8.1.2 (build n8.1.2-267-gb2f422d306) from
+https://github.com/BtbN/FFmpeg-Builds, licensed under the GNU General Public
 License (GPL) version 2 or later. ClipLib and Clipdip run them as separate processes.
 
 FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
 FFmpeg project and source code: https://ffmpeg.org
+Build scripts and library sources: https://github.com/BtbN/FFmpeg-Builds
 License: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 
 FFmpeg is free software; you may redistribute it and/or modify it under the

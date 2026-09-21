@@ -145,12 +145,14 @@ Regression checks:
 
 ## Shared FFmpeg
 
-ClipLib and clipdip run the same ffmpeg.exe and ffprobe.exe: gyan.dev's essentials
-build, pinned to one version in `scripts/fetch-ffmpeg.mjs` (the version clipdip's
-mux strategy and the export paths were tested against). `npm install` fetches it via
-`postinstall`, `npm run fetch-ffmpeg` repeats that and skips the download when both
-exes are in `vendor/ffmpeg/` (gitignored). `CLIPLIB_FFMPEG_URL` overrides the zip url.
-gyan.dev is slow and drops connections, the script resumes and retries.
+ClipLib and clipdip run the same ffmpeg.exe and ffprobe.exe: BtbN's win64 GPL build,
+pinned to one dated autobuild in `scripts/fetch-ffmpeg.mjs` (the build clipdip's mux
+strategy and the export paths were tested against). It is the GPL variant because
+exports need libx264 and libmp3lame, and BtbN rather than gyan's smaller essentials
+build because only BtbN ships libdav1d: libaom rejects NVENC AV1 bitstreams, which
+left AV1 clips without thumbnails. `npm install` fetches it via `postinstall`,
+`npm run fetch-ffmpeg` repeats that and skips the download when both exes are in
+`vendor/ffmpeg/` (gitignored). `CLIPLIB_FFMPEG_URL` overrides the zip url.
 
 Packaging copies the exes and `ATTRIBUTION.txt` to `resources/ffmpeg/`.
 `main/ffmpeg-binaries.js` resolves that packaged location, or the dev cache,
@@ -170,6 +172,21 @@ entry point is `test/ffmpeg/index.js`. Electron is stubbed with a temporary prof
 and clipboard; ffmpeg, audio analysis and thumbnail metadata use production code.
 The software export test temporarily changes the object returned by the NVENC
 status cache and restores it after encoding. No GPU is required to pass.
+
+Synthetic AV1 fixtures use `av1_nvenc -preset p1` for export coverage. Machines
+without AV1 NVENC fall back to `libsvtav1 -preset 12` and print a notice that the
+NVENC bitstream case is not covered. Each test group reuses its fixtures.
+The checked-in `test/ffmpeg/fixtures/clipdip-av1-level73.mp4` is a video-only,
+six-frame stream-copy cut from the recorder. Its level 7.3, high-tier sequence
+header reproduces libaom's decoder rejection, which synthetic NVENC fixtures do
+not. Binary decoding, production thumbnails and clip-info tests use this file
+directly; the thumbnail generator selects time 0 for its 0.1-second duration.
+The binary checks require libdav1d and decode an AV1 frame without hardware
+acceleration. Thumbnail tests call the production progressive generator with a
+fake sender, checking its completion message, 640x360 JPEG and metadata sidecar;
+the IPC registration itself lives in `main.js`. AV1 also covers screenshots,
+clip info and full h264 exports. The timing table includes AV1 thumbnail and
+export rows, with thumbnail cache removal outside the timed region.
 
 The timing table reports medians of three runs, with fixture generation and cache
 invalidation outside the timed regions. Probe metadata and analysis sidecars are

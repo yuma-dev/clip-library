@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// One ffmpeg for the library and clipdip: gyan.dev's essentials build, the same family
-// ffmpeg-static shipped, pinned so every build encodes the same way. Essentials has
-// libx264, libmp3lame, aac_mf and nvenc; it lacks libdav1d (AV1 software decode is
-// libaom, same as before). Cached at vendor/ffmpeg/, skipped when both exes exist.
-// gyan.dev throttles and drops long downloads, hence resume + retry.
+// One ffmpeg for the library and clipdip: BtbN's win64 GPL build, pinned to a dated
+// autobuild so every release encodes the same way. GPL because the export path needs
+// libx264 and libmp3lame; BtbN over gyan's essentials because only it carries libdav1d,
+// and libaom refuses NVENC AV1 bitstreams, which killed thumbnails on the gyan build.
+// Cached at vendor/ffmpeg/, skipped when both exes exist. Resume + retry for flaky links.
 import https from 'https';
 import fs, { createWriteStream, mkdirSync, existsSync } from 'fs';
 import path from 'path';
@@ -12,22 +12,24 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 export const FFMPEG_VERSION = '8.1.2';
+const BUILD = 'n8.1.2-267-gb2f422d306';
 export const DEFAULT_URL =
-  `https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-${FFMPEG_VERSION}-essentials_build.zip`;
+  `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-20-13-11/ffmpeg-${BUILD}-win64-gpl-8.1.zip`;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE_DIR = path.join(ROOT, 'vendor', 'ffmpeg');
-const CACHED_ZIP = path.join(CACHE_DIR, `ffmpeg-${FFMPEG_VERSION}-essentials_build.zip`);
+const CACHED_ZIP = path.join(CACHE_DIR, `ffmpeg-${BUILD}-win64-gpl.zip`);
 const TAR = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
 const BINARIES = ['ffmpeg.exe', 'ffprobe.exe'];
 const ATTRIBUTION = `ClipLib and Clipdip FFmpeg Attribution
 
-The bundled ffmpeg.exe and ffprobe.exe are the "essentials" build of FFmpeg ${FFMPEG_VERSION}
-from https://www.gyan.dev/ffmpeg/builds/, licensed under the GNU General Public
+The bundled ffmpeg.exe and ffprobe.exe are FFmpeg ${FFMPEG_VERSION} (build ${BUILD}) from
+https://github.com/BtbN/FFmpeg-Builds, licensed under the GNU General Public
 License (GPL) version 2 or later. ClipLib and Clipdip run them as separate processes.
 
 FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
 FFmpeg project and source code: https://ffmpeg.org
+Build scripts and library sources: https://github.com/BtbN/FFmpeg-Builds
 License: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 
 FFmpeg is free software; you may redistribute it and/or modify it under the
@@ -38,7 +40,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GPL for details.
 You may replace these executables with compatible versions of your choice.
 `;
 
-// resumes from the bytes already on disk; gyan.dev honours Range
+// resumes from the bytes already on disk; github's cdn honours Range
 function downloadOnce(url, dest) {
   return new Promise((resolve, reject) => {
     const have = existsSync(dest) ? fs.statSync(dest).size : 0;
