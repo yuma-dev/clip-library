@@ -275,6 +275,9 @@ pub fn session_end(reason: &str) {
         if let Some(path) = paths::dirty_marker_path() {
             let _ = std::fs::remove_file(path);
         }
+        if reason == "shutdown" {
+            drop_shutdown_capture_errors();
+        }
         let (Some(d), Some((sid, _)), Some((base, key))) =
             (GLOBAL.get(), SESSION.get(), ENDPOINT.get())
         else {
@@ -286,6 +289,33 @@ pub fn session_end(reason: &str) {
         client::session_end_blocking(base, key, &d.install_id, sid, &reason);
         tracing::info!("diagnostics: session ended ({reason})");
     });
+}
+
+/// Capture codes reported in the seconds before WM_QUERYENDSESSION are the shutdown itself:
+/// WGC reports unsupported and DuplicateOutput returns access denied once the session is
+/// going away, and a device-arrival pipeline restart can land right in that window.
+const SHUTDOWN_NOISE_PREFIXES: &[&str] = &["wgc_", "capturer_", "video_thread_died", "capture_"];
+const SHUTDOWN_NOISE_WINDOW: chrono::Duration = chrono::Duration::seconds(10);
+
+fn drop_shutdown_capture_errors() {
+    let queued = queue::read_all();
+    if queued.is_empty() {
+        return;
+    }
+    let cutoff = chrono::Utc::now() - SHUTDOWN_NOISE_WINDOW;
+    let is_noise = |ev: &serde_json::Value| {
+        let code = ev.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        let recent = ev
+            .get("client_ts")
+            .and_then(|t| t.as_str())
+            .and_then(parse_rfc3339)
+            .is_some_and(|t| t >= cutoff);
+        recent && SHUTDOWN_NOISE_PREFIXES.iter().any(|p| code.starts_with(p))
+    };
+    let kept: Vec<serde_json::Value> = queued.iter().filter(|ev| !is_noise(ev)).cloned().collect();
+    if kept.len() != queued.len() {
+        let _ = queue::rewrite(&kept);
+    }
 }
 
 /// The process-global handle, if [`init`] has run. For call sites that need
