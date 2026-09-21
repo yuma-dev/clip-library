@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import ffmpeg from 'ffmpeg-static';
-import probe from '@ffprobe-installer/ffprobe';
+import { ffmpegPath as ffmpeg } from '../../main/ffmpeg-binaries.js';
+import { ffprobePath } from '../../main/ffmpeg-binaries.js';
 
 export async function chooseMedia(spec, options, out) {
   if (options.clip && options.color) throw Error('choose --clip or --color, not both');
@@ -16,7 +16,7 @@ export async function chooseMedia(spec, options, out) {
   if (!options.clip) return;
   const clip = path.resolve(options.clip);
   await fs.access(clip);
-  const metadata = JSON.parse(execFileSync(probe.path, ['-v','error','-show_streams','-show_format','-of','json',clip], { encoding:'utf8', windowsHide:true }));
+  const metadata = JSON.parse(execFileSync(ffprobePath, ['-v','error','-show_streams','-show_format','-of','json',clip], { encoding:'utf8', windowsHide:true }));
   const duration = Number(metadata.format.duration);
   const offset = Number(options.offset ?? 0);
   if (!Number.isFinite(offset) || offset < 0 || offset >= duration) throw Error('offset outside clip');

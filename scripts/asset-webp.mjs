@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn, execFileSync} from 'node:child_process';
-import ffmpeg from 'ffmpeg-static';
+import { ffmpegPath as ffmpeg } from '../main/ffmpeg-binaries.js';
 import {transparentAnimationBackground} from './asset-pipeline/webp.mjs';
 import {flatten} from './asset-pipeline/codecs.mjs';
 import {animationBounds} from './asset-pipeline/crop.mjs';

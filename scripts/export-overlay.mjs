@@ -24,7 +24,7 @@ import { chromium } from "playwright";
 import WebP from "node-webpmux";
 
 const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static");
+const { ffmpegPath } = require("../main/ffmpeg-binaries");
 
 const args = process.argv.slice(2);
 const opt = (name, def) => {

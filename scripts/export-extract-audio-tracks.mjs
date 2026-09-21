@@ -22,8 +22,7 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static");
-const ffprobePath = require("@ffprobe-installer/ffprobe").path;
+const { ffmpegPath, ffprobePath } = require("../main/ffmpeg-binaries");
 
 // Same palette as player-legacy/audio-tracks-manager.js (COLOR_PALETTE).
 const COLOR_PALETTE = ["#3b82f6", "#f43f5e", "#10b981", "#a855f7", "#f59e0b", "#06b6d4", "#ec4899", "#84cc16"];

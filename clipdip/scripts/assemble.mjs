@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Assembles the dist folder + zip from the built binary and cached ffmpeg.exe.
+// Assembles the dist folder + zip from the built binary and the ffmpeg pair
+// ClipLib shares (../vendor/ffmpeg, fetched by ../scripts/fetch-ffmpeg.mjs).
 //
 //   dist/clipdip-<version>/
 //     clipdip.exe
 //     ffmpeg.exe
+//     ffprobe.exe
 //     ATTRIBUTION.txt
 //   dist/clipdip-<version>.zip
 
@@ -22,13 +24,16 @@ const DIST_DIR   = path.join(DIST_ROOT, `clipdip-${version}`);
 const ZIP_PATH   = path.join(DIST_ROOT, `clipdip-${version}.zip`);
 
 const CLIP_EXE   = path.join(ROOT, 'target', 'release', 'clipdip.exe');
-const FFMPEG_EXE = path.join(DIST_ROOT, 'ffmpeg-cache', 'ffmpeg.exe');
-const ATTR_TXT   = path.join(DIST_ROOT, 'ATTRIBUTION.txt');
+const FFMPEG_DIR = path.join(ROOT, '..', 'vendor', 'ffmpeg');
+const FFMPEG_EXE = path.join(FFMPEG_DIR, 'ffmpeg.exe');
+const FFPROBE_EXE = path.join(FFMPEG_DIR, 'ffprobe.exe');
+const ATTR_TXT   = path.join(FFMPEG_DIR, 'ATTRIBUTION.txt');
 
 // pre-flight checks
 for (const [label, p] of [
   ['clipdip.exe (run npm run build first)', CLIP_EXE],
   ['ffmpeg.exe  (run npm run fetch-ffmpeg first)', FFMPEG_EXE],
+  ['ffprobe.exe (run npm run fetch-ffmpeg first)', FFPROBE_EXE],
   ['ATTRIBUTION.txt', ATTR_TXT],
 ]) {
   if (!fs.existsSync(p)) throw new Error(`Missing ${label}: ${p}`);
@@ -41,6 +46,7 @@ fs.mkdirSync(DIST_DIR, { recursive: true });
 
 fs.copyFileSync(CLIP_EXE,  path.join(DIST_DIR, 'clipdip.exe'));
 fs.copyFileSync(FFMPEG_EXE, path.join(DIST_DIR, 'ffmpeg.exe'));
+fs.copyFileSync(FFPROBE_EXE, path.join(DIST_DIR, 'ffprobe.exe'));
 fs.copyFileSync(ATTR_TXT,  path.join(DIST_DIR, 'ATTRIBUTION.txt'));
 
 for (const f of fs.readdirSync(DIST_DIR)) {

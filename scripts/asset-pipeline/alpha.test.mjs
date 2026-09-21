@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
-import ffmpeg from 'ffmpeg-static';
+import { ffmpegPath as ffmpeg } from '../../main/ffmpeg-binaries.js';
 import { encodingArguments } from './codecs.mjs';
 
 test('VP9 roundtrip retains clear pixels and the full soft alpha ramp', async () => {

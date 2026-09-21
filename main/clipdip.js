@@ -11,6 +11,7 @@ const net = require('net');
 const TOML = require('smol-toml');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
+const { ffmpegPath } = require('./ffmpeg-binaries');
 
 const EXE_NAME = 'clipdip.exe';
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
@@ -197,19 +198,24 @@ function isRunning() {
   });
 }
 
-// clipdip has no bundled ffmpeg; point it at the library's ffmpeg-static when its path is
-// missing/stale, but leave user overrides alone
+function writtenByClipLib(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.toLowerCase().replaceAll('/', '\\');
+  return ['ffmpeg-static', 'ffmpeg-cache', '\\resources\\clipdip\\', '\\resources\\ffmpeg\\', 'vendor\\ffmpeg']
+    .some((fragment) => normalized.includes(fragment));
+}
+
+function pickFfmpegPath({ current, target, exists }) {
+  if (current === target) return current;
+  if (current && exists(current) && !writtenByClipLib(current)) return current;
+  return target;
+}
+
+// both apps share bundled ffmpeg; existing user overrides take precedence
 async function ensureFfmpegPath() {
-  let libFfmpeg;
-  try {
-    libFfmpeg = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
-  } catch {
-    return; // clipdip falls back to a sibling ffmpeg or PATH
-  }
-  if (!fs.existsSync(libFfmpeg)) return;
   const { config } = await getConfig();
   const current = config?.output?.ffmpeg_path;
-  if (current && current !== libFfmpeg && fs.existsSync(current)) return;
+  const libFfmpeg = pickFfmpegPath({ current, target: ffmpegPath, exists: fs.existsSync });
   if (current === libFfmpeg) return;
   logger.info(`Pointing clipdip at the library ffmpeg: ${libFfmpeg}`);
   // clipdip's own migration-save can race this write on first post-update launch; verify it landed
@@ -661,6 +667,8 @@ async function setEnabled(enabled) {
 }
 
 module.exports = {
+  writtenByClipLib,
+  pickFfmpegPath,
   init,
   getConfig,
   setConfig,
