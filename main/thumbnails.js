@@ -12,6 +12,7 @@ const VALIDATE_CONCURRENCY = 16;
 
 const CONCURRENT_GENERATIONS = 4;
 const THUMBNAIL_RETRY_ATTEMPTS = 3;
+const THUMBNAIL_RETRY_BASE_MS = 1500;
 const FAST_PATH_THRESHOLD = 12;
 const EPSILON = 0.001;
 const META_CORRUPT_COALESCE_MS = 600000;
@@ -213,7 +214,13 @@ async function processQueue(getSettings, getTrimData) {
           if (counted) inFlightGenerations--;
           logger.error('Error processing thumbnail for', clipName, error);
           if (attempts < THUMBNAIL_RETRY_ATTEMPTS) {
-            thumbnailQueue.push({ clipName, event, attempts: attempts + 1, totalToProcess });
+            // a clip the recorder is still writing fails every immediate retry; give it a few
+            // seconds to land before the next attempt
+            const delayMs = THUMBNAIL_RETRY_BASE_MS * 2 ** attempts;
+            setTimeout(() => {
+              thumbnailQueue.push({ clipName, event, attempts: attempts + 1, totalToProcess });
+              processQueue(getSettings, getTrimData);
+            }, delayMs);
           } else {
             // Out of retries. Tell the renderer so the card gets an explicit
             // "no thumbnail" state instead of shimmering forever.
