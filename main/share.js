@@ -194,7 +194,8 @@ async function parseJsonSafe(text) {
 // clip id, user id, or username never reaches telemetry
 const KNOWN_API_SEGMENTS = new Set([
   'auth', 'me', 'token', 'tokens', 'users', 'banner', 'clips', 'comments',
-  'reactions', 'favorite', 'share', 'notifications', 'feed', 'tags', 'stats'
+  'reactions', 'favorite', 'share', 'notifications', 'feed', 'tags', 'stats',
+  'waveform', 'stream', 'preview'
 ]);
 
 // low-cardinality telemetry template, e.g. /clips/abc123/comments?limit=20
@@ -946,13 +947,16 @@ async function apiRequest(getSettings, request = {}) {
       dims: { endpoint, status_class: statusClassOf(response.status) }
     });
     if (!response.ok) {
-      telemetry.event('share_api_failed', {
-        kind: telemetry.KIND.ERROR,
-        severity: telemetry.SEVERITY.WARNING,
-        context: { endpoint, method, http_status: response.status, ms },
-        fingerprint: telemetry.hash32(`${method}|${endpoint}|${response.status}`),
-        coalesceMs: 60000
-      });
+      // a caller that treats 404 as "none yet" (waveform) opts out of the failure event
+      if (!(response.status === 404 && request.allow404)) {
+        telemetry.event('share_api_failed', {
+          kind: telemetry.KIND.ERROR,
+          severity: telemetry.SEVERITY.WARNING,
+          context: { endpoint, method, http_status: response.status, ms },
+          fingerprint: telemetry.hash32(`${method}|${endpoint}|${response.status}`),
+          coalesceMs: 60000
+        });
+      }
       return {
         success: false,
         status: response.status,

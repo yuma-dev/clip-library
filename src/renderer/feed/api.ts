@@ -23,8 +23,13 @@ export class FeedApiError extends Error {
   }
 }
 
-async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await window.clips.shareApiRequest({ method, path, body });
+async function request<T>(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  opts: { allow404?: boolean } = {},
+): Promise<T> {
+  const res = await window.clips.shareApiRequest({ method, path, body, ...opts });
   if (!res.success) {
     throw new FeedApiError(res.error || "Request failed", res.status);
   }
@@ -91,7 +96,9 @@ export async function fetchClipDetail(clipId: string): Promise<ClipDetail> {
  * uploads before the backfill, still processing) */
 export async function fetchClipWaveform(clipId: string): Promise<ClipWaveform | null> {
   try {
-    return await request<ClipWaveform>(`/clips/${clipId}/waveform`);
+    return await request<ClipWaveform>(`/clips/${clipId}/waveform`, "GET", undefined, {
+      allow404: true,
+    });
   } catch (err) {
     if (err instanceof FeedApiError && err.status === 404) return null;
     throw err;
