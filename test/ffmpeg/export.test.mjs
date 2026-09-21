@@ -2,11 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { api, fixture, near, checkVideo, command } from './helpers/fixture.mjs';
+import { api, av1Fixture, fixture, near, checkVideo, command } from './helpers/fixture.mjs';
 import { electron } from './helpers/electron-stub.mjs';
 
 test('exports video, audio, screenshots, speed and volume', async t => {
   const f = await fixture(t);
+  await t.test('AV1 source exports a playable full h264 clip', async () => {
+    const av1 = await av1Fixture(t);
+    await checkVideo(av1.keep(await api.exportVideo(
+      av1.name, 0, 6, 1, 1, path.join(av1.dir, 'full.mp4'), av1.settings)), 6);
+  });
   const video = (name, volume = 1, speed = 1) => api.exportVideo(
     f.name, 0, 6, volume, speed, path.join(f.dir, `${name}.mp4`), f.settings);
   await t.test('default encoder exports a playable full clip', async () => {

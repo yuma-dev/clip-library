@@ -2,10 +2,20 @@ import Module, { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 export const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cliplib-ffmpeg-profile-'));
 const buffers = new Map();
 let text = '';
+export const handlers = new Map();
+const ipcMain = Object.assign(new EventEmitter(), {
+  handle: (channel, handler) => handlers.set(channel, handler),
+  removeHandler: channel => handlers.delete(channel)
+});
+export function invoke(channel, event, ...args) {
+  if (!handlers.has(channel)) throw new Error(`No IPC handler for ${channel}`);
+  return handlers.get(channel)(event, ...args);
+}
 export const electron = {
   app: { isPackaged: false, isReady: () => true, getPath: () => profile, getVersion: () => '0.0.0-test' },
   clipboard: {
@@ -14,7 +24,7 @@ export const electron = {
     writeText: value => { text = value; },
     readText: () => text
   },
-  ipcMain: { on() {}, handle() {} },
+  ipcMain,
   BrowserWindow: { getAllWindows: () => [] }
 };
 const load = Module._load;
