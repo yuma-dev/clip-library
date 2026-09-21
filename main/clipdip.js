@@ -486,7 +486,10 @@ async function setAutostart(enabled) {
 
 // platform support: needs Windows + an NVIDIA GPU (WGC capture, NVENC encode)
 // checked once per run; a failed detection counts as supported, clipdip itself errors if NVENC is
-// truly absent
+// truly absent. in-process gpu info, the Get-CimInstance query this replaced cost up to its
+// 10s timeout on a cold PowerShell and the settings page waited on it
+
+const NVIDIA_VENDOR_ID = 0x10de;
 
 let supportPromise = null;
 
@@ -497,16 +500,11 @@ function detectSupport() {
       return { supported: false, reason: 'Clipdip only runs on Windows.' };
     }
     try {
-      const gpus = await new Promise((resolve, reject) => {
-        execFile(
-          'powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-Command',
-            '(Get-CimInstance Win32_VideoController | ForEach-Object Name) -join "\n"'],
-          { windowsHide: true, timeout: 10000 },
-          (error, stdout) => (error ? reject(error) : resolve(String(stdout)))
-        );
-      });
-      if (!/nvidia|geforce|quadro|\brtx\b/i.test(gpus)) {
+      await app.whenReady();
+      const info = await app.getGPUInfo('basic');
+      const devices = Array.isArray(info?.gpuDevice) ? info.gpuDevice : [];
+      if (devices.length === 0) throw new Error('no gpu devices reported');
+      if (!devices.some((d) => Number(d?.vendorId) === NVIDIA_VENDOR_ID)) {
         return {
           supported: false,
           reason: 'Clipdip needs an NVIDIA GPU — it records with NVENC, the encoder on NVIDIA cards.'
@@ -543,6 +541,8 @@ async function getStatus() {
 
 // called once from main.js after app ready: bring clipdip up if enabled but not running
 async function ensureStartedIfEnabled() {
+  // warm the cache so the first status call never waits on gpu detection
+  detectSupport();
   try {
     const settings = await getSettings();
     if (!settings?.clipdip?.enabled) return;
