@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 export const formats = ['png', 'jpg', 'webp', 'frames', 'mp4', 'mov', 'webm'];
-export const sceneIds = ['clipCard', 'videoPlayer', 'audioMixer', 'clipTag', 'clipWorkflow', 'mentions', 'mixerPlayer', 'settings', 'librarySearch', 'hero'];
+export const sceneIds = ['clipCard', 'videoPlayer', 'audioMixer', 'clipTag', 'clipWorkflow', 'mentions', 'mixerPlayer', 'settings', 'librarySearch', 'hero', 'pillPlayer'];
 export function validate(spec) {
   if (!spec || !sceneIds.includes(spec.scene)) throw Error('unknown scene');
   if (spec.version !== undefined && spec.version !== 1) throw Error('unsupported recipe version');

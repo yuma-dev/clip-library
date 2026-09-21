@@ -15,6 +15,8 @@ import { filterClips } from "../library/filter";
 import RailSearch from "../shell/RailSearch";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 import { HeroScene } from './heroScene';
+import { MixerRow, MixerChip, VOLUME_ICON_NORMAL, type MixerTrack } from "./mixerRow";
+import { PillPlayerScene } from "./pillPlayerScene";
 
 export type Scene = (spec: ExportSpec) => ReactElement;
 
@@ -24,9 +26,10 @@ function LibrarySearchScene(spec: ExportSpec): ReactElement {
   const filteredClips=filterClips(clips,{query,tags,collection:"all",applyTags:false});
   const noop=()=>{};
   const filter:UseLibraryFilter={query,setQuery:noop,collection:"all",setCollection:noop,allTags:["Epic","Favorite"],globalTags:["Epic","Favorite"],tags,selectedCount:2,totalCount:2,toggleTag:noop,focusTag:noop,showAllTags:noop,hideAllTags:noop,clearFocus:noop,addGlobalTag:noop,renameGlobalTag:noop,removeGlobalTag:noop,filteredClips};
-  return <div id="export-root" style={{position:"relative",width:1000,height:480,padding:50,background:spec.background ?? "#050608"}}>
-    <div data-layer="search" style={{width:600,marginBottom:35}}><RailSearch filter={filter} clips={clips}/></div>
-    <div className="clip-grid" style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:18,padding:0}}>
+  return <div id="export-root" style={{position:"relative",width:1000,height:480,padding:50}}>
+    <div data-layer="background" style={{position:"absolute",inset:0,background:spec.background ?? "#050608"}}/>
+    <div data-layer="search" style={{position:"relative",width:600,marginBottom:35}}><RailSearch filter={filter} clips={clips}/></div>
+    <div className="clip-grid" data-layer="cards" style={{position:"relative",display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:18,padding:0}}>
       {filteredClips.map(clip=><ClipCard key={clip.originalName} clip={clip} thumbnailPath={clip.thumbnailPath} grayscaleIcons={false} showNewIndicators={false}/>)}
     </div>
   </div>;
@@ -99,60 +102,6 @@ function ClipTagScene(spec: ExportSpec): ReactElement {
   </div>;
 }
 
-// audioMixer: multi audio-track panel (player-legacy/audio-tracks-manager.js), rendered
-// statically from track data; row visuals mirror _paintRow() (fill=clamp(v/2,0,1)).
-
-const BOOSTED_COLOR = "#f59e0b"; // matches audio-tracks-manager.js
-const ICON_X =
-  '<svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>';
-
-interface MixerTrack {
-  ordinal: number;
-  name: string;
-  volume: number; // 1 == 100%; range 0..2
-  color: string; // #rrggbb
-  muted?: boolean; // right-click soft mute (stays in mix, strikethrough)
-  hidden?: boolean; // removed from mix, floats in the hidden tray as a pill
-}
-
-// Hidden/disabled track: a "pill" chip in the tray above the panel (_buildChip).
-function MixerChip({ track }: { track: MixerTrack }) {
-  return (
-    <button className="mixer__chip" type="button" style={{ color: track.color }} data-layer={`chip-${track.ordinal}`}>
-      <span className="mixer__chip-dot" />
-      <span className="mixer__chip-label">{track.name}</span>
-    </button>
-  );
-}
-
-function MixerRow({ track }: { track: MixerTrack }) {
-  const v = track.volume;
-  const above = v > 1;
-  const pct = Math.max(0, Math.min(1, v / 2)) * 100;
-  const rowStyle = {
-    "--fill": `${pct}%`,
-    "--c1": `${track.color}55`,
-    "--c2": above ? `${BOOSTED_COLOR}aa` : `${track.color}88`,
-    color: track.color,
-  } as CSSProperties;
-  return (
-    <div className="mixer__row-wrap" data-layer={`row-${track.ordinal}`}>
-      <div className={`mixer__row${track.muted ? " mixer__row--muted" : ""}`} data-ordinal={track.ordinal} style={rowStyle}>
-        <div className="mixer__fill" />
-        <div className="mixer__unity" />
-        <div className="mixer__overlay">
-          <button className="mixer__dot" type="button" aria-label="Change color" />
-          <div className="mixer__name" title={track.name}>
-            {track.name}
-          </div>
-          <div className="mixer__value">{Math.round(v * 100)}%</div>
-          <button className="mixer__hide" type="button" aria-label="Hide from mix" dangerouslySetInnerHTML={{ __html: ICON_X }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function AudioMixerScene(spec: ExportSpec): ReactElement {
   const props = (spec.props ?? {}) as {
     tracks?: MixerTrack[];
@@ -201,11 +150,6 @@ function AudioMixerScene(spec: ExportSpec): ReactElement {
 
 // videoPlayer: clip player overlay (player/VideoPlayer.tsx) as a still; <video>
 // replaced by a hi-res thumbnail, controls forced visible, playhead at currentSeconds.
-
-// Exact app volume glyph (player-legacy/video-player.js volumeIcons.normal, default
-// volume 1). Material Symbols speaker-with-waves.
-const VOLUME_ICON_NORMAL =
-  '<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e8eaed"><path d="M760-481q0-83-44-151.5T598-735q-15-7-22-21.5t-2-29.5q6-16 21.5-23t31.5 0q97 43 155 131.5T840-481q0 108-58 196.5T627-153q-16 7-31.5 0T574-176q-5-15 2-29.5t22-21.5q74-34 118-102.5T760-481ZM280-360H160q-17 0-28.5-11.5T120-400v-160q0-17 11.5-28.5T160-600h120l132-132q19-19 43.5-8.5T480-703v446q0 27-24.5 37.5T412-228L280-360Zm380-120q0 42-19 79.5T591-339q-10 6-20.5.5T560-356v-250q0-12 10.5-17.5t20.5.5q31 25 50 63t19 80ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"/></svg>';
 
 function fmtTime(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -315,6 +259,7 @@ export const scenes: Record<string, Scene> = {
   clipWorkflow: ClipTagScene,
   mentions: ClipTagScene,
   mixerPlayer: VideoPlayerScene,
+  pillPlayer: PillPlayerScene,
   settings: SettingsScene,
   librarySearch: LibrarySearchScene,
   hero: spec=><HeroScene spec={spec} Player={VideoPlayerScene}/>,
