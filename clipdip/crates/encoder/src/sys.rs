@@ -335,6 +335,7 @@ pub const NV_ENC_LEVEL_AV1_AUTOSELECT: NV_ENC_LEVEL_AV1 = 24;
 
 pub type NV_ENC_TIER_AV1 = u32;
 pub const NV_ENC_TIER_AV1_0: NV_ENC_TIER_AV1 = 0;
+pub const NV_ENC_TIER_AV1_1: NV_ENC_TIER_AV1 = 1;
 
 /// `#[repr(C)]` mirror of SDK 13.0 `NV_ENC_CONFIG_AV1`, reinterpreted onto
 /// `NV_ENC_CONFIG::encodeCodecConfig`; layout must match the header exactly.
