@@ -217,6 +217,10 @@ pub fn mux_with_options(
     }
 
     let do_mix = include_mix && audio_tracks.len() >= 2;
+    // write under a .part name and rename at the end: cliplib's folder watcher announces a
+    // clip once its size stops changing for 2s, and the faststart shift keeps the size flat
+    // long enough that a still-muxing mp4 got probed and shown as broken
+    let staging = staging_path(output_mp4);
     let job = MuxJob {
         ffmpeg,
         video: video_h264,
@@ -224,7 +228,7 @@ pub fn mux_with_options(
         fps: video_fps,
         tracks: audio_tracks,
         do_mix,
-        output: output_mp4,
+        output: &staging,
     };
 
     let encoder = if audio_tracks.is_empty() {
@@ -239,9 +243,15 @@ pub fn mux_with_options(
     };
     let started = Instant::now();
     let used = match strategy {
-        MuxStrategy::ParallelTracks => job.parallel_tracks(encoder)?,
-        MuxStrategy::SinglePass | MuxStrategy::Auto => job.single_pass(encoder)?,
-    };
+        MuxStrategy::ParallelTracks => job.parallel_tracks(encoder),
+        MuxStrategy::SinglePass | MuxStrategy::Auto => job.single_pass(encoder),
+    }
+    .inspect_err(|_| {
+        let _ = std::fs::remove_file(&staging);
+    })?;
+    std::fs::rename(&staging, output_mp4).with_context(|| {
+        format!("rename {} to {}", staging.display(), output_mp4.display())
+    })?;
 
     info!(
         output = %output_mp4.display(),
@@ -255,6 +265,12 @@ pub fn mux_with_options(
         "muxed clip"
     );
     Ok(())
+}
+
+fn staging_path(output: &Path) -> PathBuf {
+    let mut name = output.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".part");
+    output.with_file_name(name)
 }
 
 struct MuxJob<'a> {
@@ -333,6 +349,8 @@ impl MuxJob<'_> {
     }
 
     fn output_flags(cmd: &mut Command) {
+        // the .part staging name gives ffmpeg no extension to guess from
+        cmd.arg("-f").arg("mp4");
         // +faststart moves the moov atom to the front so the file is streamable
         cmd.arg("-movflags").arg("+faststart");
         // suppress elst: aac's priming-sample delay would otherwise become an edit list
