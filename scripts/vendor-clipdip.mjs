@@ -1,6 +1,7 @@
 // Copies the clipdip binary from the in-repo cargo build into vendor/clipdip/
-// so electron-builder ships it as resources/clipdip/. ffmpeg isn't vendored
-// clipdip shares the library's ffmpeg via output.ffmpeg_path (main/clipdip.js).
+// so electron-builder ships it as resources/clipdip/. ffmpeg is not vendored
+// here: both apps use vendor/ffmpeg (resources/ffmpeg/ in the package), which
+// main/clipdip.js writes into clipdip's output.ffmpeg_path.
 // Run via `npm run vendor:clipdip` (or as part of `npm run build`).
 import { copyFileSync, mkdirSync, existsSync, statSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";

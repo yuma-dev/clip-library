@@ -16,7 +16,7 @@ const path = require('path');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 
-const ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
+const { ffmpegPath } = require('./ffmpeg-binaries');
 
 const VERSION = 1;
 const DIR = 'analysis_v1';

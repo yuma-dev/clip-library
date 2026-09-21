@@ -15,7 +15,7 @@
     "dev:electron:trace": "wait-on tcp:127.0.0.1:5173 && node scripts/electron-trace.js",
     "typecheck": "tsc --noEmit",
     "build:renderer": "vite build",
-    "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && npm run build:launcher && npm run vendor:launcher && node scripts/gen-ingest-key.mjs && electron-builder --win",
+    "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && npm run build:launcher && npm run vendor:launcher && node scripts/gen-ingest-key.mjs && npm run fetch-ffmpeg && electron-builder --win",
     "build:clipdip": "node scripts/sync-clipdip-version.mjs && cd clipdip && npm install --no-audit --no-fund && npm run build && node -e \"const fs=require('fs'),d=new Date();fs.utimesSync('src-tauri/src/main.rs',d,d)\" && cargo build --release -p clipdip",
     "vendor:clipdip": "node scripts/vendor-clipdip.mjs",
     "release": "node scripts/release.mjs",
@@ -33,7 +33,11 @@
     "build:launcher": "cd clipdip && cargo build --release -p cliplib-launcher",
     "vendor:launcher": "node scripts/vendor-launcher.mjs",
     "assets": "node scripts/asset-pipeline.mjs",
-    "assets:test": "node --test scripts/asset-pipeline/*.test.mjs"
+    "assets:test": "node --test scripts/asset-pipeline/*.test.mjs",
+    "fetch-ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "postinstall": "node scripts/fetch-ffmpeg.mjs",
+    "test:ffmpeg": "node --test test/ffmpeg/",
+    "test": "npm run test:ffmpeg"
   },
   "build": {
     "appId": "com.yuma-dev.clips",
@@ -65,11 +69,16 @@
       {
         "from": "vendor/clipdip/",
         "to": "clipdip/"
+      },
+      {
+        "from": "vendor/ffmpeg/",
+        "to": "ffmpeg/",
+        "filter": [
+          "ffmpeg.exe",
+          "ffprobe.exe",
+          "ATTRIBUTION.txt"
+        ]
       }
-    ],
-    "asarUnpack": [
-      "node_modules/ffmpeg-static/bin/${os}/${arch}/ffmpeg",
-      "node_modules/@ffprobe-installer/ffprobe/bin/${os}/${arch}/ffprobe"
     ],
     "win": {
       "target": [
@@ -122,11 +131,9 @@
     "wait-on": "^9.0.10"
   },
   "dependencies": {
-    "@ffprobe-installer/ffprobe": "^2.1.2",
     "archiver": "^7.0.1",
     "axios": "^1.7.2",
     "discord-rpc": "^4.0.1",
-    "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.3",
     "semver": "^7.6.3",
     "smol-toml": "^1.7.0"

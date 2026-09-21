@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
-import ffmpeg from 'ffmpeg-static';
+import { ffmpegPath as ffmpeg } from '../main/ffmpeg-binaries.js';
 import { formats, sceneIds, localOutput, validate } from './asset-pipeline/contract.mjs';
 import { presets, preset } from './asset-pipeline/presets.mjs';
 import { importCursorTheme } from './asset-pipeline/xcursor.mjs';

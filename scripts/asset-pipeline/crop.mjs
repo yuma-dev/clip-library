@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import ffmpeg from 'ffmpeg-static';
+import { ffmpegPath as ffmpeg } from '../../main/ffmpeg-binaries.js';
 
 // Union of every frame's nonzero-alpha bounds; includes transient UI and glows.
 export async function animationBounds(input,fps,width,height){
