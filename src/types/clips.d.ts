@@ -353,6 +353,8 @@ export interface ClipsApi {
     method?: string;
     path: string;
     body?: unknown;
+    /** 404 is an expected answer, not a failure worth reporting */
+    allow404?: boolean;
   }): Promise<{ success: boolean; status?: number; data?: unknown; error?: string }>;
   /** Pick a banner image via the native dialog and upload it to /users/me/banner. */
   shareUploadBanner(): Promise<{
