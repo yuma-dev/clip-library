@@ -29,6 +29,7 @@ test('prints median timings for three runs per operation', async t => {
     baseline = await measure(directory);
   }
   console.log(`bundled: ${bundled.version}`);
+  console.log(`AV1 benchmark fixture encoder: ${bundled.av1Encoder}`);
   if (baseline) console.log(`baseline: ${baseline.version}`);
   else console.log('baseline: not configured (CLIPLIB_FFMPEG_BASELINE)');
   console.log('operation                       bundled ms  baseline ms  bundled/baseline');

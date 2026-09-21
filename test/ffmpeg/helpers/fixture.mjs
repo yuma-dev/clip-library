@@ -17,7 +17,21 @@ export async function command(args, binary = binaries.ffmpegPath) {
   return run(binary, args, { windowsHide: true, timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
 }
 
-export async function fixture(t, sourceBinary = path.join(root, 'vendor/ffmpeg/ffmpeg.exe')) {
+const fixtures = new WeakMap();
+
+export function fixture(t, sourceBinary = path.join(root, 'vendor/ffmpeg/ffmpeg.exe'), codec = 'h264') {
+  if (!fixtures.has(t)) fixtures.set(t, new Map());
+  const cache = fixtures.get(t);
+  const key = `${sourceBinary}:${codec}`;
+  if (!cache.has(key)) cache.set(key, createFixture(t, sourceBinary, codec));
+  return cache.get(key);
+}
+
+export const av1Fixture = t => fixture(t, undefined, 'av1');
+
+export const recorderAv1Fixture = () => path.join(root, 'test/ffmpeg/fixtures/clipdip-av1-level73.mp4');
+
+async function createFixture(t, sourceBinary, codec) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cliplib-ffmpeg-'));
   const outputs = new Set();
   t.after(async () => {
@@ -26,13 +40,24 @@ export async function fixture(t, sourceBinary = path.join(root, 'vendor/ffmpeg/f
   });
   const name = `Fixture Game ${path.basename(dir)} 12.00.00 01.01.2026.mp4`;
   const input = path.join(dir, name);
-  await command(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=60',
+  const inputs = ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=60',
     '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
     '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000',
     '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono',
-    '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:a', '-t', '6',
-    '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '2', '-pix_fmt', 'yuv420p',
+    '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:a', '-t', '6'];
+  const encode = (encoder, preset) => command([...inputs,
+    '-c:v', encoder, '-preset', preset, '-threads', '2', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '96k', input], sourceBinary);
+  let encoder = codec === 'av1' ? 'av1_nvenc' : 'libx264';
+  try {
+    await encode(encoder, codec === 'av1' ? 'p1' : 'ultrafast');
+  } catch (error) {
+    if (codec !== 'av1' || !/Unknown encoder|Cannot load|No capable devices|unsupported device|does not support|not supported|minimum required|Driver does not support|OpenEncodeSessionEx failed/i.test(error.stderr || '')) throw error;
+    encoder = 'libsvtav1';
+    console.log('AV1 fixture: libsvtav1 fallback; NVENC bitstream case is not covered on this machine.');
+    await encode(encoder, '12');
+  }
+  if (codec === 'av1' && encoder === 'av1_nvenc') console.log('AV1 fixture: av1_nvenc -preset p1');
   await thumbnails.initThumbnailCache();
   const settings = () => ({ clipLocation: dir, exportQuality: 'discord', exportPreset: 'discord_fast',
     exportSizeGoal: 'discord_10mb', exportSpeedBias: 'fast' });
@@ -41,7 +66,7 @@ export async function fixture(t, sourceBinary = path.join(root, 'vendor/ffmpeg/f
     outputs.add(result.path);
     return result;
   };
-  return { dir, name, input, settings, keep };
+  return { dir, name, input, settings, keep, encoder };
 }
 
 export function near(actual, expected, tolerance = 0.25) {
