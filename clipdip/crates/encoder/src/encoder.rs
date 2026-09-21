@@ -159,6 +159,7 @@ impl NvEncoderD3D11 {
                 // profile/tier/level, and ref counts, AV1 IDRs come out INTRA_ONLY not KEY_FRAME.
                 enc_cfg.profileGUID = NV_ENC_AV1_PROFILE_MAIN_GUID;
                 let av1 = enc_cfg.av1_config_mut();
+                // level is filled in below once the rate control is known
                 av1.level = NV_ENC_LEVEL_AV1_AUTOSELECT;
                 av1.tier = NV_ENC_TIER_AV1_0;
                 av1.idrPeriod = config.gop_length;
@@ -177,6 +178,21 @@ impl NvEncoderD3D11 {
 
         enc_cfg.rcParams.version = NV_ENC_RC_PARAMS_VER;
         apply_rate_control(&mut enc_cfg.rcParams, active_codec, config.rate_control);
+
+        if matches!(active_codec, ActiveCodec::Av1) {
+            // AUTOSELECT declares level 7.3 high tier whenever averageBitRate is 0 (the
+            // target quality mode every CQP config runs as), and libaom refuses that
+            // header outright, so ClipLib thumbnails died on it. the recording boost
+            // reconfigures the cap 1.5x higher while the level stays as declared here.
+            let cap = enc_cfg.rcParams.maxBitRate;
+            let peak = if cap == 0 { None } else { Some(cap.saturating_add(cap / 2)) };
+            let (level, tier) =
+                av1_level(config.width, config.height, config.fps_num, config.fps_den, peak);
+            let av1 = enc_cfg.av1_config_mut();
+            av1.level = level;
+            av1.tier = tier;
+            info!(level, tier, peak_bps = peak, "AV1 level declared");
+        }
 
         // logs the effective config (preset defaults + our overrides) so a user's
         // log answers "what did the encoder actually run with". re-logged on reconfigure.
@@ -796,7 +812,22 @@ fn read_leb128(bytes: &[u8]) -> Option<(u64, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_leb128, scan_for_keyframe_av1, scan_for_keyframe_h264};
+    use super::{av1_level, read_leb128, scan_for_keyframe_av1, scan_for_keyframe_h264};
+    use crate::sys::NV_ENC_LEVEL_AV1_AUTOSELECT;
+
+    #[test]
+    fn av1_level_follows_resolution_fps_and_cap() {
+        // 1080p60 under the 0.6x derated 27 Mbps cap plus the recording boost: 4.1 main
+        assert_eq!(av1_level(1920, 1080, 60, 1, Some(24_300_000)), (9, 1));
+        assert_eq!(av1_level(1920, 1080, 60, 1, Some(16_200_000)), (9, 0));
+        assert_eq!(av1_level(1920, 1080, 60, 1, None), (9, 0));
+        assert_eq!(av1_level(1920, 1080, 30, 1, Some(10_000_000)), (8, 0));
+        assert_eq!(av1_level(2560, 1440, 144, 1, Some(60_000_000)), (13, 1));
+        assert_eq!(av1_level(3840, 2160, 60, 1, Some(40_000_000)), (13, 0));
+        assert_eq!(av1_level(3840, 2160, 120, 1, Some(100_000_000)), (14, 1));
+        assert_eq!(av1_level(7680, 4320, 60, 1, Some(200_000_000)), (17, 1));
+        assert_eq!(av1_level(7680, 4320, 240, 1, Some(1_000_000_000)), (NV_ENC_LEVEL_AV1_AUTOSELECT, 0));
+    }
 
     #[test]
     fn keyframe_scan_detects_idr_long_start_code() {
@@ -998,6 +1029,45 @@ fn log_effective_config(enc_cfg: &NV_ENC_CONFIG) {
         gop_length = enc_cfg.gopLength,
         "effective NVENC config"
     );
+}
+
+/// AV1 spec annex A.3: (seq_level_idx, max luma samples, max samples/s, main tier bps,
+/// high tier bps). levels below 4.0 have no high tier, 7.x is reserved.
+const AV1_LEVELS: [(u32, u64, u64, u64, u64); 14] = [
+    (0, 147_456, 4_423_680, 1_500_000, 0),
+    (1, 278_784, 8_363_520, 3_000_000, 0),
+    (4, 665_856, 19_975_680, 6_000_000, 0),
+    (5, 1_065_024, 31_950_720, 10_000_000, 0),
+    (8, 2_359_296, 70_778_880, 12_000_000, 30_000_000),
+    (9, 2_359_296, 141_557_760, 20_000_000, 50_000_000),
+    (12, 8_912_896, 267_386_880, 30_000_000, 100_000_000),
+    (13, 8_912_896, 534_773_760, 40_000_000, 160_000_000),
+    (14, 8_912_896, 1_069_547_520, 60_000_000, 240_000_000),
+    (15, 8_912_896, 1_069_547_520, 60_000_000, 240_000_000),
+    (16, 35_651_584, 1_069_547_520, 60_000_000, 240_000_000),
+    (17, 35_651_584, 2_139_095_040, 100_000_000, 480_000_000),
+    (18, 35_651_584, 4_278_190_080, 160_000_000, 800_000_000),
+    (19, 35_651_584, 4_278_190_080, 160_000_000, 800_000_000),
+];
+
+/// Lowest level whose picture size, display rate and (when capped) bitrate fit,
+/// main tier first. Falls back to AUTOSELECT when nothing fits. The driver rejects
+/// an explicit level whose tier bitrate is below maxBitRate, hence the tier walk.
+fn av1_level(width: u32, height: u32, fps_num: u32, fps_den: u32, peak_bps: Option<u32>) -> (u32, u32) {
+    let pixels = width as u64 * height as u64;
+    let rate = pixels * fps_num as u64 / fps_den.max(1) as u64;
+    for (idx, max_pixels, max_rate, main_bps, high_bps) in AV1_LEVELS {
+        if pixels > max_pixels || rate > max_rate {
+            continue;
+        }
+        match peak_bps {
+            None => return (idx, NV_ENC_TIER_AV1_0),
+            Some(bps) if bps as u64 <= main_bps => return (idx, NV_ENC_TIER_AV1_0),
+            Some(bps) if bps as u64 <= high_bps => return (idx, NV_ENC_TIER_AV1_1),
+            Some(_) => continue,
+        }
+    }
+    (NV_ENC_LEVEL_AV1_AUTOSELECT, NV_ENC_TIER_AV1_0)
 }
 
 /// Writes `rc` into `rc_params`; shared by init and reconfigure_rate_control
