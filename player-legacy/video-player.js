@@ -7,10 +7,13 @@ const { ipcRenderer } = require('electron');
 const path = require('path');
 const logger = require('./logger');
 const state = require('./state');
-const { AudioTracksManager } = require('./audio-tracks-manager');
+const { AudioTracksManager, SingleTrackMixer } = require('./audio-tracks-manager');
 
 // active multi-track manager, if any
 let activeAudioTracksManager = null;
+// single-track clips get the mixer popover too, a one-row view over the master volume
+let singleTrackMixer = null;
+const mixerActive = () => !!(activeAudioTracksManager || singleTrackMixer);
 // bumped on every openClip/closePlayer; async multi-track init checks this
 // to bail if a newer open or close has superseded it
 let clipOpenGeneration = 0;
@@ -506,8 +509,26 @@ function changeVolume(delta) {
   showVolumeContainer();
 }
 
+/** a level the user picked: master gain, saved for the clip, badge off */
+function setMasterVolumeFromUser(newVolume) {
+  if (!state.audioContext) setupAudioContext();
+  state.gainNode.gain.setValueAtTime(newVolume, state.audioContext.currentTime);
+  updateVolumeSlider(newVolume);
+
+  if (state.currentClip) {
+    debouncedSaveVolume(state.currentClip.originalName, newVolume);
+    markVolumeCustom();
+  }
+}
+
+// last level shown; gain.value lags a setValueAtTime until the context renders
+let lastMasterVolume = 1;
+
 function updateVolumeSlider(volume) {
   elements.volumeSlider.value = volume;
+  lastMasterVolume = Number(volume);
+  // the slider steps by 0.1, the mixer row gets the exact level
+  if (singleTrackMixer) singleTrackMixer.setLevel(Number(volume));
   // the timeline waveform scales with the master level on single-track clips
   document.dispatchEvent(new CustomEvent('player-volume', { detail: Number(volume) }));
 
@@ -582,6 +603,7 @@ function setVolumeSource(detail) {
   else if (volumeSource.source === 'default') lastMatchedSource = null;
   if (!elements.volumeButton) return;
   const matched = volumeSource.source === 'normalized';
+  if (singleTrackMixer) singleTrackMixer.setLevel(undefined, matched);
   elements.volumeButton.classList.toggle('normalized', matched);
   if (matched) {
     elements.volumeButton.title = `Loudness matched (${formatDb(volumeSource.gainDb)}). Drag the slider to set your own level.`;
@@ -622,6 +644,8 @@ function applyMatchedGain(gain, ramp) {
 async function revertToMatchedVolume() {
   if (!state.currentClip || !loudnessEnabled() || volumeSource.source === 'normalized') return;
   const clipName = state.currentClip.originalName;
+  // a double-click on the mixer row sets a level on its first press, that save must not land after the reset
+  debouncedSaveVolume.cancel();
   try {
     const detail = await ipcRenderer.invoke('reset-volume', clipName);
     if (!state.currentClip || state.currentClip.originalName !== clipName) return;
@@ -645,6 +669,10 @@ function onLoudnessMeasured(payload) {
 }
 
 function showVolumeContainer() {
+  if (singleTrackMixer) {
+    singleTrackMixer.showTransient();
+    return;
+  }
   elements.volumeSlider.classList.remove("collapsed");
 
   clearTimeout(elements.volumeContainer.timeout);
@@ -1543,6 +1571,10 @@ async function closePlayer() {
     try { activeAudioTracksManager.dispose(); } catch (err) { logger.warn(`[audio-tracks] dispose failed: ${err.message}`); }
     activeAudioTracksManager = null;
   }
+  if (singleTrackMixer) {
+    singleTrackMixer.dispose();
+    singleTrackMixer = null;
+  }
   if (elements.audioTracksPanel) {
     elements.audioTracksPanel.classList.add('hidden');
   }
@@ -1942,6 +1974,10 @@ async function openClip(originalName, customName) {
     try { activeAudioTracksManager.dispose(); } catch (err) { logger.warn(`[audio-tracks] dispose failed: ${err.message}`); }
     activeAudioTracksManager = null;
   }
+  if (singleTrackMixer) {
+    singleTrackMixer.dispose();
+    singleTrackMixer = null;
+  }
   if (elements.audioTracksPanel) {
     elements.audioTracksPanel.classList.add('hidden');
   }
@@ -2329,6 +2365,33 @@ async function openClip(originalName, customName) {
       } catch (err) {
         logger.error(`[${originalName}] Failed to init multi-track audio:`, err);
       }
+    } else if (openGen === clipOpenGeneration && elements.audioTracksPanel) {
+      try {
+        const globalPrefs = openState ? openState.trackPreferences : await ipcRenderer.invoke('get-track-preferences');
+        if (openGen === clipOpenGeneration) {
+          if (singleTrackMixer) singleTrackMixer.dispose();
+          singleTrackMixer = new SingleTrackMixer({
+            panelEl: elements.audioTracksPanel,
+            globalPrefs,
+            onLevel: setMasterVolumeFromUser,
+            // matched loudness when it is on, else unity
+            onReset: () => {
+              if (loudnessEnabled()) void revertToMatchedVolume();
+              else setMasterVolumeFromUser(1);
+            },
+            onPersistGlobal: (key, patch) => {
+              ipcRenderer.invoke('save-track-preferences', key, patch)
+                .catch((err) => logger.warn(`[audio-tracks] save global failed: ${err.message}`));
+            }
+          });
+          singleTrackMixer.setLevel(lastMasterVolume, volumeSource.source === 'normalized');
+          singleTrackMixer.render();
+          if (elements.volumeSlider) elements.volumeSlider.style.display = 'none';
+          elements.audioTracksPanel.classList.add('hidden');
+        }
+      } catch (err) {
+        logger.error(`[${originalName}] Failed to init single-track mixer:`, err);
+      }
     }
     mark('afterAudioTracks');
 
@@ -2667,16 +2730,7 @@ function setupEventListeners() {
   // speed slider is click-to-expand only, hover-expand removed per design
   if (elements.volumeSlider) {
     elements.volumeSlider.addEventListener("input", (e) => {
-      const newVolume = parseFloat(e.target.value);
-      if (!state.audioContext) setupAudioContext();
-      state.gainNode.gain.setValueAtTime(newVolume, state.audioContext.currentTime);
-      updateVolumeSlider(newVolume);
-      updateVolumeIcon(newVolume);
-
-      if (state.currentClip) {
-        debouncedSaveVolume(state.currentClip.originalName, newVolume);
-        markVolumeCustom();
-      }
+      setMasterVolumeFromUser(parseFloat(e.target.value));
     });
   }
 
@@ -2694,7 +2748,7 @@ function setupEventListeners() {
       void revertToMatchedVolume();
     });
     elements.volumeButton.addEventListener("click", () => {
-      if (activeAudioTracksManager && elements.audioTracksPanel) {
+      if (mixerActive() && elements.audioTracksPanel) {
         elements.audioTracksPanel.classList.toggle('hidden');
       } else {
         elements.volumeSlider.classList.toggle("collapsed");
@@ -2706,14 +2760,14 @@ function setupEventListeners() {
   if (elements.volumeContainer) {
     elements.volumeContainer.addEventListener("mouseenter", () => {
       clearTimeout(elements.volumeContainer.timeout);
-      if (activeAudioTracksManager) return; // multi-track popout is click-only
+      if (mixerActive()) return; // the mixer popout is click-only
       elements.volumeSlider.classList.remove("collapsed");
     });
 
     elements.volumeContainer.addEventListener("mouseleave", () => {
-      // multi-track popout stays open until an outside click; mouseleave
+      // the mixer stays open until an outside click; mouseleave
       // auto-hide was too aggressive for drag handles/palette interaction
-      if (activeAudioTracksManager) return;
+      if (mixerActive()) return;
       elements.volumeContainer.timeout = setTimeout(() => {
         elements.volumeSlider.classList.add("collapsed");
       }, 2000);
@@ -2723,7 +2777,7 @@ function setupEventListeners() {
   // closes the multi-track panel; mousedown (not click) so it runs before
   // the player-overlay's own close logic on the same gesture
   document.addEventListener('mousedown', (e) => {
-    if (!activeAudioTracksManager) return;
+    if (!mixerActive()) return;
     const panel = elements.audioTracksPanel;
     if (!panel || panel.classList.contains('hidden')) return;
     if (e.target.closest('#volume-container')) return;

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo, type CSSProperties } from "react";
 import type { ClipWaveform } from "../../types/clips";
 
 /** what the mixer knows about a track that the timeline needs to draw it */
@@ -87,6 +87,16 @@ function desaturate(hex: string): string {
   return `#${((mix(r) << 16) | (mix(g) << 8) | mix(b)).toString(16).padStart(6, "0")}`;
 }
 
+/** a band dimmed while another track is hovered in the mixer */
+function greyOf(hex: string): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return "#8a8f99";
+  const v = parseInt(m[1], 16);
+  const g = Math.round(0.3 * ((v >> 16) & 255) + 0.59 * ((v >> 8) & 255) + 0.11 * (v & 255));
+  return `#${((g << 16) | (g << 8) | g).toString(16).padStart(6, "0")}`;
+}
+const DIM_OPACITY = 0.18;
+
 /** half-height of a band per bin, in svg units, before the trim taper */
 function bandHalves(levels: number[], amp: number): number[] {
   return levels.map((lv) => Math.max(FLOOR, Math.min(MAX_HALF, lv * amp)));
@@ -112,16 +122,21 @@ interface WaveformProps {
   onEnvelope?: (env: number[] | null) => void;
   /** master level 0..2 for single-track clips; multi-track bands read their own track's level */
   gain?: number;
+  /** ordinal hovered in the mixer; every other band dims */
+  focus?: number | null;
 }
 
 /** per-track level bands behind the timeline; ahead of the playhead grey, behind it coloured with a
  * bloom. clip-path on the two wrappers is driven by css vars the timeline's rAF loop sets. */
-function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1 }: WaveformProps) {
+function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1, focus = null }: WaveformProps) {
   const bands = useMemo(() => {
     if (!waveform || waveform.tracks.length === 0) return [];
     if (waveform.tracks.length === 1) {
       const levels = binLevels(waveform.tracks[0].peak).map((lv) => lv * gain);
-      return [{ key: "mono", halves: bandHalves(levels, 12), d: bandPath(levels, 12, trimStart, trimEnd), ahead: "#ffffff40", played: "#fff", opacity: 1 }];
+      // colour from the single-track mixer, white until one is picked
+      const color = tracks?.[0]?.color;
+      const tinted = color && color.toLowerCase() !== "#ffffff";
+      return [{ key: "mono", ordinal: -1, halves: bandHalves(levels, 12), d: bandPath(levels, 12, trimStart, trimEnd), ahead: tinted ? `${color}40` : "#ffffff40", played: tinted ? color : "#fff", opacity: 1 }];
     }
     if (!tracks) return [];
     const visible = tracks.filter((t) => !t.hidden);
@@ -134,6 +149,7 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1 }
       const amp = AMPS[Math.min(i, AMPS.length - 1)];
       return {
         key: String(t.ordinal),
+        ordinal: t.ordinal,
         halves: bandHalves(levels, amp),
         d: bandPath(levels, amp, trimStart, trimEnd),
         ahead: t.muted ? "#ffffff66" : desaturate(t.color),
@@ -149,13 +165,23 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1 }
 
   if (bands.length === 0) return null;
   const multi = bands[0].key !== "mono";
+  // kept out of the memo, hovering only restyles the paths
+  const paint = (b: (typeof bands)[number], fill: string, i: number): CSSProperties => {
+    const dim = multi && focus != null && b.ordinal !== focus;
+    return {
+      fill: dim ? greyOf(fill) : fill,
+      opacity: dim ? DIM_OPACITY : multi ? b.opacity : 1,
+      mixBlendMode: i ? "plus-lighter" : undefined,
+      transition: "fill 150ms, opacity 150ms",
+    };
+  };
   return (
     <>
       <div className="tl-wave tl-wave-ahead">
         <svg viewBox="0 0 100 26" preserveAspectRatio="none">
           <g opacity={multi ? 0.32 : 1}>
             {bands.map((b, i) => (
-              <path key={b.key} d={b.d} fill={b.ahead} opacity={multi ? b.opacity : 1} style={i ? { mixBlendMode: "plus-lighter" } : undefined} />
+              <path key={b.key} d={b.d} style={paint(b, b.ahead, i)} />
             ))}
           </g>
         </svg>
@@ -173,7 +199,7 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1 }
           </defs>
           <g filter="url(#tl-glow)">
             {bands.map((b, i) => (
-              <path key={b.key} d={b.d} fill={b.played} opacity={multi ? b.opacity : 1} style={i ? { mixBlendMode: "plus-lighter" } : undefined} />
+              <path key={b.key} d={b.d} style={paint(b, b.played, i)} />
             ))}
           </g>
         </svg>

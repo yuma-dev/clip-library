@@ -86,6 +86,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   const [isOpen, setIsOpen] = useState(false);
   const [tracks, setTracks] = useState<TrackView[] | null>(null);
   const [masterVolume, setMasterVolume] = useState(1);
+  const [trackFocus, setTrackFocus] = useState<number | null>(null);
   // click-to-toggle glyph; the counter restarts the animation, playing picks the glyph
   const [flash, setFlash] = useState({ n: 0, playing: false });
   // width / height of the loaded video; the frame takes this shape inside the stage
@@ -407,6 +408,11 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       setTracks(view && view.length > 0 ? view : null);
     };
     document.addEventListener("audio-tracks-changed", onTracks);
+    const onFocus = (e: Event) => {
+      const ord = (e as CustomEvent<number | null>).detail;
+      setTrackFocus(Number.isFinite(ord) ? ord : null);
+    };
+    document.addEventListener("audio-track-focus", onFocus);
     // open/close both go through body.player-open in legacy
     const observer = new MutationObserver(() => {
       const open = document.body.classList.contains("player-open");
@@ -421,6 +427,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       document.removeEventListener("clip-open-state", onOpenState);
       document.removeEventListener("player-volume", onVolume);
       document.removeEventListener("audio-tracks-changed", onTracks);
+      document.removeEventListener("audio-track-focus", onFocus);
       offReady();
       observer.disconnect();
     };
@@ -784,7 +791,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                 <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>
               <div id="current-time">0:00</div>
-              <Timeline waveform={session?.waveform ?? null} tracks={tracks} open={isOpen} gain={masterVolume} />
+              <Timeline waveform={session?.waveform ?? null} tracks={tracks} open={isOpen} gain={masterVolume} focus={trackFocus} />
               <div id="total-time">0:00</div>
               <div id="speed-container">
                 {/* legacy writes these two; the drum is what the user sees */}
