@@ -344,7 +344,7 @@
   color: #f4f4f6;
 }
 
-/* volume: single track gets a slider popover, multi track the mixer */
+/* volume: the mixer popover, the slider is only the fallback when no mixer came up */
 #volume-container {
   position: relative;
   display: flex;
@@ -456,8 +456,16 @@
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+/* single-track clips: one nameless row over the master volume */
+#audio-tracks-panel.mixer--single { width: 204px; }
+
 .mixer__tracks { display: flex; flex-direction: column; gap: 4px; }
-.mixer__row-wrap { position: relative; }
+.mixer__row-wrap { position: relative; transition: opacity 150ms, filter 150ms; }
+/* hovered track stays lit, the timeline dims the same way */
+#audio-tracks-panel[data-focus] .mixer__row-wrap:not(.mixer__row-wrap--focus) {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
 .mixer__row {
   position: relative;
   height: 28px;

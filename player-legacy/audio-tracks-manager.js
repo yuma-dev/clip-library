@@ -355,6 +355,7 @@ class AudioTracksManager {
 
   _renderRows() {
     const { tracksWrap, tray } = this._panelRefs;
+    this._setFocus(null);
     tracksWrap.innerHTML = '';
     tray.innerHTML = '';
 
@@ -374,6 +375,18 @@ class AudioTracksManager {
   /** what the timeline waveform draws: colour and visibility per track, nothing about gain */
   getTracksView() {
     return this.tracks.map((t) => ({ ordinal: t.ordinal, name: t.name, color: t.color, hidden: !!t.hidden, muted: !!t.muted, volume: t.volume }));
+  }
+
+  _setFocus(ordinal, wrap) {
+    if (this._focusOrdinal === ordinal) return;
+    this._focusOrdinal = ordinal;
+    if (this.panelEl) {
+      this.panelEl.querySelectorAll('.mixer__row-wrap--focus').forEach((el) => el.classList.remove('mixer__row-wrap--focus'));
+      if (ordinal == null) this.panelEl.removeAttribute('data-focus');
+      else this.panelEl.setAttribute('data-focus', '');
+      if (wrap) wrap.classList.add('mixer__row-wrap--focus');
+    }
+    document.dispatchEvent(new CustomEvent('audio-track-focus', { detail: ordinal }));
   }
 
   /** carries the view itself: during init the player has not stored this manager yet */
@@ -483,6 +496,12 @@ class AudioTracksManager {
     wrap.appendChild(row);
     wrap.appendChild(paletteEl);
 
+    // hovered track stays lit, the rest dim here and on the timeline; a drag keeps it past the edge
+    wrap.addEventListener('mouseenter', () => this._setFocus(track.ordinal, wrap));
+    wrap.addEventListener('mouseleave', () => {
+      if (!row.dataset.dragging) this._setFocus(null);
+    });
+
     dot.addEventListener('mousedown', (e) => e.stopPropagation());
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -554,6 +573,7 @@ class AudioTracksManager {
       dragging = false;
       dragShiftSnapshot = null;
       delete row.dataset.dragging;
+      if (!wrap.matches(':hover')) this._setFocus(null);
       // re-enable per-row transitions once the group drag ends
       if (this.panelEl) this.panelEl.removeAttribute('data-shift-drag');
       window.removeEventListener('mousemove', onMove);
@@ -770,6 +790,8 @@ class AudioTracksManager {
 
   _showPanelTransient(durationMs = 1600) {
     if (!this.panelEl) return;
+    // opened by hand: leave it open
+    if (!this.panelEl.classList.contains('hidden') && !this._panelHideTimer) return;
     this.panelEl.classList.remove('hidden');
     if (this._panelHideTimer) clearTimeout(this._panelHideTimer);
     this._panelHideTimer = setTimeout(() => {
@@ -842,6 +864,7 @@ class AudioTracksManager {
       this._paletteEscHandler = null;
     }
     this._closePalette();
+    this._setFocus(null);
     this.tracks.forEach((t) => {
       try { t.audioEl.pause(); } catch (_) {}
       try { t.gainNode.disconnect(); } catch (_) {}
@@ -861,4 +884,197 @@ class AudioTracksManager {
   }
 }
 
-module.exports = { AudioTracksManager };
+// single-track clips: the audio stays on <video> and the master gain, so this is only the mixer's
+// look over the player's volume. one row, no name, no hide or mute; the colour tints the timeline
+const SINGLE_DEFAULT_COLOR = '#ffffff';
+const SINGLE_PALETTE = [SINGLE_DEFAULT_COLOR, ...COLOR_PALETTE];
+// own key in trackPreferences.json so it never shares a colour with a multi-track stream name
+const SINGLE_PREF_KEY = 'single-track';
+
+class SingleTrackMixer {
+  /**
+   * @param {{panelEl: HTMLElement, globalPrefs: Object, onLevel: (v: number) => void,
+   *   onReset: () => void, onPersistGlobal: (name: string, patch: Object) => void}} opts
+   */
+  constructor({ panelEl, globalPrefs, onLevel, onReset, onPersistGlobal }) {
+    this.panelEl = panelEl;
+    this.onLevel = onLevel;
+    this.onReset = onReset;
+    this.onPersistGlobal = onPersistGlobal || (() => {});
+    const pref = (globalPrefs && globalPrefs[SINGLE_PREF_KEY]) || {};
+    this.color = typeof pref.color === 'string' && /^#[0-9a-f]{6}$/i.test(pref.color) ? pref.color : SINGLE_DEFAULT_COLOR;
+    this.volume = 1;
+    this.matched = false;
+    this.disposed = false;
+    this._els = null;
+    this._panelHideTimer = null;
+  }
+
+  render() {
+    if (!this.panelEl) return;
+    this.panelEl.innerHTML = '';
+    this.panelEl.classList.add('mixer--single');
+    const tracksWrap = document.createElement('div');
+    tracksWrap.className = 'mixer__tracks';
+    const wrap = document.createElement('div');
+    wrap.className = 'mixer__row-wrap';
+    const row = document.createElement('div');
+    row.className = 'mixer__row';
+    row.innerHTML = `
+      <div class="mixer__fill"></div>
+      <div class="mixer__unity"></div>
+      <div class="mixer__overlay">
+        <button class="mixer__dot" type="button" aria-label="Change color"></button>
+        <div class="mixer__name"></div>
+        <div class="mixer__value"></div>
+      </div>
+    `;
+    const dot = row.querySelector('.mixer__dot');
+    const value = row.querySelector('.mixer__value');
+    const palette = document.createElement('div');
+    palette.className = 'mixer__palette';
+    palette.hidden = true;
+    wrap.appendChild(row);
+    wrap.appendChild(palette);
+    tracksWrap.appendChild(wrap);
+    this.panelEl.appendChild(tracksWrap);
+    this._els = { row, value, palette };
+    this._buildSwatches();
+    this._paint();
+
+    dot.addEventListener('mousedown', (e) => e.stopPropagation());
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      palette.hidden = !palette.hidden;
+    });
+
+    const apply = (clientX) => {
+      const r = row.getBoundingClientRect();
+      const next = detentSnap(clamp((clientX - r.left) / r.width, 0, 1) * 2);
+      if (next !== this.volume) this.onLevel(next);
+    };
+    const onMove = (e) => {
+      e.preventDefault();
+      apply(e.touches ? e.touches[0].clientX : e.clientX);
+    };
+    const onUp = () => {
+      delete row.dataset.dragging;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+    const onDown = (e) => {
+      if (e.target.closest('.mixer__dot, .mixer__palette')) return;
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+      row.dataset.dragging = 'true';
+      apply(e.touches ? e.touches[0].clientX : e.clientX);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      window.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('touchend', onUp);
+    };
+    row.addEventListener('mousedown', onDown);
+    row.addEventListener('touchstart', onDown, { passive: false });
+    row.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.mixer__dot')) return;
+      this.onReset();
+    });
+    row.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.onLevel(detentSnap(clamp(this.volume + (e.deltaY < 0 ? 0.05 : -0.05), 0, 2)));
+    }, { passive: false });
+
+    this._outsideHandler = (e) => {
+      if (!palette.hidden && !e.target.closest('.mixer__palette, .mixer__dot')) palette.hidden = true;
+    };
+    this._escHandler = (e) => {
+      if (e.key === 'Escape') palette.hidden = true;
+    };
+    document.addEventListener('mousedown', this._outsideHandler);
+    document.addEventListener('keydown', this._escHandler);
+    this._emitChange();
+  }
+
+  _buildSwatches() {
+    const { palette } = this._els;
+    palette.innerHTML = '';
+    SINGLE_PALETTE.forEach((color) => {
+      const sw = document.createElement('button');
+      sw.type = 'button';
+      sw.className = 'mixer__swatch';
+      sw.style.background = color;
+      sw.dataset.active = String(color.toLowerCase() === this.color.toLowerCase());
+      sw.title = color;
+      sw.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.color = color;
+        // white is the default, a null drops the key
+        this.onPersistGlobal(SINGLE_PREF_KEY, { color: color === SINGLE_DEFAULT_COLOR ? null : color });
+        palette.hidden = true;
+        this._buildSwatches();
+        this._paint();
+        this._emitChange();
+      });
+      palette.appendChild(sw);
+    });
+  }
+
+  /** the player's level moved (drag, wheel, keys, matching); matched shows the auto dot */
+  setLevel(volume, matched) {
+    if (Number.isFinite(volume)) this.volume = clamp(volume, 0, 2);
+    if (matched !== undefined) this.matched = !!matched;
+    this._paint();
+  }
+
+  _paint() {
+    if (!this._els) return;
+    const { row, value } = this._els;
+    const v = this.volume;
+    row.style.setProperty('--fill', `${clamp(v / 2, 0, 1) * 100}%`);
+    row.style.setProperty('--c1', `${this.color}55`);
+    row.style.setProperty('--c2', v > 1 ? `${BOOSTED_COLOR}aa` : `${this.color}88`);
+    row.style.color = this.color;
+    value.textContent = `${Math.round(v * 100)}%`;
+    row.classList.toggle('mixer__row--matched', this.matched);
+    row.title = this.matched ? 'Loudness matched. Drag to set your own level, double-click to go back.' : '';
+  }
+
+  getTracksView() {
+    return [{ ordinal: 0, name: '', color: this.color, hidden: false, muted: false, volume: this.volume }];
+  }
+
+  _emitChange() {
+    document.dispatchEvent(new CustomEvent('audio-tracks-changed', { detail: this.disposed ? [] : this.getTracksView() }));
+  }
+
+  /** keys and wheel on the icon flash the panel; one opened by hand stays open */
+  showTransient(durationMs = 1600) {
+    if (!this.panelEl) return;
+    if (!this.panelEl.classList.contains('hidden') && !this._panelHideTimer) return;
+    this.panelEl.classList.remove('hidden');
+    if (this._panelHideTimer) clearTimeout(this._panelHideTimer);
+    this._panelHideTimer = setTimeout(() => {
+      this._panelHideTimer = null;
+      if (!this.disposed && this.panelEl) this.panelEl.classList.add('hidden');
+    }, durationMs);
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this._panelHideTimer) clearTimeout(this._panelHideTimer);
+    if (this._outsideHandler) document.removeEventListener('mousedown', this._outsideHandler);
+    if (this._escHandler) document.removeEventListener('keydown', this._escHandler);
+    if (this.panelEl) {
+      this.panelEl.innerHTML = '';
+      this.panelEl.classList.remove('mixer--single');
+      this.panelEl.classList.add('hidden');
+    }
+    this._els = null;
+    this._emitChange();
+  }
+}
+
+module.exports = { AudioTracksManager, SingleTrackMixer };
