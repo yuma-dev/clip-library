@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "clipdip-audio",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-audio"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "clipdip-diagnostics",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-capture"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "clipdip-diagnostics",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-core"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "chrono",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-diagnostics"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-discord"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-encoder"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "clipdip-profile",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-hotkey"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-muxer"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "anyhow",
  "clipdip-diagnostics",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-profile"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "parking_lot",
  "tracing",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "clipdip-ringbuf"
-version = "3.5.37"
+version = "3.5.39"
 dependencies = [
  "parking_lot",
  "tracing",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "cliplib-launcher"
-version = "3.5.37"
+version = "3.5.38"
 dependencies = [
  "png 0.17.16",
  "windows 0.58.0",

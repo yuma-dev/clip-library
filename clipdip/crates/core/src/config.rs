@@ -427,8 +427,16 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             sources: vec![
-                AudioSource::SystemLoopback { device_id: None, fallbacks: Vec::new() },
-                AudioSource::Microphone { device_id: None, fallbacks: Vec::new() },
+                AudioSource::SystemLoopback {
+                    device_id: None,
+                    device_name: None,
+                    fallbacks: Vec::new(),
+                },
+                AudioSource::Microphone {
+                    device_id: None,
+                    device_name: None,
+                    fallbacks: Vec::new(),
+                },
             ],
             include_mix: true,
         }
@@ -445,16 +453,23 @@ pub enum AudioSource {
     /// `device_id = None` uses system default; `Some(id)` pins one (see
     /// `clipdip --list-audio-devices`). `fallbacks` tried in order if the
     /// primary doesn't start; empty means a missing pinned device records nothing.
+    /// `device_name` is the pinned endpoint's friendly name: windows mints a new
+    /// endpoint id when a usb device moves ports or its driver reinstalls, and
+    /// the name is how the pipeline finds it again (learned on first good start)
     SystemLoopback {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_name: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fallbacks: Vec<String>,
     },
-    /// Same `device_id`/`fallbacks` conventions as `SystemLoopback`.
+    /// Same `device_id`/`device_name`/`fallbacks` conventions as `SystemLoopback`.
     Microphone {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_name: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fallbacks: Vec<String>,
     },
@@ -486,6 +501,32 @@ impl AudioSource {
             AudioSource::SystemLoopback { device_id, .. }
             | AudioSource::Microphone { device_id, .. } => device_id.as_deref(),
             AudioSource::ProcessLoopback { .. } => None,
+        }
+    }
+
+    /// Friendly name saved alongside the pin, if any.
+    pub fn device_name(&self) -> Option<&str> {
+        match self {
+            AudioSource::SystemLoopback { device_name, .. }
+            | AudioSource::Microphone { device_name, .. } => device_name.as_deref(),
+            AudioSource::ProcessLoopback { .. } => None,
+        }
+    }
+
+    /// Rewrites the pin after the pipeline found it under a new id or learned its
+    /// name. Returns false when nothing changed (or the source has no pin).
+    pub fn set_pin(&mut self, id: &str, name: &str) -> bool {
+        match self {
+            AudioSource::SystemLoopback { device_id, device_name, .. }
+            | AudioSource::Microphone { device_id, device_name, .. } => {
+                if device_id.as_deref() == Some(id) && device_name.as_deref() == Some(name) {
+                    return false;
+                }
+                *device_id = Some(id.to_string());
+                *device_name = Some(name.to_string());
+                true
+            }
+            AudioSource::ProcessLoopback { .. } => false,
         }
     }
 
@@ -753,6 +794,28 @@ mod tests {
         assert_eq!(back.audio.sources[0].fallbacks().len(), 2);
         // empty chains stay off disk entirely
         assert!(!out.contains("fallbacks = []"));
+    }
+
+    #[test]
+    fn device_name_round_trips_and_set_pin_reports_change() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [[audio.sources]]
+            kind = "microphone"
+            device_id = "{0.0.1.00000000}.{aaaa}"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.sources[0].device_name(), None);
+        assert!(cfg.audio.sources[0].set_pin("{0.0.1.00000000}.{bbbb}", "Mikrofon (Auna Mic CM900)"));
+        assert!(!cfg.audio.sources[0].set_pin("{0.0.1.00000000}.{bbbb}", "Mikrofon (Auna Mic CM900)"));
+
+        let out = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&out).unwrap();
+        assert_eq!(back.audio.sources[0].device_id(), Some("{0.0.1.00000000}.{bbbb}"));
+        assert_eq!(back.audio.sources[0].device_name(), Some("Mikrofon (Auna Mic CM900)"));
+        // unpinned sources keep the key off disk
+        assert!(!toml::to_string(&Config::default()).unwrap().contains("device_name"));
     }
 
     #[test]

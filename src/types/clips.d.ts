@@ -15,10 +15,12 @@ export type ClipdipRecordingQuality =
   | { mode: "constant_qp"; qp: number };
 
 /** Kind-tagged audio source entry; fallbacks is an ordered list of device ids
- *  tried when the entry above doesn't start ("default" = system default). */
+ *  tried when the entry above doesn't start ("default" = system default).
+ *  device_name rides along with a pin so the engine can find the endpoint again
+ *  after windows hands it a new id (usb port change, driver reinstall). */
 export type ClipdipAudioSource =
-  | { kind: "system_loopback"; device_id?: string; fallbacks?: string[] }
-  | { kind: "microphone"; device_id?: string; fallbacks?: string[] }
+  | { kind: "system_loopback"; device_id?: string; device_name?: string; fallbacks?: string[] }
+  | { kind: "microphone"; device_id?: string; device_name?: string; fallbacks?: string[] }
   | { kind: "process_loopback"; process_name?: string };
 
 export interface ClipdipConfig {

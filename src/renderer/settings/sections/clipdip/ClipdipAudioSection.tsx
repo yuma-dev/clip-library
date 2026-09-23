@@ -9,6 +9,8 @@ type AudioSourceKind = "system_loopback" | "microphone" | "process_loopback";
 interface AudioSource {
   kind: AudioSourceKind;
   device_id?: string;
+  /** friendly name saved with the pin; the engine re-finds the endpoint by it when the id changes */
+  device_name?: string;
   /** ordered device ids tried when the entry above doesn't start; "default" means the system
    *  default endpoint */
   fallbacks?: string[];
@@ -54,9 +56,10 @@ function withStaleOption(
   opts: { value: string; label: string; hint?: string }[],
   value: string | undefined,
   stale: boolean,
+  name?: string,
 ) {
   if (!stale || !value) return opts;
-  return [...opts, { value, label: "(disconnected device)", hint: value }];
+  return [...opts, { value, label: name ? `${name} (not connected)` : "(disconnected device)", hint: value }];
 }
 
 export default function ClipdipAudioSection() {
@@ -145,7 +148,12 @@ export default function ClipdipAudioSection() {
             {sources.map((src, i) => {
               const KindIcon = kindIcon(src.kind);
               const devOpts = deviceOptionsFor(src.kind, devices, DEFAULT_DEVICE_VALUE);
-              const knownDevice = devices.find((d) => d.id === src.device_id);
+              const flow = src.kind === "microphone" ? "Capture" : "Render";
+              // the pinned id may be dead while the same device sits under a new id; show that
+              // one selected, the engine repins on its next start the same way
+              const byName = devices.filter((d) => d.flow === flow && d.friendly_name === src.device_name);
+              const knownDevice =
+                devices.find((d) => d.id === src.device_id) ?? (byName.length === 1 ? byName[0] : undefined);
               const stale =
                 src.kind !== "process_loopback" && Boolean(src.device_id) && !knownDevice && !devicesLoading;
               const fallbacks = src.fallbacks ?? [];
@@ -187,10 +195,15 @@ export default function ClipdipAudioSection() {
                           {fallbacks.length > 0 ? "1." : "Device"}
                         </span>
                         <Select
-                          value={src.device_id ?? DEFAULT_DEVICE_VALUE}
+                          value={knownDevice?.id ?? src.device_id ?? DEFAULT_DEVICE_VALUE}
                           disabled={loading}
-                          onChange={(v) => update(i, { device_id: v === DEFAULT_DEVICE_VALUE ? undefined : v })}
-                          options={withStaleOption(devOpts, src.device_id, stale)}
+                          onChange={(v) =>
+                            update(i, {
+                              device_id: v === DEFAULT_DEVICE_VALUE ? undefined : v,
+                              device_name: devices.find((d) => d.id === v)?.friendly_name,
+                            })
+                          }
+                          options={withStaleOption(devOpts, src.device_id, stale, src.device_name)}
                           width={280}
                           aria-label={`Source ${i + 1} device`}
                         />

@@ -1667,8 +1667,17 @@ fn audio_restart_reason(states: &[clipdip_core::pipeline::AudioSourceState]) -> 
                 candidates.push(cand);
             }
         }
-        let available = |cand: &Option<String>| match cand {
+        // the primary may sit under a new id by now (usb re-enumeration); same
+        // lookup the pipeline does, so the restart it triggers actually opens it
+        let available = |rank: usize, cand: &Option<String>| match cand {
             None => default_id.is_some(),
+            Some(id) if rank == 0 => clipdip_core::pipeline::resolve_pinned_device(
+                st.kind,
+                id,
+                st.primary_name.as_deref(),
+                &devices,
+            )
+            .is_some_and(|d| d.flow == flow),
             Some(id) => devices.iter().any(|d| d.flow == flow && d.id == *id),
         };
         // Anything strictly better than what's running (everything, when
@@ -1678,7 +1687,7 @@ fn audio_restart_reason(states: &[clipdip_core::pipeline::AudioSourceState]) -> 
             if rank >= limit {
                 break;
             }
-            if available(cand) {
+            if available(rank, cand) {
                 return Some(if st.silent() {
                     format!("a {:?} device is available again", st.kind)
                 } else {
@@ -1697,6 +1706,40 @@ fn audio_restart_reason(states: &[clipdip_core::pipeline::AudioSourceState]) -> 
         }
     }
     None
+}
+
+/// writes back pins the pipeline opened under a different id than configured, or
+/// whose friendly name was never saved. Without this a usb mic that moved ports
+/// would be looked up by its dead id at every start and record nothing (Kai, Sept 2026).
+fn persist_pin_repairs(config_path: &std::path::Path, states: &[clipdip_core::pipeline::AudioSourceState]) {
+    if states.iter().all(|st| st.pin_repair.is_none()) {
+        return;
+    }
+    let mut cfg = match clipdip_core::config::Config::load_or_default(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("pin repair skipped, config load failed: {e:#}");
+            return;
+        }
+    };
+    let mut changed = false;
+    for st in states {
+        let Some(repair) = &st.pin_repair else { continue };
+        let Some(src) = cfg.audio.sources.get_mut(st.index) else { continue };
+        // config may have been edited since the pipeline read it; only touch the same pin
+        if src.device_id() != st.primary_id.as_deref() {
+            continue;
+        }
+        if src.set_pin(&repair.device_id, &repair.device_name) {
+            info!(kind = ?st.kind, name = %repair.device_name, "saved pinned audio device under its current id");
+            changed = true;
+        }
+    }
+    if changed {
+        if let Err(e) = cfg.save(config_path) {
+            warn!("pin repair save failed: {e:#}");
+        }
+    }
 }
 
 /// forwards debounced WASAPI endpoint changes into the capture loop; one
@@ -2337,6 +2380,7 @@ fn run_capture_loop(
         Ok(p) => {
             info!("pipeline started");
             let states = p.audio_states();
+            persist_pin_repairs(&config_path, &states);
             notify_audio_state_changes(&app, &notif_corner, None, &states);
             set_audio_status(&app, &states);
             last_audio_states = Some(states);
@@ -2846,6 +2890,7 @@ fn run_capture_loop(
                     Ok(p) => {
                         info!("pipeline restarted");
                         let states = p.audio_states();
+                        persist_pin_repairs(&config_path, &states);
                         notify_audio_state_changes(
                             &app,
                             &notif_corner,
