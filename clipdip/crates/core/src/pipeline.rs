@@ -453,6 +453,12 @@ pub struct AudioSourceState {
     pub wanted_label: String,
     /// The primary pin; `None` = system default.
     pub primary_id: Option<String>,
+    /// Friendly name saved with the pin, so a re-enumerated endpoint can be found by name.
+    pub primary_name: Option<String>,
+    /// What the config should say about the pin after this start: the endpoint id
+    /// actually opened plus its friendly name. Set when the id was remapped or the
+    /// name was never saved; the app layer writes it back so the pin survives the next id churn.
+    pub pin_repair: Option<PinRepair>,
     /// Configured fallback entries in priority order (may hold the `"default"` sentinel).
     pub fallback_ids: Vec<String>,
     /// Friendly name of what's actually recording; `None` = silent.
@@ -475,6 +481,40 @@ impl AudioSourceState {
     pub fn silent(&self) -> bool {
         self.rank.is_none()
     }
+}
+
+/// Pinned endpoint as it should be stored after a start (see `AudioSourceState::pin_repair`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinRepair {
+    pub device_id: String,
+    pub device_name: String,
+}
+
+/// Finds a pinned endpoint among the active devices: by id first, then by the
+/// saved friendly name when the id is gone. Windows hands a usb mic a fresh
+/// endpoint id after a port change or driver reinstall, and the name is the
+/// only thing that survives that. A name shared by two endpoints of the same
+/// flow is ambiguous and stays unresolved rather than picking the wrong one.
+pub fn resolve_pinned_device<'a>(
+    kind: AudioKind,
+    device_id: &str,
+    device_name: Option<&str>,
+    devices: &'a [AudioDeviceInfo],
+) -> Option<&'a AudioDeviceInfo> {
+    if let Some(d) = devices.iter().find(|d| d.id == device_id) {
+        return Some(d);
+    }
+    let name = device_name?;
+    let flow = match kind {
+        AudioKind::SystemLoopback => DeviceFlow::Render,
+        AudioKind::Microphone => DeviceFlow::Capture,
+    };
+    let mut by_name = devices.iter().filter(|d| d.flow == flow && d.friendly_name == name);
+    let first = by_name.next()?;
+    if by_name.next().is_some() {
+        return None;
+    }
+    Some(first)
 }
 
 /// Per-kind gate key so a missing mic doesn't suppress a missing-loopback report (or vice versa).
@@ -503,7 +543,8 @@ fn start_audio(
     for (idx, source) in cfg.audio.sources.iter().enumerate() {
         let stream_id = (idx + 1) as u8; // stream 0 is video
         let label = source.label();
-        let device_id = source.device_id().map(str::to_string);
+        let configured_id = source.device_id().map(str::to_string);
+        let configured_name = source.device_name().map(str::to_string);
         let kind = match source {
             AudioSource::SystemLoopback { .. } => AudioKind::SystemLoopback,
             AudioSource::Microphone { .. } => AudioKind::Microphone,
@@ -512,6 +553,30 @@ fn start_audio(
                 continue;
             }
         };
+        // a pin whose id is gone but whose name is back gets opened under the new id
+        let remapped = configured_id.as_deref().and_then(|id| {
+            resolve_pinned_device(kind, id, configured_name.as_deref(), &devices)
+                .filter(|d| d.id != id)
+                .map(|d| d.id.clone())
+        });
+        let device_id = remapped.clone().or_else(|| configured_id.clone());
+        if let Some(new_id) = &remapped {
+            info!(?kind, %label, "pinned device found under a new endpoint id, using it");
+            if let clipdip_diagnostics::Gate::Send { .. } = clipdip_diagnostics::gate(
+                &kind_gate_key("audio_pinned_device_remapped", kind),
+                Duration::from_secs(900),
+            ) {
+                clipdip_diagnostics::report_custom(
+                    "audio_pinned_device_remapped",
+                    clipdip_diagnostics::Severity::Info,
+                    format!("pinned audio device re-enumerated under a new id ({kind:?})"),
+                    Some(serde_json::json!({
+                        "audio_kind": format!("{kind:?}"),
+                        "new_id_is_default": devices.iter().any(|d| &d.id == new_id && d.is_default),
+                    })),
+                );
+            }
+        }
         let resolved_name = resolve_friendly_name(kind, device_id.as_deref(), &devices);
         // pinned device id no longer enumerates = "your saved mic is gone"
         let pinned_missing = device_id.is_some() && resolved_name.is_none() && !devices.is_empty();
@@ -535,6 +600,7 @@ fn start_audio(
                             .iter()
                             .any(|d| d.flow == want_flow && d.is_default),
                         "fallbacks_configured": source.fallbacks().len(),
+                        "name_saved": configured_name.is_some(),
                     })),
                 );
             }
@@ -586,7 +652,9 @@ fn start_audio(
             index: idx,
             kind,
             wanted_label,
-            primary_id: device_id.clone(),
+            primary_id: configured_id.clone(),
+            primary_name: configured_name.clone(),
+            pin_repair: None,
             fallback_ids: source.fallbacks().to_vec(),
             using_label: None,
             using_id: None,
@@ -621,6 +689,19 @@ fn start_audio(
                                 .map(extract_hresult),
                         })),
                     );
+                }
+                // a pinned primary that opened teaches the config its current id + name; the
+                // name only comes from enumeration, a made-up fallback name must not be saved
+                if rank == 0 && pinned && devices.iter().any(|d| d.id == used_id) {
+                    let repair = PinRepair {
+                        device_id: used_id.clone(),
+                        device_name: friendly_name.clone(),
+                    };
+                    let stored = configured_id.as_deref() == Some(repair.device_id.as_str())
+                        && configured_name.as_deref() == Some(repair.device_name.as_str());
+                    if !stored {
+                        state.pin_repair = Some(repair);
+                    }
                 }
                 state.using_label = Some(friendly_name.clone());
                 state.using_id = Some(used_id);
@@ -1581,4 +1662,39 @@ fn write_wav(path: &PathBuf, fmt: WaveFormat, pkts: &[&EncodedPacket]) -> Result
     f.seek(SeekFrom::Start(40))?;
     f.write_all(&(data_bytes as u32).to_le_bytes())?;
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dev(id: &str, name: &str, flow: DeviceFlow) -> AudioDeviceInfo {
+        AudioDeviceInfo {
+            id: id.into(),
+            friendly_name: name.into(),
+            flow,
+            is_default: false,
+        }
+    }
+
+    #[test]
+    fn pinned_device_resolves_by_id_then_by_name() {
+        let devices = vec![
+            dev("cap-new", "Mikrofon (Auna Mic CM900)", DeviceFlow::Capture),
+            dev("ren-1", "Mikrofon (Auna Mic CM900)", DeviceFlow::Render),
+            dev("cap-2", "Mic (Elgato Virtual Audio)", DeviceFlow::Capture),
+        ];
+        let mic = AudioKind::Microphone;
+        let name = Some("Mikrofon (Auna Mic CM900)");
+        // exact id wins even when the name would point elsewhere
+        assert_eq!(resolve_pinned_device(mic, "cap-2", name, &devices).map(|d| d.id.as_str()), Some("cap-2"));
+        // gone id, saved name: same-flow match only, the render endpoint with that name is ignored
+        assert_eq!(resolve_pinned_device(mic, "cap-old", name, &devices).map(|d| d.id.as_str()), Some("cap-new"));
+        // no name saved: nothing to go on
+        assert!(resolve_pinned_device(mic, "cap-old", None, &devices).is_none());
+        // ambiguous name stays unresolved
+        let mut twins = devices.clone();
+        twins.push(dev("cap-3", "Mikrofon (Auna Mic CM900)", DeviceFlow::Capture));
+        assert!(resolve_pinned_device(mic, "cap-old", name, &twins).is_none());
+    }
 }
