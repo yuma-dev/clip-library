@@ -972,7 +972,8 @@ function frameStep(timestamp) {
     return;
   }
 
-  const frameTime = 1 / 30; // assume 30fps
+  // probe fps from get-clip-info; 60 when unknown (clips cached before it was stored)
+  const frameTime = 1 / (state.currentClip?.fps || 60);
   const minFrameInterval = 50; // min ms between steps
 
   if (timestamp - state.lastFrameStepTime >= minFrameInterval) {
@@ -1902,7 +1903,7 @@ async function openClip(originalName, customName) {
 
   logger.info(`[${originalName}] Clip data ready. Duration: ${clipInfo?.format?.duration}, Trim: ${trimData ? 'Yes' : 'No'}, Tags: ${clipTags?.length || 0}`);
 
-  state.currentClip = { originalName, customName, tags: clipTags };
+  state.currentClip = { originalName, customName, tags: clipTags, fps: clipInfo.fps || null };
 
   if (elements.clipTitle) {
     elements.clipTitle.value = customName || path.basename(originalName, path.extname(originalName));
