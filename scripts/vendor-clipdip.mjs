@@ -18,11 +18,10 @@ if (!existsSync(exe)) {
   process.exit(1);
 }
 
+// start empty: everything left here ships as resources/clipdip/ (the pre-merge
+// ffmpeg pair and an old preparer exe both lingered)
+rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
-// drop stale extras from the pre-merge layout
-for (const stale of ["ffmpeg.exe", "ATTRIBUTION.txt"]) {
-  rmSync(join(outDir, stale), { force: true });
-}
 const dest = join(outDir, "clipdip.exe");
 copyFileSync(exe, dest);
 console.log(`vendor-clipdip: clipdip.exe (${(statSync(dest).size / 1048576).toFixed(1)} MB) -> ${outDir}`);
