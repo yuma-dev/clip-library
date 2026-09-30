@@ -87,7 +87,9 @@ export default function LayerTags({ tracks, open, onHeight }: { tracks: TrackVie
       const dt = (ev.clientX - x0) / pps;
       if (edge === "start") {
         const start = clamp(s0 + dt, 0, e0 - MIN_LEN);
-        update(l.id, { start });
+        // zoom keys count from the start, shift them back so they stay on the same frames
+        const keys = l.kind === "zoom" ? l.keys : undefined;
+        update(l.id, keys?.length ? { start, keys: keys.map((k) => ({ ...k, t: k.t + s0 - start })) } : { start });
         if (v) v.currentTime = start;
       } else if (edge === "end") {
         const end = clamp(e0 + dt, s0 + MIN_LEN, duration);
@@ -134,6 +136,11 @@ export default function LayerTags({ tracks, open, onHeight }: { tracks: TrackVie
             <span className="pl-tag-edge is-start" data-edge="start" />
             {l.kind === "text" && l.source === "subtitles" ? <Captions size={11} strokeWidth={2.2} /> : <KindIcon kind={l.kind} size={11} strokeWidth={2.2} />}
             <span className="pl-tag-label">{label}</span>
+            {l.kind === "zoom"
+              ? l.keys?.map((k, i) =>
+                  k.t < 0 || k.t > l.end - l.start ? null : <i key={i} className="pl-tag-key" style={{ left: `${(k.t / (l.end - l.start)) * 100}%` }} />,
+                )
+              : null}
             <span className="pl-tag-edge is-end" data-edge="end" />
           </div>
         );

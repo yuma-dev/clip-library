@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LoaderCircle, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
-import type { GifLayer, ImageLayer, KlipyGif, Layer, LayerAnim, TextLayer, VolumeLayer } from "../../../types/clips";
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CopyPlus, DiamondMinus, DiamondPlus, LoaderCircle, Play, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import type { BlurLayer, GifLayer, ImageLayer, KlipyGif, Layer, LayerAnim, SoundLayer, SpeedLayer, TextLayer, VisualLayer, VolumeLayer, ZoomLayer } from "../../../types/clips";
 import type { TrackView } from "../Waveform";
 import { AnimGrid, AnimLengthRows, Detail, FillSlider, Flyout, Row, Seg, SizeSlider, StyleTiles, Swatches, TextDetailRows } from "./controls";
 import { KIND_NAME, fileUrl, layerColor, shortName, trackInfo } from "./meta";
-import { HIDE_ANIMS, SHOW_MEDIA, SHOW_TEXT, clamp, pct } from "./model";
-import { remove, select, setMenu, update, useLayers } from "./store";
+import { HIDE_ANIMS, MAX_ZOOM_KEYS, SHOW_MEDIA, SHOW_TEXT, SPEEDS, ZOOM_MAX, ZOOM_MIN, clamp, fmtTime, keyAt, pct, playSeconds, toggleKey, viewPatch, zoomView } from "./model";
+import { usePlayhead } from "./fx";
+import { probeDuration } from "./sound";
+import { baseRate } from "./speed";
+import { duplicateSelected, getLayers, remove, select, setMenu, update, useLayers } from "./store";
 
 const video = () => document.getElementById("video-player") as HTMLVideoElement | null;
 
@@ -77,7 +80,7 @@ function preview(from: number, to: number) {
   previewStop = requestAnimationFrame(watch);
 }
 
-function AnimRows({ l }: { l: Exclude<Layer, VolumeLayer> }) {
+function AnimRows({ l }: { l: VisualLayer }) {
   // picking one replays that edge so it shows at once
   const pick = (key: "ain" | "aout", v: LayerAnim) => {
     update(l.id, { [key]: v } as Partial<Layer>);
@@ -178,7 +181,7 @@ function GifBody({ l, clip }: { l: GifLayer; clip: string }) {
     update(l.id, { gif: { id: g.id, title: g.title, url: g.url }, aspect: g.width && g.height ? g.width / g.height : 1, file: null });
     try {
       const { file } = await window.clips.downloadLayerGif(clip, { id: g.id, url: g.url });
-      update(l.id, { file });
+      update(l.id, { file }, { history: false });
     } catch {
       setError("That GIF didn't download. Pick it again or try another.");
     } finally {
@@ -229,7 +232,8 @@ function ImageBody({ l, clip }: { l: ImageLayer; clip: string }) {
       const img = new window.Image();
       img.src = fileUrl(res.file);
       await img.decode().catch(() => undefined);
-      update(l.id, { file: res.file, aspect: img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1 });
+      // the first pick finishes the add, only a replace is its own step
+      update(l.id, { file: res.file, aspect: img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1 }, { history: Boolean(l.file) });
     } catch (err) {
       setError((err as Error)?.message || "Couldn't add that image.");
     }
@@ -257,8 +261,261 @@ function ImageBody({ l, clip }: { l: ImageLayer; clip: string }) {
   );
 }
 
+/** plays the layer with a little lead in and out; deselects first so a zoom shows instead of its box */
+function PreviewButton({ l }: { l: Layer }) {
+  return (
+    <button
+      type="button"
+      className="pl-lp-btn"
+      onClick={() => {
+        select(null);
+        preview(Math.max(0, l.start - 0.6), l.end + 0.6);
+      }}
+    >
+      <Play size={12} />
+      Preview
+    </button>
+  );
+}
+
+/** the layer's span with a diamond per key and the playhead; a click seeks, the button adds or
+ * drops the key at the playhead */
+function ZoomKeys({ l, t }: { l: ZoomLayer; t: number }) {
+  const len = l.end - l.start;
+  const keys = l.keys ?? [];
+  const at = keyAt(l, t);
+  const full = at < 0 && keys.length >= MAX_ZOOM_KEYS;
+  const seek = (to: number) => {
+    const v = video();
+    if (!v) return;
+    v.pause();
+    v.currentTime = l.start + clamp(to, 0, len);
+  };
+  // click or drag along it to scrub
+  const onTrack = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const el = e.currentTarget;
+    const r = el.getBoundingClientRect();
+    const to = (x: number) => seek(((x - r.left) / r.width) * len);
+    to(e.clientX);
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => to(ev.clientX);
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  };
+  const inside = t >= l.start && t <= l.end;
+  return (
+    <div className="pl-keys" style={{ "--c": layerColor(l, null) } as CSSProperties}>
+      <div className="pl-keys-track">
+        <div className="pl-keys-span" onPointerDown={onTrack} title="Click or drag to move the playhead">
+          {inside ? <i className="pl-keys-head" style={{ left: `${((t - l.start) / len) * 100}%` }} /> : null}
+          {keys.map((k, i) =>
+            k.t < 0 || k.t > len ? null : (
+              <button
+                key={i}
+                type="button"
+                className={`pl-keys-key${i === at ? " is-on" : ""}`}
+                style={{ left: `${(k.t / len) * 100}%` }}
+                title={`${k.scale.toFixed(1)}x at ${fmtTime(l.start + k.t)}`}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  seek(k.t);
+                }}
+              />
+            ),
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="pl-lp-btn"
+        disabled={full}
+        title={at >= 0 ? "Remove the keyframe at the playhead" : full ? `${MAX_ZOOM_KEYS} keyframes at most` : "Add a keyframe at the playhead"}
+        onClick={() => update(l.id, toggleKey(l, t))}
+      >
+        {at >= 0 ? <DiamondMinus size={12} /> : <DiamondPlus size={12} />}
+        {at >= 0 ? "Remove" : "Add"}
+      </button>
+    </div>
+  );
+}
+
+function ZoomBody({ l }: { l: ZoomLayer }) {
+  const t = usePlayhead();
+  const view = zoomView(l, t);
+  const keyed = !!l.keys?.length;
+  return (
+    <>
+      <p className="pl-lp-hint">
+        {keyed
+          ? "Move the playhead, then drag the box or the slider. Each change sets a keyframe there, the zoom moves smoothly between them."
+          : "Drag the box on the video to pick the spot, drag its corner to zoom more or less. Add a keyframe to make it move."}
+      </p>
+      <Row label="Zoom">
+        <FillSlider
+          label="Zoom"
+          value={view.scale}
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          reset={1.6}
+          step={0.05}
+          color={layerColor(l, null)}
+          name="Zoom"
+          text={`${view.scale.toFixed(1)}x`}
+          onChange={(scale) => {
+            const cur = getLayers().items.find((x) => x.id === l.id);
+            if (cur?.kind === "zoom") update(l.id, viewPatch(cur, t, { scale }));
+          }}
+        />
+      </Row>
+      <Row label="Keyframes">
+        <ZoomKeys l={l} t={t} />
+      </Row>
+      <Row label="Move in and out">
+        <Seg<number> value={l.ease} onPick={(ease) => update(l.id, { ease })} options={[[0, "Cut"], [0.4, "Smooth"], [1, "Slow"]]} />
+      </Row>
+      <PreviewButton l={l} />
+    </>
+  );
+}
+
+function SpeedBody({ l }: { l: SpeedLayer }) {
+  const { items } = useLayers();
+  const plays = playSeconds(items, l.start, l.end, 1);
+  return (
+    <>
+      <Row label="Speed">
+        <Seg<number> value={l.rate} onPick={(rate) => update(l.id, { rate })} options={SPEEDS.map((v) => [v, `${v}x`] as [number, string])} />
+      </Row>
+      <p className="pl-lp-hint">
+        {fmtTime(l.end - l.start)} of the clip plays in {fmtTime(plays)}. The sound slows down and speeds up with it.
+      </p>
+      <PreviewButton l={l} />
+    </>
+  );
+}
+
+function BlurBody({ l }: { l: BlurLayer }) {
+  return (
+    <>
+      <p className="pl-lp-hint">Drag the box on the video over what to hide. It follows zooms.</p>
+      <Row label="Look">
+        <Seg<BlurLayer["mode"]> value={l.mode} onPick={(mode) => update(l.id, { mode })} options={[["blur", "Blur"], ["pixelate", "Pixelate"]]} />
+      </Row>
+      <Row label="Strength">
+        <FillSlider
+          label="Strength"
+          value={l.strength}
+          min={0.05}
+          max={1}
+          reset={0.6}
+          step={0.01}
+          color={layerColor(l, null)}
+          name={l.mode === "pixelate" ? "Pixelate" : "Blur"}
+          text={pct(l.strength)}
+          onChange={(strength) => update(l.id, { strength })}
+        />
+      </Row>
+    </>
+  );
+}
+
+/** a tag end in source seconds that lets the sound play out; speed layers make that non linear */
+function fitEnd(l: SoundLayer, duration: number): number {
+  const max = video()?.duration || l.end;
+  const items = getLayers().items;
+  const base = baseRate();
+  let end = l.start + 0.2;
+  while (end < max && playSeconds(items, l.start, end, base) < duration) end += 0.02;
+  return Math.min(max, end);
+}
+
+const cleanErr = (err: unknown) => (err as Error)?.message?.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") || "";
+
+function SoundBody({ l, clip }: { l: SoundLayer; clip: string }) {
+  const [error, setError] = useState<string | null>(null);
+  const choose = async () => {
+    setError(null);
+    try {
+      const res = await window.clips.pickLayerSound(clip);
+      if (!res) return;
+      const duration = await probeDuration(res.file);
+      // the first pick finishes the add, only a replace is its own step
+      update(l.id, { file: res.file, name: res.name, duration }, { history: Boolean(l.file) });
+      if (duration > 0) update(l.id, { end: fitEnd(l, duration) }, { history: false });
+    } catch (err) {
+      setError(cleanErr(err) || "Couldn't add that sound.");
+    }
+  };
+  // a fresh sound layer opens the file dialog right away
+  const asked = useRef(false);
+  useEffect(() => {
+    if (!l.file && !asked.current) {
+      asked.current = true;
+      void choose();
+    }
+  }, []);
+  return (
+    <>
+      <div className="pl-lp-image">
+        <span className="pl-lp-sound">{l.file ? `${l.name || "Sound"}${l.duration ? `, ${fmtTime(l.duration)}` : ""}` : "No sound picked"}</span>
+        <button type="button" className="pl-lp-btn" onClick={() => void choose()}>
+          <Upload size={12} />
+          {l.file ? "Replace sound" : "Choose sound"}
+        </button>
+      </div>
+      {error ? <p className="pl-lp-error">{error}</p> : null}
+      <Row label="Level">
+        <FillSlider
+          label="Level"
+          value={l.level}
+          min={0}
+          max={2}
+          reset={1}
+          step={0.01}
+          color={layerColor(l, null)}
+          name={l.name || "Sound"}
+          text={pct(l.level)}
+          onChange={(level) => update(l.id, { level })}
+        />
+      </Row>
+      <Row label="Fade in and out">
+        <Seg<number> value={l.fade} onPick={(fade) => update(l.id, { fade })} options={[[0, "Off"], [0.3, "Short"], [1, "Long"]]} />
+      </Row>
+      {l.file && l.duration > 0 ? (
+        <button type="button" className="pl-lp-btn" onClick={() => update(l.id, { end: fitEnd(l, l.duration) })}>
+          Fit to the sound
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+const hasDetails = (l: Layer) => l.kind !== "speed" && l.kind !== "blur";
+
 /** the fine settings of a layer, shown in the flyout */
 function LayerDetails({ l }: { l: Layer }) {
+  if (l.kind === "zoom") {
+    return (
+      <Row label="Move">
+        <Detail label="Length" value={l.ease} min={0} max={2} step={0.05} def={0.4} fmt={(v) => (v ? `${v.toFixed(2)} s` : "cut")} onChange={(ease) => update(l.id, { ease: ease ?? 0.4 })} />
+      </Row>
+    );
+  }
+  if (l.kind === "sound") {
+    return (
+      <Row label="Fade">
+        <Detail label="Length" value={l.fade} min={0} max={3} step={0.05} def={0} fmt={(v) => (v ? `${v.toFixed(2)} s` : "off")} onChange={(fade) => update(l.id, { fade: fade ?? 0 })} />
+      </Row>
+    );
+  }
+  if (l.kind === "speed" || l.kind === "blur") return null;
   if (l.kind === "volume") {
     return (
       <Row label="Ease">
@@ -329,9 +586,14 @@ export default function LayerInspector({ tracks, tagsHeight }: { tracks: TrackVi
     >
       <div className="pl-lp-head">
         <span className="pl-lp-title">{KIND_NAME[l.kind]}</span>
-        <button type="button" className={`pl-lp-icon${more ? " is-on" : ""}`} title="Details" aria-pressed={more} onClick={() => setMore(!more)}>
-          <SlidersHorizontal size={13} />
+        <button type="button" className="pl-lp-icon" title="Duplicate (Ctrl+D)" onClick={() => duplicateSelected()}>
+          <CopyPlus size={13} />
         </button>
+        {hasDetails(l) ? (
+          <button type="button" className={`pl-lp-icon${more ? " is-on" : ""}`} title="Details" aria-pressed={more} onClick={() => setMore(!more)}>
+            <SlidersHorizontal size={13} />
+          </button>
+        ) : null}
         <button type="button" className="pl-lp-icon is-danger" title="Delete (Del)" onClick={() => remove(l.id)}>
           <Trash2 size={13} />
         </button>
@@ -343,8 +605,12 @@ export default function LayerInspector({ tracks, tagsHeight }: { tracks: TrackVi
       {l.kind === "text" ? <TextBody l={l} /> : null}
       {l.kind === "gif" ? <GifBody key={l.id} l={l} clip={clip} /> : null}
       {l.kind === "image" ? <ImageBody key={l.id} l={l} clip={clip} /> : null}
+      {l.kind === "zoom" ? <ZoomBody l={l} /> : null}
+      {l.kind === "speed" ? <SpeedBody l={l} /> : null}
+      {l.kind === "blur" ? <BlurBody l={l} /> : null}
+      {l.kind === "sound" ? <SoundBody key={l.id} l={l} clip={clip} /> : null}
     </div>
-    {more && pos ? (
+    {more && pos && hasDetails(l) ? (
       <Flyout title="Details" onClose={() => setMore(false)} style={{ left: pos.flyLeft, bottom, maxHeight: pos.maxHeight }}>
         <LayerDetails l={l} />
       </Flyout>

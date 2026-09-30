@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { baseRate } from "./layers/speed";
 
 // fastest on top: up the wheel is up the list
 const SPEEDS = [2, 1.5, 1.25, 1, 0.75, 0.5];
@@ -34,7 +35,7 @@ export default function SpeedDrum({ rate, onChange }: SpeedDrumProps) {
     if (controlled) return;
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
     if (!video) return;
-    const sync = () => setOwn(nearest(video.playbackRate));
+    const sync = () => setOwn(nearest(baseRate()));
     video.addEventListener("ratechange", sync);
     return () => video.removeEventListener("ratechange", sync);
   }, [controlled]);

@@ -1,16 +1,21 @@
 import type { LayerKind } from "../../../types/clips";
 import { getActionFromEvent } from "../keybindings";
-import { add, getLayers, remove, select, setMenu } from "./store";
+import { add, canPaste, copySelected, duplicateSelected, getLayers, paste, redo, remove, select, setMenu, undo } from "./store";
 
 const ADD: Record<string, LayerKind> = {
   addVolumeLayer: "volume",
   addTextLayer: "text",
   addGifLayer: "gif",
   addImageLayer: "image",
+  addZoomLayer: "zoom",
+  addSpeedLayer: "speed",
+  addBlurLayer: "blur",
+  addSoundLayer: "sound",
 };
 
 /** layer keys, in the capture phase so they win over the player's own: Delete removes the
- * selected layer instead of the clip, Escape closes the popover instead of the player */
+ * selected layer instead of the clip, Escape closes the popover instead of the player. undo, redo,
+ * copy, paste and duplicate are the usual ctrl keys and not rebindable */
 export function installLayerKeys(): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (!document.body.classList.contains("player-open")) return;
@@ -22,6 +27,21 @@ export function installLayerKeys(): () => void {
       e.preventDefault();
       e.stopPropagation();
     };
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      const done =
+        k === "z" ? (e.shiftKey ? redo() : undo()) :
+        k === "y" && !e.shiftKey ? redo() :
+        k === "c" && !e.shiftKey && sel ? copySelected() :
+        k === "v" && !e.shiftKey && canPaste() ? paste() :
+        k === "d" && !e.shiftKey && sel ? duplicateSelected() :
+        null;
+      // undo with nothing left still eats the key, it means nothing else in the player
+      if (done !== null || k === "z" || k === "y") {
+        stop();
+        return;
+      }
+    }
     if (sel && (e.key === "Delete" || e.key === "Backspace")) {
       stop();
       remove(sel);
@@ -46,7 +66,7 @@ export function installLayerKeys(): () => void {
   const onDown = (e: PointerEvent) => {
     if (!getLayers().sel) return;
     const t = e.target as HTMLElement | null;
-    if (t?.closest(".pl-lp, .pl-more, .pl-layer, .pl-tag")) return;
+    if (t?.closest(".pl-lp, .pl-more, .pl-layer, .pl-tag, .pl-blur, .pl-zoombox")) return;
     select(null);
   };
   document.addEventListener("keydown", onKey, true);

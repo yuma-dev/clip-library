@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Layer, TextLayer, VolumeLayer } from "../../../types/clips";
+import type { TextLayer, VisualLayer } from "../../../types/clips";
+import { FxStage, hasFx } from "./fx";
 import { fileUrl } from "./meta";
 import { animAt, clamp, isVisual } from "./model";
 import { drawText, loadTextFont } from "./rasterize";
 import { select, update, useLayers } from "./store";
 
-type Visual = Exclude<Layer, VolumeLayer>;
+type Visual = VisualLayer;
 const video = () => document.getElementById("video-player") as HTMLVideoElement | null;
 
 /** the same canvas the export png comes from, drawn at the on-screen size */
@@ -52,6 +53,7 @@ export default function LayerStage() {
   selRef.current = sel;
 
   const hasVisuals = visuals.length > 0;
+  const fx = hasFx(items);
   // on-screen frame width, text is drawn for it so it stays sharp at any window size
   const [frameW, setFrameW] = useState(0);
   useLayoutEffect(() => {
@@ -61,7 +63,7 @@ export default function LayerStage() {
     ro.observe(box);
     setFrameW(box.offsetWidth);
     return () => ro.disconnect();
-  }, [hasVisuals]);
+  }, [hasVisuals, fx]);
   useEffect(() => {
     if (!hasVisuals) return;
     let raf = 0;
@@ -131,10 +133,11 @@ export default function LayerStage() {
     el.addEventListener("pointercancel", up);
   };
 
-  if (!hasVisuals) return null;
+  if (!hasVisuals && !fx) return null;
   return (
     <div className="pl-layers">
       <div className="pl-layers-box" ref={boxRef}>
+        <FxStage />
         {visuals.map((l) => (
           <div
             key={l.id}

@@ -26,6 +26,10 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   addTextLayer: "t",
   addGifLayer: "g",
   addImageLayer: "i",
+  addZoomLayer: "z",
+  addSpeedLayer: "s",
+  addBlurLayer: "b",
+  addSoundLayer: "m",
 };
 
 let keybindings: Record<string, string> = { ...DEFAULT_KEYBINDINGS };

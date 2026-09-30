@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Captions, Check, ChevronLeft, Plus, SlidersHorizontal } from "lucide-react";
+import { Captions, Check, ChevronLeft, Plus, Redo2, SlidersHorizontal, Undo2 } from "lucide-react";
 import type { LayerKind, TextLayer } from "../../../types/clips";
 import type { TrackView } from "../Waveform";
 import { getAllKeybindings } from "../keybindings";
 import { AnimGrid, FillSlider, Flyout, Row, SizeSlider, StyleTiles, Swatches, TextDetailRows } from "./controls";
 import { KIND_HINT, KindIcon, shortName } from "./meta";
 import { HIDE_ANIMS, SHOW_TEXT } from "./model";
-import { add, getLayers, mapItems, replaceSubtitles, setMenu, useLayers } from "./store";
+import { add, getLayers, mapItems, redo, replaceSubtitles, setMenu, undo, useLayers } from "./store";
 import { buildSubtitles, colorFor, colorKey, isSub, loadSubStyle, restyle, saveSubStyle, styleOf, type SubStyle } from "./subtitles";
 
 const KINDS: Array<[LayerKind, string, string]> = [
@@ -14,6 +14,10 @@ const KINDS: Array<[LayerKind, string, string]> = [
   ["text", "Text", "addTextLayer"],
   ["gif", "GIF", "addGifLayer"],
   ["image", "Image", "addImageLayer"],
+  ["zoom", "Zoom", "addZoomLayer"],
+  ["speed", "Speed", "addSpeedLayer"],
+  ["blur", "Blur", "addBlurLayer"],
+  ["sound", "Sound", "addSoundLayer"],
 ];
 
 type Busy = { step: "engine" | "unpack" | "model" | "audio" | "transcribe"; progress: number; of?: string; got?: number; total?: number };
@@ -52,10 +56,7 @@ function streamOf(ordinal: number): number[] {
 function DownloadView({ busy, error, onDownload }: { busy: Busy | null; error: string | null; onDownload: () => void }) {
   return (
     <>
-      <p className="pl-subs-why">
-        Subtitles are made by a speech model that runs on this PC. Your audio never leaves it, and it understands almost any language, slang
-        included.
-      </p>
+      <p className="pl-subs-why">Subtitles are made by a speech model that runs on this PC.</p>
       <p className="pl-subs-why">The model is downloaded once, about 1.75 GB. After that, subtitles take a few seconds per clip.</p>
       {busy ? (
         <Progress busy={busy} />
@@ -254,7 +255,7 @@ function SubtitlesPanel({ tracks, onBack }: { tracks: TrackView[] | null; onBack
 
 /** the Add button in the player bar and its menu; everything lands at the playhead */
 export default function AddLayer({ tracks }: { tracks: TrackView[] | null }) {
-  const { menu } = useLayers();
+  const { menu, hist } = useLayers();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -269,10 +270,20 @@ export default function AddLayer({ tracks }: { tracks: TrackView[] | null }) {
   const keys = menu ? getAllKeybindings() : {};
   return (
     <div className="pl-add" ref={ref}>
+      {hist.undo || hist.redo ? (
+        <>
+          <button type="button" className="pl-add-hist" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!hist.undo} onClick={() => undo()}>
+            <Undo2 size={13} strokeWidth={2.2} />
+          </button>
+          <button type="button" className="pl-add-hist" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!hist.redo} onClick={() => redo()}>
+            <Redo2 size={13} strokeWidth={2.2} />
+          </button>
+        </>
+      ) : null}
       <button
         type="button"
         className={`pl-add-btn${menu ? " is-on" : ""}`}
-        title="Add a volume change, text, GIF, image or subtitles"
+        title="Add text, media, a zoom, a speed change, a blur, a sound or subtitles"
         aria-haspopup="menu"
         aria-expanded={Boolean(menu)}
         onClick={(e) => {
@@ -299,7 +310,7 @@ export default function AddLayer({ tracks }: { tracks: TrackView[] | null }) {
               {keys[action] ? <kbd>{keys[action].toUpperCase()}</kbd> : null}
             </button>
           ))}
-          <button type="button" role="menuitem" onClick={() => setMenu("subs")}>
+          <button type="button" role="menuitem" className="is-wide" onClick={() => setMenu("subs")}>
             <Captions size={15} className="pl-add-icon is-subs" />
             <span>
               <b>Subtitles</b>

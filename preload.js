@@ -188,6 +188,8 @@ const api = {
   saveLayers: invoke("save-layers"),
   writeLayerText: invoke("layers-write-text"),
   pickLayerImage: invoke("layers-pick-image"),
+  pickLayerSound: invoke("layers-pick-sound"),
+  copyLayerMedia: invoke("layers-copy-media"),
   downloadLayerGif: invoke("layers-download-gif"),
   searchGifs: invoke("klipy-gifs"),
   subtitlesStatus: invoke("subtitles-status"),

@@ -8,7 +8,17 @@ const path = require('path');
 const fs = require('fs').promises;
 const os = require('os');
 const ffmpeg = require('fluent-ffmpeg');
-const { loadExportLayers, volumeLayerFilters, buildOverlayGraph } = require('./layer-export');
+const {
+  loadExportLayers,
+  volumeLayerFilters,
+  buildOverlayGraph,
+  buildFxGraph,
+  buildTimeMap,
+  atempoChain,
+  retimeAudio,
+  planSounds,
+  mixSounds
+} = require('./layer-export');
 const { ffmpegPath, ffprobePath } = require('./ffmpeg-binaries');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
@@ -836,7 +846,10 @@ function buildAudioMixFilterComplex({
   hasSpeedChange,
   layers = [],
   start = 0,
-  duration = 0
+  duration = 0,
+  tmap = null,
+  sounds = [],
+  soundInput = 1
 }) {
   if (!Array.isArray(audioMix) || audioMix.length === 0) return null;
 
@@ -871,7 +884,29 @@ function buildAudioMixFilterComplex({
   const postFilters = [];
   if (hasBaseVolumeChange) postFilters.push(`volume=${effectiveVolume}`);
   postFilters.push(...volumeLayerFilters(layers, start, duration, (t) => t === 'all'));
-  if (hasSpeedChange) postFilters.push(`atempo=${effectiveSpeed}`);
+  const retime = Boolean(tmap && tmap.segmented);
+  if (hasSpeedChange && !retime) postFilters.push(...atempoChain(effectiveSpeed));
+
+  // speed layers and sounds need labelled steps after the mix
+  if (retime || sounds.length > 0) {
+    let label = mixedLabel;
+    if (postFilters.length > 0) {
+      parts.push(`[${label}]${postFilters.join(',')}[apost]`);
+      label = 'apost';
+    }
+    if (retime) {
+      const r = retimeAudio(label, tmap);
+      parts.push(...r.parts);
+      label = r.out;
+    }
+    if (sounds.length > 0) {
+      const m = mixSounds(label, sounds, soundInput);
+      parts.push(...m.parts);
+      label = m.out;
+    }
+    parts.push(`[${label}]anull[aout]`);
+    return parts.join(';');
+  }
 
   if (postFilters.length > 0) {
     parts.push(`[${mixedLabel}]${postFilters.join(',')}[aout]`);
@@ -906,9 +941,11 @@ async function exportVideoWithFallback(options) {
     emitGlobalProgress = true
   } = options;
   const duration = Math.max(0.01, Number(end) - Number(start));
-  // setpts and atempo squeeze or stretch the trim, the file runs duration / speed. -t, the frame
-  // count and the size-goal bitrate all go by that, or 2x keeps going past the trim end
-  const outputDuration = duration / (Number(speed) > 0 ? Number(speed) : 1);
+  // setpts and atempo squeeze or stretch the trim, the file runs duration / speed, speed layers
+  // included. -t, the frame count and the size-goal bitrate all go by that, or 2x keeps going
+  // past the trim end
+  const timeMap = buildTimeMap(layers, Number(start) || 0, duration, Number(speed) > 0 ? Number(speed) : 1);
+  const outputDuration = timeMap.outDur;
   const resolvedTuning = resolveExportTuning(exportSettings, quality, outputDuration);
   const effectiveQuality = resolvedTuning.quality;
 
@@ -1015,7 +1052,11 @@ async function exportVideoWithFallback(options) {
       );
 
       const videoFilters = [];
-      if (hasSpeedChange) {
+      if (timeMap.segmented) {
+        // speed layers: one piecewise setpts, then back to a constant rate so slow parts repeat
+        // frames and fast parts drop them
+        videoFilters.push(timeMap.setpts, `fps=${fps}`);
+      } else if (hasSpeedChange) {
         videoFilters.push(`setpts=${1 / effectiveSpeed}*PTS`);
       }
       if (needsScaleDown) {
@@ -1033,8 +1074,13 @@ async function exportVideoWithFallback(options) {
         speed: effectiveSpeed,
         outW,
         outH,
-        fps
+        fps,
+        tmap: timeMap
       });
+      // blur and zoom work on the source frame, before the retime and any scale down
+      const fxGraph = buildFxGraph({ layers, start: exportStart, duration, width: sourceWidth, height: sourceHeight });
+      const sounds = audioStreamCount > 0 ? planSounds(layers, exportStart, duration, timeMap) : [];
+      const soundInput = 1 + (overlayGraph ? overlayGraph.inputs.length : 0);
 
       const buildAudioFilter = () => {
         const filters = [];
@@ -1050,21 +1096,30 @@ async function exportVideoWithFallback(options) {
 
       const audioFilters = buildAudioFilter();
       // overlays count too, they also rule out hw decode: overlay can't take cuda frames
-      const needsVideoFilter = videoFilters.length > 0 || overlayGraph !== null;
+      const needsVideoFilter = videoFilters.length > 0 || overlayGraph !== null || fxGraph !== null;
+      // speed layers and sounds need the graph; a single-track clip gets a mix of its one stream
+      const needsAudioGraph = timeMap.segmented || sounds.length > 0;
+      const firstAudio = Array.isArray(metadata.streams) ? metadata.streams.find((s) => s.codec_type === 'audio') : null;
+      const mix = !Array.isArray(audioMix) && needsAudioGraph && firstAudio
+        ? [{ streamIndex: firstAudio.index, ordinal: 0, volume: 1 }]
+        : audioMix;
       // an explicit mix from the renderer replaces the single-stream filter chain
       // with filter_complex; an *empty* mix means every track muted/hidden, so -an
-      const audioMixProvided = Array.isArray(audioMix);
-      const audioMixSilent = audioMixProvided && audioMix.length === 0;
+      const audioMixProvided = Array.isArray(mix);
+      const audioMixSilent = audioMixProvided && mix.length === 0;
       const audioFilterComplex = audioMixProvided && !audioMixSilent
         ? buildAudioMixFilterComplex({
-            audioMix,
+            audioMix: mix,
             effectiveVolume,
             hasBaseVolumeChange,
             effectiveSpeed,
             hasSpeedChange,
             layers,
             start: exportStart,
-            duration
+            duration,
+            tmap: timeMap,
+            sounds,
+            soundInput
           })
         : null;
       const usingAudioMix = audioFilterComplex !== null || audioMixSilent;
@@ -1157,15 +1212,24 @@ async function exportVideoWithFallback(options) {
             command.input(input.path).inputOptions(input.options);
           }
         }
+        // sounds come after the overlays, soundInput counts on that order
+        if (audioFilterComplex) {
+          for (const sound of sounds) command.input(sound.path);
+        }
 
-        if (audioFilterComplex || overlayGraph) {
+        if (audioFilterComplex || overlayGraph || fxGraph) {
           // ffmpeg rejects -vf next to -filter_complex on the same stream, so video filters go
           // into the graph as [vout]; -filter_complex disables automatic mapping, maps are explicit
           const graph = [];
+          let src = '[0:v:0]';
+          if (fxGraph) {
+            graph.push(...fxGraph.chains);
+            src = `[${fxGraph.out}]`;
+          }
           if (overlayGraph) {
-            graph.push(`[0:v:0]${videoFilters.length ? videoFilters.join(',') : 'null'}[vbase]`, ...overlayGraph.chains);
+            graph.push(`${src}${videoFilters.length ? videoFilters.join(',') : 'null'}[vbase]`, ...overlayGraph.chains);
           } else if (needsVideoFilter) {
-            graph.push(`[0:v:0]${videoFilters.join(',')}[vout]`);
+            graph.push(`${src}${videoFilters.length ? videoFilters.join(',') : 'null'}[vout]`);
           }
           if (audioFilterComplex) graph.push(audioFilterComplex);
           command.outputOptions(['-filter_complex', graph.join(';'), '-map', needsVideoFilter ? '[vout]' : '0:v:0']);
@@ -1844,10 +1908,22 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
   const hasSpeedChange = Math.abs(effectiveSpeed - 1) > 0.001;
   const hasVolumeChange = Math.abs(effectiveVolume - 1) > 0.001;
 
-  const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
+  let audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const audioMixSilent = Array.isArray(audioMix) && audioMix.length === 0;
   const layers = await loadExportLayers(clipName, getSettings);
   const exportStart = Number(start) || 0;
+  const timeMap = buildTimeMap(layers, exportStart, duration, effectiveSpeed);
+  const sounds = planSounds(layers, exportStart, duration, timeMap);
+  // speed layers and sounds need the graph; a single-track clip gets a mix of its one stream
+  if (!audioMix && (timeMap.segmented || sounds.length > 0)) {
+    try {
+      const probe = await ffprobeAsync(inputPath);
+      const first = (probe.streams || []).find((st) => st.codec_type === 'audio');
+      if (first) audioMix = [{ streamIndex: first.index, ordinal: 0, volume: 1 }];
+    } catch (error) {
+      logger.warn(`[ffmpeg] audio export probe failed, speed layers and sounds skipped: ${error.message}`);
+    }
+  }
   const audioFilterComplex = Array.isArray(audioMix) && audioMix.length > 0
     ? buildAudioMixFilterComplex({
         audioMix,
@@ -1857,7 +1933,10 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
         hasSpeedChange,
         layers,
         start: exportStart,
-        duration
+        duration,
+        tmap: timeMap,
+        sounds,
+        soundInput: 1
       })
     : null;
 
@@ -1867,8 +1946,9 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
       const command = ffmpeg(inputPath)
         .seekInput(start)
         // atempo changes the length, -t is output time
-        .setDuration(duration / effectiveSpeed)
+        .setDuration(audioFilterComplex ? timeMap.outDur : duration / effectiveSpeed)
         .output(outputPath);
+      if (audioFilterComplex) for (const sound of sounds) command.input(sound.path);
 
       if (audioMixSilent) {
         // refuse empty/silent mp3 export, caller probably hid/muted every track by mistake
@@ -2017,6 +2097,18 @@ function setupProgressListeners() {
 }
 
 // metadata helpers
+// for frame stepping; null when unknown instead of parseFrameRate's 30 guess. avg first since
+// r_frame_rate on a vfr recording can be a timebase like 1000/1
+function probeVideoFps(streams) {
+  const video = Array.isArray(streams) ? streams.find((s) => s && s.codec_type === 'video') : null;
+  for (const value of [video?.avg_frame_rate, video?.r_frame_rate]) {
+    const [num, den] = String(value || '').split('/').map(Number);
+    const fps = den ? num / den : num;
+    if (Number.isFinite(fps) && fps >= 1 && fps <= 480) return fps;
+  }
+  return null;
+}
+
 function buildAudioTracksFromStreams(streams) {
   if (!Array.isArray(streams)) return [];
   const audio = streams.filter((s) => s && s.codec_type === 'audio');
@@ -2114,7 +2206,9 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
           filename: clipPath,
           duration: metadata.duration
         },
-        audioTracks: metadata.audioTracks
+        audioTracks: metadata.audioTracks,
+        // entries cached before fps was stored have none; the player falls back
+        fps: metadata.fps || null
       };
     }
 
@@ -2140,7 +2234,8 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
           duration: Number(parsed.format && parsed.format.duration) || 0
         },
         streams,
-        audioTracks: buildAudioTracksFromStreams(streams)
+        audioTracks: buildAudioTracksFromStreams(streams),
+        fps: probeVideoFps(streams)
       };
     } catch (directErr) {
       // fluent probe's tags are sometimes filtered, but a generic name beats failing the open
@@ -2159,6 +2254,7 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
         ffmpeg.ffprobe(clipPath, (err, res) => (err ? reject(err) : resolve(res)));
       });
       info.audioTracks = buildAudioTracksFromStreams(info.streams);
+      info.fps = probeVideoFps(info.streams);
     }
     logger.info(`[ffmpeg] ffprobe successful for ${clipName} - duration: ${info.format.duration}, audioTracks: ${info.audioTracks.length} (${info.audioTracks.map((t) => t.name).join(' | ')})`);
     const existingMetadata = await thumbnailsModule.getThumbnailMetadata(thumbnailPath) || {};
@@ -2167,6 +2263,7 @@ async function getClipInfoUncached(clipName, getSettings, thumbnailsModule) {
       duration: info.format.duration,
       audioTracks: info.audioTracks,
       audioTracksVersion: AUDIO_TRACKS_CACHE_VERSION,
+      fps: info.fps,
       timestamp: Date.now()
     });
     return info;
@@ -2317,6 +2414,7 @@ module.exports = {
   initFFmpeg,
   getFFmpegVersion,
   getNvencStatus,
+  getAudioEncoder,
   getExportAccelerationStatus,
   ffprobeAsync,
   exportVideo,

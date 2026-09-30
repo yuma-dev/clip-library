@@ -45,6 +45,9 @@ import LayerStage from "./layers/LayerStage";
 import LayerTags from "./layers/LayerTags";
 import { installLayerAudio } from "./layers/audio";
 import { installLayerKeys } from "./layers/keys";
+import { installSpeedLayers } from "./layers/speed";
+import { installZoom } from "./layers/fx";
+import { installSoundLayers } from "./layers/sound";
 import { closeClip, getLayers, loadClip, select, useLayers } from "./layers/store";
 import "./layers/layers.css";
 import { fingerprint, reportEvent } from "../telemetry";
@@ -452,8 +455,12 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   // chrome show/hide rules, one place for keys, mouse, open and drags
   useEffect(() => installChromeVisibility(), []);
 
-  // layers: volume automation from the playhead, and their keys ahead of the player's
+  // layers: volume automation, speed, zoom and sounds from the playhead, and their keys ahead of
+  // the player's
   useEffect(() => installLayerAudio(), []);
+  useEffect(() => installSpeedLayers(), []);
+  useEffect(() => installZoom(), []);
+  useEffect(() => installSoundLayers(), []);
   useEffect(() => installLayerKeys(), []);
 
   // play/pause drives watch-session active-time + discord presence (ticker while playing, frozen

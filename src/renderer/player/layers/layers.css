@@ -82,6 +82,39 @@
 .pl-add-icon.is-gif { color: var(--color-accent-glyph); }
 .pl-add-icon.is-image { color: var(--analysis-clr); }
 .pl-add-icon.is-subs { color: #fde047; }
+.pl-add-icon.is-zoom { color: #6ee7f0; }
+.pl-add-icon.is-speed { color: #fde047; }
+.pl-add-icon.is-blur { color: #a3a3b3; }
+.pl-add-icon.is-sound { color: #f472b6; }
+/* nine entries, two columns keep the menu from towering over the video */
+.pl-add-menu:not(.is-subs) {
+  width: 452px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+.pl-add-menu > button.is-wide {
+  grid-column: 1 / -1;
+}
+.pl-add-hist {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: #f4f4f6;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.pl-add-hist:hover:not(:disabled) {
+  background: #ffffff1f;
+}
+.pl-add-hist:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
 
 /* subtitles page, takes the menu's place and styles every generated line at once */
 /* the page scrolls inside, the menu itself doesn't, so the details flyout can sit beside it */
@@ -847,6 +880,25 @@ body.dragging .pl-tag {
 .pl-lp-btn:hover {
   background: #ffffff1f;
 }
+/* preview and fit sit on their own line under the rows */
+.pl-lp > .pl-lp-btn {
+  align-self: flex-start;
+}
+.pl-lp-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+.pl-lp-sound {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #f4f4f6;
+}
 
 /* overlays: a box with the video's aspect, so % positions match the export in fullscreen too */
 .pl-layers {
@@ -921,6 +973,157 @@ body.dragging .pl-tag {
   background: #fff;
   box-shadow: 0 0 0 1px #0006;
   cursor: nwse-resize;
+}
+
+/* zoom and blur live in the frame's own pixels, fx.tsx gives this box the video's zoom */
+.pl-fx {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+.pl-blur {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+}
+.pl-blur canvas {
+  position: absolute;
+  display: block;
+  max-width: none;
+  pointer-events: none;
+}
+.pl-blur.is-sel {
+  outline: 1px dashed #ffffffc0;
+  outline-offset: 3px;
+}
+/* the box clips its canvas, so the handle sits inside the corner */
+.pl-blur .pl-layer-resize {
+  right: 2px;
+  bottom: 2px;
+}
+.pl-blur.is-outside {
+  opacity: 0.45;
+}
+.pl-zoombox {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid #ffffffe0;
+  border-radius: 4px;
+  box-shadow: 0 0 0 100vmax #0000008c;
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+}
+.pl-zoombox-label {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: #000a;
+  color: #fff;
+  font: 600 10.5px var(--font-sans);
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pl-zoombox .pl-layer-resize {
+  right: -6px;
+  bottom: -6px;
+}
+/* sitting on a key: the label carries a diamond, so a drag reads as editing that key */
+.pl-zoombox.is-key {
+  border-color: #6ee7f0;
+}
+.pl-zoombox-key,
+.pl-keys-key,
+.pl-tag-key {
+  transform: rotate(45deg);
+  border-radius: 1.5px;
+}
+.pl-zoombox-key {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: #6ee7f0;
+}
+
+/* zoom keyframes in the popover: the layer's span, a diamond per key, the playhead */
+.pl-keys {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pl-keys-track {
+  position: relative;
+  flex: 1;
+  height: 28px;
+  border-radius: 7px;
+  background: #ffffff0d;
+}
+/* inset so a key at the very start or end stays inside the track */
+.pl-keys-span {
+  position: absolute;
+  inset: 0 7px;
+  cursor: pointer;
+}
+.pl-keys-span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: #ffffff24;
+}
+.pl-keys-head {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 1.5px;
+  margin-left: -0.75px;
+  background: #fff;
+  pointer-events: none;
+}
+.pl-keys-key {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  padding: 0;
+  border: 0;
+  background: var(--c);
+  opacity: 0.55;
+  cursor: pointer;
+}
+.pl-keys-key:hover,
+.pl-keys-key.is-on {
+  opacity: 1;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+.pl-keys .pl-lp-btn {
+  width: 84px;
+  justify-content: center;
+}
+.pl-keys .pl-lp-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* the zoom tag's keys, small, on the tag's bottom edge */
+.pl-tag-key {
+  position: absolute;
+  bottom: -2.5px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 1px;
+  background: var(--c);
+  pointer-events: none;
 }
 
 /* text styles for the popover's tiles; on the video the text is rasterize.ts's canvas */

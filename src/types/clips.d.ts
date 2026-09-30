@@ -171,7 +171,60 @@ export interface GifLayer extends MediaBase {
 export interface ImageLayer extends MediaBase {
   kind: "image";
 }
-export type Layer = VolumeLayer | TextLayer | GifLayer | ImageLayer;
+/** punch-in on a spot of the frame; blur boxes zoom with it, text and media stay put */
+export interface ZoomLayer extends LayerBase {
+  kind: "zoom";
+  /** centre of the zoomed view, % of the frame */
+  x: number;
+  y: number;
+  /** 1.1..4 */
+  scale: number;
+  /** seconds the move in and the move out take */
+  ease: number;
+  /** sorted by t; unset or empty means x/y/scale hold for the whole layer */
+  keys?: ZoomKey[];
+}
+/** the zoom's view t seconds after the layer's start; between keys it eases like the move in */
+export interface ZoomKey {
+  t: number;
+  x: number;
+  y: number;
+  scale: number;
+}
+/** slow motion or fast forward for a part, on top of the clip's own speed */
+export interface SpeedLayer extends LayerBase {
+  kind: "speed";
+  /** 0.25..4 */
+  rate: number;
+}
+export type BlurMode = "blur" | "pixelate";
+/** hides a box of the frame, in source pixels so it follows a zoom */
+export interface BlurLayer extends LayerBase {
+  kind: "blur";
+  /** centre and size, % of the frame */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  mode: BlurMode;
+  /** 0..1 */
+  strength: number;
+}
+/** an audio file played from start; it runs at normal speed through speed changes */
+export interface SoundLayer extends LayerBase {
+  kind: "sound";
+  /** local file in the clip's layers_media folder */
+  file: string | null;
+  name: string;
+  /** 0..2 */
+  level: number;
+  /** seconds of fade at each end */
+  fade: number;
+  /** length of the file in seconds, 0 until known */
+  duration: number;
+}
+export type Layer = VolumeLayer | TextLayer | GifLayer | ImageLayer | ZoomLayer | SpeedLayer | BlurLayer | SoundLayer;
+export type VisualLayer = TextLayer | GifLayer | ImageLayer;
 export type LayerKind = Layer["kind"];
 
 export interface KlipyGif {
@@ -454,9 +507,13 @@ export interface ClipsApi {
   getVolume(clipName: string): Promise<number>;
   saveVolume(clipName: string, volume: number): Promise<any>;
   getLayers(clipName: string): Promise<{ items: Layer[] }>;
-  saveLayers(clipName: string, items: Layer[]): Promise<{ success: boolean; error?: string }>;
+  /** keep: media files the undo history still points at, spared from cleanup */
+  saveLayers(clipName: string, items: Layer[], keep?: string[]): Promise<{ success: boolean; error?: string }>;
   writeLayerText(clipName: string, id: string, bytes: Uint8Array): Promise<{ file: string }>;
   pickLayerImage(clipName: string): Promise<{ file: string } | null>;
+  pickLayerSound(clipName: string): Promise<{ file: string; name: string } | null>;
+  /** copies a media file from another clip's layers into this one, for paste */
+  copyLayerMedia(clipName: string, file: string): Promise<{ file: string }>;
   downloadLayerGif(clipName: string, gif: { id: string; url: string }): Promise<{ file: string }>;
   searchGifs(query: { q?: string; page?: number }): Promise<{ items: KlipyGif[]; hasNext: boolean; error?: string }>;
   subtitlesStatus(): Promise<{ installed: boolean; cli: boolean; model: boolean }>;
@@ -679,6 +736,8 @@ export interface LegacyPlayerModule {
     setLayerGain?(ordinal: number, gain: number): void;
   } | null;
   setupAudioContext(): void;
+  /** puts the trim back, for undo */
+  setTrim?(start: number, end: number): void;
   handleKeyPress(e: KeyboardEvent): void;
   handleKeyRelease(e: KeyboardEvent): void;
   [key: string]: any;

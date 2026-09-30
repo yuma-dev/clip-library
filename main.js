@@ -1973,8 +1973,8 @@ ipcMain.handle('get-layers', async (event, clipName) => {
   return layersModule.getLayers(clipName, getSettings);
 });
 
-ipcMain.handle('save-layers', async (event, clipName, items) => {
-  return layersModule.saveLayers(clipName, items, getSettings);
+ipcMain.handle('save-layers', async (event, clipName, items, keep) => {
+  return layersModule.saveLayers(clipName, items, getSettings, keep);
 });
 
 ipcMain.handle('layers-write-text', async (event, clipName, id, bytes) => {
@@ -1990,6 +1990,21 @@ ipcMain.handle('layers-pick-image', async (event, clipName) => {
   });
   if (result.canceled || !result.filePaths?.length) return null;
   return layersModule.importImage(clipName, result.filePaths[0], getSettings);
+});
+
+ipcMain.handle('layers-pick-sound', async (event, clipName) => {
+  const owner = event.sender.getOwnerBrowserWindow?.() || mainWindow;
+  const result = await dialog.showOpenDialog(owner, {
+    title: 'Choose a sound',
+    properties: ['openFile'],
+    filters: [{ name: 'Audio', extensions: layersModule.SOUND_EXTS.map((e) => e.slice(1)) }]
+  });
+  if (result.canceled || !result.filePaths?.length) return null;
+  return layersModule.importSound(clipName, result.filePaths[0], getSettings);
+});
+
+ipcMain.handle('layers-copy-media', async (event, clipName, file) => {
+  return layersModule.copyMedia(clipName, file, getSettings);
 });
 
 ipcMain.handle('layers-download-gif', async (event, clipName, gif) => {

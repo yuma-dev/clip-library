@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Upload, X } from "lucide-react";
 import { useToast } from "../ui/Toast";
 import { invalidateFeedListCache } from "../feed/useFeedClips";
+import { baseRate } from "./layers/speed";
 
 interface ShareUser {
   id: string;
@@ -175,7 +176,7 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       start: state.trimStartTime,
       end: state.trimEndTime,
       volume,
-      speed: video?.playbackRate ?? 1,
+      speed: video ? baseRate() : 1,
       audioMix,
       metadata: {
         title: title.trim() || current.customName,

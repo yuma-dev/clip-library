@@ -8,7 +8,10 @@ import {
   FastForward,
   FileAudio,
   FileVideo,
+  Gauge,
+  Grid3x3,
   Maximize,
+  Music,
   Pencil,
   Play,
   Rewind,
@@ -22,6 +25,7 @@ import {
   Volume1,
   Volume2,
   X,
+  ZoomIn,
   type LucideIcon,
 } from "lucide-react";
 import { SetGroup } from "../rows";
@@ -55,6 +59,10 @@ const ACTIONS: { id: string; title: string; description: string; icon: LucideIco
   { id: "addTextLayer", title: "Add text", description: "Text on the clip at the playhead", icon: Type },
   { id: "addGifLayer", title: "Add GIF", description: "A KLIPY GIF at the playhead", icon: Sticker },
   { id: "addImageLayer", title: "Add image", description: "An image from your PC at the playhead", icon: Image },
+  { id: "addZoomLayer", title: "Add zoom", description: "Punch in on a spot at the playhead", icon: ZoomIn },
+  { id: "addSpeedLayer", title: "Add speed change", description: "Slow motion or fast forward at the playhead", icon: Gauge },
+  { id: "addBlurLayer", title: "Add blur", description: "Hide part of the frame at the playhead", icon: Grid3x3 },
+  { id: "addSoundLayer", title: "Add sound", description: "A sound from your PC at the playhead", icon: Music },
 ];
 
 /** formats a combo like "ctrl+shift+e" as "Ctrl+Shift+E" for display */

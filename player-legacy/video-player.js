@@ -1138,7 +1138,8 @@ function handleKeyPress(e) {
       state.spaceHoldTimeoutId = setTimeout(() => {
         if (state.isSpaceHeld && !elements.videoPlayer.paused) {
           state.wasSpaceHoldBoostActive = true;
-          state.speedBeforeSpaceHold = elements.videoPlayer.playbackRate;
+          // speed layers scale playbackRate, the hold restores the clip's own speed
+          state.speedBeforeSpaceHold = typeof window.playerBaseRate === 'function' ? window.playerBaseRate() : elements.videoPlayer.playbackRate;
           elements.videoPlayer.playbackRate = 2;
         }
       }, 200);
@@ -1922,6 +1923,7 @@ async function openClip(originalName, customName) {
     state.initialPlaybackTime = clipInfo.format.duration > 40 ? clipInfo.format.duration / 2 : 0;
     logger.info(`[${originalName}] No trim data - Start: ${state.trimStartTime}, End: ${state.trimEndTime}, Initial: ${state.initialPlaybackTime}`);
   }
+  lastTrim = { clip: originalName, start: state.trimStartTime, end: state.trimEndTime };
 
   logger.info(`[${originalName}] Setting up video load promise...`);
   const videoLoadPromise = new Promise((resolve, reject) => {
@@ -2362,13 +2364,35 @@ async function persistTrimSave(trimSave) {
   }
 }
 
+// the trim as last saved, so each change can tell the layer store's undo what it replaced
+let lastTrim = null;
+
+/** undo puts an older trim back through here */
+function setTrim(start, end) {
+  const duration = elements.videoPlayer.duration;
+  if (!Number.isFinite(duration) || !state.currentClip) return;
+  state.trimStartTime = Math.max(0, Math.min(start, duration));
+  state.trimEndTime = Math.max(state.trimStartTime, Math.min(end, duration));
+  state.isAutoResetDisabled = false;
+  updateTrimControls();
+  saveTrimChanges();
+}
+
 async function saveTrimChanges() {
   const clipToUpdate = state.currentClip ? { ...state.currentClip } : null;
-  
+
   if (!clipToUpdate) {
     logger.info("No clip to save trim data for");
     return;
   }
+
+  const next = { start: state.trimStartTime, end: state.trimEndTime };
+  if (lastTrim && lastTrim.clip === clipToUpdate.originalName && (lastTrim.start !== next.start || lastTrim.end !== next.end)) {
+    window.dispatchEvent(new CustomEvent('cliplib:trim-change', {
+      detail: { clip: clipToUpdate.originalName, prev: { start: lastTrim.start, end: lastTrim.end } }
+    }));
+  }
+  lastTrim = { clip: clipToUpdate.originalName, ...next };
 
   if (saveTrimTimeout) {
     clearTimeout(saveTrimTimeout);
@@ -2805,6 +2829,7 @@ module.exports = {
   exportClipFromContextMenu,
   openClip,
   saveTrimChanges,
+  setTrim,
   resetClipTrimTimes,
   closePlayer,
   handleKeyPress,

@@ -11,12 +11,15 @@ const telemetry = require('./telemetry');
 const metadata = require('./metadata');
 
 const VERSION = 1;
-const KINDS = new Set(['volume', 'text', 'gif', 'image']);
+const KINDS = new Set(['volume', 'text', 'gif', 'image', 'zoom', 'speed', 'blur', 'sound']);
 const ANIMS = new Set(['none', 'fade', 'pop', 'zoom', 'slide', 'drop', 'side', 'wipe', 'type']);
 const STYLES = new Set(['clean', 'outline', 'box', 'loud']);
+const SOUND_EXTS = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.opus'];
 // subtitles on a long clip are a few hundred lines
 const MAX_ITEMS = 1000;
 const MAX_TEXT = 200;
+// model.ts in the player caps it the same, every key is a term in the export's ffmpeg expression
+const MAX_ZOOM_KEYS = 24;
 
 const safeName = (clipName) => clipName.replace(/\//g, '--');
 
@@ -50,6 +53,39 @@ function sanitize(raw, mediaDir) {
   }
   // media must sit in this clip's media folder, a layers file never points ffmpeg elsewhere
   const inMedia = (p) => typeof p === 'string' && path.dirname(path.resolve(p)) === path.resolve(mediaDir);
+  if (raw.kind === 'zoom') {
+    const zoom = { ...base, x: num(raw.x, 0, 100, 50), y: num(raw.y, 0, 100, 50), scale: num(raw.scale, 1.1, 4, 1.6), ease: num(raw.ease, 0, 2, 0.4) };
+    // t counts from the layer's start and may fall outside it after a trim, the path still runs through it
+    const keys = (Array.isArray(raw.keys) ? raw.keys : [])
+      .filter((k) => k && Number.isFinite(Number(k.t)))
+      .map((k) => ({ t: num(k.t, -86400, 86400, 0), x: num(k.x, 0, 100, 50), y: num(k.y, 0, 100, 50), scale: num(k.scale, 1.1, 4, 1.6) }))
+      .sort((a, b) => a.t - b.t)
+      .filter((k, i, all) => i === 0 || k.t - all[i - 1].t > 0.001)
+      .slice(0, MAX_ZOOM_KEYS);
+    return keys.length ? { ...zoom, keys } : zoom;
+  }
+  if (raw.kind === 'speed') return { ...base, rate: num(raw.rate, 0.25, 4, 0.5) };
+  if (raw.kind === 'blur') {
+    return {
+      ...base,
+      x: num(raw.x, 0, 100, 50),
+      y: num(raw.y, 0, 100, 50),
+      w: num(raw.w, 1, 100, 20),
+      h: num(raw.h, 1, 100, 12),
+      mode: raw.mode === 'pixelate' ? 'pixelate' : 'blur',
+      strength: num(raw.strength, 0, 1, 0.6),
+    };
+  }
+  if (raw.kind === 'sound') {
+    return {
+      ...base,
+      file: inMedia(raw.file) ? raw.file : null,
+      name: str(raw.name, 120),
+      level: num(raw.level, 0, 2, 1),
+      fade: num(raw.fade, 0, 5, 0),
+      duration: num(raw.duration, 0, 86400, 0),
+    };
+  }
   // details stay unset unless given, unset means the default the player and export share
   const opt = (key, lo, hi) => (Number.isFinite(Number(raw[key])) && raw[key] !== null ? { [key]: num(raw[key], lo, hi, lo) } : {});
   const visual = {
@@ -135,15 +171,16 @@ async function getLayers(clipName, getSettings) {
   }
 }
 
-/** removes media files no layer points at anymore */
-async function collectMedia(mediaDir, items) {
+/** removes media files no layer points at anymore. extra: files the player's undo history can
+ * still bring back */
+async function collectMedia(mediaDir, items, extra = []) {
   let names;
   try {
     names = await fs.readdir(mediaDir);
   } catch {
     return;
   }
-  const keep = new Set();
+  const keep = new Set((Array.isArray(extra) ? extra : []).filter((f) => typeof f === 'string').map((f) => path.basename(f)));
   for (const i of items) {
     if (i.file) keep.add(path.basename(i.file));
     if (i.raster?.file) keep.add(path.basename(i.raster.file));
@@ -152,7 +189,7 @@ async function collectMedia(mediaDir, items) {
   if (keep.size === 0) await fs.rmdir(mediaDir).catch(() => {});
 }
 
-async function saveLayers(clipName, items, getSettings) {
+async function saveLayers(clipName, items, getSettings, keep = []) {
   const p = await paths(clipName, getSettings);
   const clean = (Array.isArray(items) ? items : []).slice(0, MAX_ITEMS).map((i) => sanitize(i, p.media)).filter(Boolean);
   try {
@@ -160,7 +197,7 @@ async function saveLayers(clipName, items, getSettings) {
     else await metadata.writeFileAtomically(p.file, JSON.stringify({ version: VERSION, items: clean }));
     // the range lives on as a layer now, left in place export would apply it twice
     await fs.unlink(p.legacyRange).catch(() => {});
-    await collectMedia(p.media, clean);
+    await collectMedia(p.media, clean, keep);
     return { success: true };
   } catch (error) {
     logger.error(`Error saving layers for ${clipName}:`, error);
@@ -188,6 +225,35 @@ async function importImage(clipName, sourcePath, getSettings) {
   const file = path.join(p.media, `img-${hash}${ext}`);
   await fs.mkdir(p.media, { recursive: true });
   await fs.writeFile(file, buf);
+  return { file };
+}
+
+async function importSound(clipName, sourcePath, getSettings) {
+  const p = await paths(clipName, getSettings);
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (!SOUND_EXTS.includes(ext)) throw new Error('Unsupported audio type');
+  const stat = await fs.stat(sourcePath);
+  // a sound effect, not an album; export mixes the whole file in
+  if (stat.size > 50 * 1024 * 1024) throw new Error('That file is over 50 MB. Pick a shorter sound.');
+  const buf = await fs.readFile(sourcePath);
+  const hash = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 12);
+  const file = path.join(p.media, `snd-${hash}${ext}`);
+  await fs.mkdir(p.media, { recursive: true });
+  await fs.writeFile(file, buf);
+  return { file, name: path.basename(sourcePath, ext).slice(0, 120) };
+}
+
+/** paste from another clip: its media lives in that clip's folder, which cleans up on its own */
+async function copyMedia(clipName, sourceFile, getSettings) {
+  const p = await paths(clipName, getSettings);
+  const root = path.resolve(path.dirname(p.media));
+  const src = path.resolve(String(sourceFile || ''));
+  // only files some clip's layers own, never an arbitrary path from the renderer
+  if (path.dirname(path.dirname(src)) !== root) throw new Error('Not a layer media file');
+  if (path.dirname(src) === path.resolve(p.media)) return { file: src };
+  const file = path.join(p.media, path.basename(src));
+  await fs.mkdir(p.media, { recursive: true });
+  await fs.copyFile(src, file);
   return { file };
 }
 
@@ -297,6 +363,9 @@ module.exports = {
   saveLayers,
   writeTextRaster,
   importImage,
+  importSound,
+  copyMedia,
+  SOUND_EXTS,
   searchGifs,
   downloadGif,
   removeClipLayers,

@@ -1,13 +1,13 @@
 // reimplements the legacy export-manager's arg-gathering against window.clips.*; the fragile
 // encoder-fallback/benchmark/clipboard logic lives in the main process. savePath === null means clipboard
+import { baseRate } from "./layers/speed";
 
 /** (current, total, isClipboard); mirrors the legacy showExportProgress */
 export type ProgressFn = (current: number, total: number, clipboard: boolean) => void;
 
-/** current playback rate drives export speed (>0, else 1x) */
+/** the clip's speed drives export speed (>0, else 1x); speed layers come from the layers file */
 function speed(): number {
-  const v = document.getElementById("video-player") as HTMLVideoElement | null;
-  const r = Number(v?.playbackRate);
+  const r = Number(baseRate());
   return Number.isFinite(r) && r > 0 ? r : 1;
 }
 
