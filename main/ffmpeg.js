@@ -17,7 +17,8 @@ const NVENC_STATUS_TTL_MS = 5 * 60 * 1000;
 const DECODER_LIST_TTL_MS = 5 * 60 * 1000;
 const HWACCEL_LIST_TTL_MS = 5 * 60 * 1000;
 const DISCORD_TARGET_BYTES = Math.floor(9.5 * 1024 * 1024);
-const DISCORD_AUDIO_BITRATE_K = 96;
+// 96k made voice audibly worse than the recording (clipdip writes 192k per track)
+const DISCORD_AUDIO_BITRATE_K = 128;
 const UNKNOWN_CODEC_KEY = '__unknown__';
 const CUDA_DECODER_BY_CODEC = {
   h264: 'h264_cuvid',
@@ -142,6 +143,7 @@ const HIGH_BFRAMES_BY_SPEED = {
   best: 3
 };
 let nvencStatusCache = null;
+let aacMfProbe = null;
 let decoderListCache = null;
 let hwAccelListCache = null;
 const preferredDecodeModeByCodec = new Map();
@@ -325,6 +327,22 @@ function parseFrameRate(frameRateValue) {
   }
   const fps = numerator / denominator;
   return Number.isFinite(fps) && fps > 0 ? fps : 30;
+}
+
+// mediafoundation aac over the native encoder: at the same bitrate it leaves about a third of the
+// error on a voice mix (measured on a clipdip clip). missing on windows N without the media pack
+function getAudioEncoder() {
+  if (!aacMfProbe) {
+    aacMfProbe = execFileAsync(ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '0.2',
+      '-c:a', 'aac_mf', '-b:a', '128k', '-f', 'null', '-'
+    ]).then(() => 'aac_mf', (rejection) => {
+      logger.warn(`[ffmpeg] aac_mf unavailable, exports use the native aac: ${String(rejection?.stderr || rejection?.error?.message || '').trim().slice(0, 200)}`);
+      return 'aac';
+    });
+  }
+  return aacMfProbe;
 }
 
 async function getNvencStatus(options = {}) {
@@ -1063,12 +1081,19 @@ async function exportVideoWithFallback(options) {
         ? resolvedTuning.sizeCapVideoBitrateKbps
         : null;
       const targetAudioBitrateKbps = resolvedTuning.audioBitrateKbps;
+      let audioEncoder = await getAudioEncoder();
+      const shouldCopyAudio = !usingAudioMix && !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord';
+      const audioOptions = () => {
+        if (audioMixSilent) return [];
+        if (shouldCopyAudio) return ['-c:a copy'];
+        return [`-c:a ${audioEncoder}`, `-b:a ${targetAudioBitrateKbps}k`];
+      };
       logger.info(
         `[ffmpeg] Export pipeline: quality=${effectiveQuality}, requestedQuality=${resolvedTuning.requestedQuality}, ` +
         `preset=${resolvedTuning.preset}, sizeGoal=${resolvedTuning.sizeGoal}, qualityBias=${resolvedTuning.qualityBias}, speedBias=${resolvedTuning.speedBias}, ` +
         `speed=${effectiveSpeed}, videoFilter=${needsVideoFilter}, audioFilter=${needsAudioFilter}, hwDecodeCandidate=${canAttemptHwDecode}, scaleDown=${needsScaleDown}, ` +
         `nominalVideo=${nominalVideoBitrateKbps || 'none'}k, videoCap=${sizeCapVideoBitrateKbps || 'none'}k, ` +
-        `targetVideo=${targetVideoBitrateKbps || 'none'}k, targetAudio=${targetAudioBitrateKbps}k`
+        `targetVideo=${targetVideoBitrateKbps || 'none'}k, targetAudio=${targetAudioBitrateKbps}k ${audioEncoder}`
       );
 
       const maybeReportProgress = (percent) => {
@@ -1212,15 +1237,7 @@ async function exportVideoWithFallback(options) {
           '-stats_period 0.1'
         ];
 
-        const shouldCopyAudio = !usingAudioMix && !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord';
-        if (audioMixSilent) {
-          // no audio output, codec choice irrelevant
-        } else if (shouldCopyAudio) {
-          softwareOptions.push('-c:a copy');
-        } else {
-          softwareOptions.push(`-b:a ${targetAudioBitrateKbps}k`);
-          softwareOptions.push('-c:a aac');
-        }
+        softwareOptions.push(...audioOptions());
 
         if (effectiveQuality !== 'lossless' && Number.isFinite(targetVideoBitrateKbps)) {
           softwareOptions.push(`-maxrate ${targetVideoBitrateKbps}k`);
@@ -1245,6 +1262,14 @@ async function exportVideoWithFallback(options) {
             });
           })
           .on('error', (ffmpegError, stdout, stderr) => {
+            if (audioEncoder === 'aac_mf' && !audioMixSilent && !shouldCopyAudio) {
+              // the probe passed but mediafoundation can still refuse an odd rate or layout
+              logger.warn(`[ffmpeg] software export failed with aac_mf, retrying with the native aac: ${ffmpegError.message}`);
+              audioEncoder = 'aac';
+              reportProgress(0);
+              runSoftwareEncode();
+              return;
+            }
             logger.error('FFmpeg error:', ffmpegError.message);
             logger.error('FFmpeg stdout:', stdout);
             logger.error('FFmpeg stderr:', stderr);
@@ -1380,8 +1405,7 @@ async function exportVideoWithFallback(options) {
               '-rc:v constqp',
               '-qp 0',
               '-profile:v high',
-              '-c:a aac',
-              `-b:a ${targetAudioBitrateKbps}k`
+              ...audioOptions()
             );
             break;
           case 'high':
@@ -1408,8 +1432,7 @@ async function exportVideoWithFallback(options) {
               '-profile:v high',
               `-rc-lookahead ${highLookahead}`,
               `-bf ${highBframes}`,
-              '-c:a aac',
-              `-b:a ${targetAudioBitrateKbps}k`
+              ...audioOptions()
             );
             }
             break;
@@ -1425,23 +1448,14 @@ async function exportVideoWithFallback(options) {
               '-profile:v high',
               `-rc-lookahead ${resolvedTuning.discordLookahead}`,
               `-bf ${resolvedTuning.discordBframes}`,
-              '-c:a aac',
-              `-b:a ${targetAudioBitrateKbps}k`
+              ...audioOptions()
             );
         }
 
         if (!isCudaDecodeMode) {
           nvencQualityOptions.push('-pix_fmt yuv420p');
         }
-        // silent export (all tracks muted): strip audio codec/bitrate opts that fight with -an
-        const filteredNvencOptions = audioMixSilent
-          ? nvencQualityOptions.filter((opt) => !/^-c:a |^-b:a /.test(opt))
-          : nvencQualityOptions;
-        command.outputOptions(filteredNvencOptions);
-
-        if (!usingAudioMix && !needsAudioFilter && allowAudioCopy && effectiveQuality !== 'discord') {
-          command.outputOptions(['-c:a copy']);
-        }
+        command.outputOptions(nvencQualityOptions);
 
         command.outputOptions([
           '-progress pipe:1',
