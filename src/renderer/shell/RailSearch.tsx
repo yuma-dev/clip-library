@@ -241,7 +241,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
   const runs = useMemo(() => highlightRuns(query), [query]);
 
   return (
-    <label className="r-search" data-rail-tip="Search clips · ? to shuffle">
+    <label className="r-search" data-rail-tip="Search clips Â· ? to shuffle">
       <img className="r-search-logo" src={logoUrl} alt="ClipLib" draggable={false} />
       <div className="r-search-field">
         <div className="r-search-hl" ref={overlayRef} aria-hidden="true">
@@ -297,7 +297,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
             >
               {active?.kind === "?" ? (
                 <>
-                  <div className="search-suggest-head">Shuffle · hide recent clips</div>
+                  <div className="search-suggest-head">Shuffle Â· hide recent clips</div>
                   {shuffleSuggestions.map((option, i) => (
                     <button key={option.token} type="button"
                       className={`search-suggest-row${i === highlight ? " active" : ""}`}

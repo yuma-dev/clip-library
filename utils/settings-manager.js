@@ -16,9 +16,8 @@ const DEFAULT_SETTINGS = {
   exportQualityBias: 'balanced',
   exportSpeedBias: 'balanced',
   uiFont: 'modern_ui',
-  // Clip sharing integration settings (friends.cliplib.app)
+  // sharing server is fixed (share.js DEFAULT_SERVER_URL); apiToken is legacy, migrated to the auth store
   sharing: {
-    serverUrl: 'https://friends.cliplib.app',
     apiToken: ''
   },
   // integrated clipdip (bundled binary); only library-side keys live here, its
