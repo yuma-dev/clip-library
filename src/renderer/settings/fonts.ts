@@ -1,6 +1,6 @@
 // same keys as legacy renderer (settings.uiFont values persist); stacks match legacy UI_FONT_STACKS
 // except modern_ui now leads with bundled Inter Variable, so old installs keep the new design font
-// unless they picked something else. webfonts load from Google Fonts on demand (ensureWebfonts)
+// unless they picked something else. webfonts load from Google Fonts and Fontshare on demand (ensureWebfonts)
 
 export const UI_FONT_DEFAULT = "modern_ui";
 
@@ -39,20 +39,27 @@ export function fontStack(key: string | undefined): string {
   return (UI_FONTS.find((f) => f.key === key) ?? UI_FONTS[0]).stack;
 }
 
-// fonts whose first choice is bundled or a system font; every other key leads with a Google Fonts family
+// fonts whose first choice is bundled or a system font; every other key leads with a webfont family
 const LOCAL_FONT_KEYS = new Set(["modern_ui", "segoe_ui", "inter"]);
-const WEBFONTS_HREF =
-  "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Figtree:wght@400;500;600&family=Geist:wght@400;500;600&family=Manrope:wght@400;500;600&family=Outfit:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600&family=Public+Sans:wght@400;500;600&family=Roboto:wght@400;500&family=Space+Grotesk:wght@400;500;600&family=Work+Sans:wght@400;500;600&display=swap";
+// satoshi and switzer are fontshare only. fontshare answers a multi-family request with just the
+// first family, so one link each. satoshi has no 600
+const WEBFONTS_HREFS = [
+  "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Figtree:wght@400;500;600&family=Geist:wght@400;500;600&family=Hubot+Sans:wght@400;500;600&family=Manrope:wght@400;500;600&family=Mona+Sans:wght@400;500;600&family=Outfit:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600&family=Public+Sans:wght@400;500;600&family=Roboto:wght@400;500&family=Space+Grotesk:wght@400;500;600&family=Work+Sans:wght@400;500;600&display=swap",
+  "https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap",
+  "https://api.fontshare.com/v2/css?f[]=switzer@400,500,600&display=swap",
+];
 let webfontsRequested = false;
 
 /** loads the optional webfont families once, the first time one is selected */
 export function ensureWebfonts(): void {
   if (webfontsRequested) return;
   webfontsRequested = true;
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = WEBFONTS_HREF;
-  document.head.appendChild(link);
+  for (const href of WEBFONTS_HREFS) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    document.head.appendChild(link);
+  }
 }
 
 /** applies the selected font app-wide, legacy applyUiFontSetting equivalent */

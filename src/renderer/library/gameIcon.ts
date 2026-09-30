@@ -63,6 +63,12 @@ export function getCachedGameIcon(name: string): GameIcon | undefined {
   return cache.get(name);
 }
 
+// any real icon from the user's library, for previews that need an example
+export function anyCachedGameIconPath(): string | null {
+  for (const icon of cache.values()) if (icon.path) return icon.path;
+  return null;
+}
+
 function normalize(data: unknown): GameIcon {
   if (data && typeof data === "object") {
     const obj = data as { path?: string | null; title?: string | null; discord?: ClipDiscordInfo | null };

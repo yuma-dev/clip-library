@@ -2,11 +2,9 @@ import { GroupReset, SetGroup, SetRow } from "../rows";
 import Toggle from "../../ui/Toggle";
 import Select from "../../ui/Select";
 import { useSettings } from "../SettingsContext";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { UI_FONTS, UI_FONT_DEFAULT, ensureWebfonts, fontStack } from "../fonts";
-
-// example game icon for the greyscale preview, real icon from the library's icon cache
-const EXAMPLE_ICON = "file:///C:/Users/Fabia/Videos/Clips/icons/League of Legends.png";
+import { anyCachedGameIconPath } from "../../library/gameIcon";
 
 /** mini clip card used by both library previews */
 function MockCard({
@@ -55,6 +53,11 @@ export default function AppearanceSection() {
   }, []);
   const grey = Boolean(settings.iconGreyscale);
   const indicators = settings.showNewClipsIndicators !== false;
+  // no icons resolved yet (fresh library): the preview row is skipped
+  const [exampleIcon] = useState(() => {
+    const iconPath = anyCachedGameIconPath();
+    return iconPath ? `file://${iconPath}` : undefined;
+  });
 
   return (
     <>
@@ -109,9 +112,11 @@ export default function AppearanceSection() {
         aside={<Toggle checked={grey} onChange={(v) => void set("iconGreyscale", v)} aria-label="Greyscale game icons" />}
       >
         <p className="set-group-blurb">Mute the game icons on clip cards so thumbnails stand out.</p>
-        <div className="mock-card-row single">
-          <MockCard iconSrc={EXAMPLE_ICON} grey={grey} />
-        </div>
+        {exampleIcon && (
+          <div className="mock-card-row single">
+            <MockCard iconSrc={exampleIcon} grey={grey} />
+          </div>
+        )}
       </SetGroup>
     </>
   );
