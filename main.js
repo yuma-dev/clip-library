@@ -691,9 +691,24 @@ async function handleCliplibProtocolUrl(protocolUrl) {
       apiToken: parsed.token
     });
 
+    // only a 401/403 says the token is bad; a network error, timeout or 5xx keeps it so a blip on
+    // /auth/me doesn't send the user back to login
+    const rejected = verify?.status === 401 || verify?.status === 403;
+    if (verify && !verify.success && !rejected) {
+      logger.warn(`ClipLib login token kept, verification failed: ${verify.error || verify.status}`);
+      telemetry.event('auth_verify_deferred', {
+        kind: telemetry.KIND.DEGRADED,
+        severity: telemetry.SEVERITY.WARNING,
+        context: {
+          reason: typeof verify.status === 'number' ? 'http_error' : 'request_failed',
+          http_status: typeof verify.status === 'number' ? verify.status : undefined
+        }
+      });
+      queueCliplibAuthEvent({ status: 'success', displayName: 'Unknown user', unverified: true });
+      return;
+    }
+
     if (!verify?.success) {
-      // the token itself may well be good: any transient blip on /auth/me throws it away and sends
-      // the user back to login.
       telemetry.event('auth_verify_discarded_token', {
         kind: telemetry.KIND.ERROR,
         severity: telemetry.SEVERITY.ERROR,
