@@ -11,7 +11,6 @@ const rendererConsole = require('./renderer-console-capture');
 const clipdipModule = require('./clipdip');
 
 const DEFAULT_ENDPOINT = 'https://logs.yuma-homeserver.online/api/logs';
-const HARD_CODED_API_KEY = 'db3ca26bdfa8e080866b54ec533d9828f4cfe96cee8ff3bba44ced6f26885cfe';
 
 // tail caps keep an upload sane: clipdip's rolling log can hit its 10 MB rotation limit mid-session
 const MAIN_LOG_TAIL_BYTES = 8 * 1024 * 1024;
@@ -200,12 +199,25 @@ function postLogs({ endpoint, apiKey, content, title, redirectCount = 0 }) {
   });
 }
 
+// build-time injected by scripts/gen-logs-key.mjs, never in source (public repo)
+function resolveLogsKey() {
+  if (process.env.LOGS_API_KEY) return process.env.LOGS_API_KEY;
+  try {
+    const { key } = require('./logs-key.generated.json');
+    if (key) return key;
+  } catch {
+    /* not generated in this checkout */
+  }
+  return null;
+}
+
 async function uploadSessionLogs({ rendererConsoleLogs, note } = {}) {
-  const apiKey = process.env.LOGS_API_KEY || HARD_CODED_API_KEY;
+  const apiKey = resolveLogsKey();
   const endpoint = process.env.LOGS_API_URL || DEFAULT_ENDPOINT;
 
   if (!apiKey) {
-    return { success: false, error: 'Missing LOGS_API_KEY environment variable.' };
+    logger.warn('No log upload key in this build (LOGS_API_KEY or logs-key.generated.json)');
+    return { success: false, error: 'Log upload is not available in this build. Use "Save zip" and share it manually.' };
   }
 
   let mainLogPath = '';
@@ -269,8 +281,11 @@ function resolveIngestKey() {
   return null;
 }
 
+let cachedInstallId = null;
+
 // prefer clipdip's install id so manual bundles line up with its crash reports
 async function getInstallId() {
+  if (cachedInstallId) return cachedInstallId;
   try {
     const entry = (await clipdipModule.collectDiagnosticFiles()).find((f) => f.name === 'install_id');
     if (entry) {
@@ -288,7 +303,14 @@ async function getInstallId() {
     /* first run */
   }
   const id = crypto.randomUUID();
-  await fs.writeFile(fallbackPath, id, 'utf8').catch(() => {});
+  try {
+    await fs.mkdir(path.dirname(fallbackPath), { recursive: true });
+    await fs.writeFile(fallbackPath, id, 'utf8');
+  } catch (error) {
+    // unpersisted id would change every launch; at least keep it stable for this process
+    logger.warn(`Could not persist install id to ${fallbackPath}: ${error.message}`);
+  }
+  cachedInstallId = id;
   return id;
 }
 

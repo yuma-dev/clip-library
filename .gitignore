@@ -41,6 +41,8 @@ RENDERER-REWRITE-PLAN.md
 main/ingest-key.generated.json
 main/klipy-key.generated.json
 klipy.key
+main/logs-key.generated.json
+logs.key
 
 # Cold-start benchmark: seeded profiles and per-run results
 benchmark/profiles/
