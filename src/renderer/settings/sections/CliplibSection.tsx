@@ -7,6 +7,7 @@ import { Copy, Check, LogIn, LogOut, Plus, Trash2 } from "lucide-react";
 import { SetGroup, SetRow } from "../rows";
 import { useProfile } from "../../shell/useProfile";
 import { useToast } from "../../ui/Toast";
+import { useConfirm } from "../../ui/ConfirmDialog";
 import {
   fetchInvites,
   createInvite,
@@ -32,6 +33,7 @@ function formatDate(date: string): string {
 export default function CliplibSection() {
   const profile = useProfile();
   const toast = useToast();
+  const { confirm } = useConfirm();
 
   const [tokens, setTokens] = useState<ApiTokenInfo[]>([]);
   const [invites, setInvites] = useState<InviteCode[]>([]);
@@ -78,7 +80,13 @@ export default function CliplibSection() {
   };
 
   const revokeToken = async (id: string, label: string) => {
-    if (!window.confirm(`Revoke "${label}"? Any app using this token will stop working.`)) return;
+    const ok = await confirm({
+      title: "Revoke token",
+      message: `Revoke "${label}"? Any app using this token will stop working.`,
+      confirmLabel: "Revoke",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteApiToken(id);
       setTokens((prev) => prev.filter((t) => t.id !== id));

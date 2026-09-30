@@ -30,6 +30,7 @@ import {
 import { useAppNav } from "../shell/appNav";
 import { useSettings } from "../settings/SettingsContext";
 import { useToast } from "../ui/Toast";
+import { useConfirm } from "../ui/ConfirmDialog";
 import {
   deleteComment as apiDeleteComment,
   createClipShareLink,
@@ -124,6 +125,7 @@ export default function FeedPlayer() {
     [],
   );
   const toast = useToast();
+  const { confirm } = useConfirm();
 
   const [clip, setClip] = useState<Clip | null>(null);
   const [list, setList] = useState<Clip[]>([]);
@@ -575,13 +577,20 @@ export default function FeedPlayer() {
   }, [clip, posting, draft]);
 
   const onDeleteComment = useCallback(async (commentId: string) => {
+    const ok = await confirm({
+      title: "Delete comment",
+      message: "Delete this comment? This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setComments((prev) => prev.filter((c) => c.id !== commentId));
     try {
       await apiDeleteComment(commentId);
     } catch {
       /* comment stays removed locally; a reopen refetches truth */
     }
-  }, []);
+  }, [confirm]);
 
   const enterEdit = useCallback(async () => {
     if (!clip) return;
@@ -672,7 +681,13 @@ export default function FeedPlayer() {
 
   const onDeleteClip = useCallback(async () => {
     if (!clip || deleting) return;
-    if (!window.confirm("Delete this clip? This cannot be undone.")) return;
+    const ok = await confirm({
+      title: "Delete clip",
+      message: "Delete this clip? This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     const deletedId = clip.id;
     try {
@@ -694,7 +709,7 @@ export default function FeedPlayer() {
     } finally {
       setDeleting(false);
     }
-  }, [clip, deleting, list, close, onClipDeletedSync, toast]);
+  }, [clip, deleting, list, close, onClipDeletedSync, toast, confirm]);
 
   const openProfile = useCallback(
     (userId: string) => {
