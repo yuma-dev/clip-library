@@ -522,6 +522,7 @@ export interface ClipsApi {
   getDefaultKeybindings(): Promise<any>;
 
   openFolderDialog(): Promise<any>;
+  openExeDialog(): Promise<string | null>;
   openFolderDialogSteelseries(): Promise<any>;
   showDiagnosticsSaveDialog(...args: any[]): Promise<any>;
 

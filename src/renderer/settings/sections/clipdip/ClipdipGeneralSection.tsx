@@ -57,7 +57,7 @@ export default function ClipdipGeneralSection() {
   };
 
   const pickBinary = async () => {
-    const file = await window.clips.openFolderDialog();
+    const file = await window.clips.openExeDialog();
     if (file) {
       const ok = await set("clipdip.binaryPath", file);
       if (!ok) toast.show("Failed to save setting", "error");
@@ -140,7 +140,7 @@ export default function ClipdipGeneralSection() {
           description={<span className="set-mono">{binaryPath || "Bundled (resources/clipdip/clipdip.exe)"}</span>}
         >
           <button type="button" className="btn" onClick={() => void pickBinary()}>
-            <FolderOpen size={14} /> Choose folder
+            <FolderOpen size={14} /> Choose exe
           </button>
         </SetRow>
       </SetGroup>

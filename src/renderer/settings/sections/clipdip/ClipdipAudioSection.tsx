@@ -172,7 +172,10 @@ export default function ClipdipAudioSection() {
                       options={[
                         { value: "system_loopback", label: "System output", hint: "Game audio, music, calls" },
                         { value: "microphone", label: "Microphone", hint: "Your voice" },
-                        { value: "process_loopback", label: "Process loopback", hint: "Audio from one specific app" },
+                        // engine skips process loopback (pipeline.rs), only shown so an existing one stays visible
+                        ...(src.kind === "process_loopback"
+                          ? [{ value: "process_loopback", label: "Process loopback", hint: "Not supported yet" }]
+                          : []),
                       ]}
                       width={200}
                       aria-label={`Source ${i + 1} kind`}
@@ -268,7 +271,10 @@ export default function ClipdipAudioSection() {
                       </div>
                     </>
                   ) : (
-                    <div className="audio-source-note">Targets the focused game window. No device pick needed.</div>
+                    <div className="audio-source-note">
+                      Process loopback isn't supported by the recorder yet, so this track is skipped. Switch it to
+                      another source or remove it.
+                    </div>
                   )}
                 </div>
               );

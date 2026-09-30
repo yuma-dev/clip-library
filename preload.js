@@ -249,6 +249,7 @@ const api = {
 
   // dialogs
   openFolderDialog: invoke("open-folder-dialog"),
+  openExeDialog: invoke("open-exe-dialog"),
   openFolderDialogSteelseries: invoke("open-folder-dialog-steelseries"),
   showDiagnosticsSaveDialog: invoke("show-diagnostics-save-dialog"),
 

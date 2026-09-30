@@ -57,6 +57,19 @@ async function showSaveDialog(mainWindow, type, clipName, customName) {
   return result.canceled ? null : result.filePath;
 }
 
+/**
+ * @param {BrowserWindow} mainWindow
+ * @returns {Promise<string|null>}
+ */
+async function showExeDialog(mainWindow) {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose clipdip.exe',
+    properties: ['openFile'],
+    filters: [{ name: 'Programs', extensions: ['exe'] }]
+  });
+  return result.canceled || !result.filePaths.length ? null : result.filePaths[0];
+}
+
 /** @returns {Promise<string|null>} */
 async function showSteelSeriesFolderDialog() {
   const result = await dialog.showOpenDialog({
@@ -70,6 +83,7 @@ async function showSteelSeriesFolderDialog() {
 module.exports = {
   showDiagnosticsSaveDialog,
   showFolderDialog,
+  showExeDialog,
   showSaveDialog,
   showSteelSeriesFolderDialog
 };

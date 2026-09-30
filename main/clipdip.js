@@ -37,7 +37,7 @@ async function resolveBinaryPath() {
   const override = settings?.clipdip?.binaryPath;
   if (override && typeof override === 'string' && override.trim()) {
     const p = override.trim();
-    // picker gives a folder; a direct exe path also works
+    // picker gives the exe; older settings hold its folder
     return p.toLowerCase().endsWith('.exe') ? p : path.join(p, EXE_NAME);
   }
   if (!app.isPackaged) {

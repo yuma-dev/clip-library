@@ -106,6 +106,7 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
   const SLOW_EVENT_EXEMPT = new Set([
     'open-save-dialog',
     'open-folder-dialog',
+    'open-exe-dialog',
     'open-folder-dialog-steelseries',
     'show-diagnostics-save-dialog',
     'share-upload-banner',
@@ -1793,6 +1794,10 @@ ipcMain.handle("set-clip-location", async (event, newLocation) => {
 
 ipcMain.handle("open-folder-dialog", async () => {
   return dialogsModule.showFolderDialog(mainWindow);
+});
+
+ipcMain.handle("open-exe-dialog", async () => {
+  return dialogsModule.showExeDialog(mainWindow);
 });
 
 ipcMain.handle("get-thumbnail-path", async (event, clipName) => {
