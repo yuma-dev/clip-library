@@ -4,7 +4,8 @@ import { ZOOM_MAX, ZOOM_MIN, clamp, keyAt, viewPatch, zoomAt, zoomView } from ".
 import { getLayers, select, update, useLayers } from "./store";
 
 // zoom and blur, the layers that change the video itself. both live in source pixels: a blur box
-// zooms with the frame, text and media on top don't. main/layer-export.js does blur, then zoom
+// zooms with the frame always, text and media on top only when the zoom takes them along
+// (LayerStage). main/layer-export.js does blur, then zoom
 
 const video = () => document.getElementById("video-player") as HTMLVideoElement | null;
 

@@ -1,10 +1,10 @@
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CopyPlus, DiamondMinus, DiamondPlus, LoaderCircle, Play, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
-import type { BlurLayer, GifLayer, ImageLayer, KlipyGif, Layer, LayerAnim, SoundLayer, SpeedLayer, TextLayer, VisualLayer, VolumeLayer, ZoomLayer } from "../../../types/clips";
+import type { BlurLayer, GifLayer, ImageLayer, KlipyGif, Layer, LayerAnim, SoundLayer, SpeedLayer, TextLayer, VisualLayer, VolumeLayer, ZoomFollow, ZoomLayer } from "../../../types/clips";
 import type { TrackView } from "../Waveform";
-import { AnimGrid, AnimLengthRows, Detail, FillSlider, Flyout, Row, Seg, SizeSlider, StyleTiles, Swatches, TextDetailRows } from "./controls";
+import { AnimGrid, AnimLengthRows, Detail, FillSlider, Flyout, Row, Seg, SizeSlider, StyleTiles, Swatches, TextDetailRows, Toggles } from "./controls";
 import { KIND_NAME, fileUrl, layerColor, shortName, trackInfo } from "./meta";
-import { HIDE_ANIMS, MAX_ZOOM_KEYS, SHOW_MEDIA, SHOW_TEXT, SPEEDS, ZOOM_MAX, ZOOM_MIN, clamp, fmtTime, keyAt, pct, playSeconds, toggleKey, viewPatch, zoomView } from "./model";
+import { HIDE_ANIMS, MAX_ZOOM_KEYS, ZOOM_FOLLOW_DEFAULT, speedMovesSounds, SHOW_MEDIA, SHOW_TEXT, SPEEDS, ZOOM_MAX, ZOOM_MIN, clamp, fmtTime, keyAt, pct, playSeconds, toggleKey, viewPatch, zoomView } from "./model";
 import { usePlayhead } from "./fx";
 import { probeDuration } from "./sound";
 import { baseRate } from "./speed";
@@ -377,6 +377,17 @@ function ZoomBody({ l }: { l: ZoomLayer }) {
       <Row label="Keyframes">
         <ZoomKeys l={l} t={t} />
       </Row>
+      <Row label="Zooms in on too">
+        <Toggles<ZoomFollow>
+          value={l.follow ?? ZOOM_FOLLOW_DEFAULT}
+          onChange={(follow) => update(l.id, { follow })}
+          options={[
+            ["text", "Text", "Text layers stick to the video and zoom with it. Off keeps them on the screen"],
+            ["subtitles", "Subtitles", "Subtitles stick to the video and zoom with it. Off keeps them on the screen"],
+            ["media", "GIFs and images", "GIFs and images stick to the video and zoom with it. Off keeps them on the screen"],
+          ]}
+        />
+      </Row>
       <Row label="Move in and out">
         <Seg<number> value={l.ease} onPick={(ease) => update(l.id, { ease })} options={[[0, "Cut"], [0.4, "Smooth"], [1, "Slow"]]} />
       </Row>
@@ -393,8 +404,15 @@ function SpeedBody({ l }: { l: SpeedLayer }) {
       <Row label="Speed">
         <Seg<number> value={l.rate} onPick={(rate) => update(l.id, { rate })} options={SPEEDS.map((v) => [v, `${v}x`] as [number, string])} />
       </Row>
+      <Row label="Sound layers">
+        <Seg<boolean>
+          value={speedMovesSounds(l)}
+          onPick={(sounds) => update(l.id, { sounds })}
+          options={[[true, l.rate < 1 ? "Slow down too" : "Speed up too"], [false, "Stay at normal speed"]]}
+        />
+      </Row>
       <p className="pl-lp-hint">
-        {fmtTime(l.end - l.start)} of the clip plays in {fmtTime(plays)}. The sound slows down and speeds up with it.
+        {fmtTime(l.end - l.start)} of the clip plays in {fmtTime(plays)}. The clip's own sound slows down and speeds up with it.
       </p>
       <PreviewButton l={l} />
     </>

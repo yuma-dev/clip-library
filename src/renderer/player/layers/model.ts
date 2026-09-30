@@ -1,4 +1,4 @@
-import type { Layer, LayerAnim, LayerKind, SpeedLayer, TextLayer, TextStyle, VisualLayer, VolumeLayer, ZoomKey, ZoomLayer } from "../../../types/clips";
+import type { Layer, LayerAnim, LayerKind, SoundLayer, SpeedLayer, TextLayer, TextStyle, VisualLayer, VolumeLayer, ZoomFollow, ZoomKey, ZoomLayer } from "../../../types/clips";
 
 // show/hide animation length in clip seconds; main/layer-export.js burns in the same
 export const ANIM_S = 0.35;
@@ -248,6 +248,17 @@ export function zoomAt(layers: Layer[], t: number): ZoomState {
   return { z, ox: clamp(ox, 0, z - 1), oy: clamp(oy, 0, z - 1) };
 }
 
+export const ZOOM_FOLLOW_DEFAULT: ZoomFollow[] = ["text", "media"];
+export const followGroup = (l: VisualLayer): ZoomFollow => (l.kind !== "text" ? "media" : l.source === "subtitles" ? "subtitles" : "text");
+export const zoomFollows = (z: ZoomLayer, l: VisualLayer) => (z.follow ?? ZOOM_FOLLOW_DEFAULT).includes(followGroup(l));
+
+/** the zoom a layer on top gets at t: only the zooms it follows. main/layer-export.js does the same */
+export function overlayZoomAt(layers: Layer[], l: VisualLayer, t: number): ZoomState {
+  return zoomAt(layers.filter((z) => z.kind === "zoom" && zoomFollows(z, l)), t);
+}
+
+export const speedMovesSounds = (l: SpeedLayer) => l.sounds !== false;
+
 /** speed layers multiply where they overlap; 1 outside all of them */
 export function rateAt(layers: Layer[], t: number): number {
   let r = 1;
@@ -269,6 +280,49 @@ export function playSeconds(layers: Layer[], a: number, b: number, base = 1): nu
   let out = 0;
   for (let i = 0; i < xs.length - 1; i++) out += (xs[i + 1] - xs[i]) / (base * rateAt(layers, (xs[i] + xs[i + 1]) / 2));
   return out;
+}
+
+/** product of the speed layers at t that leave sounds alone */
+function soundHoldAt(layers: Layer[], t: number): number {
+  let r = 1;
+  for (const l of layers) if (l.kind === "speed" && t >= l.start && t < l.end && !speedMovesSounds(l)) r *= l.rate;
+  return r;
+}
+
+/** sound time between source times a and b. speed layers that move sounds and the clip's speed
+ * stretch the sound like the clip audio, so those cancel; the others keep it on the real clock */
+function soundSeconds(layers: Layer[], a: number, b: number): number {
+  if (b <= a) return 0;
+  const cuts = new Set([a, b]);
+  for (const l of layers) {
+    if (l.kind !== "speed") continue;
+    if (l.start > a && l.start < b) cuts.add(l.start);
+    if (l.end > a && l.end < b) cuts.add(l.end);
+  }
+  const xs = [...cuts].sort((p, q) => p - q);
+  let out = 0;
+  for (let i = 0; i < xs.length - 1; i++) out += (xs[i + 1] - xs[i]) / soundHoldAt(layers, (xs[i] + xs[i + 1]) / 2);
+  return out;
+}
+
+/** where a sound layer is at source time t: seconds into its file and its playback rate. mirrors
+ * planSounds in main/layer-export.js */
+export function soundAt(layers: Layer[], l: SoundLayer, t: number, base = 1): { pos: number; rate: number } {
+  const moving = layers.filter((x): x is SpeedLayer => x.kind === "speed" && speedMovesSounds(x));
+  return { pos: soundSeconds(layers, l.start, t), rate: base * rateAt(moving, t) };
+}
+
+/** source time a sound layer stops at: its end, or earlier when the file runs out */
+export function soundEnd(layers: Layer[], l: SoundLayer): number {
+  if (!(l.duration > 0) || soundSeconds(layers, l.start, l.end) <= l.duration) return l.end;
+  let lo = l.start;
+  let hi = l.end;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (soundSeconds(layers, l.start, mid) < l.duration) lo = mid;
+    else hi = mid;
+  }
+  return hi;
 }
 
 export function layerLabel(l: Layer, trackName: (ordinal: number) => string): string {

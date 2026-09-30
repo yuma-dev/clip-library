@@ -154,6 +154,61 @@ test('zoom, blur, speed and sound layers export', async (t) => {
     assert.ok(between > first * 3 + 1, `moving between the keys, ${between}`);
   });
 
+  await t.test('an image follows a zoom it sticks to, and stays put when it does not', async () => {
+    const red = path.join(media, 'img-red.png');
+    const zoomed = async (follow, out) => {
+      await fs.mkdir(media, { recursive: true });
+      await command(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=64x64', '-frames:v', '1', red]);
+      await layers.saveLayers(f.name, [
+        { id: 'i', kind: 'image', start: 0, end: 4, x: 30, y: 30, w: 8, aspect: 1, file: red, ain: 'none', aout: 'none' },
+        { id: 'z', kind: 'zoom', start: 0.5, end: 3.5, x: 30, y: 30, scale: 2, ease: 0, follow },
+      ], f.settings);
+      return f.keep(await api.exportVideo(f.name, 0, 4, 1, 1, path.join(f.dir, out), f.settings));
+    };
+    // rgb at a spot of a 320x180 frame
+    const px = (buf, x, y) => [...buf.subarray((y * 320 + x) * 3, (y * 320 + x) * 3 + 3)];
+    const isRed = ([r, g, b]) => r > 180 && g < 80 && b < 80;
+    const stuck = await frame((await zoomed(['media'], 'zoom-img-stuck.mp4')).path, 2);
+    const kept = await frame((await zoomed([], 'zoom-img-kept.mp4')).path, 2);
+    // zooming 2x on 30%,30% brings that spot to the middle and doubles the image, 8% becomes 16%
+    assert.ok(isRed(px(stuck, 160, 90)), `stuck image in the middle, ${px(stuck, 160, 90)}`);
+    assert.ok(isRed(px(stuck, 160 + 20, 90)), `and twice as wide, ${px(stuck, 180, 90)}`);
+    assert.ok(isRed(px(kept, 96, 54)), `kept image where it was, ${px(kept, 96, 54)}`);
+    assert.ok(!isRed(px(kept, 160, 90)), 'kept image not moved to the middle');
+
+    // half speed over the first 2 s: output 0.8 is source 0.4, before the zoom; output 1.4 is 0.7, in it
+    await fs.mkdir(media, { recursive: true });
+    await command(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=64x64', '-frames:v', '1', red]);
+    await layers.saveLayers(f.name, [
+      { id: 's', kind: 'speed', start: 0, end: 2, rate: 0.5 },
+      { id: 'i', kind: 'image', start: 0, end: 4, x: 30, y: 30, w: 8, aspect: 1, file: red, ain: 'none', aout: 'none' },
+      { id: 'z', kind: 'zoom', start: 0.5, end: 3.5, x: 30, y: 30, scale: 2, ease: 0 },
+    ], f.settings);
+    const slow = f.keep(await api.exportVideo(f.name, 0, 4, 1, 1, path.join(f.dir, 'zoom-img-slow.mp4'), f.settings));
+    const before = await frame(slow.path, 0.8);
+    const during = await frame(slow.path, 1.4);
+    assert.ok(isRed(px(before, 96, 54)) && !isRed(px(before, 160, 90)), `not zoomed yet at 0.8 s, ${px(before, 160, 90)}`);
+    assert.ok(isRed(px(during, 160, 90)), `zoomed at 1.4 s, ${px(during, 160, 90)}`);
+  });
+
+  await t.test('sounds slow down with a speed layer unless it leaves them alone', async () => {
+    const run = async (sounds, out) => {
+      await makeBeep();
+      await layers.saveLayers(f.name, [
+        { id: 's', kind: 'speed', start: 1, end: 4, rate: 0.5, sounds },
+        { id: 'b', kind: 'sound', start: 1, end: 4, file: beep, name: 'beep', level: 1, fade: 0, duration: 1 },
+      ], f.settings);
+      return f.keep(await api.exportVideo(f.name, 0, 5, 1, 1, path.join(f.dir, out), f.settings));
+    };
+    // the one second beep starts at 1 s of output; at half speed it runs to 3 s, left alone to 2 s
+    const slowed = await run(true, 'snd-slowed.mp4');
+    const normal = await run(false, 'snd-normal.mp4');
+    const late = { slowed: await peak(slowed.path, 2.3, 2.8, highs), normal: await peak(normal.path, 2.3, 2.8, highs) };
+    const early = await peak(normal.path, 1.2, 1.8, highs);
+    assert.ok(late.slowed > -20, `slowed beep still playing at 2.5 s, ${late.slowed} dB`);
+    assert.ok(early - late.normal > 15, `normal beep over by 2.5 s, ${late.normal} dB vs ${early} dB`);
+  });
+
   await t.test('undo keeps media alive, paste copies it from another clip', async () => {
     await makeBeep();
     await layers.saveLayers(f.name, [], f.settings, [beep]);

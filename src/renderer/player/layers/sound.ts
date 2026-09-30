@@ -1,12 +1,12 @@
 import type { Layer, SoundLayer } from "../../../types/clips";
 import { fileUrl } from "./meta";
-import { playSeconds } from "./model";
+import { playSeconds, soundAt, soundEnd } from "./model";
 import { baseRate } from "./speed";
 import { getLayers } from "./store";
 
-/** plays sound layers along with the video. they run on the real clock, not slowed by speed layers
- * or the clip's speed, the same as main/layer-export.js mixes them after the retime. levels above
- * 100% need a gain node, so each sound goes through its own */
+/** plays sound layers along with the video. the clip's speed and speed layers change their tempo
+ * like the clip audio, except speed layers set to leave sounds alone; main/layer-export.js plans them
+ * the same. levels above 100% need a gain node, so each sound goes through its own */
 interface Voice {
   el: HTMLAudioElement;
   gain: GainNode;
@@ -73,21 +73,24 @@ export function installSoundLayers(): () => void {
         continue;
       }
       const v = voiceFor(l);
-      const at = playSeconds(all, l.start, t, base);
-      const len = playSeconds(all, l.start, l.end, base);
-      if (l.duration > 0 && at >= l.duration) {
+      const { pos, rate } = soundAt(all, l, t, base);
+      if (l.duration > 0 && pos >= l.duration) {
         if (!v.el.paused) v.el.pause();
         continue;
       }
+      // the fades run on the clock you hear, like the export's afade after the retime
+      const at = playSeconds(all, l.start, t, base);
+      const len = playSeconds(all, l.start, soundEnd(all, l), base);
       const c = context();
       if (c.state === "suspended") void c.resume();
-      v.gain.gain.setTargetAtTime(envelope(l, at, Math.min(len, l.duration || len)), c.currentTime, 0.015);
-      if (v.el.playbackRate !== 1) v.el.playbackRate = 1;
+      v.gain.gain.setTargetAtTime(envelope(l, at, len), c.currentTime, 0.015);
+      const r = Math.min(16, Math.max(0.0625, rate));
+      if (Math.abs(v.el.playbackRate - r) > 1e-6) v.el.playbackRate = r;
       if (v.el.paused) {
-        v.el.currentTime = at;
+        v.el.currentTime = pos;
         void v.el.play().catch(() => undefined);
-      } else if (Math.abs(v.el.currentTime - at) > DRIFT_S) {
-        v.el.currentTime = at;
+      } else if (Math.abs(v.el.currentTime - pos) > DRIFT_S * Math.max(1, r)) {
+        v.el.currentTime = pos;
       }
     }
   };

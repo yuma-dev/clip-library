@@ -509,6 +509,12 @@ body.dragging .pl-tag {
   font: 500 11.5px var(--font-sans);
   cursor: pointer;
 }
+/* labels of different lengths, each button as wide as its own */
+.pl-lp-seg.is-fit button {
+  flex: auto;
+  padding: 0 8px;
+  white-space: nowrap;
+}
 .pl-lp-seg button:hover {
   color: #f4f4f6;
 }
@@ -915,6 +921,9 @@ body.dragging .pl-tag {
   aspect-ratio: var(--ar, 1.7778);
   width: min(100cqw, calc(100cqh * var(--ar, 1.7778)));
   container-type: inline-size;
+}
+.pl-layers-box.is-zoomed {
+  overflow: clip;
 }
 /* max-content: an absolute box only gets the room right of its left edge, and the global
    img max-width then shrank a big gif as it moved right */

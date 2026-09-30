@@ -82,7 +82,7 @@ export function FillSlider({ value, min, max, reset, step, color, name, text, on
   );
 }
 
-export function Seg<T extends string | number>({ value, options, onPick }: { value: T; options: Array<[T, ReactNode]>; onPick: (v: T) => void }) {
+export function Seg<T extends string | number | boolean>({ value, options, onPick }: { value: T; options: Array<[T, ReactNode]>; onPick: (v: T) => void }) {
   return (
     <div className="pl-lp-seg" role="radiogroup">
       {options.map(([v, label]) => (
@@ -90,6 +90,29 @@ export function Seg<T extends string | number>({ value, options, onPick }: { val
           {label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Seg's look, but each button switches on and off by itself */
+export function Toggles<T extends string>({ value, options, onChange }: { value: T[]; options: Array<[T, ReactNode, string]>; onChange: (v: T[]) => void }) {
+  return (
+    <div className="pl-lp-seg is-fit">
+      {options.map(([v, label, title]) => {
+        const on = value.includes(v);
+        return (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={on}
+            className={on ? "is-on" : undefined}
+            title={title}
+            onClick={() => onChange(on ? value.filter((x) => x !== v) : [...value, v])}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }

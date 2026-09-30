@@ -1,7 +1,8 @@
 /** turns a clip's layers into ffmpeg filters for export: volume layers become volume filters on
  * the right audio chain, text/gif/image layers become overlay inputs burned onto the video. blur and
  * zoom change the frame before the retime, speed layers retime video and audio, sound layers are
- * mixed in after the retime so they play at normal speed.
+ * mixed in after the retime, each piece at the tempo its speed layers give it. overlays a zoom
+ * takes along get its scale and offset per frame, mapped back to source time.
  *
  *   [0:v] blur boxes, zoom (source time)  setpts retime  scale  overlays (output time)
  *   [0:a] track volumes + volume layers (source time)  atrim/atempo per piece  + sounds */
@@ -9,6 +10,9 @@ const fs = require('fs').promises;
 const logger = require('../utils/logger');
 
 const OVERLAY_KINDS = new Set(['text', 'gif', 'image']);
+// what a zoom takes along when it doesn't say, ZOOM_FOLLOW_DEFAULT in model.ts
+const FOLLOW_DEFAULT = ['text', 'media'];
+const followGroup = (l) => (l.kind !== 'text' ? 'media' : l.source === 'subtitles' ? 'subtitles' : 'text');
 const FILE_KINDS = new Set(['gif', 'image', 'sound']);
 
 /** the clip's layers for an export, minus layers whose file is gone. a bad layers file
@@ -84,7 +88,17 @@ function buildTimeMap(layers, start, duration, speed) {
     const p = pieces[i];
     expr = `if(lt(T,${fx(p.b)}),(T-${fx(p.a)})/${p.rate.toFixed(6)}+${fx(p.c)},${expr})`;
   }
-  return { segmented: segs.length > 0, pieces, outDur, out, rateAt, setpts: `setpts='(${expr})/TB'` };
+  // the other way, output seconds back to source seconds, for filters that run after the retime
+  const srcExpr = (tv) => {
+    const last = pieces[pieces.length - 1];
+    let e = `${fx(last.a)}+(${tv}-${fx(last.c)})*${last.rate.toFixed(6)}`;
+    for (let i = pieces.length - 2; i >= 0; i--) {
+      const p = pieces[i];
+      e = `if(lt(${tv},${fx(pieces[i + 1].c)}),${fx(p.a)}+(${tv}-${fx(p.c)})*${p.rate.toFixed(6)},${e})`;
+    }
+    return `(${e})`;
+  };
+  return { segmented: segs.length > 0, pieces, outDur, out, rateAt, speed: sp, srcExpr, setpts: `setpts='(${expr})/TB'` };
 }
 
 /** atempo per instance only goes down to 0.5, slower rates chain it */
@@ -117,34 +131,73 @@ function retimeAudio(inLabel, tmap) {
   return { parts, out: 'aret' };
 }
 
-/** sound layers that play inside the export, in output seconds. off is where in the file it starts */
+/** sound layers that play inside the export. at is where the sound starts in output seconds, len
+ * how long it plays there. segs cut the file where the speed changes: off and len in file seconds,
+ * tempo what that piece plays at. speed layers set to leave sounds alone keep the file on the real
+ * clock, the rest and the clip's speed stretch it like the clip audio. mirrors soundAt in model.ts */
 function planSounds(layers, start, duration, tmap) {
+  const sp = tmap.speed || 1;
+  const speeds = (layers || []).filter((l) => l.kind === 'speed' && Math.abs(l.rate - 1) > 0.001);
+  const rateAt = (x, all) =>
+    speeds.reduce((r, l) => (x >= l.start - start && x < l.end - start && (all || l.sounds !== false) ? r * l.rate : r), sp);
   const out = [];
   for (const l of layers || []) {
     if (l.kind !== 'sound' || !l.file) continue;
     const a = l.start - start;
     const b = l.end - start;
     if (b <= 0 || a >= duration) continue;
-    const at = tmap.out(Math.max(0, a));
-    const off = at - tmap.out(a);
-    let len = tmap.out(Math.min(b, duration)) - at;
-    if (l.duration > 0) len = Math.min(len, l.duration - off);
+    const hi = Math.min(b, duration);
+    const cuts = new Set([a, hi]);
+    if (a < 0) cuts.add(0);
+    for (const sl of speeds) {
+      for (const x of [sl.start - start, sl.end - start]) if (x > a && x < hi) cuts.add(x);
+    }
+    const xs = [...cuts].sort((p, q) => p - q);
+    const segs = [];
+    let pos = 0;
+    for (let i = 0; i < xs.length - 1; i++) {
+      const x0 = xs[i];
+      let x1 = xs[i + 1];
+      const mid = (x0 + x1) / 2;
+      const tempo = rateAt(mid, false);
+      // source seconds per file second
+      const hold = rateAt(mid, true) / tempo;
+      let len = (x1 - x0) / hold;
+      let last = false;
+      if (l.duration > 0 && pos + len >= l.duration) {
+        len = l.duration - pos;
+        x1 = x0 + len * hold;
+        last = true;
+      }
+      if (x0 >= 0 && len > 0.001) segs.push({ off: pos, len, tempo });
+      pos += len;
+      if (last) break;
+    }
+    const len = segs.reduce((n, g) => n + g.len / g.tempo, 0);
     if (len <= 0.02) continue;
-    out.push({ path: l.file, at, off, len, level: l.level, fade: l.fade, fadeIn: a >= 0, fadeOut: b <= duration });
+    out.push({ path: l.file, at: tmap.out(Math.max(0, a)), segs, len, level: l.level, fade: l.fade, fadeIn: a >= 0, fadeOut: b <= duration });
   }
   return out;
 }
 
-/** mixes planned sounds (inputs from firstInput on) into [inLabel], normal speed, into [asnd] */
+/** mixes planned sounds (inputs from firstInput on) into [inLabel], each piece at its tempo, into [asnd] */
 function mixSounds(inLabel, sounds, firstInput) {
   const parts = [];
   sounds.forEach((s, k) => {
-    const f = [`atrim=start=${s.off.toFixed(4)}:duration=${s.len.toFixed(4)}`, 'asetpts=PTS-STARTPTS', `volume=${Number(s.level).toFixed(4)}`];
+    const cut = (g) => [`atrim=start=${g.off.toFixed(4)}:duration=${g.len.toFixed(4)}`, 'asetpts=PTS-STARTPTS', ...atempoChain(g.tempo)];
+    if (s.segs.length === 1) {
+      parts.push(`[${firstInput + k}:a]${cut(s.segs[0]).join(',')}[sc${k}]`);
+    } else {
+      parts.push(`[${firstInput + k}:a]asplit=${s.segs.length}${s.segs.map((_, i) => `[ss${k}_${i}]`).join('')}`);
+      s.segs.forEach((g, i) => parts.push(`[ss${k}_${i}]${cut(g).join(',')}[sp${k}_${i}]`));
+      parts.push(`${s.segs.map((_, i) => `[sp${k}_${i}]`).join('')}concat=n=${s.segs.length}:v=0:a=1[sc${k}]`);
+    }
+    const f = [`volume=${Number(s.level).toFixed(4)}`];
     const fd = Math.min(s.fade, s.len / 2);
     if (fd > 0 && s.fadeIn) f.push(`afade=t=in:st=0:d=${fd.toFixed(4)}`);
     if (fd > 0 && s.fadeOut) f.push(`afade=t=out:st=${(s.len - fd).toFixed(4)}:d=${fd.toFixed(4)}`);
     f.push(`adelay=${Math.round(s.at * 1000)}:all=1`);
-    parts.push(`[${firstInput + k}:a]${f.join(',')}[snd${k}]`);
+    parts.push(`[sc${k}]${f.join(',')}[snd${k}]`);
   });
   parts.push(`[${inLabel}]${sounds.map((_, k) => `[snd${k}]`).join('')}amix=inputs=${sounds.length + 1}:normalize=0:duration=first[asnd]`);
   return { parts, out: 'asnd' };
@@ -178,17 +231,56 @@ const ZOOM_MAX = 4;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const even = (v) => Math.max(2, Math.round(v / 2) * 2);
 
-/** one channel of a zoom's keys over export time: the first key plus a smoothstepped step per pair,
- * the same sum zoomView in model.ts adds up. var 1 holds the step's progress so it is written once */
-function keyExpr(keys, a, pick) {
+/** one channel of a zoom's keys over time T: the first key plus a smoothstepped step per pair, the
+ * same sum zoomView in model.ts adds up. var 1 holds the step's progress so it is written once */
+function keyExpr(keys, a, pick, T) {
   let out = pick(keys[0]).toFixed(5);
   for (let i = 0; i + 1 < keys.length; i++) {
     const d = pick(keys[i + 1]) - pick(keys[i]);
     if (Math.abs(d) < 1e-6) continue;
     const len = Math.max(1e-3, keys[i + 1].t - keys[i].t);
-    out += `+(${d.toFixed(5)})*(st(1,clip((t-${fx(a + keys[i].t)})/${len.toFixed(4)},0,1));ld(1)*ld(1)*(3-2*ld(1)))`;
+    out += `+(${d.toFixed(5)})*(st(1,clip((${T}-${fx(a + keys[i].t)})/${len.toFixed(4)},0,1));ld(1)*ld(1)*(3-2*ld(1)))`;
   }
   return `(${out})`;
+}
+
+/** the summed zoom of some zoom layers as expressions of source time T (export seconds): Z the
+ * scale, X and Y the view's left and top in frame widths and heights of the unzoomed frame, before
+ * the clamp into [0, Z-1]. mirrors zoomAt in model.ts. uses vars 0 and 1 */
+function zoomTerms(zooms, start, T) {
+  const zt = [];
+  const xt = [];
+  const yt = [];
+  for (const l of zooms) {
+    const a = l.start - start;
+    const b = l.end - start;
+    const d = Math.min(Number(l.ease) || 0, (b - a) / 2);
+    const P = `clip(min((${T}-${fx(a)})/${d.toFixed(4)},(${fx(b)}-${T})/${d.toFixed(4)}),0,1)`;
+    // smoothstep, the player eases the same way
+    const e = d > 0 ? `(${P}*${P}*(3-2*${P}))` : `between(${T},${fx(a)},${fx(b)})`;
+    const keys = Array.isArray(l.keys) ? l.keys : [];
+    if (keys.length > 1) {
+      // the view moves: z, x and y are expressions of T. var 0 holds z, the offset is the centre
+      // kept inside the frame times z less half a frame, the anchor math of the static case below
+      // with (z-1) cancelled out
+      const Z = keyExpr(keys, a, (k) => clamp(k.scale, ZOOM_MIN, ZOOM_MAX), T);
+      const off = (c) => `(st(0,${Z});(clip(${keyExpr(keys, a, (k) => k[c] / 100, T)},0.5/ld(0),1-0.5/ld(0))*ld(0)-0.5)*${e})`;
+      zt.push(`(${Z}-1)*${e}`);
+      xt.push(off('x'));
+      yt.push(off('y'));
+      continue;
+    }
+    const view = keys[0] || l;
+    const z = clamp(view.scale, ZOOM_MIN, ZOOM_MAX);
+    const k = z - 1;
+    const half = 0.5 / z;
+    const px = (clamp(view.x / 100, half, 1 - half) * z - 0.5) / k;
+    const py = (clamp(view.y / 100, half, 1 - half) * z - 0.5) / k;
+    zt.push(`${k.toFixed(5)}*${e}`);
+    xt.push(`${(px * k).toFixed(5)}*${e}`);
+    yt.push(`${(py * k).toFixed(5)}*${e}`);
+  }
+  return { Z: `(1+${zt.join('+')})`, X: `(${xt.join('+')})`, Y: `(${yt.join('+')})` };
 }
 
 /** blur boxes then the zoom, on [0:v:0] in source pixels and source seconds, ending in [vfx]. null
@@ -233,43 +325,11 @@ function buildFxGraph({ layers, start, duration, width, height }) {
   });
 
   if (zooms.length) {
-    const zt = [];
-    const xt = [];
-    const yt = [];
-    for (const l of zooms) {
-      const a = l.start - start;
-      const b = l.end - start;
-      const d = Math.min(Number(l.ease) || 0, (b - a) / 2);
-      const P = `clip(min((t-${fx(a)})/${d.toFixed(4)},(${fx(b)}-t)/${d.toFixed(4)}),0,1)`;
-      // smoothstep, the player eases the same way
-      const e = d > 0 ? `(${P}*${P}*(3-2*${P}))` : `between(t,${fx(a)},${fx(b)})`;
-      const keys = Array.isArray(l.keys) ? l.keys : [];
-      if (keys.length > 1) {
-        // the view moves: z, x and y are expressions of t. var 0 holds z, the offset is the
-        // centre kept inside the frame times z less half a frame, the anchor math of the static
-        // case below with (z-1) cancelled out
-        const Z = keyExpr(keys, a, (k) => clamp(k.scale, ZOOM_MIN, ZOOM_MAX));
-        const off = (c) => `(st(0,${Z});(clip(${keyExpr(keys, a, (k) => k[c] / 100)},0.5/ld(0),1-0.5/ld(0))*ld(0)-0.5)*${e})`;
-        zt.push(`(${Z}-1)*${e}`);
-        xt.push(off('x'));
-        yt.push(off('y'));
-        continue;
-      }
-      const view = keys[0] || l;
-      const z = clamp(view.scale, ZOOM_MIN, ZOOM_MAX);
-      const k = z - 1;
-      const half = 0.5 / z;
-      const px = (clamp(view.x / 100, half, 1 - half) * z - 0.5) / k;
-      const py = (clamp(view.y / 100, half, 1 - half) * z - 0.5) / k;
-      zt.push(`${k.toFixed(5)}*${e}`);
-      xt.push(`${(px * k).toFixed(5)}*${e}`);
-      yt.push(`${(py * k).toFixed(5)}*${e}`);
-    }
-    const Z = `(1+${zt.join('+')})`;
+    const { Z, X, Y } = zoomTerms(zooms, start, 't');
     // scaled up by Z, then cut back to the frame at the anchor's offset
     chains.push(
       `[${cur}]scale=w='2*trunc(${W}*${Z}/2)':h='2*trunc(${H}*${Z}/2)':eval=frame:flags=bicubic,` +
-      `crop=${W}:${H}:x='clip(${W}*(${xt.join('+')}),0,iw-ow)':y='clip(${H}*(${yt.join('+')}),0,ih-oh)'[vfx]`
+      `crop=${W}:${H}:x='clip(${W}*${X},0,iw-ow)':y='clip(${H}*${Y},0,ih-oh)'[vfx]`
     );
   } else {
     chains.push(`[${cur}]null[vfx]`);
@@ -318,6 +378,13 @@ function buildOverlayGraph({ layers, start, duration, speed, outW, outH, fps, tm
     }
 
     const w0 = Math.max(2, Math.round(l.kind === 'text' ? l.raster.w * (outW / l.raster.refW) : (l.w / 100) * outW));
+    // zooms this layer sticks to: it sits on the zoomed frame, so it grows with it and slides out
+    // of view with it. vars 3 and 2 hold source time and the zoom, zoomTerms uses 0 and 1
+    const zooms = (layers || []).filter(
+      (z) => z.kind === 'zoom' && z.end > l.start && z.start < l.end && (z.follow || FOLLOW_DEFAULT).includes(followGroup(l))
+    );
+    const zt = zooms.length ? zoomTerms(zooms, start, 'ld(3)') : null;
+    const zpre = zt ? `st(3,${tmap.srcExpr('t')});st(2,${zt.Z});` : '';
     const f = ['format=rgba'];
     if (Number.isFinite(l.opacity) && l.opacity < 1) f.push(`colorchannelmixer=aa=${l.opacity.toFixed(3)}`);
     const P = `clip((t-${fx(sr)})/${dIn.toFixed(4)},0,1)`;
@@ -348,7 +415,8 @@ function buildOverlayGraph({ layers, start, duration, speed, outW, outH, fps, tm
     if (animOut === 'pop') scales.push(back(Q));
     if (animIn === 'zoom') scales.push(`(1+0.6*${away(P)})`);
     if (animOut === 'zoom') scales.push(`(1+0.6*${away(Q)})`);
-    if (scales.length) f.push(`scale=w='max(2,trunc(${w0}*${scales.join('*')}))':h=-1:eval=frame`);
+    if (zt) scales.push('ld(2)');
+    if (scales.length) f.push(`scale=w='${zpre}max(2,trunc(${w0}*${scales.join('*')}))':h=-1:eval=frame`);
     else f.push(`scale=${w0}:-1`);
     // pop only fades over the first 40% of its length, the scale carries the rest
     const fadeLen = (kind, d) => (kind === 'pop' ? d * 0.4 : d);
@@ -363,8 +431,8 @@ function buildOverlayGraph({ layers, start, duration, speed, outW, outH, fps, tm
     // and falls out, slide goes left to right
     const rise = (RISE * outW).toFixed(2);
     const side = (SIDE * outW).toFixed(2);
-    let x = `${((l.x / 100) * outW).toFixed(2)}-w/2`;
-    let y = `${((l.y / 100) * outH).toFixed(2)}-h/2`;
+    let x = zt ? `${zpre}(${(l.x / 100).toFixed(5)}*ld(2)-clip(${zt.X},0,ld(2)-1))*${outW}-w/2` : `${((l.x / 100) * outW).toFixed(2)}-w/2`;
+    let y = zt ? `${zpre}(${(l.y / 100).toFixed(5)}*ld(2)-clip(${zt.Y},0,ld(2)-1))*${outH}-h/2` : `${((l.y / 100) * outH).toFixed(2)}-h/2`;
     if (animIn === 'slide') y += `+${rise}*${away(P)}`;
     if (animOut === 'slide') y += `-${rise}*${away(Q)}`;
     if (animIn === 'drop') y += `-${rise}*${away(P)}`;

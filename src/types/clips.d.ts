@@ -171,7 +171,7 @@ export interface GifLayer extends MediaBase {
 export interface ImageLayer extends MediaBase {
   kind: "image";
 }
-/** punch-in on a spot of the frame; blur boxes zoom with it, text and media stay put */
+/** punch-in on a spot of the frame; blur boxes zoom with it, text and media when follow says so */
 export interface ZoomLayer extends LayerBase {
   kind: "zoom";
   /** centre of the zoomed view, % of the frame */
@@ -182,8 +182,10 @@ export interface ZoomLayer extends LayerBase {
   /** seconds the move in and the move out take */
   ease: number;
   /** sorted by t; unset or empty means x/y/scale hold for the whole layer */
-  keys?: ZoomKey[];
+  keys?: ZoomKey[];  /** which layers on top zoom with the video; unset means text and media do, subtitles stay put */
+  follow?: ZoomFollow[];
 }
+export type ZoomFollow = "text" | "subtitles" | "media";
 /** the zoom's view t seconds after the layer's start; between keys it eases like the move in */
 export interface ZoomKey {
   t: number;
@@ -196,6 +198,8 @@ export interface SpeedLayer extends LayerBase {
   kind: "speed";
   /** 0.25..4 */
   rate: number;
+  /** false leaves sound layers at normal speed through this part */
+  sounds?: boolean;
 }
 export type BlurMode = "blur" | "pixelate";
 /** hides a box of the frame, in source pixels so it follows a zoom */
@@ -210,7 +214,7 @@ export interface BlurLayer extends LayerBase {
   /** 0..1 */
   strength: number;
 }
-/** an audio file played from start; it runs at normal speed through speed changes */
+/** an audio file played from start; speed layers change its tempo unless they are set not to */
 export interface SoundLayer extends LayerBase {
   kind: "sound";
   /** local file in the clip's layers_media folder */

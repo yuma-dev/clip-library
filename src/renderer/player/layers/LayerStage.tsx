@@ -2,9 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TextLayer, VisualLayer } from "../../../types/clips";
 import { FxStage, hasFx } from "./fx";
 import { fileUrl } from "./meta";
-import { animAt, clamp, isVisual } from "./model";
+import { animAt, clamp, isVisual, overlayZoomAt } from "./model";
 import { drawText, loadTextFont } from "./rasterize";
-import { select, update, useLayers } from "./store";
+import { getLayers, select, update, useLayers } from "./store";
 
 type Visual = VisualLayer;
 const video = () => document.getElementById("video-player") as HTMLVideoElement | null;
@@ -39,9 +39,17 @@ function Body({ l, frameW }: { l: Visual; frameW: number }) {
   return <img src={src} alt="" draggable={false} style={{ width: `${l.w}cqw`, aspectRatio: String(l.aspect) }} />;
 }
 
+/** the zoom a layer on top gets at t; none while a zoom is selected, the frame stays whole then */
+function zoomFor(l: Visual, t: number) {
+  const { items, sel } = getLayers();
+  if (items.find((x) => x.id === sel)?.kind === "zoom") return { z: 1, ox: 0, oy: 0 };
+  return overlayZoomAt(items, l, t);
+}
+
 /** the visual layers over the video, in a box with the video's own aspect so % positions match the
- * export in fullscreen too. a frame loop sets visibility and the show/hide animation from the
- * playhead; the selected layer stays visible (dimmed outside its time) so it can be placed */
+ * export in fullscreen too. a frame loop sets visibility, the show/hide animation and the zoom of
+ * the layers that follow it from the playhead; the selected layer stays visible (dimmed outside its
+ * time) so it can be placed */
 export default function LayerStage() {
   const { items, sel } = useLayers();
   const visuals = items.filter(isVisual);
@@ -72,6 +80,7 @@ export default function LayerStage() {
       const v = video();
       if (!v) return;
       const t = v.currentTime;
+      let zoomed = false;
       for (const l of itemsRef.current) {
         const el = els.current.get(l.id);
         if (!el) continue;
@@ -85,10 +94,17 @@ export default function LayerStage() {
         const a = inside ? animAt(l, t) : { opacity: 0.45, scale: 1, dx: 0, dy: 0, clipL: 0, clipR: 0 };
         el.classList.toggle("is-outside", !inside);
         el.style.opacity = String(a.opacity * (l.opacity ?? 1));
-        el.style.transform = `translate(-50%, -50%) translate(${a.dx}cqw, ${a.dy}cqw) scale(${a.scale})`;
+        // a followed zoom scales the frame by z and cuts it at ox/oy, the layer sits on that frame
+        const { z, ox, oy } = zoomFor(l, t);
+        if (z > 1.0001) zoomed = true;
+        el.style.left = `${(l.x / 100) * z * 100 - ox * 100}%`;
+        el.style.top = `${(l.y / 100) * z * 100 - oy * 100}%`;
+        el.style.transform = `translate(-50%, -50%) translate(${a.dx}cqw, ${a.dy}cqw) scale(${a.scale * z})`;
         const body = el.firstElementChild as HTMLElement | null;
         if (body) body.style.clipPath = a.clipL || a.clipR ? `inset(0 ${a.clipR * 100}% 0 ${a.clipL * 100}%)` : "";
       }
+      // zoomed layers pushed past the frame's edge are cut there, like the export
+      boxRef.current?.classList.toggle("is-zoomed", zoomed);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
@@ -110,17 +126,19 @@ export default function LayerStage() {
     const y0 = e.clientY;
     const { x: lx, y: ly } = l;
     const size0 = l.kind === "text" ? l.size : l.w;
+    // a zoomed layer moves by frame pixels, so the pointer's travel shrinks by the zoom
+    const { z } = zoomFor(l, video()?.currentTime ?? 0);
     const move = (ev: PointerEvent) => {
       if (resizing) {
         // diagonal drag, away from the centre grows
-        const f = Math.max(0.05, 1 + (ev.clientX - x0 + ev.clientY - y0) / 240);
+        const f = Math.max(0.05, 1 + (ev.clientX - x0 + ev.clientY - y0) / (240 * z));
         if (l.kind === "text") update(l.id, { size: clamp(size0 * f, 0.5, 60) });
         else update(l.id, { w: clamp(size0 * f, 0.5, 1000) });
         return;
       }
       update(l.id, {
-        x: clamp(lx + ((ev.clientX - x0) / box.width) * 100, 0, 100),
-        y: clamp(ly + ((ev.clientY - y0) / box.height) * 100, 0, 100),
+        x: clamp(lx + ((ev.clientX - x0) / box.width / z) * 100, 0, 100),
+        y: clamp(ly + ((ev.clientY - y0) / box.height / z) * 100, 0, 100),
       });
     };
     const up = () => {

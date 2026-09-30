@@ -14,6 +14,8 @@ const VERSION = 1;
 const KINDS = new Set(['volume', 'text', 'gif', 'image', 'zoom', 'speed', 'blur', 'sound']);
 const ANIMS = new Set(['none', 'fade', 'pop', 'zoom', 'slide', 'drop', 'side', 'wipe', 'type']);
 const STYLES = new Set(['clean', 'outline', 'box', 'loud']);
+// what a zoom takes along, see ZoomFollow in src/types/clips.d.ts
+const FOLLOW = new Set(['text', 'subtitles', 'media']);
 const SOUND_EXTS = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.opus'];
 // subtitles on a long clip are a few hundred lines
 const MAX_ITEMS = 1000;
@@ -62,9 +64,10 @@ function sanitize(raw, mediaDir) {
       .sort((a, b) => a.t - b.t)
       .filter((k, i, all) => i === 0 || k.t - all[i - 1].t > 0.001)
       .slice(0, MAX_ZOOM_KEYS);
-    return keys.length ? { ...zoom, keys } : zoom;
+    const follow = Array.isArray(raw.follow) ? [...new Set(raw.follow.filter((f) => FOLLOW.has(f)))] : null;
+    return { ...zoom, ...(keys.length ? { keys } : {}), ...(follow ? { follow } : {}) };
   }
-  if (raw.kind === 'speed') return { ...base, rate: num(raw.rate, 0.25, 4, 0.5) };
+  if (raw.kind === 'speed') return { ...base, rate: num(raw.rate, 0.25, 4, 0.5), ...(raw.sounds === false ? { sounds: false } : {}) };
   if (raw.kind === 'blur') {
     return {
       ...base,
