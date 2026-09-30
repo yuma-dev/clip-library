@@ -317,6 +317,87 @@ export interface TelemetryReport {
   metrics?: TelemetryWireMetric[];
 }
 
+// settings > storage (main/storage.js, main/overlaps.js)
+
+export interface StorageSummary {
+  location: string;
+  /** whole clip folder */
+  total: number;
+  clips: { bytes: number; count: number };
+  metadata: { bytes: number; analysis: number; audioTracks: number; layersMedia: number; other: number };
+  icons: number;
+  otherFiles: number;
+  /** userData/thumbnail-cache, outside the clip folder */
+  thumbnails: number;
+  speechModel: { bytes: number; installed: boolean };
+  disk: { free: number; size: number } | null;
+  at: number;
+}
+
+export interface StorageRow {
+  name: string;
+  size: number;
+  mtimeMs: number;
+  /** null until probed or analyzed */
+  duration: number | null;
+  trim: { start: number; end: number } | null;
+}
+
+/** two saves that share footage; offset = where `later` starts inside `earlier`, seconds */
+export interface OverlapPair {
+  key: string;
+  earlier: string;
+  later: string;
+  earlierSize: number;
+  laterSize: number;
+  earlierDuration: number;
+  laterDuration: number;
+  offset: number;
+  overlap: number;
+  mergedDuration: number;
+  contained: boolean;
+  method: "audio" | "timestamp";
+  /** audio match strength 0-1, null when only the file times were used */
+  confidence: number | null;
+}
+
+export interface OverlapState {
+  pairs: OverlapPair[];
+  scanning: boolean;
+  scanned: boolean;
+}
+
+export type StorageJobSpec =
+  | { kind: "merge" | "keep-longer"; key: string; label?: string }
+  | { kind: "delete" | "shrink"; names: string[]; label?: string };
+
+export interface StorageJobProgress {
+  id: number;
+  kind: StorageJobSpec["kind"];
+  state: "queued" | "running" | "done" | "failed";
+  progress: number;
+  label?: string;
+  phase?: string;
+  index?: number;
+  total?: number;
+  name?: string;
+  error?: string;
+}
+
+export interface StorageJobResult {
+  merged?: string;
+  kept?: string;
+  removed?: string[];
+  shrunk?: Array<{ name: string; freed: number; keyframe: number; trimCleared: boolean }>;
+  skipped?: Array<{ name: string; reason: string }>;
+  failed?: Array<{ name: string; error: string } | string>;
+  bytesFreed?: number;
+  bytesBefore?: number;
+  bytesAfter?: number;
+  tags?: string[] | null;
+  encoder?: string;
+}
+
 type ClipsUnsubscribe = () => void;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ClipsEventCallback = (...args: any[]) => void;
@@ -329,6 +410,18 @@ export interface ClipsApi {
   getNewClipsInfo(knownNames?: string[]): Promise<{ newClips: string[]; totalNewCount?: number }>;
   /** Total disk usage (bytes) of the configured clip folder. Cached ~4 min in main. */
   getClipsFolderSize(): Promise<{ bytes: number }>;
+  /** cached two minutes in main unless forced */
+  getStorageSummary(force?: boolean): Promise<StorageSummary | null>;
+  getStorageRows(): Promise<StorageRow[]>;
+  /** probes up to 60 clips that had no cached duration */
+  getStorageDurations(names: string[]): Promise<Record<string, number | null>>;
+  /** startIfIdle kicks off the first scan when the deferred startup one hasn't run yet */
+  getOverlaps(startIfIdle?: boolean): Promise<OverlapState>;
+  rescanOverlaps(): Promise<OverlapState>;
+  dismissOverlap(key: string): Promise<OverlapState>;
+  /** queued in main, one job at a time; progress on onStorageProgress */
+  runStorageJob(spec: StorageJobSpec): Promise<StorageJobResult>;
+  getStorageJob(): Promise<StorageJobProgress | null>;
   markClipsWatched(clipNames: string[]): Promise<void>;
   deleteClip(clip: any): Promise<any>;
   saveClipListImmediately(): Promise<any>;
@@ -543,6 +636,8 @@ export interface ClipsApi {
   onCliplibNavigate(cb: ClipsEventCallback): ClipsUnsubscribe;
   onExportProgress(cb: ClipsEventCallback): ClipsUnsubscribe;
   onSubtitlesProgress(cb: (p: { step: "engine" | "unpack" | "model" | "audio" | "transcribe"; progress: number; got?: number; total?: number }) => void): ClipsUnsubscribe;
+  onStorageProgress(cb: (p: StorageJobProgress) => void): ClipsUnsubscribe;
+  onOverlapsChanged(cb: (s: OverlapState) => void): ClipsUnsubscribe;
   onShowFallbackNotice(cb: ClipsEventCallback): ClipsUnsubscribe;
   onShowDecodeFallbackNotice(cb: ClipsEventCallback): ClipsUnsubscribe;
   onThumbnailValidationStart(cb: ClipsEventCallback): ClipsUnsubscribe;

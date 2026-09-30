@@ -5,6 +5,7 @@ import {
   Bell,
   Clapperboard,
   FolderOpen,
+  HardDrive,
   Info,
   Keyboard,
   Mic,
@@ -22,6 +23,7 @@ import PlayerSection from "../settings/sections/PlayerSection";
 import LoudnessSection from "../settings/sections/LoudnessSection";
 import AnalysisSection from "../settings/sections/AnalysisSection";
 import ExportSection from "../settings/sections/ExportSection";
+import StorageSection from "../settings/sections/StorageSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
 import CliplibSection from "../settings/sections/CliplibSection";
@@ -43,6 +45,7 @@ type SectionId =
   | "player"
   | "audio"
   | "export"
+  | "storage"
   | "shortcuts"
   | "cliplib"
   | "about"
@@ -68,6 +71,7 @@ export const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
       { id: "player", label: "Player", icon: MonitorPlay, blurb: "Previews and the ambient glow" },
       { id: "audio", label: "Audio", icon: AudioLines, blurb: "Waveforms and even loudness across clips" },
       { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
+      { id: "storage", label: "Storage", icon: HardDrive, blurb: "What takes up space, and ways to get it back" },
       { id: "shortcuts", label: "Shortcuts", icon: Keyboard, blurb: "Player keyboard bindings" },
       { id: "cliplib", label: "ClipLib", icon: Share2, blurb: "Account, invite codes, and API tokens" },
       { id: "about", label: "About", icon: Info, blurb: "Version, updates, and diagnostics" },
@@ -158,6 +162,7 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
       </>
     ),
     export: () => <ExportSection />,
+    storage: () => <StorageSection lib={lib} />,
     shortcuts: () => <ShortcutsSection />,
     cliplib: () => <CliplibSection />,
     about: () => <AboutSection />,

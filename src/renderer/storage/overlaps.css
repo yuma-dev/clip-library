@@ -1,0 +1,22 @@
+/* overlapping-save mark on library cards, bottom-left: avatars own top-left, the star top-right */
+.clip-overlap-mark {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: var(--color-accent-glyph);
+  font-size: 11px;
+  font-weight: 550;
+  pointer-events: auto;
+}
+.clip-overlap-mark span {
+  color: rgba(255, 255, 255, 0.82);
+}

@@ -117,7 +117,8 @@ if (!app.isPackaged && process.env.CLIPS_PERF_STARTUP === '1') {
     'import-steelseries-clips',
     'export-video',
     'export-trimmed-video',
-    'export-audio'
+    'export-audio',
+    'storage-run'
   ]);
   const originalHandle = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = function (channel, handler) {
@@ -206,6 +207,8 @@ const fileWatcherModule = require('./main/file-watcher');
 const clipWarmer = require('./main/clip-warmer');
 const loudnessModule = require('./main/loudness');
 const analysisModule = require('./main/audio-analysis');
+// settings > storage and overlapping save detection; registers its own storage-* handlers
+const storageModule = require('./main/storage');
 // Library order (newest first) from the last get-clips, for the warmer.
 let lastClipNames = [];
 
@@ -334,6 +337,8 @@ async function runDeferredServices() {
   if (!skip.has('warm')) setTimeout(() => {
     analysisModule.scanAll().catch((error) => logger.warn(`analysis scan failed: ${error.message}`));
   }, 8000);
+  // overlapping saves, after the listen has had a head start (its sidecars carry durations)
+  if (!skip.has('warm')) storageModule.start(20000);
 }
 
 // hidden until the compositor frames the painted library (renderer-ready), not just ready-to-show
@@ -499,6 +504,7 @@ analysisModule.init({
   loudness: loudnessModule,
   send: sendToRenderer
 });
+storageModule.init({ ipcMain, getSettings, send: sendToRenderer });
 // Wires the settings getter only (no process work): a cliplib://settings/clipdip
 // deep link can ask for clipdip status before the deferred services run.
 clipdipModule.init(getSettings);
@@ -1143,6 +1149,7 @@ async function createWindow() {
       }
       // front of the queue so a fresh recording has its waveform and level before its first open
       analysisModule.enqueue(fileName, true);
+      storageModule.onNewClip(fileName);
     },
     // the single recursive watch has one change buffer; on overflow, walk the library and announce
     // anything not yet known.

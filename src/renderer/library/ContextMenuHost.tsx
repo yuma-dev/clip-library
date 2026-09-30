@@ -7,6 +7,8 @@ import { useConfirm } from "../ui/ConfirmDialog";
 import { exportClipToClipboard } from "../player/playerExport";
 import { hideExportProgress, showExportProgress } from "../player/exportToast";
 import type { LocalClip } from "./types";
+import { Merge } from "lucide-react";
+import { mergePair, pairsFor } from "../storage/overlaps";
 
 export interface ContextMenuHandle {
   /** With `selection` > 1 clip, menu switches to bulk mode: actions apply to all. */
@@ -76,6 +78,19 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
       const msg = (err as Error)?.message;
       toast.show(msg ? `Export failed: ${msg}` : "Export failed", "error");
     }
+  };
+  // the pair sharing the most footage; the rest are listed in Settings > Storage
+  const overlap = !multi && clip ? pairsFor(clip.originalName)[0] : undefined;
+  const mergeOverlap = async () => {
+    if (!overlap || !clip) return;
+    const own = clip;
+    close();
+    await mergePair(overlap, {
+      confirm,
+      toast,
+      removeClips: (names) => names.forEach(onDeleted),
+      displayName: (name) => (name === own.originalName ? own.customName : name.replace(/^.*\//, "").replace(/\.[^.]+$/, "")),
+    });
   };
   const resetTrim = async () => {
     if (clips.length === 0) return;
@@ -217,6 +232,11 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
           {!multi ? (
             <MenuItem icon={<FolderOpen size={15} />} onClick={revealClip}>
               Reveal in Explorer
+            </MenuItem>
+          ) : null}
+          {overlap ? (
+            <MenuItem icon={<Merge size={15} />} onClick={mergeOverlap}>
+              Merge with overlapping save
             </MenuItem>
           ) : null}
           <MenuDivider />

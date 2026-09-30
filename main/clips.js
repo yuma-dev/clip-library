@@ -305,9 +305,16 @@ async function getNewClipInfo(getSettings, fileName) {
     }
   }
 
+  // a merged save lands with its name already written
+  let customName = path.basename(fileName, path.extname(fileName));
+  try {
+    customName = (await fs.readFile(path.join(metadataFolder, `${metadataSafeName(fileName)}.customname`), "utf8")) || customName;
+  } catch {
+  }
+
   const newClipInfo = {
     originalName: fileName,
-    customName: path.basename(fileName, path.extname(fileName)),
+    customName,
     createdAt: createdAt,
     tags: []
   };
