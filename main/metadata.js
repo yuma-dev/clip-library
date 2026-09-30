@@ -1,5 +1,5 @@
 /** .clip_metadata file I/O: atomic writes, read/write for names, trim, speed,
- * volume, tags. layers live in ./layers.js */
+ * volume, tags, favorites. layers live in ./layers.js */
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
@@ -520,6 +520,39 @@ async function saveClipTags(clipName, tags, getSettings) {
   }
 }
 
+// favorites: an empty .favorite marker, presence is the flag. get-clips already
+// sees it in its one readdir, so the grid needs no extra IPC to load them
+
+/**
+ * @param {string[]} clipNames
+ * @param {boolean} favorite
+ * @param {Function} getSettings
+ */
+async function setClipsFavorite(clipNames, favorite, getSettings) {
+  const settings = await getSettings();
+  const metadataFolder = getMetadataFolder(settings.clipLocation);
+  const names = Array.isArray(clipNames) ? clipNames : [clipNames];
+
+  try {
+    if (favorite) await ensureDirectoryExists(metadataFolder);
+    await mapWithConcurrency(names, 16, async (clipName) => {
+      const filePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.favorite`);
+      if (favorite) {
+        await fs.writeFile(filePath, '');
+      } else {
+        await fs.unlink(filePath).catch((error) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+    });
+    logActivity(favorite ? 'favorite_add' : 'favorite_remove', { clipNames: names });
+    return { success: true };
+  } catch (error) {
+    logger.error('Error saving favorite:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // global tags
 
 async function loadGlobalTags(getAppPath) {
@@ -1008,6 +1041,9 @@ module.exports = {
   getClipTags,
   getClipTagsBatch,
   saveClipTags,
+
+  // Favorites
+  setClipsFavorite,
 
   // Global tags
   loadGlobalTags,

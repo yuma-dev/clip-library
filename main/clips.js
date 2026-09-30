@@ -342,7 +342,7 @@ function stopPeriodicSave() {
 /** newest first; .mp4/.avi/.mov; missing optional metadata files
  * (.customname/.trim/.date) fall back cleanly. returns [] on failure
  * @param {Function} getSettings - resolves to { clipLocation: string }
- * @returns {Promise<Array<{originalName: string, customName: string, createdAt: number, thumbnailPath: string, isTrimmed: boolean}>>}
+ * @returns {Promise<Array<{originalName: string, customName: string, createdAt: number, thumbnailPath: string, isTrimmed: boolean, isFavorite: boolean}>>}
  */
 async function getClips(getSettings) {
   const settings = await getSettings();
@@ -387,6 +387,7 @@ async function getClips(getSettings) {
         const safeName = metadataSafeName(file.name);
         let customName = path.basename(file.name, path.extname(file.name));
         const isTrimmed = hasMetadata(`${safeName}.trim`);
+        const isFavorite = hasMetadata(`${safeName}.favorite`);
         let createdAt = file.date.getTime();
 
         if (hasMetadata(`${safeName}.customname`)) {
@@ -419,6 +420,7 @@ async function getClips(getSettings) {
           createdAt: createdAt,
           thumbnailPath: thumbnailPath,
           isTrimmed: isTrimmed,
+          isFavorite: isFavorite,
         };
       });
 
@@ -515,7 +517,7 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/** deletes a clip and its metadata (.customname/.trim/.layers/thumbnail)
+/** deletes a clip and its metadata (.customname/.trim/.layers/.favorite/thumbnail)
  * @param {string} clipName
  * @param {Function} getSettings
  * @param {Object} thumbnailsModule
@@ -530,9 +532,10 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
   const customNamePath = path.join(metadataFolder, `${safeName}.customname`);
   const trimDataPath = path.join(metadataFolder, `${safeName}.trim`);
   const layersPath = path.join(metadataFolder, `${safeName}.layers`);
+  const favoritePath = path.join(metadataFolder, `${safeName}.favorite`);
   const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
 
-  const filesToDelete = [clipPath, customNamePath, trimDataPath, layersPath, thumbnailPath];
+  const filesToDelete = [clipPath, customNamePath, trimDataPath, layersPath, favoritePath, thumbnailPath];
 
   if (videoPlayer) {
     videoPlayer.src = "";

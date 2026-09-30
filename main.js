@@ -1657,6 +1657,10 @@ ipcMain.handle("save-clip-tags", async (event, clipName, tags) => {
   return metadataModule.saveClipTags(clipName, tags, getSettings);
 });
 
+ipcMain.handle("set-clips-favorite", async (event, clipNames, favorite) => {
+  return metadataModule.setClipsFavorite(clipNames, Boolean(favorite), getSettings);
+});
+
 ipcMain.handle("load-global-tags", async () => {
   return metadataModule.loadGlobalTags(app.getPath.bind(app));
 });

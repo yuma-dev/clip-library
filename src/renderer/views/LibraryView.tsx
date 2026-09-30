@@ -52,6 +52,7 @@ function LibraryView({
           removeClips={lib.removeClips}
           renameClip={lib.renameClip}
           setClipTags={lib.setClipTags}
+          setFavorite={lib.setFavorite}
           globalTags={globalTags}
           addGlobalTag={addGlobalTag}
         />

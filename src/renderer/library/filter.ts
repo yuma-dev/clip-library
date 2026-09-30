@@ -83,12 +83,14 @@ function computeTagMatch(clip: LocalClip, tags: TagFilterState): boolean {
 }
 
 // collections: quick top-level filters, ANDed with search + tags
-export type Collection = "all" | "new" | "untagged" | "trimmed";
+export type Collection = "all" | "new" | "favorites" | "untagged" | "trimmed";
 
 export function matchesCollection(clip: LocalClip, collection: Collection): boolean {
   switch (collection) {
     case "new":
       return Boolean(clip.isNewSinceLastSession);
+    case "favorites":
+      return Boolean(clip.isFavorite);
     case "untagged":
       return clip.tags.length === 0;
     case "trimmed":

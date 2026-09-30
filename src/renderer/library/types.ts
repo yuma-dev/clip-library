@@ -8,6 +8,8 @@ export interface LocalClip {
   createdAt: number;
   thumbnailPath: string | null;
   isTrimmed: boolean;
+  /** .favorite marker in .clip_metadata; absent in snapshots cached before favorites existed */
+  isFavorite?: boolean;
   tags: string[];
   /** true for clips added since last session or live while running; drives new-clip highlighting */
   isNewSinceLastSession?: boolean;

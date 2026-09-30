@@ -35,6 +35,7 @@ import {
 } from "../library/gridNavigation";
 import ShareModal from "./ShareModal";
 import SpeedDrum from "./SpeedDrum";
+import FavoriteStar from "./FavoriteStar";
 import { installChromeVisibility } from "./chromeVisibility";
 import Timeline from "./Timeline";
 import type { TrackView } from "./Waveform";
@@ -71,6 +72,9 @@ interface VideoPlayerProps {
   removeClips: (names: string[]) => void;
   /** clears the "new" highlight + persists watched state on open */
   markClipsWatched: (names: string[]) => void;
+  /** unfiltered library; `clips` drops a clip unstarred inside the Favorites collection */
+  allClips: LocalClip[];
+  setFavorite: (names: string[], favorite: boolean) => void;
 }
 
 /** what react keeps per opened clip, taken from legacy's clip-open-state event */
@@ -82,7 +86,7 @@ interface OpenSession {
 
 /** renders the legacy #player-overlay DOM; window.legacyPlayer.init() drives it imperatively
  * (React never re-renders it). card clicks call legacyPlayer.openClip() */
-function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWatched }: VideoPlayerProps) {
+function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWatched, allClips, setFavorite }: VideoPlayerProps) {
   const initedRef = useRef(false);
   const { confirm } = useConfirm();
   const toast = useToast();
@@ -113,6 +117,13 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   // avoids stale closures in the openClip wrapper
   const markWatchedRef = useRef(markClipsWatched);
   markWatchedRef.current = markClipsWatched;
+  // the legacy keybinding callback is bound once, so it reads the live list through this
+  const toggleFavoriteRef = useRef(() => {});
+  toggleFavoriteRef.current = () => {
+    const name = window.legacyState?.currentClip?.originalName as string | undefined;
+    if (!name) return;
+    setFavorite([name], !allClips.find((c) => c.originalName === name)?.isFavorite);
+  };
   // debounced title save timer; also cleared by legacy's flush-on-close
   const titleTimerRef = useRef<number | undefined>(undefined);
   // hover-preview scrub video
@@ -333,6 +344,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       exportAudioToClipboard: () => runExport((p) => exportAudio(null, p)),
       exportDefault: () => runExport(exportTrimmedVideo),
       confirmAndDeleteClip: () => void handleDelete(),
+      toggleFavorite: () => toggleFavoriteRef.current(),
       // player re-enables grid nav (library/gridNavigation.ts) on close while a gamepad is
       // connected (player-legacy:1747)
       enableGridNavigation: () => enableGridNavigation(),
@@ -723,6 +735,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
             <div id="top-controls">
               <div className="pl-pill pl-title">
                 <input type="text" id="clip-title" placeholder="Clip title" spellCheck={false} />
+                <FavoriteStar
+                  on={Boolean(session && allClips.find((c) => c.originalName === session.originalName)?.isFavorite)}
+                  onToggle={() => toggleFavoriteRef.current()}
+                />
               </div>
               <div className="pl-pill pl-actions">
                 <button

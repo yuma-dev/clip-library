@@ -3,9 +3,12 @@ import { useObserve } from "./visibility";
 import { useHover } from "./hoverContext";
 import { useSelection } from "./selectionContext";
 import { useRename } from "./renameContext";
+import { useFavorite } from "./favoriteContext";
 import { absoluteTime, relativeTime } from "./time";
 import { getCachedGameIcon, loadGameIcon, type GameIcon } from "./gameIcon";
 import ParticipantAvatars from "./ParticipantAvatars";
+import { Layers2, Star } from "lucide-react";
+import { useHasOverlap } from "../storage/overlaps";
 import Tooltip from "../ui/Tooltip";
 import type { LocalClip } from "./types";
 import shimmerUrl from "../../../assets/loading-thumbnail.gif";
@@ -26,6 +29,8 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators, medi
   const hover = useHover();
   const selection = useSelection();
   const rename = useRename();
+  const setFavorite = useFavorite();
+  const overlaps = useHasOverlap(clip.originalName);
   const [errored, setErrored] = useState(false);
   const [editing, setEditing] = useState(false);
   const [icon, setIcon] = useState<GameIcon | null>(() => getCachedGameIcon(clip.originalName) ?? null);
@@ -94,6 +99,28 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators, medi
         {mediaOverlay}
         {icon?.discord ? (
           <ParticipantAvatars discord={icon.discord} clipCreatedAt={clip.createdAt} />
+        ) : null}
+        {overlaps ? (
+          <span className="clip-overlap-mark" title="Shares footage with another save. Right-click to merge them.">
+            <Layers2 size={12} strokeWidth={2.2} />
+            <span>Overlap</span>
+          </span>
+        ) : null}
+        {setFavorite ? (
+          <button
+            type="button"
+            className={`clip-fav${clip.isFavorite ? " on" : ""}`}
+            aria-label={clip.isFavorite ? "Remove from favorites" : "Add to favorites"}
+            aria-pressed={Boolean(clip.isFavorite)}
+            title={clip.isFavorite ? "Remove from favorites" : "Add to favorites"}
+            onClick={(e) => {
+              // the card's own click would open the player or change the selection
+              e.stopPropagation();
+              setFavorite([clip.originalName], !clip.isFavorite);
+            }}
+          >
+            <Star size={14} strokeWidth={2.2} fill={clip.isFavorite ? "currentColor" : "none"} />
+          </button>
         ) : null}
       </div>
 

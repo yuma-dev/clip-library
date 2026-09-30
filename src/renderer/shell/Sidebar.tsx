@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { CircleDashed, Layers, Scissors, Sparkles } from "lucide-react";
+import { CircleDashed, Layers, Scissors, Sparkles, Star } from "lucide-react";
 import { routes, type Route } from "../routes";
 import { useToast } from "../ui/Toast";
 import { useProfile } from "./useProfile";
@@ -29,6 +29,7 @@ interface SidebarProps {
 const COLLECTIONS: { id: Collection; label: string; icon: typeof Layers }[] = [
   { id: "all", label: "All clips", icon: Layers },
   { id: "new", label: "New", icon: Sparkles },
+  { id: "favorites", label: "Favorites", icon: Star },
   { id: "untagged", label: "Untagged", icon: CircleDashed },
   { id: "trimmed", label: "Trimmed", icon: Scissors },
 ];
@@ -56,13 +57,15 @@ function Sidebar({
     let untagged = 0;
     let trimmed = 0;
     let isNew = 0;
+    let favorites = 0;
     for (const c of clips) {
       if (now - c.createdAt <= WEEK_MS) week++;
       if (c.tags.length === 0) untagged++;
       if (c.isTrimmed) trimmed++;
       if (c.isNewSinceLastSession) isNew++;
+      if (c.isFavorite) favorites++;
     }
-    return { total: clips.length, week, untagged, trimmed, isNew };
+    return { total: clips.length, week, untagged, trimmed, isNew, favorites };
   }, [clips]);
 
   // clip-folder disk usage, lazily fetched and refreshed slowly; nothing depends on it
@@ -91,6 +94,8 @@ function Sidebar({
     switch (id) {
       case "new":
         return counts.isNew;
+      case "favorites":
+        return counts.favorites;
       case "untagged":
         return counts.untagged;
       case "trimmed":

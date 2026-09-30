@@ -55,6 +55,8 @@ export interface UseClips {
   renameClip: (originalName: string, newName: string) => Promise<boolean>;
   /** persists via IPC, reflects into the legacy player; drives grid "Manage tags" */
   setClipTags: (originalName: string, tags: string[]) => void;
+  /** optimistic, persists via IPC; card star, context menu and player all go through here */
+  setFavorite: (names: string[], favorite: boolean) => void;
   /** in-memory mirror of settings' Manage Tags; disk side done by the caller */
   renameTagInClips: (oldTag: string, newTag: string) => void;
   removeTagFromClips: (tag: string) => void;
@@ -107,6 +109,7 @@ export function useClips(): UseClips {
         createdAt: Number(c.createdAt ?? 0),
         thumbnailPath: (c.thumbnailPath as string | null) ?? null,
         isTrimmed: Boolean(c.isTrimmed),
+        isFavorite: Boolean(c.isFavorite),
         tags: [],
         isNewSinceLastSession: newSet.has(String(c.originalName ?? "")),
       }));
@@ -125,6 +128,7 @@ export function useClips(): UseClips {
             old.createdAt === fresh.createdAt &&
             old.thumbnailPath === fresh.thumbnailPath &&
             old.isTrimmed === fresh.isTrimmed &&
+            (old.isFavorite ?? false) === fresh.isFavorite &&
             (old.isNewSinceLastSession ?? false) === (fresh.isNewSinceLastSession ?? false)
           ) {
             return old;
@@ -344,6 +348,28 @@ export function useClips(): UseClips {
     }
   }, []);
 
+  const setFavorite = useCallback((names: string[], favorite: boolean) => {
+    const set = new Set(names);
+    const changed = new Set<string>();
+    setClips((prev) =>
+      prev.map((c) => {
+        if (!set.has(c.originalName) || Boolean(c.isFavorite) === favorite) return c;
+        changed.add(c.originalName);
+        return { ...c, isFavorite: favorite };
+      }),
+    );
+    // a failed write rolls back, or the star would lie until the next rescan
+    void window.clips
+      .setClipsFavorite(names, favorite)
+      .catch(() => null)
+      .then((res) => {
+        if (res?.success || changed.size === 0) return;
+        setClips((prev) =>
+          prev.map((c) => (changed.has(c.originalName) ? { ...c, isFavorite: !favorite } : c)),
+        );
+      });
+  }, []);
+
   const renameTagInClips = useCallback((oldTag: string, newTag: string) => {
     setClips((prev) =>
       prev.map((c) =>
@@ -380,6 +406,7 @@ export function useClips(): UseClips {
       markClipsWatched,
       renameClip,
       setClipTags,
+      setFavorite,
       renameTagInClips,
       removeTagFromClips,
     }),
@@ -393,6 +420,7 @@ export function useClips(): UseClips {
       markClipsWatched,
       renameClip,
       setClipTags,
+      setFavorite,
       renameTagInClips,
       removeTagFromClips,
     ],

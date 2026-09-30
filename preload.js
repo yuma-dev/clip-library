@@ -197,6 +197,7 @@ const api = {
   getClipTags: invoke("get-clip-tags"),
   getClipTagsBatch: invoke("get-clip-tags-batch"),
   saveClipTags: invoke("save-clip-tags"),
+  setClipsFavorite: invoke("set-clips-favorite"),
 
   // audio tracks
   extractAudioTracks: invoke("extract-audio-tracks"),

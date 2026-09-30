@@ -471,6 +471,8 @@ export interface ClipsApi {
   getClipTags(clipName: string): Promise<string[]>;
   getClipTagsBatch(clipNames: string[]): Promise<Record<string, string[]>>;
   saveClipTags(clipName: string, tags: string[]): Promise<any>;
+  /** writes or removes the empty .favorite marker for each clip */
+  setClipsFavorite(clipNames: string[], favorite: boolean): Promise<{ success: boolean; error?: string }>;
   /** Hover-preview start seconds (trim.start or cached-duration midpoint); never probes. */
   getPreviewStartTime(clipName: string): Promise<number>;
   /** Effective volume: the custom .volume file, else the loudness-matched gain, else 1. */

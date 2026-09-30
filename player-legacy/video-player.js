@@ -1218,6 +1218,10 @@ function handleKeyPress(e) {
         case 'focusTitle':
           elements.clipTitle.focus();
           break;
+        case 'toggleFavorite':
+          // held key would flip it back and forth
+          if (!e.repeat && callbacks.toggleFavorite) callbacks.toggleFavorite();
+          break;
         default:
           break;
       }
@@ -2466,6 +2470,7 @@ let callbacks = {
   exportAudioToClipboard: null,          // Called to export audio to clipboard
   exportDefault: null,                   // Called to export using default settings
   confirmAndDeleteClip: null,            // Called to delete current clip
+  toggleFavorite: null,
   enableGridNavigation: null,            // Called to enable grid navigation
   disableGridNavigation: null,
   openCurrentGridSelection: null,

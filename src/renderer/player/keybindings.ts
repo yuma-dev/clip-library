@@ -21,6 +21,7 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   setTrimEnd: "]",
   focusTitle: "Tab",
   closePlayer: "Escape",
+  toggleFavorite: "h",
   addVolumeLayer: "v",
   addTextLayer: "t",
   addGifLayer: "g",

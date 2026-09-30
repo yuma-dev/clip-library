@@ -9,6 +9,7 @@ import { LibraryHover } from "./hoverController";
 import { HoverContext } from "./hoverContext";
 import { SelectionContext, type SelectionApi } from "./selectionContext";
 import { RenameContext, type RenameFn } from "./renameContext";
+import { FavoriteContext, type FavoriteFn } from "./favoriteContext";
 import ContextMenuHost, { type ContextMenuHandle } from "./ContextMenuHost";
 import { useToast } from "../ui/Toast";
 import { useStreamedSlice } from "../ui/useStreamedSlice";
@@ -25,6 +26,7 @@ interface ClipGridProps {
   removeClips: (names: string[]) => void;
   renameClip: RenameFn;
   setClipTags: (originalName: string, tags: string[]) => void;
+  setFavorite: FavoriteFn;
   globalTags: string[];
   addGlobalTag: (tag: string) => void;
 }
@@ -50,6 +52,7 @@ function ClipGrid({
   removeClips,
   renameClip,
   setClipTags,
+  setFavorite,
   globalTags,
   addGlobalTag,
 }: ClipGridProps) {
@@ -327,6 +330,7 @@ function ClipGrid({
     <ObserveContext.Provider value={observe}>
       <HoverContext.Provider value={hover}>
         <RenameContext.Provider value={renameClip}>
+          <FavoriteContext.Provider value={setFavorite}>
           <SelectionContext.Provider value={selectionApi}>
             <div className="clip-scroll" ref={scrollRef}>
               <div className="clip-grid" ref={gridRef}>
@@ -360,10 +364,12 @@ function ClipGrid({
               ref={menuHostRef}
               onDeleted={handleDeleted}
               setClipTags={setClipTags}
+              setFavorite={setFavorite}
               globalTags={globalTags}
               addGlobalTag={addGlobalTag}
             />
           </SelectionContext.Provider>
+          </FavoriteContext.Provider>
         </RenameContext.Provider>
       </HoverContext.Provider>
     </ObserveContext.Provider>

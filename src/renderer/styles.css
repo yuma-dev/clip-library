@@ -2270,6 +2270,39 @@ body.ui-blur-exit .app-body {
 .clip-participants .user-popover-anchor {
   position: relative;
 }
+
+/* favorite star, top-right opposite the avatars; shows on hover, stays once starred */
+.clip-fav {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, color 120ms ease, background 120ms ease;
+}
+.clip-item:hover .clip-fav,
+.clip-fav.on,
+.clip-fav:focus-visible {
+  opacity: 1;
+}
+.clip-fav:hover {
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+}
+.clip-fav.on {
+  color: var(--color-accent-glyph);
+}
 .clip-participants .user-popover-anchor + .user-popover-anchor {
   margin-left: -8px;
 }

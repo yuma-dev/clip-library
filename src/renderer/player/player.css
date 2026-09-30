@@ -275,6 +275,29 @@
   font: 500 12px var(--font-sans);
   text-overflow: ellipsis;
 }
+/* favorite star at the end of the title pill (FavoriteStar.tsx) */
+.pl-fav {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: 0 -7px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: #ffffff70;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.pl-fav:hover {
+  background: #ffffff1f;
+  color: #f4f4f6;
+}
+.pl-fav.on {
+  color: var(--color-accent-glyph);
+}
 
 .pl-actions {
   height: 30px;

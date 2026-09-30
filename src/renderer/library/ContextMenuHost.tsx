@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, FolderOpen, Plus, RotateCcw, Scissors, Search, Tag, Trash2, Upload } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, FolderOpen, Plus, RotateCcw, Scissors, Search, Star, StarOff, Tag, Trash2, Upload } from "lucide-react";
 import ContextMenu from "../ui/ContextMenu";
 import { MenuDivider, MenuItem, MenuList } from "../ui/Menu";
 import { useToast } from "../ui/Toast";
@@ -19,6 +19,7 @@ interface ContextMenuHostProps {
   onDeleted: (originalName: string) => void;
   /** Persist + propagate a clip's tag list (drives the "Manage tags" panel). */
   setClipTags: (originalName: string, tags: string[]) => void;
+  setFavorite: (names: string[], favorite: boolean) => void;
   /** Assignable global tags, in display order. */
   globalTags: string[];
   /** Create a brand-new global tag. */
@@ -32,7 +33,7 @@ type View = "root" | "tags";
  * NOT re-render the (2000-card) grid; cards trigger it via the ref handle.
  */
 const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(function ContextMenuHost(
-  { onDeleted, setClipTags, globalTags, addGlobalTag },
+  { onDeleted, setClipTags, setFavorite, globalTags, addGlobalTag },
   ref,
 ) {
   const [state, setState] = useState<{ x: number; y: number; clips: LocalClip[] } | null>(null);
@@ -62,6 +63,14 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
   const clips = state?.clips ?? [];
   const clip = clips[0];
   const multi = clips.length > 1;
+
+  // mixed selection adds; remove only once every clip in scope is a favorite
+  const allFavorite = clips.length > 0 && clips.every((c) => c.isFavorite);
+  const toggleFavorite = () => {
+    if (clips.length === 0) return;
+    setFavorite(clips.map((c) => c.originalName), !allFavorite);
+    close();
+  };
 
   const revealClip = () => {
     if (clip) window.clips.revealClip(clip.originalName);
@@ -222,6 +231,9 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
             <span className="menu-label">Manage tags</span>
             <ChevronRight size={14} className="ctx-submenu-caret" />
           </button>
+          <MenuItem icon={allFavorite ? <StarOff size={15} /> : <Star size={15} />} onClick={toggleFavorite}>
+            {allFavorite ? "Remove from favorites" : "Add to favorites"}
+          </MenuItem>
           <MenuDivider />
           <MenuItem icon={<Scissors size={15} />} onClick={resetTrim}>
             Reset trim

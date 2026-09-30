@@ -337,6 +337,8 @@ export default function App() {
         renameClip={lib.renameClip}
         removeClips={lib.removeClips}
         markClipsWatched={lib.markClipsWatched}
+        allClips={lib.clips}
+        setFavorite={lib.setFavorite}
       />
       {/* feed player mounts app-wide so any grid can open remote clips via feedPlayerBus */}
       <FeedPlayer />
