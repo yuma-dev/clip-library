@@ -1,7 +1,7 @@
 {
   "name": "clips",
   "displayName": "ClipLib",
-  "version": "3.5.39",
+  "version": "3.6.0",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
   "main": "main.js",
@@ -15,7 +15,7 @@
     "dev:electron:trace": "wait-on tcp:127.0.0.1:5173 && node scripts/electron-trace.js",
     "typecheck": "tsc --noEmit",
     "build:renderer": "vite build",
-    "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && npm run build:launcher && npm run vendor:launcher && node scripts/gen-ingest-key.mjs && npm run fetch-ffmpeg && electron-builder --win",
+    "build": "npm run build:renderer && npm run build:clipdip && npm run vendor:clipdip && npm run build:launcher && npm run vendor:launcher && node scripts/gen-ingest-key.mjs && node scripts/gen-klipy-key.mjs && npm run fetch-ffmpeg && electron-builder --win",
     "build:clipdip": "node scripts/sync-clipdip-version.mjs && cd clipdip && npm install --no-audit --no-fund && npm run build && node -e \"const fs=require('fs'),d=new Date();fs.utimesSync('src-tauri/src/main.rs',d,d)\" && cargo build --release -p clipdip",
     "vendor:clipdip": "node scripts/vendor-clipdip.mjs",
     "release": "node scripts/release.mjs",

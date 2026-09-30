@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const os = require('os');
 const ffmpeg = require('fluent-ffmpeg');
+const { loadExportLayers, volumeLayerFilters, buildOverlayGraph } = require('./layer-export');
 const { ffmpegPath, ffprobePath } = require('./ffmpeg-binaries');
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
@@ -807,29 +808,22 @@ function ffprobeAsync(filePath) {
 }
 
 // export helpers
-/** mixes per-track volumes then layers master volume/range/speed atempo on top;
- * null if no mix requested. output is always labeled [aout] for -map [aout]. */
+/** mixes per-track volumes then layers master volume, all-track volume layers and speed atempo
+ * on top; null if no mix requested. output is always labeled [aout] for -map [aout]. */
 function buildAudioMixFilterComplex({
   audioMix,
   effectiveVolume,
   hasBaseVolumeChange,
   effectiveSpeed,
   hasSpeedChange,
-  hasRangeVolumeChange,
-  rangeLevelRaw,
-  relativeRangeStart,
-  relativeRangeEnd,
-  videoFilters = null
+  layers = [],
+  start = 0,
+  duration = 0
 }) {
   if (!Array.isArray(audioMix) || audioMix.length === 0) return null;
 
   const parts = [];
 
-  // video filters must be inlined into the complex graph too: ffmpeg rejects
-  // mixing -vf with -filter_complex on the same output stream
-  if (Array.isArray(videoFilters) && videoFilters.length > 0) {
-    parts.push(`[0:v:0]${videoFilters.join(',')}[vout]`);
-  }
   const inputLabels = [];
   audioMix.forEach((track, idx) => {
     const streamIndex = Number(track.streamIndex);
@@ -837,8 +831,10 @@ function buildAudioMixFilterComplex({
     const vol = Number.isFinite(track.volume) ? Math.max(0, track.volume) : 1;
     const label = `mt${idx}`;
     inputLabels.push(label);
-    // pre-stage volume per track so amix sees weighted inputs
-    parts.push(`[0:${streamIndex}]volume=${vol}[${label}]`);
+    // pre-stage volume per track so amix sees weighted inputs; the track's own volume layers
+    // follow it, same order as the player's layer node after the mixer gain
+    const trackLayers = volumeLayerFilters(layers, start, duration, (t) => t === track.ordinal);
+    parts.push(`[0:${streamIndex}]${[`volume=${vol}`, ...trackLayers].join(',')}[${label}]`);
   });
   if (inputLabels.length === 0) return null;
 
@@ -856,11 +852,7 @@ function buildAudioMixFilterComplex({
   // post-mix transforms mirror the single-stream filter chain
   const postFilters = [];
   if (hasBaseVolumeChange) postFilters.push(`volume=${effectiveVolume}`);
-  if (hasRangeVolumeChange) {
-    postFilters.push(
-      `volume=${rangeLevelRaw}:enable='between(t,${relativeRangeStart},${relativeRangeEnd})'`
-    );
-  }
+  postFilters.push(...volumeLayerFilters(layers, start, duration, (t) => t === 'all'));
   if (hasSpeedChange) postFilters.push(`atempo=${effectiveSpeed}`);
 
   if (postFilters.length > 0) {
@@ -887,7 +879,7 @@ async function exportVideoWithFallback(options) {
     speed,
     quality,
     exportSettings = null,
-    volumeData,
+    layers = [],
     audioMix = null,
     onProgress,
     onFallback,
@@ -896,7 +888,10 @@ async function exportVideoWithFallback(options) {
     emitGlobalProgress = true
   } = options;
   const duration = Math.max(0.01, Number(end) - Number(start));
-  const resolvedTuning = resolveExportTuning(exportSettings, quality, duration);
+  // setpts and atempo squeeze or stretch the trim, the file runs duration / speed. -t, the frame
+  // count and the size-goal bitrate all go by that, or 2x keeps going past the trim end
+  const outputDuration = duration / (Number(speed) > 0 ? Number(speed) : 1);
+  const resolvedTuning = resolveExportTuning(exportSettings, quality, outputDuration);
   const effectiveQuality = resolvedTuning.quality;
 
   const reportProgress = (percent) => {
@@ -969,7 +964,7 @@ async function exportVideoWithFallback(options) {
         ? metadata.streams.find((stream) => stream.codec_type === 'video') || metadata.streams[0]
         : null;
       const fps = parseFrameRate(videoStream?.r_frame_rate);
-      totalFrames = Math.ceil(duration * fps);
+      totalFrames = Math.ceil(outputDuration * fps);
       const sourceWidth = Number(videoStream?.width) || null;
       const sourceHeight = Number(videoStream?.height) || null;
       const sourceFps = Number(fps.toFixed(2));
@@ -986,28 +981,14 @@ async function exportVideoWithFallback(options) {
       const effectiveSpeed = Number.isFinite(speedValue) && speedValue > 0 ? speedValue : 1;
       const effectiveVolume = Number.isFinite(volumeValue) ? volumeValue : 1;
 
-      const rangeStartRaw = Number(volumeData?.start);
-      const rangeEndRaw = Number(volumeData?.end);
-      const rangeLevelRaw = Number(volumeData?.level);
-
       const hasSpeedChange = Math.abs(effectiveSpeed - 1) > 0.001;
       const hasBaseVolumeChange = Math.abs(effectiveVolume - 1) > 0.001;
 
-      const hasValidVolumeRange = (
-        Number.isFinite(rangeStartRaw) &&
-        Number.isFinite(rangeEndRaw) &&
-        Number.isFinite(rangeLevelRaw) &&
-        rangeEndRaw > rangeStartRaw
-      );
-
-      const relativeRangeStart = hasValidVolumeRange ? Math.max(0, rangeStartRaw - start) : 0;
-      const relativeRangeEnd = hasValidVolumeRange ? Math.min(duration, rangeEndRaw - start) : 0;
-      const hasRangeVolumeChange = (
-        hasValidVolumeRange &&
-        Math.abs(rangeLevelRaw - 1) > 0.001 &&
-        relativeRangeStart < duration &&
-        relativeRangeEnd > 0
-      );
+      const exportStart = Number(start) || 0;
+      // without a mix only one stream plays, a per-track layer only means it when it's the only one
+      const audioStreamCount = Array.isArray(metadata.streams)
+        ? metadata.streams.filter((s) => s.codec_type === 'audio').length
+        : 0;
 
       const needsScaleDown = (
         effectiveQuality === 'discord' &&
@@ -1022,15 +1003,27 @@ async function exportVideoWithFallback(options) {
       if (needsScaleDown) {
         videoFilters.push('scale=-2:1080:flags=fast_bilinear');
       }
+      const outH = needsScaleDown ? 1080 : (sourceHeight || 1080);
+      const outW = needsScaleDown && sourceWidth && sourceHeight
+        ? Math.round((sourceWidth * 1080) / sourceHeight / 2) * 2
+        : (sourceWidth || 1920);
+      // kept out of videoFilters: that array goes to telemetry, overlay inputs are file paths
+      const overlayGraph = buildOverlayGraph({
+        layers,
+        start: exportStart,
+        duration,
+        speed: effectiveSpeed,
+        outW,
+        outH,
+        fps
+      });
 
       const buildAudioFilter = () => {
         const filters = [];
         if (hasBaseVolumeChange) {
           filters.push(`volume=${effectiveVolume}`);
         }
-        if (hasRangeVolumeChange) {
-          filters.push(`volume=${rangeLevelRaw}:enable='between(t,${relativeRangeStart},${relativeRangeEnd})'`);
-        }
+        filters.push(...volumeLayerFilters(layers, exportStart, duration, (t) => t === 'all' || (audioStreamCount <= 1 && t === 0)));
         if (hasSpeedChange) {
           filters.push(`atempo=${effectiveSpeed}`);
         }
@@ -1038,7 +1031,8 @@ async function exportVideoWithFallback(options) {
       };
 
       const audioFilters = buildAudioFilter();
-      const needsVideoFilter = videoFilters.length > 0;
+      // overlays count too, they also rule out hw decode: overlay can't take cuda frames
+      const needsVideoFilter = videoFilters.length > 0 || overlayGraph !== null;
       // an explicit mix from the renderer replaces the single-stream filter chain
       // with filter_complex; an *empty* mix means every track muted/hidden, so -an
       const audioMixProvided = Array.isArray(audioMix);
@@ -1050,11 +1044,9 @@ async function exportVideoWithFallback(options) {
             hasBaseVolumeChange,
             effectiveSpeed,
             hasSpeedChange,
-            hasRangeVolumeChange,
-            rangeLevelRaw,
-            relativeRangeStart,
-            relativeRangeEnd,
-            videoFilters
+            layers,
+            start: exportStart,
+            duration
           })
         : null;
       const usingAudioMix = audioFilterComplex !== null || audioMixSilent;
@@ -1110,7 +1102,7 @@ async function exportVideoWithFallback(options) {
         const command = ffmpeg(inputPath)
           .inputOptions(['-threads 0'])
           .seekInput(start)
-          .setDuration(duration);
+          .setDuration(outputDuration);
 
         if (decodeMode === 'cuda_cuvid') {
           const cudaInputOptions = [
@@ -1134,15 +1126,33 @@ async function exportVideoWithFallback(options) {
           command.inputOptions(['-hwaccel dxva2']);
         }
 
-        if (audioFilterComplex) {
-          // video filters (if any) were folded into the graph as [vout]; -filter_complex
-          // disables automatic mapping so both outputs must be explicit
-          const videoMap = needsVideoFilter ? '[vout]' : '0:v:0';
-          command.outputOptions([
-            '-filter_complex', audioFilterComplex,
-            '-map', videoMap,
-            '-map', '[aout]'
-          ]);
+        // after the main input's options: fluent applies inputOptions to the last added input
+        if (overlayGraph) {
+          for (const input of overlayGraph.inputs) {
+            command.input(input.path).inputOptions(input.options);
+          }
+        }
+
+        if (audioFilterComplex || overlayGraph) {
+          // ffmpeg rejects -vf next to -filter_complex on the same stream, so video filters go
+          // into the graph as [vout]; -filter_complex disables automatic mapping, maps are explicit
+          const graph = [];
+          if (overlayGraph) {
+            graph.push(`[0:v:0]${videoFilters.length ? videoFilters.join(',') : 'null'}[vbase]`, ...overlayGraph.chains);
+          } else if (needsVideoFilter) {
+            graph.push(`[0:v:0]${videoFilters.join(',')}[vout]`);
+          }
+          if (audioFilterComplex) graph.push(audioFilterComplex);
+          command.outputOptions(['-filter_complex', graph.join(';'), '-map', needsVideoFilter ? '[vout]' : '0:v:0']);
+          if (audioFilterComplex) {
+            command.outputOptions(['-map', '[aout]']);
+          } else if (audioMixSilent) {
+            command.outputOptions(['-an']);
+          } else {
+            // a stream straight from the input can still take -af next to the graph
+            command.outputOptions(['-map', '0:a:0?']);
+            if (needsAudioFilter) command.audioFilters(audioFilters);
+          }
         } else {
           if (needsVideoFilter) {
             command.videoFilters(videoFilters);
@@ -1511,27 +1521,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = savePath || path.join(os.tmpdir(), `exported_${Date.now()}_${path.basename(clipName)}`);
 
-  const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
-
-  let volumeData = null;
-  let volumeDataRaw = null;
-  try {
-    volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
-    volumeData = JSON.parse(volumeDataRaw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      logger.error('Error reading volume range data:', error);
-    }
-    // unparseable file: range dropped silently, export gets wrong audio
-    if (volumeDataRaw !== null) {
-      telemetry.event('volume_range_dropped', {
-        kind: telemetry.KIND.DATA_LOSS,
-        severity: telemetry.SEVERITY.WARNING,
-        context: { file_bytes: Buffer.byteLength(volumeDataRaw, 'utf8') }
-      });
-    }
-  }
+  const layers = await loadExportLayers(clipName, getSettings);
 
   try {
     const onProgress = typeof progressCallbacks?.onProgress === 'function'
@@ -1555,7 +1545,7 @@ async function exportVideo(clipName, start, end, volume, speed, savePath, getSet
       speed,
       quality,
       exportSettings: settings,
-      volumeData,
+      layers,
       audioMix,
       onProgress,
       onFallback,
@@ -1638,27 +1628,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `trimmed_${Date.now()}_${path.basename(clipName)}`);
 
-  const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
-
-  let volumeData = null;
-  let volumeDataRaw = null;
-  try {
-    volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
-    volumeData = JSON.parse(volumeDataRaw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      logger.error('Error reading volume range data:', error);
-    }
-    // unparseable file: range dropped silently, export gets wrong audio
-    if (volumeDataRaw !== null) {
-      telemetry.event('volume_range_dropped', {
-        kind: telemetry.KIND.DATA_LOSS,
-        severity: telemetry.SEVERITY.WARNING,
-        context: { file_bytes: Buffer.byteLength(volumeDataRaw, 'utf8') }
-      });
-    }
-  }
+  const layers = await loadExportLayers(clipName, getSettings);
 
   try {
     const onProgress = typeof progressCallbacks?.onProgress === 'function'
@@ -1682,7 +1652,7 @@ async function exportTrimmedVideo(clipName, start, end, volume, speed, getSettin
       speed,
       quality,
       exportSettings: settings,
-      volumeData,
+      layers,
       audioMix,
       onProgress,
       onFallback,
@@ -1763,27 +1733,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
   const inputPath = path.join(settings.clipLocation, clipName);
   const outputPath = path.join(os.tmpdir(), `shared_${Date.now()}_${path.parse(clipName).name}.mp4`);
 
-  const metadataFolder = path.join(settings.clipLocation, '.clip_metadata');
-  const volumeRangeFilePath = path.join(metadataFolder, `${clipName.replace(/\//g, '--')}.volumerange`);
-
-  let volumeData = null;
-  let volumeDataRaw = null;
-  try {
-    volumeDataRaw = await fs.readFile(volumeRangeFilePath, 'utf8');
-    volumeData = JSON.parse(volumeDataRaw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      logger.error('Error reading volume range data:', error);
-    }
-    // unparseable file: range dropped silently, export gets wrong audio
-    if (volumeDataRaw !== null) {
-      telemetry.event('volume_range_dropped', {
-        kind: telemetry.KIND.DATA_LOSS,
-        severity: telemetry.SEVERITY.WARNING,
-        context: { file_bytes: Buffer.byteLength(volumeDataRaw, 'utf8') }
-      });
-    }
-  }
+  const layers = await loadExportLayers(clipName, getSettings);
 
   try {
     const quality = settings.exportQuality || 'discord';
@@ -1797,7 +1747,7 @@ async function exportTrimmedVideoForShare(clipName, start, end, volume, speed, g
       speed,
       quality,
       exportSettings: settings,
-      volumeData,
+      layers,
       audioMix,
       onProgress,
       // audio copy incompatible with a custom mix, re-encode when filter_complex builds [aout]
@@ -1882,6 +1832,8 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
 
   const audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
   const audioMixSilent = Array.isArray(audioMix) && audioMix.length === 0;
+  const layers = await loadExportLayers(clipName, getSettings);
+  const exportStart = Number(start) || 0;
   const audioFilterComplex = Array.isArray(audioMix) && audioMix.length > 0
     ? buildAudioMixFilterComplex({
         audioMix,
@@ -1889,10 +1841,9 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
         hasBaseVolumeChange: hasVolumeChange,
         effectiveSpeed,
         hasSpeedChange,
-        hasRangeVolumeChange: false,
-        rangeLevelRaw: 0,
-        relativeRangeStart: 0,
-        relativeRangeEnd: 0
+        layers,
+        start: exportStart,
+        duration
       })
     : null;
 
@@ -1901,7 +1852,8 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
     await new Promise((resolve, reject) => {
       const command = ffmpeg(inputPath)
         .seekInput(start)
-        .setDuration(duration)
+        // atempo changes the length, -t is output time
+        .setDuration(duration / effectiveSpeed)
         .output(outputPath);
 
       if (audioMixSilent) {
@@ -1922,6 +1874,7 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
         if (hasVolumeChange) {
           audioFilters.push(`volume=${effectiveVolume}`);
         }
+        audioFilters.push(...volumeLayerFilters(layers, exportStart, duration, (t) => t === 'all' || t === 0));
         if (hasSpeedChange) {
           audioFilters.push(`atempo=${effectiveSpeed}`);
         }

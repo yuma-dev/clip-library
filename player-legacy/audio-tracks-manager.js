@@ -135,8 +135,11 @@ class AudioTracksManager {
 
       const sourceNode = this.audioContext.createMediaElementSource(audioEl);
       const gainNode = this.audioContext.createGain();
+      // volume layers automate this one, the mixer keeps writing gainNode
+      const layerGainNode = this.audioContext.createGain();
       sourceNode.connect(gainNode);
-      gainNode.connect(this.masterGainNode);
+      gainNode.connect(layerGainNode);
+      layerGainNode.connect(this.masterGainNode);
 
       const saved = persisted[meta.ordinal] || {};
       // a saved level of exactly 1 from before the custom flag existed counts as unset
@@ -165,6 +168,7 @@ class AudioTracksManager {
         audioEl,
         sourceNode,
         gainNode,
+        layerGainNode,
         hidden,
         muted,
         volume,
@@ -776,6 +780,13 @@ class AudioTracksManager {
     this._showPanelTransient();
   }
 
+  setLayerGain(ordinal, gain) {
+    const t = this.tracks.find((x) => x.ordinal === ordinal);
+    if (!t || !t.layerGainNode) return;
+    // short time constant: no zipper noise, still tracks a fade ramp at frame rate
+    t.layerGainNode.gain.setTargetAtTime(gain, this.audioContext.currentTime, 0.015);
+  }
+
   /** one entry per track that isn't hidden or muted; carries the source stream index for ffmpeg */
   getExportMix() {
     return this.tracks
@@ -868,6 +879,7 @@ class AudioTracksManager {
     this.tracks.forEach((t) => {
       try { t.audioEl.pause(); } catch (_) {}
       try { t.gainNode.disconnect(); } catch (_) {}
+      try { t.layerGainNode && t.layerGainNode.disconnect(); } catch (_) {}
       try { t.sourceNode.disconnect(); } catch (_) {}
       try { t.audioEl.removeAttribute('src'); t.audioEl.load(); } catch (_) {}
       if (t.audioEl.parentNode) t.audioEl.parentNode.removeChild(t.audioEl);

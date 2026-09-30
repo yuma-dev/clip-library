@@ -508,7 +508,7 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/** deletes a clip and its metadata (.customname/.trim/thumbnail)
+/** deletes a clip and its metadata (.customname/.trim/.layers/thumbnail)
  * @param {string} clipName
  * @param {Function} getSettings
  * @param {Object} thumbnailsModule
@@ -522,9 +522,10 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
   const safeName = metadataSafeName(clipName);
   const customNamePath = path.join(metadataFolder, `${safeName}.customname`);
   const trimDataPath = path.join(metadataFolder, `${safeName}.trim`);
+  const layersPath = path.join(metadataFolder, `${safeName}.layers`);
   const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
 
-  const filesToDelete = [clipPath, customNamePath, trimDataPath, thumbnailPath];
+  const filesToDelete = [clipPath, customNamePath, trimDataPath, layersPath, thumbnailPath];
 
   if (videoPlayer) {
     videoPlayer.src = "";

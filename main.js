@@ -196,6 +196,10 @@ const thumbnailsModule = lazyModule('./main/thumbnails');
 
 const metadataModule = lazyModule('./main/metadata');
 
+const layersModule = lazyModule('./main/layers');
+
+const subtitlesModule = lazyModule('./main/subtitles');
+
 const fileWatcherModule = require('./main/file-watcher');
 
 // Warms the slow, cacheable part of opening a clip ahead of the click.
@@ -1557,7 +1561,7 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
       }
     );
   };
-  const [clipInfo, trimData, clipTags, thumbnailPath, volumeDetail, speed, volumeRange, trackState, trackPreferences, waveform] =
+  const [clipInfo, trimData, clipTags, thumbnailPath, volumeDetail, speed, layers, trackState, trackPreferences, waveform] =
     await Promise.all([
       swallow('clip_info', ffmpegModule.getClipInfo(clipName, getSettings, thumbnailsModule), null),
       swallow('trim', metadataModule.getTrimData(clipName, getSettings), null),
@@ -1565,7 +1569,7 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
       swallow('thumbnail', thumbnailsModule.getThumbnailPath(clipName, getSettings), null),
       swallow('volume', resolveVolumeDetail(clipName), { volume: 1, source: 'default', measured: false }),
       swallow('speed', metadataModule.getSpeed(clipName, getSettings), 1),
-      swallow('volume_range', metadataModule.getVolumeRange(clipName, getSettings), null),
+      swallow('layers', layersModule.getLayers(clipName, getSettings), { items: [] }),
       swallow('track_state', metadataModule.getTrackState(clipName, getSettings), null),
       swallow('track_prefs', metadataModule.getTrackPreferences(app.getPath.bind(app)), null),
       // a miss queues the measurement and arrives later as waveform-ready
@@ -1581,7 +1585,7 @@ ipcMain.handle("get-clip-open-state", async (event, clipName) => {
       context: { missing, total_ms: totalMs, probe_error: probeError }
     });
   }
-  return { clipInfo, trimData, clipTags, thumbnailPath, volume, volumeDetail, speed, volumeRange, trackState, trackPreferences, waveform };
+  return { clipInfo, trimData, clipTags, thumbnailPath, volume, volumeDetail, speed, layers, trackState, trackPreferences, waveform };
 });
 
 ipcMain.handle("get-clip-waveform", async (event, clipName) => {
@@ -1853,7 +1857,9 @@ ipcMain.handle("delete-trim", async (event, clipName) => {
 
 ipcMain.handle("delete-clip", async (event, clipName, videoPlayer) => {
   analysisModule.remove(clipName).catch(() => undefined);
-  return clipsModule.deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer);
+  const result = await clipsModule.deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer);
+  if (result?.success) layersModule.removeClipLayers(clipName, getSettings).catch(() => undefined);
+  return result;
 });
 
 ipcMain.handle('reveal-clip', async (event, clipName) => {
@@ -1931,12 +1937,54 @@ ipcMain.handle('import-steelseries-clips', async (event, sourcePath) => {
   );
 });
 
-ipcMain.handle('save-volume-range', async (event, clipName, volumeData) => {
-  return metadataModule.saveVolumeRange(clipName, volumeData, getSettings);
+ipcMain.handle('get-layers', async (event, clipName) => {
+  return layersModule.getLayers(clipName, getSettings);
 });
 
-ipcMain.handle('get-volume-range', async (event, clipName) => {
-  return metadataModule.getVolumeRange(clipName, getSettings);
+ipcMain.handle('save-layers', async (event, clipName, items) => {
+  return layersModule.saveLayers(clipName, items, getSettings);
+});
+
+ipcMain.handle('layers-write-text', async (event, clipName, id, bytes) => {
+  return layersModule.writeTextRaster(clipName, id, bytes, getSettings);
+});
+
+ipcMain.handle('layers-pick-image', async (event, clipName) => {
+  const owner = event.sender.getOwnerBrowserWindow?.() || mainWindow;
+  const result = await dialog.showOpenDialog(owner, {
+    title: 'Choose an image',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+  });
+  if (result.canceled || !result.filePaths?.length) return null;
+  return layersModule.importImage(clipName, result.filePaths[0], getSettings);
+});
+
+ipcMain.handle('layers-download-gif', async (event, clipName, gif) => {
+  return layersModule.downloadGif(clipName, gif, getSettings);
+});
+
+ipcMain.handle('klipy-gifs', async (event, query) => {
+  return layersModule.searchGifs(query || {});
+});
+
+ipcMain.handle('subtitles-status', async () => {
+  return subtitlesModule.status();
+});
+
+// install and transcribe report progress on subtitles-progress to the asking window
+ipcMain.handle('subtitles-install', async (event) => {
+  const send = (p) => { if (!event.sender.isDestroyed()) event.sender.send('subtitles-progress', p); };
+  return subtitlesModule.install(send);
+});
+
+ipcMain.handle('subtitles-uninstall', async () => {
+  return subtitlesModule.uninstall();
+});
+
+ipcMain.handle('subtitles-transcribe', async (event, request) => {
+  const send = (p) => { if (!event.sender.isDestroyed()) event.sender.send('subtitles-progress', p); };
+  return subtitlesModule.transcribe(request || {}, getSettings, send);
 });
 
 ipcMain.handle('log-watch-session', (event, sessionData) => {

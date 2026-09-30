@@ -762,43 +762,6 @@ body.dragging #trim-end i {
   to { opacity: 1; }
 }
 
-/* volume range (legacy, v key): a level applied between two handles on the bar */
-.volume-start,
-.volume-end {
-  position: absolute;
-  top: 4px;
-  width: 2px;
-  height: 32px;
-  margin-left: -1px;
-  background: #f59e0b;
-  cursor: ew-resize;
-  z-index: 4;
-  display: none;
-}
-.volume-region {
-  position: absolute;
-  top: 4px;
-  height: 32px;
-  background: #f59e0b22;
-  pointer-events: none;
-  display: none;
-}
-.volume-drag-control {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  transform: translateX(-50%);
-  display: none;
-  padding: 6px 10px;
-  background: #0a0a0ce6;
-  border: 0.5px solid #ffffff1a;
-  border-radius: 9px;
-  z-index: 7;
-}
-.volume-drag-control input {
-  width: 100px;
-  accent-color: #f59e0b;
-}
-
 /* speed drum */
 #speed-container {
   position: relative;

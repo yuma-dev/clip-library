@@ -174,8 +174,16 @@ const api = {
   saveSpeed: invoke("save-speed"),
   getVolume: invoke("get-volume"),
   saveVolume: invoke("save-volume"),
-  getVolumeRange: invoke("get-volume-range"),
-  saveVolumeRange: invoke("save-volume-range"),
+  getLayers: invoke("get-layers"),
+  saveLayers: invoke("save-layers"),
+  writeLayerText: invoke("layers-write-text"),
+  pickLayerImage: invoke("layers-pick-image"),
+  downloadLayerGif: invoke("layers-download-gif"),
+  searchGifs: invoke("klipy-gifs"),
+  subtitlesStatus: invoke("subtitles-status"),
+  installSubtitles: invoke("subtitles-install"),
+  uninstallSubtitles: invoke("subtitles-uninstall"),
+  transcribeSubtitles: invoke("subtitles-transcribe"),
   getClipTags: invoke("get-clip-tags"),
   getClipTagsBatch: invoke("get-clip-tags-batch"),
   saveClipTags: invoke("save-clip-tags"),
@@ -318,6 +326,7 @@ const api = {
   onCliplibNavigate: subscribe("cliplib-navigate"),
   onAppUpdated: subscribe("app-updated"),
   onExportProgress: subscribe("export-progress"),
+  onSubtitlesProgress: subscribe("subtitles-progress"),
   onShowFallbackNotice: subscribe("show-fallback-notice"),
   onShowDecodeFallbackNotice: subscribe("show-decode-fallback-notice"),
   onThumbnailValidationStart: subscribe("thumbnail-validation-start"),
@@ -395,8 +404,6 @@ try {
   window.legacyState = require("./player-legacy/state.js");
   legacyModuleIndex = 1;
   window.legacyPlayer = require("./player-legacy/video-player.js");
-  legacyModuleIndex = 2;
-  window.legacyVolumeRange = require("./player-legacy/volume-range-controls.js");
 } catch (err) {
   // non-fatal: the library still works; the player just won't open
   console.error("[preload] failed to load legacy player:", err);

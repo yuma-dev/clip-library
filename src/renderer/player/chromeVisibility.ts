@@ -1,10 +1,10 @@
 // when the player chrome shows. one rule set: any activity (key, mouse movement, clip open,
 // legacy's player-activity event) shows it and arms a timer; the timer hides it unless the
-// video is paused, the pointer is over chrome, or a drag is in progress, in which case it
-// re-arms. legacy no longer touches the visible class.
+// video is paused, the pointer is over chrome, a drag is in progress, a chrome input has focus
+// or a layer popover is open, in which case it re-arms. legacy no longer touches the visible class.
 
 const IDLE_MS = 1800;
-const CHROME = "#video-controls .pl-pill, .video-nav-button, #audio-tracks-panel, .volume-drag-control";
+const CHROME = "#video-controls .pl-pill, .video-nav-button, #audio-tracks-panel";
 
 export function installChromeVisibility(): () => void {
   const controls = document.getElementById("video-controls");
@@ -20,10 +20,17 @@ export function installChromeVisibility(): () => void {
   const hide = () => {
     controls.classList.remove("visible");
   };
+  // typing into the title keeps the chrome up, the input would vanish mid word otherwise; an
+  // open layer popover or add menu holds it the same way
+  const editing = () => {
+    const el = document.activeElement;
+    if (el && controls.contains(el) && el.matches("input, textarea")) return true;
+    return !!controls.querySelector(".pl-lp, .pl-add-menu");
+  };
   const arm = () => {
     window.clearTimeout(timer);
     timer = window.setTimeout(() => {
-      if (video.paused || hoverChrome || interacting) arm();
+      if (video.paused || hoverChrome || interacting || editing()) arm();
       else hide();
     }, IDLE_MS);
   };

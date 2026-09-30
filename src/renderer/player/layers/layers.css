@@ -1,0 +1,967 @@
+/* layers: tags above the timeline, the add menu, the settings popover and the overlays on the
+   video. glass and edges follow .pl-pill and the mixer in player.css */
+
+/* add button + menu, inside the bottom pill */
+.pl-add {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.pl-add-btn {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px 0 7px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: #f4f4f6;
+  font: 500 11.5px var(--font-sans);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pl-add-btn:hover,
+.pl-add-btn.is-on {
+  background: #ffffff1f;
+}
+.pl-add-menu {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 14px);
+  width: 236px;
+  padding: 6px;
+  background: #141417;
+  border: 0.5px solid #ffffff1a;
+  border-radius: 13px;
+  box-shadow: 0 18px 48px #0009;
+  backdrop-filter: blur(16px);
+  font-family: var(--font-sans);
+  z-index: 31;
+  transform-origin: bottom right;
+  animation: pl-pop-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+/* direct children only, the subtitles page has its own buttons inside */
+.pl-add-menu > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: #f4f4f6;
+  text-align: left;
+  cursor: pointer;
+}
+.pl-add-menu > button:hover,
+.pl-add-menu > button:focus-visible {
+  background: #ffffff1f;
+  outline: none;
+}
+.pl-add-menu > button b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.pl-add-menu > button span span {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.pl-add-menu kbd {
+  font: 500 10px var(--font-mono, ui-monospace), ui-monospace, monospace;
+  color: var(--color-text-secondary);
+  border: 0.5px solid #ffffff26;
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.pl-add-icon.is-volume { color: #e8e6ee; }
+.pl-add-icon.is-text { color: #f4f4f6; }
+.pl-add-icon.is-gif { color: var(--color-accent-glyph); }
+.pl-add-icon.is-image { color: var(--analysis-clr); }
+.pl-add-icon.is-subs { color: #fde047; }
+
+/* subtitles page, takes the menu's place and styles every generated line at once */
+/* the page scrolls inside, the menu itself doesn't, so the details flyout can sit beside it */
+.pl-add-menu.is-subs {
+  width: 290px;
+  padding: 0;
+  cursor: default;
+}
+.pl-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(72vh, 640px);
+  padding: 10px 12px 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff2e transparent;
+  color: #f4f4f6;
+  font: 400 12px/1.4 var(--font-sans);
+}
+.pl-subs::-webkit-scrollbar {
+  width: 6px;
+}
+.pl-subs::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #ffffff2e;
+}
+.pl-subs-head b {
+  flex: 1;
+}
+.pl-subs-why {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+/* a track row: the pick on the left, its subtitle color on the right, the palette under both */
+.pl-subs-track {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+}
+.pl-subs-paint {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1.5px solid #ffffff26;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px #0004;
+}
+.pl-subs-paint:hover,
+.pl-subs-paint.is-on {
+  border-color: #fff;
+}
+.pl-subs-palette {
+  grid-column: 1 / -1;
+  padding: 4px 2px 6px;
+}
+
+/* details flyout, beside its popover */
+.pl-more {
+  position: absolute;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #141417;
+  border: 0.5px solid #ffffff1f;
+  border-radius: 13px;
+  box-shadow: 0 18px 48px #000b;
+  color: #f4f4f6;
+  font: 400 12px/1.4 var(--font-sans);
+  text-align: left;
+  cursor: default;
+  z-index: 31;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff2e transparent;
+  animation: pl-pop-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+.pl-more .pl-lp-row {
+  gap: 4px;
+}
+.pl-lp-icon.is-on {
+  background: #ffffff1f;
+  color: #f4f4f6;
+}
+.pl-subs-bytrack {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  padding: 0;
+  border: 1.5px solid transparent;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--a) 50%, var(--b) 50%);
+  cursor: pointer;
+}
+.pl-subs-bytrack.is-on {
+  border-color: #fff;
+}
+.pl-subs-link {
+  align-self: flex-start;
+  margin-top: -4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-glyph);
+  font: 500 11px var(--font-sans);
+  cursor: pointer;
+}
+.pl-subs-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pl-subs-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 -2px -4px;
+  font-size: 12.5px;
+}
+.pl-subs .pl-lp-tracks span {
+  flex: 1;
+}
+.pl-subs-check {
+  flex: none;
+  color: #f4f4f6;
+}
+.pl-subs-go {
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-accent) 70%, #000);
+  color: #fff;
+  font: 600 12px var(--font-sans);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pl-subs-go:hover {
+  background: color-mix(in srgb, var(--color-accent-hover) 70%, #000);
+}
+.pl-subs-go:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pl-subs-progress {
+  position: relative;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: #ffffff0d;
+  font-size: 11.5px;
+}
+.pl-subs-progress span {
+  position: relative;
+  z-index: 1;
+}
+.pl-subs-progress i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  transition: width 0.2s;
+}
+.pl-subs-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.pl-subs-remove {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font: 500 11px var(--font-sans);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.pl-subs-remove:hover {
+  color: #f4f4f6;
+}
+.pl-subs-remove.is-dev {
+  color: #e3c06b;
+}
+@keyframes pl-pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* tags: one per layer, lined up with the timeline, stacked in rows when they overlap */
+.pl-tags {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  pointer-events: none;
+}
+.pl-tag {
+  position: absolute;
+  height: 18px;
+  min-width: 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 0.5px solid #ffffff1a;
+  border-radius: 6px;
+  background: #0a0a0cd6;
+  backdrop-filter: blur(10px);
+  color: #ffffffcc;
+  font: 500 10.5px var(--font-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  box-sizing: border-box;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  transition: border-color 0.12s, background 0.12s;
+}
+.pl-tag svg {
+  flex: none;
+  color: var(--c);
+}
+.pl-tag:hover {
+  border-color: #ffffff3d;
+  color: #fff;
+}
+/* short ranges only fit the icon; hovering widens the tag to its label. never the selected one,
+   its edges have to stay on its start and end */
+.pl-tag:not(.is-sel):hover {
+  min-width: max-content;
+  z-index: 2;
+}
+.pl-tag.is-sel {
+  border-color: #ffffffb3;
+  background: #1d1b22e6;
+  color: #fff;
+}
+.pl-tag-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pl-tag-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 1;
+}
+.pl-tag-edge.is-start { left: 0; }
+.pl-tag-edge.is-end { right: 0; }
+.pl-tag.is-sel .pl-tag-edge::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: #fff;
+}
+.pl-tag-edge.is-start::after { left: 2px; }
+.pl-tag-edge.is-end::after { right: 2px; }
+body.dragging .pl-tag {
+  cursor: grabbing;
+}
+
+/* the selected layer's range, faint on the timeline under its tag */
+.tl-layer-range {
+  position: absolute;
+  top: 5px;
+  height: 30px;
+  border-radius: 4px;
+  background: #ffffff0f;
+  box-shadow: inset 1px 0 0 #ffffff59, inset -1px 0 0 #ffffff59;
+  pointer-events: none;
+}
+
+/* settings popover, lives in the bottom pill so it can hang off the selected tag. solid, the
+   footage behind made the controls hard to read */
+.pl-lp {
+  position: absolute;
+  width: 290px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #141417;
+  border: 0.5px solid #ffffff1f;
+  border-radius: 13px;
+  box-shadow: 0 18px 48px #000b;
+  color: #f4f4f6;
+  font: 400 12px/1.4 var(--font-sans);
+  text-align: left;
+  cursor: default;
+  z-index: 30;
+  animation: pl-pop-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+.pl-lp,
+.pl-lp-gifs {
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff2e transparent;
+}
+.pl-lp::-webkit-scrollbar,
+.pl-lp-gifs::-webkit-scrollbar {
+  width: 6px;
+}
+.pl-lp::-webkit-scrollbar-track,
+.pl-lp-gifs::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pl-lp::-webkit-scrollbar-thumb,
+.pl-lp-gifs::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #ffffff2e;
+}
+.pl-lp::-webkit-scrollbar-thumb:hover,
+.pl-lp-gifs::-webkit-scrollbar-thumb:hover {
+  background: #ffffff4d;
+}
+.pl-lp-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: -2px;
+}
+.pl-lp-title {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.pl-lp-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.pl-lp-icon:hover {
+  background: #ffffff1f;
+  color: #f4f4f6;
+}
+.pl-lp-icon.is-danger:hover {
+  background: #7a2420;
+  color: #ffd9d3;
+}
+.pl-lp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pl-lp-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.pl-lp-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: #ffffff0d;
+}
+.pl-lp-seg button {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--color-text-secondary);
+  font: 500 11.5px var(--font-sans);
+  cursor: pointer;
+}
+.pl-lp-seg button:hover {
+  color: #f4f4f6;
+}
+.pl-lp-seg button.is-on {
+  background: #ffffff1f;
+  color: #f4f4f6;
+}
+.pl-lp-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pl-lp-tracks button {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 0.5px solid transparent;
+  border-radius: 8px;
+  background: #ffffff0a;
+  color: var(--color-text-secondary);
+  font: 500 11.5px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.pl-lp-tracks button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-lp-tracks button:hover {
+  background: #ffffff14;
+  color: #f4f4f6;
+}
+.pl-lp-tracks button.is-on {
+  border-color: #ffffff40;
+  background: #ffffff17;
+  color: #f4f4f6;
+}
+.pl-lp-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+}
+
+/* sliders: the mixer row, the fill is the control */
+.pl-lp-level {
+  position: relative;
+  height: 28px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: #ffffff0a;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+.pl-lp-level:focus-visible {
+  outline: 1.5px solid var(--color-accent-glyph);
+  outline-offset: 2px;
+}
+.pl-lp-level-fill {
+  position: absolute;
+  inset: 0;
+  width: var(--fill);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 30%, transparent), color-mix(in srgb, var(--c) 50%, transparent));
+  transition: width 80ms;
+}
+.pl-lp-level[data-dragging] .pl-lp-level-fill {
+  transition: none;
+}
+.pl-lp-level-unity {
+  position: absolute;
+  left: var(--unity, 50%);
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  background: #ffffff59;
+}
+.pl-lp-level-name,
+.pl-lp-level-value {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  text-shadow: 0 1px 2px #0009;
+}
+.pl-lp-level-name {
+  left: 9px;
+  font-size: 11.5px;
+}
+.pl-lp-level-value {
+  right: 9px;
+  font: 600 11px var(--font-mono, ui-monospace), ui-monospace, monospace;
+}
+
+.pl-lp-textarea {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 0.5px solid #ffffff1a;
+  border-radius: 8px;
+  background: #ffffff0d;
+  color: #f4f4f6;
+  font: 500 13px var(--font-sans);
+  outline: none;
+}
+.pl-lp-textarea:focus {
+  border-color: #ffffff40;
+}
+.pl-lp-styles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.pl-lp-styles button {
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0.5px solid transparent;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #2c2438, #4a3440);
+  cursor: pointer;
+}
+.pl-lp-styles button.is-on {
+  border-color: #fff;
+}
+.pl-lp-styles .pl-lt {
+  font-size: 15px;
+}
+.pl-lp-styles em {
+  font-style: normal;
+  font-size: 9.5px;
+  color: #ffffffc0;
+}
+.pl-lp-swatches {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.pl-lp-swatches button,
+.pl-lp-custom {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  padding: 0;
+  border: 1.5px solid transparent;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px #0004;
+  cursor: pointer;
+}
+.pl-lp-swatches button.is-on,
+.pl-lp-custom.is-on {
+  border-color: #fff;
+}
+/* any color: a rainbow ring until one is picked, then that color inside the ring */
+.pl-lp-custom {
+  position: relative;
+  box-sizing: border-box;
+  background:
+    radial-gradient(circle, var(--pick, #141417) 0 42%, transparent 44%),
+    conic-gradient(#f87171, #fde047, #6ee7f0, #818cf8, #c774e0, #f87171);
+}
+.pl-lp-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* show/hide: four by two, each previews its motion on hover */
+.pl-lp-anims {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.pl-lp-anims button {
+  height: 26px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border: 0.5px solid transparent;
+  border-radius: 7px;
+  background: #ffffff0d;
+  color: var(--color-text-secondary);
+  font: 500 11px var(--font-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.pl-lp-anims button:hover {
+  background: #ffffff14;
+  color: #f4f4f6;
+}
+.pl-lp-anims button.is-on {
+  border-color: #ffffff40;
+  background: #ffffff17;
+  color: #f4f4f6;
+}
+.pl-lp-demo {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #ffffff12;
+}
+.pl-lp-demo b {
+  display: block;
+  font: 800 9.5px var(--font-sans);
+  color: #f4f4f6;
+}
+.pl-lp-demo .is-none { opacity: 0.35; }
+.pl-lp-anims button:hover .is-fade { animation: pl-demo-fade 1.3s ease-out infinite; }
+.pl-lp-anims button:hover .is-pop { animation: pl-demo-pop 1.3s infinite; }
+.pl-lp-anims button:hover .is-zoom { animation: pl-demo-zoom 1.3s ease-out infinite; }
+.pl-lp-anims button:hover .is-slide { animation: pl-demo-rise 1.3s cubic-bezier(0.2, 0.8, 0.3, 1) infinite; }
+.pl-lp-anims button:hover .is-drop { animation: pl-demo-drop 1.3s cubic-bezier(0.2, 0.8, 0.3, 1) infinite; }
+.pl-lp-anims button:hover .is-side { animation: pl-demo-side 1.3s cubic-bezier(0.2, 0.8, 0.3, 1) infinite; }
+.pl-lp-anims button:hover .is-wipe { animation: pl-demo-wipe 1.3s linear infinite; }
+.pl-lp-anims button:hover .is-type { animation: pl-demo-type 1.3s steps(3) infinite; }
+/* hide plays the motion backwards; the moves keep their direction, so they swap keyframes */
+.pl-lp-anims.is-out button:hover b { animation-direction: reverse; }
+.pl-lp-anims.is-out button:hover .is-slide { animation-name: pl-demo-drop; }
+.pl-lp-anims.is-out button:hover .is-drop { animation-name: pl-demo-rise; }
+.pl-lp-anims.is-out button:hover .is-side { animation-name: pl-demo-side-out; }
+.pl-lp-anims.is-out button:hover .is-wipe { animation-name: pl-demo-wipe-out; }
+@keyframes pl-demo-fade { 0% { opacity: 0; } 50%, 100% { opacity: 1; } }
+@keyframes pl-demo-pop { 0% { transform: scale(0.2); opacity: 0; } 30% { transform: scale(1.25); opacity: 1; } 45%, 100% { transform: scale(1); } }
+@keyframes pl-demo-zoom { 0% { transform: scale(2); opacity: 0; } 50%, 100% { transform: scale(1); opacity: 1; } }
+@keyframes pl-demo-rise { 0% { transform: translateY(10px); opacity: 0; } 50%, 100% { transform: none; opacity: 1; } }
+@keyframes pl-demo-drop { 0% { transform: translateY(-10px); opacity: 0; } 50%, 100% { transform: none; opacity: 1; } }
+@keyframes pl-demo-side { 0% { transform: translateX(-10px); opacity: 0; } 50%, 100% { transform: none; opacity: 1; } }
+@keyframes pl-demo-side-out { 0% { transform: translateX(10px); opacity: 0; } 50%, 100% { transform: none; opacity: 1; } }
+@keyframes pl-demo-wipe { 0% { clip-path: inset(0 100% 0 0); } 60%, 100% { clip-path: inset(0); } }
+@keyframes pl-demo-wipe-out { 0% { clip-path: inset(0 0 0 100%); } 60%, 100% { clip-path: inset(0); } }
+@keyframes pl-demo-type { 0% { clip-path: inset(0 100% 0 0); } 60%, 100% { clip-path: inset(0); } }
+
+/* klipy picker */
+.pl-lp-search {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 0.5px solid #ffffff1a;
+  border-radius: 8px;
+  background: #ffffff0d;
+  color: var(--color-text-muted);
+}
+.pl-lp-search:focus-within {
+  border-color: #ffffff40;
+}
+.pl-lp-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: #f4f4f6;
+  font: 400 12px var(--font-sans);
+}
+.pl-lp-gifs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  max-height: 210px;
+  margin: -6px -4px 0 0;
+  padding-right: 4px;
+  overflow: auto;
+}
+.pl-lp-gifs button {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 7px;
+  background: #ffffff0a;
+  cursor: pointer;
+}
+.pl-lp-gifs button.is-on {
+  outline: 2px solid var(--color-accent-glyph);
+  outline-offset: -2px;
+}
+.pl-lp-gifs img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pl-lp-gif-busy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0008;
+  color: #fff;
+}
+.pl-lp-gif-busy svg {
+  animation: spin 0.9s linear infinite;
+}
+.pl-lp-klipy {
+  margin: -6px 0 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-align: right;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.pl-lp-empty,
+.pl-lp-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.pl-lp-empty {
+  grid-column: 1 / -1;
+  padding: 8px 0;
+}
+.pl-lp-error {
+  color: #f08a7a;
+}
+.pl-lp-image {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pl-lp-image img,
+.pl-lp-image-empty {
+  width: 64px;
+  height: 48px;
+  border-radius: 7px;
+  object-fit: contain;
+  background: repeating-conic-gradient(#ffffff10 0 25%, #0000 0 50%) 0 0 / 10px 10px;
+}
+.pl-lp-btn {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 0 10px;
+  border: 0.5px solid #ffffff1a;
+  border-radius: 8px;
+  background: #ffffff0f;
+  color: #f4f4f6;
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+}
+.pl-lp-btn:hover {
+  background: #ffffff1f;
+}
+
+/* overlays: a box with the video's aspect, so % positions match the export in fullscreen too */
+.pl-layers {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  container-type: size;
+  pointer-events: none;
+  z-index: 5;
+}
+.pl-layers-box {
+  position: relative;
+  aspect-ratio: var(--ar, 1.7778);
+  width: min(100cqw, calc(100cqh * var(--ar, 1.7778)));
+  container-type: inline-size;
+}
+/* max-content: an absolute box only gets the room right of its left edge, and the global
+   img max-width then shrank a big gif as it moved right */
+.pl-layer {
+  position: absolute;
+  width: max-content;
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+  will-change: transform, opacity;
+}
+.pl-layer-body {
+  position: relative;
+}
+.pl-layer img,
+.pl-layer canvas,
+.pl-layer-text {
+  display: block;
+  max-width: none;
+  pointer-events: none;
+}
+.pl-layer-empty {
+  display: block;
+  border-radius: 0.6cqw;
+  background: #ffffff14;
+  border: 1px dashed #ffffff59;
+}
+.pl-layer.is-sel .pl-layer-body {
+  outline: 1px dashed #ffffffc0;
+  outline-offset: 6px;
+}
+.pl-layer.is-outside {
+  filter: grayscale(0.4);
+}
+.pl-layer.is-outside .pl-layer-body::before {
+  content: "Outside its time";
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: #000a;
+  color: #fff;
+  font: 500 10px var(--font-sans);
+  white-space: nowrap;
+}
+.pl-layer-resize {
+  position: absolute;
+  right: -11px;
+  bottom: -11px;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1px #0006;
+  cursor: nwse-resize;
+}
+
+/* text styles for the popover's tiles; on the video the text is rasterize.ts's canvas */
+.pl-lt {
+  display: block;
+  color: var(--c);
+  font-family: "Inter Variable", Inter, "Segoe UI", sans-serif;
+  line-height: 1.05;
+  text-align: center;
+  white-space: pre;
+}
+.pl-lt-clean {
+  font-weight: 800;
+  text-shadow: 0 0.06em 0.3em #000c;
+}
+.pl-lt-outline {
+  font-weight: 900;
+  -webkit-text-stroke: 0.2em #000;
+  paint-order: stroke fill;
+}
+.pl-lt-box {
+  font-weight: 700;
+  padding: 0.22em 0.5em;
+  border-radius: 0.28em;
+  background: #0a0a0cd1;
+}
+.pl-lt-loud {
+  font-family: Impact, "Arial Black", sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  -webkit-text-stroke: 0.16em #000;
+  paint-order: stroke fill;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-add-menu,
+  .pl-lp {
+    animation: none;
+  }
+  .pl-lp-anims button:hover b {
+    animation: none !important;
+  }
+}

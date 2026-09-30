@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import Waveform, { BINS, type TrackView } from "./Waveform";
-import type { ClipWaveform } from "../../types/clips";
+import type { ClipWaveform, Layer } from "../../types/clips";
 
 // px; above the silence thread (2 x 0.6 units) so the playhead never vanishes in quiet parts
 const PLAYHEAD_MIN = 8;
@@ -12,18 +12,23 @@ interface TimelineProps {
   open: boolean;
   /** master level, single-track clips scale their band with it */
   gain: number;
-  /** track hovered in the mixer */
+  /** track hovered in the mixer, or picked by the selected volume layer */
   focus: number | null;
+  /** volume layers reshape the bands, the selected layer's range gets a faint mark */
+  layers: Layer[];
+  selected: Layer | null;
 }
 
-/** the bar inside the bottom pill. legacy still owns seeking on click, trim-handle drags, the
- * playhead and the volume-range widgets (it writes inline left/right on #playhead, #progress-bar,
+/** the bar inside the bottom pill. legacy still owns seeking on click, trim-handle drags and the
+ * playhead (it writes inline left/right on #playhead, #progress-bar,
  * #trim-start, #trim-end); this component adds the waveform, drag-to-seek and a rAF loop that
  * mirrors trim + playhead into css vars so the hairlines and waveform clip-paths follow. */
-export default function Timeline({ waveform, tracks, open, gain, focus }: TimelineProps) {
+export default function Timeline({ waveform, tracks, open, gain, focus, layers, selected }: TimelineProps) {
   const ref = useRef<HTMLDivElement>(null);
   // fractions of the full duration; only the waveform's end rounding needs them as state
   const [trim, setTrim] = useState({ start: 0, end: 1 });
+  // seconds; volume layers and the selected range are placed with it
+  const [duration, setDuration] = useState(0);
   // tallest band per bin in svg units (1 unit = 1px here); the playhead grows and shrinks with it
   const envelopeRef = useRef<number[] | null>(null);
   const [hasWave, setHasWave] = useState(false);
@@ -39,12 +44,16 @@ export default function Timeline({ waveform, tracks, open, gain, focus }: Timeli
     const controls = document.getElementById("video-controls");
     if (!el || !video || !playhead || !open) return;
     let raf = 0;
-    let last = { pos: -1, ts: -1, te: -1, h: -1 };
+    let last = { pos: -1, ts: -1, te: -1, h: -1, d: 0 };
     const loop = () => {
       const d = video.duration;
       const state = window.legacyState;
       // chrome faded out: nothing here is visible, and the var writes cost a style pass per frame
       const shown = !controls || controls.classList.contains("visible");
+      if (d > 0 && d !== last.d) {
+        last.d = d;
+        setDuration(d);
+      }
       if (d > 0 && state && shown) {
         const pos = Math.min(1, Math.max(0, video.currentTime / d));
         const ts = Math.min(1, Math.max(0, (state.trimStartTime ?? 0) / d));
@@ -69,7 +78,7 @@ export default function Timeline({ waveform, tracks, open, gain, focus }: Timeli
           el.style.setProperty("--te", `${(te * 100).toFixed(3)}%`);
           setTrim({ start: ts, end: te });
         }
-        last = { pos, ts, te, h };
+        last = { ...last, pos, ts, te, h };
       }
       raf = requestAnimationFrame(loop);
     };
@@ -85,8 +94,6 @@ export default function Timeline({ waveform, tracks, open, gain, focus }: Timeli
     const video = document.getElementById("video-player") as HTMLVideoElement | null;
     const el = ref.current;
     if (!state || !video || !el || state.isDragging) return;
-    const t = e.target as HTMLElement;
-    if (t.closest(".volume-drag-control, .volume-start, .volume-end")) return;
     const seek = (clientX: number) => {
       const r = el.getBoundingClientRect();
       const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
@@ -115,7 +122,23 @@ export default function Timeline({ waveform, tracks, open, gain, focus }: Timeli
       <div className="tl-out tl-out-start" />
       <div className="tl-out tl-out-end" />
       <div id="progress-bar" />
-      <Waveform waveform={waveform} tracks={tracks} trimStart={trim.start} trimEnd={trim.end} onEnvelope={onEnvelope} gain={gain} focus={focus} />
+      {selected && duration > 0 ? (
+        <div
+          className="tl-layer-range"
+          style={{ left: `${(selected.start / duration) * 100}%`, width: `${((selected.end - selected.start) / duration) * 100}%` }}
+        />
+      ) : null}
+      <Waveform
+        waveform={waveform}
+        tracks={tracks}
+        trimStart={trim.start}
+        trimEnd={trim.end}
+        onEnvelope={onEnvelope}
+        gain={gain}
+        focus={focus}
+        layers={layers}
+        duration={duration}
+      />
       <div id="playhead" />
       <div id="trim-start" title="Trim start">
         <i />

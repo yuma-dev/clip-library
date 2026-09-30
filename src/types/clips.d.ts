@@ -109,6 +109,82 @@ export interface WaveformTrack {
   rms: number[];
 }
 
+/** a thing on the clip's timeline; times are clip seconds, x/y the centre in % of the frame */
+export type LayerAnim = "none" | "fade" | "pop" | "zoom" | "slide" | "drop" | "side" | "wipe" | "type";
+export type TextStyle = "clean" | "outline" | "box" | "loud";
+interface LayerBase {
+  id: string;
+  start: number;
+  end: number;
+}
+export interface VolumeLayer extends LayerBase {
+  kind: "volume";
+  /** audio track ordinal, or every track */
+  track: "all" | number;
+  /** 0..4, 1 = unchanged */
+  level: number;
+  /** seconds of ramp at each end */
+  fade: number;
+}
+interface VisualBase extends LayerBase {
+  x: number;
+  y: number;
+  ain: LayerAnim;
+  aout: LayerAnim;
+  /** seconds the show and hide animations take, 0.35 when unset */
+  din?: number;
+  dout?: number;
+  /** 0..1, 1 when unset */
+  opacity?: number;
+}
+export interface TextLayer extends VisualBase {
+  kind: "text";
+  text: string;
+  style: TextStyle;
+  color: string;
+  /** font size in % of the frame width */
+  size: number;
+  /** details, each in em of the font size; unset means what the style gives */
+  outline?: number;
+  shadow?: number;
+  boxOpacity?: number;
+  spacing?: number;
+  /** set on lines the subtitle generator made, so a new run can replace them */
+  source?: "subtitles";
+  /** audio track ordinal a subtitle line was heard on, for colouring by track */
+  speaker?: number;
+  /** png the export burns in, rendered at refW px frame width; null until rendered */
+  raster: { file: string; w: number; h: number; refW: number; key: string } | null;
+}
+interface MediaBase extends VisualBase {
+  /** width in % of the frame width */
+  w: number;
+  /** local file in the clip's layers_media folder, null while a gif downloads */
+  file: string | null;
+  /** width / height */
+  aspect: number;
+}
+export interface GifLayer extends MediaBase {
+  kind: "gif";
+  gif: { id: string; title: string; url: string };
+}
+export interface ImageLayer extends MediaBase {
+  kind: "image";
+}
+export type Layer = VolumeLayer | TextLayer | GifLayer | ImageLayer;
+export type LayerKind = Layer["kind"];
+
+export interface KlipyGif {
+  id: string;
+  title: string;
+  /** small animated webp for the picker */
+  preview: string;
+  /** gif the layer downloads */
+  url: string;
+  width: number;
+  height: number;
+}
+
 export interface ClipWaveform {
   rate: number;
   tracks: WaveformTrack[];
@@ -284,8 +360,21 @@ export interface ClipsApi {
   saveSpeed(clipName: string, speed: number): Promise<any>;
   getVolume(clipName: string): Promise<number>;
   saveVolume(clipName: string, volume: number): Promise<any>;
-  getVolumeRange(clipName: string): Promise<any>;
-  saveVolumeRange(clipName: string, range: any): Promise<any>;
+  getLayers(clipName: string): Promise<{ items: Layer[] }>;
+  saveLayers(clipName: string, items: Layer[]): Promise<{ success: boolean; error?: string }>;
+  writeLayerText(clipName: string, id: string, bytes: Uint8Array): Promise<{ file: string }>;
+  pickLayerImage(clipName: string): Promise<{ file: string } | null>;
+  downloadLayerGif(clipName: string, gif: { id: string; url: string }): Promise<{ file: string }>;
+  searchGifs(query: { q?: string; page?: number }): Promise<{ items: KlipyGif[]; hasNext: boolean; error?: string }>;
+  subtitlesStatus(): Promise<{ installed: boolean; cli: boolean; model: boolean }>;
+  installSubtitles(): Promise<{ installed: boolean }>;
+  /** removes engine and models, for seeing the first run again */
+  uninstallSubtitles(): Promise<{ installed: boolean }>;
+  /** streams are ffprobe stream indexes, mixed when several; times are clip seconds */
+  transcribeSubtitles(request: { clipName: string; streams: number[]; start: number; end: number; language?: string }): Promise<{
+    lines: Array<{ start: number; end: number; text: string }>;
+    language: string;
+  }>;
   getClipTags(clipName: string): Promise<string[]>;
   getClipTagsBatch(clipNames: string[]): Promise<Record<string, string[]>>;
   saveClipTags(clipName: string, tags: string[]): Promise<any>;
@@ -453,6 +542,7 @@ export interface ClipsApi {
   /** Navigation deep links (cliplib://settings/<section>) forwarded by main. */
   onCliplibNavigate(cb: ClipsEventCallback): ClipsUnsubscribe;
   onExportProgress(cb: ClipsEventCallback): ClipsUnsubscribe;
+  onSubtitlesProgress(cb: (p: { step: "engine" | "unpack" | "model" | "audio" | "transcribe"; progress: number; got?: number; total?: number }) => void): ClipsUnsubscribe;
   onShowFallbackNotice(cb: ClipsEventCallback): ClipsUnsubscribe;
   onShowDecodeFallbackNotice(cb: ClipsEventCallback): ClipsUnsubscribe;
   onThumbnailValidationStart(cb: ClipsEventCallback): ClipsUnsubscribe;
@@ -487,7 +577,10 @@ export interface LegacyPlayerModule {
     getExportMix(): Array<{ streamIndex: number; ordinal: number; volume: number }>;
     /** shifts every unhidden track by delta, keeping their offsets */
     nudgeAll(delta: number): void;
+    /** volume layer automation, a node per track after the mixer's own gain */
+    setLayerGain?(ordinal: number, gain: number): void;
   } | null;
+  setupAudioContext(): void;
   handleKeyPress(e: KeyboardEvent): void;
   handleKeyRelease(e: KeyboardEvent): void;
   [key: string]: any;
@@ -507,7 +600,6 @@ declare global {
     legacyPlayer?: LegacyPlayerModule;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     legacyState?: Record<string, any>;
-    legacyVolumeRange?: { init(opts: Record<string, unknown>): void };
   }
 }
 

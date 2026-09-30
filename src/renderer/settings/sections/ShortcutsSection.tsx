@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Clapperboard,
   ClipboardCopy,
+  Image,
   FastForward,
   FileAudio,
   FileVideo,
@@ -14,7 +15,9 @@ import {
   RotateCcw,
   SkipBack,
   SkipForward,
+  Sticker,
   Trash2,
+  Type,
   Volume1,
   Volume2,
   X,
@@ -46,6 +49,10 @@ const ACTIONS: { id: string; title: string; description: string; icon: LucideIco
   { id: "setTrimEnd", title: "Set trim end", description: "Mark trim end at the playhead", icon: ChevronRight },
   { id: "focusTitle", title: "Edit title", description: "Begin editing the clip title", icon: Pencil },
   { id: "closePlayer", title: "Close player", description: "Close the player", icon: X },
+  { id: "addVolumeLayer", title: "Add volume change", description: "Louder or quieter from the playhead on", icon: Volume1 },
+  { id: "addTextLayer", title: "Add text", description: "Text on the clip at the playhead", icon: Type },
+  { id: "addGifLayer", title: "Add GIF", description: "A KLIPY GIF at the playhead", icon: Sticker },
+  { id: "addImageLayer", title: "Add image", description: "An image from your PC at the playhead", icon: Image },
 ];
 
 /** formats a combo like "ctrl+shift+e" as "Ctrl+Shift+E" for display */

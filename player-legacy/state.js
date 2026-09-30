@@ -51,16 +51,8 @@ let savedTagSelections = new Set(); // saved permanently
 let temporaryTagSelections = new Set(); // ctrl+click, not saved
 let isInTemporaryMode = false;
 
-// volume range
-let volumeStartTime = 0;
-let volumeEndTime = 0;
-let volumeLevel = 0; // Volume level for the range
-let isVolumeDragging = null;
-let volumeStartElement = null;
-let volumeEndElement = null;
-let volumeRegionElement = null;
-let volumeDragControl = null;
-let isVolumeControlsVisible = false;
+// volume layers on single-track clips, between the video source and the master
+let layerGainNode = null;
 
 // settings & discord
 let settings = null;
@@ -190,24 +182,8 @@ module.exports = {
   get isInTemporaryMode() { return isInTemporaryMode; },
   set isInTemporaryMode(value) { isInTemporaryMode = value; },
 
-  get volumeStartTime() { return volumeStartTime; },
-  set volumeStartTime(value) { volumeStartTime = value; },
-  get volumeEndTime() { return volumeEndTime; },
-  set volumeEndTime(value) { volumeEndTime = value; },
-  get volumeLevel() { return volumeLevel; },
-  set volumeLevel(value) { volumeLevel = value; },
-  get isVolumeDragging() { return isVolumeDragging; },
-  set isVolumeDragging(value) { isVolumeDragging = value; },
-  get volumeStartElement() { return volumeStartElement; },
-  set volumeStartElement(value) { volumeStartElement = value; },
-  get volumeEndElement() { return volumeEndElement; },
-  set volumeEndElement(value) { volumeEndElement = value; },
-  get volumeRegionElement() { return volumeRegionElement; },
-  set volumeRegionElement(value) { volumeRegionElement = value; },
-  get volumeDragControl() { return volumeDragControl; },
-  set volumeDragControl(value) { volumeDragControl = value; },
-  get isVolumeControlsVisible() { return isVolumeControlsVisible; },
-  set isVolumeControlsVisible(value) { isVolumeControlsVisible = value; },
+  get layerGainNode() { return layerGainNode; },
+  set layerGainNode(value) { layerGainNode = value; },
 
   get settings() { return settings; },
   set settings(value) { settings = value; },

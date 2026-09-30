@@ -2,7 +2,7 @@ import ExportProgress from './ExportProgress';
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ChevronLeft, ChevronRight, Copy, Maximize, Sparkle, Trash2, Upload } from "lucide-react";
 import type { LocalClip } from "../library/types";
-import type { ClipWaveform } from "../../types/clips";
+import type { ClipWaveform, Layer } from "../../types/clips";
 import { getActionFromEvent, initKeybindings } from "./keybindings";
 import {
   exportAudio,
@@ -38,6 +38,14 @@ import SpeedDrum from "./SpeedDrum";
 import { installChromeVisibility } from "./chromeVisibility";
 import Timeline from "./Timeline";
 import type { TrackView } from "./Waveform";
+import AddLayer from "./layers/AddLayer";
+import LayerInspector from "./layers/LayerInspector";
+import LayerStage from "./layers/LayerStage";
+import LayerTags from "./layers/LayerTags";
+import { installLayerAudio } from "./layers/audio";
+import { installLayerKeys } from "./layers/keys";
+import { closeClip, getLayers, loadClip, select, useLayers } from "./layers/store";
+import "./layers/layers.css";
 import { fingerprint, reportEvent } from "../telemetry";
 import "./player.css";
 
@@ -87,6 +95,12 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
   const [tracks, setTracks] = useState<TrackView[] | null>(null);
   const [masterVolume, setMasterVolume] = useState(1);
   const [trackFocus, setTrackFocus] = useState<number | null>(null);
+  // rows of layer tags above the timeline, the popover hangs above them
+  const [tagsHeight, setTagsHeight] = useState(0);
+  const { items: layers, sel: layerSel } = useLayers();
+  const selLayer = layers.find((l) => l.id === layerSel) ?? null;
+  // a selected per-track volume layer dims the other bands, same as hovering its mixer row
+  const layerFocus = selLayer?.kind === "volume" && selLayer.track !== "all" ? selLayer.track : null;
   // click-to-toggle glyph; the counter restarts the animation, playing picks the glyph
   const [flash, setFlash] = useState({ n: 0, playing: false });
   // width / height of the loaded video; the frame takes this shape inside the stage
@@ -351,18 +365,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         document.addEventListener("keyup", player.handleKeyRelease);
         return rawOpenClip(originalName, customName);
       };
-
-      // volume-range controls create state.volumeStart/End/Region DOM that hideVolumeControls() expects
-      window.legacyVolumeRange?.init({
-        videoPlayer: elements.videoPlayer,
-        progressBarContainer: elements.progressBarContainer,
-        volumeSlider: elements.volumeSlider,
-        toggleVolumeControls: player.toggleVolumeControls,
-        showVolumeDragControl: player.showVolumeDragControl,
-        handleVolumeDrag: player.handleVolumeDrag,
-        endVolumeDrag: player.endVolumeDrag,
-        debounce: player.debounce,
-      });
     } catch (err) {
       console.error("[VideoPlayer] legacy init failed:", err);
       // stays broken after this; console-only logging was why it never surfaced in the field
@@ -391,6 +393,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
         waveform: (openState.waveform as ClipWaveform | null) ?? null,
       });
       setTracks(null);
+      loadClip(originalName, ((openState.layers as { items?: Layer[] } | null)?.items ?? []) as Layer[]);
     };
     document.addEventListener("clip-open-state", onOpenState);
     const offReady = window.clips.onAnalysisReady(({ clipName, waveform }) => {
@@ -420,6 +423,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       if (!open) {
         setSession(null);
         setTracks(null);
+        if (getLayers().clip) closeClip();
       }
     });
     observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
@@ -435,6 +439,10 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
 
   // chrome show/hide rules, one place for keys, mouse, open and drags
   useEffect(() => installChromeVisibility(), []);
+
+  // layers: volume automation from the playhead, and their keys ahead of the player's
+  useEffect(() => installLayerAudio(), []);
+  useEffect(() => installLayerKeys(), []);
 
   // play/pause drives watch-session active-time + discord presence (ticker while playing, frozen
   // while paused); pause also fires before ended and on switch/close
@@ -593,16 +601,6 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       window.legacyPlayer?.updatePreview?.({ clientX }, { skipPosition: true });
     };
     const onMove = (e: MouseEvent) => {
-      // don't fight the volume-range drag controls that live on the bar
-      const t = e.target as HTMLElement;
-      if (
-        t.closest(".volume-drag-control") ||
-        t.classList.contains("volume-region") ||
-        t.classList.contains("volume-start") ||
-        t.classList.contains("volume-end")
-      ) {
-        return;
-      }
       preview.style.display = "block";
       if (!half) half = preview.offsetWidth / 2 || 100;
       const rect = container.getBoundingClientRect();
@@ -703,6 +701,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                 // legacy's native listener toggled play/pause before this ran, so paused is already the new state
                 const video = document.getElementById("video-player") as HTMLVideoElement | null;
                 setFlash((f) => ({ n: f.n + 1, playing: !!video && !video.paused }));
+                if (getLayers().sel) select(null);
               }}
             />
             {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
@@ -718,6 +717,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
               </div>
             ) : null}
           </div>
+          <LayerStage />
           <div id="video-controls">
             {/* top: title pill left, actions pill right */}
             <div id="top-controls">
@@ -770,6 +770,8 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
 
             {/* bottom pill: volume, time, timeline, duration, speed, fullscreen */}
             <div id="bottom-controls" className="pl-pill pl-bar">
+              <LayerTags tracks={tracks} open={isOpen} onHeight={setTagsHeight} />
+              <LayerInspector tracks={tracks} tagsHeight={tagsHeight} />
               <div id="volume-container">
                 <div id="audio-tracks-panel" className="hidden" />
                 <button
@@ -791,8 +793,17 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                 <input type="range" id="volume-slider" min="0" max="2" step="0.1" defaultValue="1" className="collapsed" />
               </div>
               <div id="current-time">0:00</div>
-              <Timeline waveform={session?.waveform ?? null} tracks={tracks} open={isOpen} gain={masterVolume} focus={trackFocus} />
+              <Timeline
+                waveform={session?.waveform ?? null}
+                tracks={tracks}
+                open={isOpen}
+                gain={masterVolume}
+                focus={trackFocus ?? layerFocus}
+                layers={layers}
+                selected={selLayer}
+              />
               <div id="total-time">0:00</div>
+              <AddLayer tracks={tracks} />
               <div id="speed-container">
                 {/* legacy writes these two; the drum is what the user sees */}
                 <button id="speed-button" type="button" tabIndex={-1} aria-hidden="true">

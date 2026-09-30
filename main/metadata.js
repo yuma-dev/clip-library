@@ -1,5 +1,5 @@
 /** .clip_metadata file I/O: atomic writes, read/write for names, trim, speed,
- * volume, volume range, tags. */
+ * volume, tags. layers live in ./layers.js */
 const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
@@ -11,7 +11,7 @@ const { logActivity } = require('../utils/activity-tracker');
 /**
  * telemetry kind from file extension; the filename (with clip name) never leaves this process
  * @param {string} filePath
- * @returns {string} trim|tags|custom_name|speed|volume|volume_range|track_state|track_prefs|gameinfo|other
+ * @returns {string} trim|tags|custom_name|speed|volume|volume_range|layers|track_state|track_prefs|gameinfo|other
  */
 function metadataKind(filePath) {
   const base = filePath.endsWith('.tmp') ? filePath.slice(0, -4) : filePath;
@@ -22,6 +22,7 @@ function metadataKind(filePath) {
     case '.speed': return 'speed';
     case '.volume': return 'volume';
     case '.volumerange': return 'volume_range';
+    case '.layers': return 'layers';
     case '.trackstate': return 'track_state';
     case '.gameinfo': return 'gameinfo';
     // trackPreferences.json is the only .json written through this path.
@@ -414,70 +415,6 @@ async function getTrackState(clipName, getSettings) {
       });
     }
     return { tracks: {} };
-  }
-}
-
-// volume range
-
-async function saveVolumeRange(clipName, volumeData, getSettings) {
-  const settings = await getSettings();
-  const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
-
-  // null = remove range: delete file instead of writing literal "null".
-  // player used to call this on every clip open even with nothing to remove
-  if (volumeData == null) {
-    try {
-      await fs.unlink(volumeRangeFilePath);
-      logger.info(`Volume range data removed for ${clipName}`);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        logger.error(`Error removing volume range for ${clipName}:`, error);
-        return { success: false, error: error.message };
-      }
-    }
-    return { success: true };
-  }
-
-  try {
-    await writeFileAtomically(volumeRangeFilePath, JSON.stringify(volumeData));
-    logger.info(`Volume range data saved successfully for ${clipName}`);
-    return { success: true };
-  } catch (error) {
-    logger.error(`Error saving volume range for ${clipName}:`, error);
-    return { success: false, error: error.message };
-  }
-}
-
-async function getVolumeRange(clipName, getSettings) {
-  const settings = await getSettings();
-  const metadataFolder = getMetadataFolder(settings.clipLocation);
-  const volumeRangeFilePath = path.join(metadataFolder, `${metadataSafeName(clipName)}.volumerange`);
-
-  let volumeData;
-  try {
-    volumeData = await fs.readFile(volumeRangeFilePath, 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return null;
-    }
-    logger.error(`Error reading volume range for ${clipName}:`, error);
-    throw error;
-  }
-
-  try {
-    return JSON.parse(volumeData);
-  } catch {
-    // self-heal: opens no longer overwrite this file, so delete it here.
-    // record what we destroyed since it's the user's data
-    logger.error(`Corrupt volume range file for ${clipName}; removing it`);
-    telemetry.event('volume_range_self_deleted', {
-      kind: telemetry.KIND.DATA_LOSS,
-      severity: telemetry.SEVERITY.WARNING,
-      context: { file_bytes: Buffer.byteLength(volumeData, 'utf8') }
-    });
-    await fs.unlink(volumeRangeFilePath).catch(() => {});
-    return null;
   }
 }
 
@@ -1058,10 +995,6 @@ module.exports = {
   saveVolume,
   getVolume,
   deleteVolume,
-
-  // Volume range
-  saveVolumeRange,
-  getVolumeRange,
 
   // Per-track audio state
   saveTrackState,

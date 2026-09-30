@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, type CSSProperties } from "react";
-import type { ClipWaveform } from "../../types/clips";
+import type { ClipWaveform, Layer } from "../../types/clips";
+import { gainAt } from "./layers/model";
 
 /** what the mixer knows about a track that the timeline needs to draw it */
 export interface TrackView {
@@ -110,6 +111,7 @@ export function envelopeOf(bands: Array<{ halves: number[] }>): number[] {
 }
 
 const SILENT = new Array<number>(BINS).fill(0);
+const EMPTY: Layer[] = [];
 
 interface WaveformProps {
   waveform: ClipWaveform | null;
@@ -124,15 +126,24 @@ interface WaveformProps {
   gain?: number;
   /** ordinal hovered in the mixer; every other band dims */
   focus?: number | null;
+  /** volume layers squash or grow the bands where they apply, so the change is visible */
+  layers?: Layer[];
+  /** seconds, maps bins to layer times */
+  duration?: number;
 }
 
 /** per-track level bands behind the timeline; ahead of the playhead grey, behind it coloured with a
  * bloom. clip-path on the two wrappers is driven by css vars the timeline's rAF loop sets. */
-function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1, focus = null }: WaveformProps) {
+function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1, focus = null, layers = EMPTY, duration = 0 }: WaveformProps) {
+  // only volume layers matter here; moving a text tag must not rebuild the paths
+  const volumeKey = JSON.stringify(layers.filter((l) => l.kind === "volume"));
   const bands = useMemo(() => {
     if (!waveform || waveform.tracks.length === 0) return [];
+    const volume: Layer[] = JSON.parse(volumeKey);
+    const shape = (levels: number[], ordinal: number) =>
+      volume.length && duration > 0 ? levels.map((lv, i) => lv * gainAt(volume, ordinal, (i / (BINS - 1)) * duration)) : levels;
     if (waveform.tracks.length === 1) {
-      const levels = binLevels(waveform.tracks[0].peak).map((lv) => lv * gain);
+      const levels = shape(binLevels(waveform.tracks[0].peak).map((lv) => lv * gain), 0);
       // colour from the single-track mixer, white until one is picked
       const color = tracks?.[0]?.color;
       const tinted = color && color.toLowerCase() !== "#ffffff";
@@ -145,7 +156,7 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1, 
       if (!data) return null;
       // muted: a flat white thread at the silence floor, its level no longer matters
       const level = Number.isFinite(t.volume) ? (t.volume as number) : 1;
-      const levels = t.muted ? SILENT : binLevels(data.peak).map((lv) => lv * level);
+      const levels = t.muted ? SILENT : shape(binLevels(data.peak).map((lv) => lv * level), t.ordinal);
       const amp = AMPS[Math.min(i, AMPS.length - 1)];
       return {
         key: String(t.ordinal),
@@ -157,7 +168,7 @@ function Waveform({ waveform, tracks, trimStart, trimEnd, onEnvelope, gain = 1, 
         opacity: 0.8,
       };
     }).filter((b): b is NonNullable<typeof b> => b !== null);
-  }, [waveform, tracks, trimStart, trimEnd, gain]);
+  }, [waveform, tracks, trimStart, trimEnd, gain, volumeKey, duration]);
 
   useEffect(() => {
     onEnvelope?.(bands.length ? envelopeOf(bands) : null);

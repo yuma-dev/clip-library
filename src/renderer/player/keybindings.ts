@@ -21,6 +21,10 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   setTrimEnd: "]",
   focusTitle: "Tab",
   closePlayer: "Escape",
+  addVolumeLayer: "v",
+  addTextLayer: "t",
+  addGifLayer: "g",
+  addImageLayer: "i",
 };
 
 let keybindings: Record<string, string> = { ...DEFAULT_KEYBINDINGS };

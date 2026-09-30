@@ -61,6 +61,21 @@ test('exports video, audio, screenshots, speed and volume', async t => {
   await t.test('speed 1.5 exports four seconds', async () => {
     await checkVideo(f.keep(await video('speed', 1, 1.5)), 4);
   });
+  // a trim that ends before the source does: the output must stop at the trim, not run on
+  const middle = (name, speed) => api.exportVideo(f.name, 1, 3, 1, speed, path.join(f.dir, `${name}.mp4`), f.settings);
+  await t.test('speed 2 on a middle trim exports one second', async () => {
+    const result = f.keep(await middle('speed2', 2));
+    await checkVideo(result, 1);
+    const info = await api.ffprobeAsync(result.path);
+    near(info.streams.find(s => s.codec_type === 'audio').duration, 1);
+  });
+  await t.test('speed 0.5 on a middle trim exports four seconds', async () => {
+    await checkVideo(f.keep(await middle('speed05', 0.5)), 4);
+  });
+  await t.test('audio at speed 2 on a middle trim is one second', async () => {
+    const result = f.keep(await api.exportAudio(f.name, 1, 3, 1, 2, path.join(f.dir, 'audio2.mp3'), f.settings));
+    near((await api.ffprobeAsync(result.path)).format.duration, 1);
+  });
   await t.test('volume zero exports silent audio', async () => {
     const result = f.keep(await video('silent', 0));
     await checkVideo(result, 6);

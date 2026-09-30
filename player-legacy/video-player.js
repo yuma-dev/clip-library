@@ -483,8 +483,11 @@ function setupAudioContext() {
   if (state.audioContext) return;
   state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
   state.gainNode = state.audioContext.createGain();
+  // volume layers automate this one so the master keeps the user's level
+  state.layerGainNode = state.audioContext.createGain();
   const source = state.audioContext.createMediaElementSource(elements.videoPlayer);
-  source.connect(state.gainNode);
+  source.connect(state.layerGainNode);
+  state.layerGainNode.connect(state.gainNode);
   state.gainNode.connect(state.audioContext.destination);
 }
 
@@ -1063,216 +1066,6 @@ function updateLoadingProgress() {
   }
 }
 
-function endVolumeDrag() {
-  if (!state.isVolumeDragging) return;
-
-  document.body.classList.remove('dragging');
-
-  if (state.currentClip) {
-    const volumeData = {
-      start: state.volumeStartTime,
-      end: state.volumeEndTime,
-      level: state.volumeLevel
-    };
-    ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, volumeData)
-      .catch(error => logger.error('Error saving volume data:', error));
-  }
-
-  state.isVolumeDragging = null;
-  document.removeEventListener('mousemove', handleVolumeDrag);
-  document.removeEventListener('mouseup', endVolumeDrag);
-
-  updateVolumeControlsPosition();
-
-  const volumeInput = state.volumeDragControl.querySelector('input');
-  if (volumeInput) {
-    volumeInput.style.display = 'block';
-  }
-}
-
-async function loadVolumeData(preloadedVolumeData) {
-  if (!state.currentClip) {
-    logger.warn('Attempted to load volume data without current clip');
-    return;
-  }
-
-  try {
-    // openClip passes its batched open-state value; other callers hit IPC directly
-    const volumeData = preloadedVolumeData !== undefined
-      ? preloadedVolumeData
-      : await ipcRenderer.invoke('get-volume-range', state.currentClip.originalName);
-    logger.info('Volume data loaded:', volumeData);
-
-    if (volumeData && volumeData.start !== undefined && volumeData.end !== undefined) {
-      state.volumeStartTime = volumeData.start;
-      state.volumeEndTime = volumeData.end;
-      state.volumeLevel = volumeData.level || 0;
-      state.isVolumeControlsVisible = true;
-      showVolumeControls();
-      updateVolumeControlsPosition();
-      logger.info('Volume controls restored with data:', {
-        start: state.volumeStartTime,
-        end: state.volumeEndTime,
-        level: state.volumeLevel
-      });
-    } else {
-      logger.info('No valid volume data found for:', state.currentClip.originalName);
-      // no stored range, don't write a removal (this path runs on every clip open)
-      hideVolumeControls(false);
-    }
-  } catch (error) {
-    logger.error('Error loading volume data:', error);
-    hideVolumeControls(false);
-  }
-}
-
-function hideVolumeDragControl() {
-  if (state.volumeDragControl) {
-    state.volumeDragControl.style.display = 'none';
-  }
-}
-
-function hideVolumeControls(persistRemoval = true) {
-  state.isVolumeControlsVisible = false;
-  state.volumeStartTime = 0;
-  state.volumeEndTime = 0;
-  state.volumeLevel = 0;
-  state.volumeStartElement.style.display = 'none';
-  state.volumeEndElement.style.display = 'none';
-  state.volumeRegionElement.style.display = 'none';
-  hideVolumeDragControl();
-
-  // avoid stale debounced writes re-saving removed range data
-  if (debouncedSaveVolumeData.cancel) {
-    debouncedSaveVolumeData.cancel();
-  }
-
-  // callers hiding controls just because a clip has no range pass
-  // persistRemoval=false so opening a clip never writes to disk
-  if (persistRemoval && state.currentClip) {
-    ipcRenderer.invoke('save-volume-range', state.currentClip.originalName, null)
-      .catch(error => logger.error('Error removing volume data:', error));
-  }
-}
-
-const debouncedSaveVolumeData = debounce(async (clipName, volumeData) => {
-  if (!clipName || !volumeData) return;
-
-  try {
-    logger.info('Saving volume data:', volumeData);
-    await ipcRenderer.invoke('save-volume-range', clipName, volumeData);
-    logger.info('Volume data saved successfully');
-  } catch (error) {
-    logger.error('Error saving volume data:', error);
-  }
-}, 300);
-
-function saveVolumeData() {
-  if (!state.currentClip || !state.isVolumeControlsVisible) return;
-
-  const volumeData = {
-    start: state.volumeStartTime,
-    end: state.volumeEndTime,
-    level: state.volumeLevel || 0
-  };
-
-  debouncedSaveVolumeData(state.currentClip.originalName, volumeData);
-}
-
-function showVolumeControls() {
-  state.isVolumeControlsVisible = true;
-  state.volumeStartElement.style.display = 'block';
-  state.volumeEndElement.style.display = 'block';
-  state.volumeRegionElement.style.display = 'block';
-  updateVolumeControlsPosition();
-  showVolumeDragControl();
-}
-
-function toggleVolumeControls() {
-  if (!elements.videoPlayer || !elements.videoPlayer.duration) return;
-
-  if (!state.isVolumeControlsVisible) {
-    if (state.volumeStartTime === 0 && state.volumeEndTime === 0) {
-      state.volumeStartTime = elements.videoPlayer.duration / 3;
-      state.volumeEndTime = (elements.videoPlayer.duration / 3) * 2;
-      state.volumeLevel = 0;
-    }
-    showVolumeControls();
-  } else {
-    hideVolumeControls();
-  }
-}
-
-function updateVolumeControlsPosition() {
-  if (!elements.videoPlayer || !elements.videoPlayer.duration || !state.isVolumeControlsVisible) return;
-
-  const startPercent = (state.volumeStartTime / elements.videoPlayer.duration) * 100;
-  const endPercent = (state.volumeEndTime / elements.videoPlayer.duration) * 100;
-
-  state.volumeStartElement.style.left = `${startPercent}%`;
-  state.volumeEndElement.style.left = `${endPercent}%`;
-  state.volumeRegionElement.style.left = `${startPercent}%`;
-  state.volumeRegionElement.style.width = `${endPercent - startPercent}%`;
-
-  if (state.volumeDragControl) {
-    const middlePercent = (startPercent + endPercent) / 2;
-    state.volumeDragControl.style.left = `${middlePercent}%`;
-    state.volumeDragControl.style.display = 'flex';
-  }
-}
-
-/**
- * Show the drag UI when adjusting volume range.
- */
-function showVolumeDragControl(e) {
-  if (!state.isVolumeControlsVisible || !elements.progressBarContainer || !elements.videoPlayer) return;
-
-  const rect = elements.progressBarContainer.getBoundingClientRect();
-  state.volumeDragControl.style.display = 'flex';
-
-  if (e) {
-    const x = e.clientX - rect.left;
-    state.volumeDragControl.style.left = `${x}px`;
-  } else {
-    const startPercent = (state.volumeStartTime / elements.videoPlayer.duration) * 100;
-    const endPercent = (state.volumeEndTime / elements.videoPlayer.duration) * 100;
-    const middlePercent = (startPercent + endPercent) / 2;
-    state.volumeDragControl.style.left = `${middlePercent}%`;
-  }
-
-  const volumeInput = state.volumeDragControl.querySelector('input');
-  if (volumeInput) {
-    volumeInput.value = state.volumeLevel;
-    volumeInput.style.display = 'block';
-  }
-}
-
-function handleVolumeDrag(e) {
-  if (!state.isVolumeDragging || !elements.progressBarContainer || !elements.videoPlayer) return;
-
-  document.body.classList.add('dragging');
-
-  const rect = elements.progressBarContainer.getBoundingClientRect();
-  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-  const timePosition = (x / rect.width) * elements.videoPlayer.duration;
-
-  if (state.isVolumeDragging === 'start') {
-    state.volumeStartTime = Math.min(timePosition, state.volumeEndTime - 0.1);
-  } else if (state.isVolumeDragging === 'end') {
-    state.volumeEndTime = Math.max(timePosition, state.volumeStartTime + 0.1);
-  }
-
-  updateVolumeControlsPosition();
-  state.volumeDragControl.style.display = 'flex';
-  
-  const volumeInput = state.volumeDragControl.querySelector('input');
-  if (volumeInput) {
-    volumeInput.style.display = 'block';
-  }
-
-  saveVolumeData();
-}
-
 function updatePreview(e, options = {}) {
   if (!elements.progressBarContainer || !elements.previewElement || !elements.tempVideo || !elements.videoPlayer) return;
   if (!e) return;
@@ -1495,13 +1288,6 @@ async function flushPendingClipEdits({ clipName, oldCustomName, titleValue, flus
     const pendingVolumeArgs = debouncedSaveVolume.getPendingArgs ? debouncedSaveVolume.getPendingArgs() : null;
     if (pendingVolumeArgs && pendingVolumeArgs[0] === clipName) {
       pendingTasks.push(Promise.resolve(debouncedSaveVolume.flush()));
-    }
-  }
-
-  if (debouncedSaveVolumeData.hasPending && debouncedSaveVolumeData.hasPending()) {
-    const pendingVolumeDataArgs = debouncedSaveVolumeData.getPendingArgs ? debouncedSaveVolumeData.getPendingArgs() : null;
-    if (pendingVolumeDataArgs && pendingVolumeDataArgs[0] === clipName) {
-      pendingTasks.push(Promise.resolve(debouncedSaveVolumeData.flush()));
     }
   }
 
@@ -2025,7 +1811,7 @@ async function openClip(originalName, customName) {
   mark('playerVisibleEarly');
 
   let clipInfo, trimData, clipTags, thumbnailPath;
-  // volume/speed/volume-range/track state all arrive in the same round trip
+  // volume/speed/layers/track state all arrive in the same round trip
   // so later stages never touch IPC again
   let openState = null;
   const cachedData = callbacks.getCachedClipData ? await callbacks.getCachedClipData(originalName) : null;
@@ -2282,9 +2068,6 @@ async function openClip(originalName, customName) {
     
     mark('afterVolumeSpeed');
     
-    await loadVolumeData(openState ? openState.volumeRange : undefined);
-    mark('afterVolumeData');
-
     // multi-track clips: extract each stream to its own .m4a, mute the <video>
     // build a per-track audio graph. Awaited before play(), a brief delay beats
     // playing the wrong (native default) track for a second then swapping it out
@@ -3009,10 +2792,6 @@ module.exports = {
   pauseVideoIfPlaying,
   handleVideoSeeked,
   updateLoadingProgress,
-  endVolumeDrag,
-  loadVolumeData,
-  hideVolumeDragControl,
-  hideVolumeControls,
   cleanupVideoPreview,
   releaseVideoElement,
   preloadClipData,
@@ -3025,12 +2804,6 @@ module.exports = {
   handleKeyPress,
   handleKeyRelease,
   updatePreview,
-  handleVolumeDrag,
-  showVolumeDragControl,
-  updateVolumeControlsPosition,
-  toggleVolumeControls,
-  showVolumeControls,
-  saveVolumeData,
 
   // Volume icons (for external use)
   volumeIcons,
