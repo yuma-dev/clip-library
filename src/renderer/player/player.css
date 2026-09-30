@@ -255,7 +255,7 @@
   max-width: 55%;
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 12px 0 0;
   cursor: text;
   transition: border-color 0.15s;
 }
@@ -263,13 +263,16 @@
 .pl-title:focus-within {
   border-color: #ffffff40;
 }
+/* the input fills the pill, a drag select that starts in the padding or above the text would
+   otherwise leave focus on the body and every key after it goes to the player */
 #clip-title {
+  align-self: stretch;
   min-width: 40px;
   max-width: 100%;
   field-sizing: content;
   border: 0;
   outline: 0;
-  padding: 0;
+  padding: 0 6px 0 12px;
   background: transparent;
   color: #f4f4f6;
   font: 500 12px var(--font-sans);
