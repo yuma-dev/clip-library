@@ -1,4 +1,4 @@
-// Live glow tuning via the DevTools console (like window.clipGrid). Visual
+// Live glow tuning via the DevTools console. Visual
 // params are CSS vars on the canvas; overflow/yShift are read by ClipGlow on hover.
 //
 //   window.clipGlow.opacity(0.5)   // overall strength (screen blend over black)

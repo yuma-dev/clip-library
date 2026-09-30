@@ -279,6 +279,7 @@ export default function App() {
         collapsed={railCollapsed}
         onToggleWidth={toggleWidth}
         onTogglePin={togglePin}
+        showGridZoom={route === "library" && !profileUserId}
       />
       <div className={`app-body${railDynamic ? " rail-floating" : ""}`}>
         <Sidebar

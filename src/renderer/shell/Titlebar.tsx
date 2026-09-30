@@ -1,5 +1,6 @@
 import { PanelLeft, Pin } from "lucide-react";
 import GamepadIndicator from "./GamepadIndicator";
+import GridZoom from "./GridZoom";
 
 interface TitlebarProps {
   /** Pinned = static width; the width button toggles collapsed/expanded. */
@@ -10,6 +11,9 @@ interface TitlebarProps {
   /** toggles dynamic (unpinned) or collapsed (pinned) */
   onToggleWidth: () => void;
   onTogglePin: () => void;
+  /** card size slider, shown on the library route. omitted leaves it out entirely: export
+   * scenes render this without a settings provider */
+  showGridZoom?: boolean;
 }
 
 /** whole bar is a drag region; native window controls sit top-right via Electron's `titleBarOverlay`
@@ -20,6 +24,7 @@ export default function Titlebar({
   collapsed,
   onToggleWidth,
   onTogglePin,
+  showGridZoom,
 }: TitlebarProps) {
   const narrow = dynamic || collapsed;
   const widthTip = pinned
@@ -52,6 +57,7 @@ export default function Titlebar({
       </button>
       <GamepadIndicator />
       <div className="titlebar-drag" />
+      {showGridZoom !== undefined ? <GridZoom hidden={!showGridZoom} /> : null}
     </header>
   );
 }

@@ -52,6 +52,8 @@ export interface AppSettings {
   exportQualityBias: string;
   exportSpeedBias: string;
   keybindings?: Record<string, string>;
+  /** library card column min-width in px (shell/GridZoom.tsx); absent until first changed */
+  gridCardSize?: number;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }

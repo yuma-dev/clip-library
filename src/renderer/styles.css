@@ -195,6 +195,58 @@ body.ui-blur-exit .app-body {
   flex: 1;
 }
 
+/* card size slider (shell/GridZoom.tsx), right end of the titlebar; the margin clears the
+   native min/max/close overlay, env() is its reported area, 138px is its width on windows */
+.grid-zoom {
+  -webkit-app-region: no-drag;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 22px;
+  padding: 0 8px;
+  margin-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)));
+  color: var(--color-text-muted);
+}
+.grid-zoom.hidden {
+  display: none;
+}
+.grid-zoom:hover {
+  color: var(--color-text-secondary);
+}
+.grid-zoom input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 96px;
+  height: 3px;
+  margin: 0;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #a855f7 var(--fill, 50%),
+    rgba(255, 255, 255, 0.12) var(--fill, 50%)
+  );
+  outline: none;
+  cursor: pointer;
+}
+.grid-zoom input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: 0;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  transition: transform 120ms ease;
+}
+.grid-zoom input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+.grid-zoom input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--color-accent-glyph);
+  outline-offset: 2px;
+}
+
 /* sidebar/nav rail (design handoff, 300px primary surface) */
 .rail {
   width: var(--rail-width);
@@ -1870,7 +1922,7 @@ body.ui-blur-exit .app-body {
 
 .clip-group-content {
   display: grid;
-  /* column min-width is tunable live via window.clipGrid.size()/cols() (dev) */
+  /* column min-width comes from the titlebar card size slider (library/gridDensity.ts) */
   grid-template-columns: repeat(auto-fill, minmax(var(--clip-col, 400px), 1fr));
   gap: 16px;
   padding: 4px 4px 12px;
