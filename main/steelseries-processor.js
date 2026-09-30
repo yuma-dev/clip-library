@@ -4,9 +4,8 @@ const { spawn } = require('child_process');
 const logger = require('../utils/logger');
 const { logActivity } = require('../utils/activity-tracker');
 const telemetry = require('./telemetry');
+const { ffmpegPath, ffprobePath } = require('./ffmpeg-binaries');
 
-// spawns a bare `ffprobe`/`ffmpeg` from PATH, not the app's bundled binaries
-// so on a stock machine this is ENOENT and import quietly does nothing
 function reportBinaryMissing(binary, err) {
     telemetry.event('steelseries_binary_missing', {
         kind: telemetry.KIND.SILENT_FAILURE,
@@ -50,7 +49,7 @@ class SteelSeriesProcessor {
 
     async getAudioStreamCount(inputFile) {
         return new Promise((resolve, reject) => {
-            const ffprobe = spawn('ffprobe', [
+            const ffprobe = spawn(ffprobePath, [
                 '-v', 'quiet',
                 '-print_format', 'json',
                 '-show_streams',
@@ -86,7 +85,7 @@ class SteelSeriesProcessor {
 
     async extractSteelSeriesMetadata(inputFile) {
         return new Promise((resolve, reject) => {
-            const ffprobe = spawn('ffprobe', [
+            const ffprobe = spawn(ffprobePath, [
                 '-v', 'quiet',
                 '-print_format', 'json',
                 '-show_format',
@@ -142,7 +141,7 @@ class SteelSeriesProcessor {
 
     async getAllMetadata(inputFile) {
         return new Promise((resolve, reject) => {
-            const ffprobe = spawn('ffprobe', [
+            const ffprobe = spawn(ffprobePath, [
                 '-v', 'quiet',
                 '-print_format', 'json',
                 '-show_format',
@@ -193,22 +192,18 @@ class SteelSeriesProcessor {
                     outputFile
                 ];
             } else {
-                // mix multiple audio streams together
-                const filterInputs = Array.from({ length: audioStreams }, (_, i) => `[0:a:${i}]`).join('');
-                const filterString = `${filterInputs}amix=inputs=${audioStreams}:duration=longest[aout]`;
-                
+                // game and mic stay separate tracks, the player mixes multi-track clips itself
                 ffmpegArgs = [
                     '-i', inputFile,
-                    '-c:v', 'copy',
-                    '-filter_complex', filterString,
                     '-map', '0:v:0',
-                    '-map', '[aout]',
+                    '-map', '0:a',
+                    '-c', 'copy',
                     '-y',
                     outputFile
                 ];
             }
 
-            const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+            const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
 
             ffmpeg.stderr.on('data', (data) => {
                 this.log(`FFmpeg: ${data}`);
