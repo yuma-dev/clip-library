@@ -1387,7 +1387,7 @@ app.on("activate", () => {
 
 ipcMain.handle('update-discord-presence', (event, details, state, startTimestamp) => {
   clearTimeout(idleTimer);
-  discordModule.updateDiscordPresence(details, state);
+  discordModule.updateDiscordPresence(details, state, startTimestamp);
 });
 
 ipcMain.handle('toggle-discord-rpc', async (event, enable) => {

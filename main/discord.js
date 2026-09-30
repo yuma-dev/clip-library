@@ -32,7 +32,8 @@ async function initDiscordRPC(getSettingsFn) {
   });
 }
 
-async function updateDiscordPresence(details, state = null) {
+// startTimestamp: epoch ms or Date, discord shows it as "elapsed"
+async function updateDiscordPresence(details, state = null, startTimestamp = null) {
   const settings = getSettings ? await getSettings() : null;
 
   if (!rpcReady || !settings || !settings.enableDiscordRPC) {
@@ -49,6 +50,11 @@ async function updateDiscordPresence(details, state = null) {
 
   if (state !== null) {
     activity.state = String(state);
+  }
+
+  const start = startTimestamp instanceof Date ? startTimestamp.getTime() : Number(startTimestamp);
+  if (Number.isFinite(start) && start > 0) {
+    activity.startTimestamp = start;
   }
 
   rpc.setActivity(activity).catch((error) => {
