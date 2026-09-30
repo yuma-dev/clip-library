@@ -11,12 +11,17 @@ const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
 // clip counts as finished once size hasn't changed for this long
 const STABILITY_MS = 2000;
 const POLL_MS = 250;
+// restart after a watcher error: 5s doubling to 5min, a removed drive or dropped share comes back eventually
+const RESTART_BASE_MS = 5000;
+const RESTART_MAX_MS = 5 * 60 * 1000;
 
 let watcher = null;
 let watcherAlive = false;
 let currentLocation = '';
 let onNewClipCallback = null;
 let onOverflowCallback = null;
+let restartTimer = null;
+let restartAttempts = 0;
 // filePath -> { size, stableSince, since, timer }
 const pending = new Map();
 // announced files, so a burst of events after (rename/change pair for one create) doesn't double-announce
@@ -132,6 +137,36 @@ function onFsEvent(eventType, filename) {
  * @returns {object|null}
  */
 function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
+  restartAttempts = 0;
+  return startWatcher(clipLocation, onNewClip, onOverflow);
+}
+
+function scheduleRestart() {
+  if (restartTimer) return;
+  const location = currentLocation;
+  const delay = Math.min(RESTART_BASE_MS * 2 ** restartAttempts, RESTART_MAX_MS);
+  restartAttempts += 1;
+  logger.info(`File watcher restart in ${delay}ms (attempt ${restartAttempts})`);
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    // clip folder changed meanwhile, that setup already owns the watcher
+    if (location !== currentLocation || watcherAlive) return;
+    startWatcher(location, onNewClipCallback, onOverflowCallback);
+    // events during the outage were missed
+    if (watcherAlive && typeof onOverflowCallback === 'function') {
+      Promise.resolve().then(onOverflowCallback).catch((error) => logger.warn(`Watcher rescan failed: ${error.message}`));
+    }
+  }, delay);
+  if (typeof restartTimer.unref === 'function') restartTimer.unref();
+}
+
+// keeps the callbacks from the first setup, for when only the clip folder changes
+function repointFileWatcher(clipLocation) {
+  restartAttempts = 0;
+  return startWatcher(clipLocation, onNewClipCallback, onOverflowCallback);
+}
+
+function startWatcher(clipLocation, onNewClip, onOverflow) {
   if (!clipLocation) {
     logger.warn('No clip location provided for file watcher');
     telemetry.event('watcher_not_started', {
@@ -157,14 +192,21 @@ function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
       severity: telemetry.SEVERITY.ERROR,
       context: { errno: error?.code, ms_since_setup: 0 }
     });
+    scheduleRestart();
     return null;
   }
   watcherAlive = true;
 
+  const thisWatcher = watcher;
   watcher.on('error', (error) => {
     logger.error('File watcher error:', error);
+    if (thisWatcher !== watcher) return;
     watcherAlive = false;
-    // nothing restarts the watcher: a network share or removed drive stops detection for the session
+    try {
+      thisWatcher.close();
+    } catch {}
+    watcher = null;
+    scheduleRestart();
     telemetry.event('watcher_error', {
       kind: telemetry.KIND.SILENT_FAILURE,
       severity: telemetry.SEVERITY.ERROR,
@@ -182,6 +224,10 @@ function setupFileWatcher(clipLocation, { onNewClip, onOverflow } = {}) {
 
 function stopFileWatcher() {
   clearPending();
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
   if (!watcher) return;
   try {
     watcher.close();
@@ -204,6 +250,7 @@ function isWatcherAlive() {
 
 module.exports = {
   setupFileWatcher,
+  repointFileWatcher,
   stopFileWatcher,
   isWatcherAlive
 };

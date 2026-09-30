@@ -1789,6 +1789,7 @@ ipcMain.handle("get-clip-location", async () => {
 ipcMain.handle("set-clip-location", async (event, newLocation) => {
   const location = await setClipLocation(getSettings, newLocation);
   settings.clipLocation = newLocation; // Update cached settings
+  fileWatcherModule.repointFileWatcher(newLocation);
   return location;
 });
 
