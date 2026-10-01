@@ -578,6 +578,7 @@ export interface ClipsApi {
   exportAudio(...args: any[]): Promise<any>;
   openSaveDialog(...args: any[]): Promise<any>;
   revealClip(...args: any[]): Promise<any>;
+  openClipFolder(): Promise<{ success: boolean; error?: string }>;
   resetClipCache(...args: any[]): Promise<any>;
 
   getSettings(): Promise<any>;

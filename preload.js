@@ -232,6 +232,7 @@ const api = {
   exportAudio: invoke("export-audio"),
   openSaveDialog: invoke("open-save-dialog"),
   revealClip: invoke("reveal-clip"),
+  openClipFolder: invoke("open-clip-folder"),
   resetClipCache: invoke("reset-clip-cache"),
 
   // settings: dedupe concurrent startup calls (share in-flight promise, not cached)

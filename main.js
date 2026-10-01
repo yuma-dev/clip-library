@@ -1903,6 +1903,14 @@ ipcMain.handle('reveal-clip', async (event, clipName) => {
   return clipsModule.revealClip(clipName, getSettings);
 });
 
+ipcMain.handle('open-clip-folder', async () => {
+  const { clipLocation } = await getSettings();
+  if (!clipLocation) return { success: false, error: 'No clip folder set' };
+  // openPath resolves to an error string, empty on success
+  const error = await shell.openPath(clipLocation);
+  return error ? { success: false, error } : { success: true };
+});
+
 ipcMain.handle("open-save-dialog", async (event, type, clipName, customName) => {
   return dialogsModule.showSaveDialog(mainWindow, type, clipName, customName);
 });

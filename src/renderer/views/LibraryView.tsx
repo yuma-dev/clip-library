@@ -1,5 +1,6 @@
 import { memo } from "react";
 import ClipGrid from "../library/ClipGrid";
+import EmptyLibrary, { useForcedEmpty } from "../library/EmptyLibrary";
 import type { UseClips } from "../library/useClips";
 import type { LocalClip } from "../library/types";
 
@@ -29,6 +30,7 @@ function LibraryView({
   globalTags,
   addGlobalTag,
 }: LibraryViewProps) {
+  const forcedEmpty = useForcedEmpty();
   return (
     <div className="library-view">
       {lib.loading ? (
@@ -40,6 +42,8 @@ function LibraryView({
             <p>Loading clips…</p>
           </div>
         </div>
+      ) : lib.clips.length === 0 || forcedEmpty ? (
+        <EmptyLibrary clipLocation={lib.clipLocation} />
       ) : (
         <ClipGrid
           clips={clips}
