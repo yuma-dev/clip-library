@@ -837,7 +837,8 @@ function ffprobeAsync(filePath) {
 
 // export helpers
 /** mixes per-track volumes then layers master volume, all-track volume layers and speed atempo
- * on top; null if no mix requested. output is always labeled [aout] for -map [aout]. */
+ * on top; null if no mix requested. output is always labeled [aout] for -map [aout]. an empty mix
+ * with sounds (no audio stream, or every track muted) puts the sounds on outDur of silence */
 function buildAudioMixFilterComplex({
   audioMix,
   effectiveVolume,
@@ -849,9 +850,15 @@ function buildAudioMixFilterComplex({
   duration = 0,
   tmap = null,
   sounds = [],
-  soundInput = 1
+  soundInput = 1,
+  outDur = 0
 }) {
-  if (!Array.isArray(audioMix) || audioMix.length === 0) return null;
+  if (!Array.isArray(audioMix)) return null;
+  if (audioMix.length === 0) {
+    if (sounds.length === 0 || !(outDur > 0)) return null;
+    const m = mixSounds('abed', sounds, soundInput);
+    return [`anullsrc=r=48000:cl=stereo,atrim=duration=${outDur.toFixed(4)}[abed]`, ...m.parts, `[${m.out}]anull[aout]`].join(';');
+  }
 
   const parts = [];
 
@@ -1079,7 +1086,7 @@ async function exportVideoWithFallback(options) {
       });
       // blur and zoom work on the source frame, before the retime and any scale down
       const fxGraph = buildFxGraph({ layers, start: exportStart, duration, width: sourceWidth, height: sourceHeight });
-      const sounds = audioStreamCount > 0 ? planSounds(layers, exportStart, duration, timeMap) : [];
+      const sounds = planSounds(layers, exportStart, duration, timeMap);
       const soundInput = 1 + (overlayGraph ? overlayGraph.inputs.length : 0);
 
       const buildAudioFilter = () => {
@@ -1100,13 +1107,14 @@ async function exportVideoWithFallback(options) {
       // speed layers and sounds need the graph; a single-track clip gets a mix of its one stream
       const needsAudioGraph = timeMap.segmented || sounds.length > 0;
       const firstAudio = Array.isArray(metadata.streams) ? metadata.streams.find((s) => s.codec_type === 'audio') : null;
-      const mix = !Array.isArray(audioMix) && needsAudioGraph && firstAudio
-        ? [{ streamIndex: firstAudio.index, ordinal: 0, volume: 1 }]
+      // a clip without audio still carries its sounds, on an empty mix
+      const mix = !Array.isArray(audioMix) && needsAudioGraph
+        ? (firstAudio ? [{ streamIndex: firstAudio.index, ordinal: 0, volume: 1 }] : sounds.length > 0 ? [] : audioMix)
         : audioMix;
       // an explicit mix from the renderer replaces the single-stream filter chain
-      // with filter_complex; an *empty* mix means every track muted/hidden, so -an
+      // with filter_complex; an *empty* mix means every track muted/hidden, so -an unless sounds play
       const audioMixProvided = Array.isArray(mix);
-      const audioMixSilent = audioMixProvided && mix.length === 0;
+      const audioMixSilent = audioMixProvided && mix.length === 0 && sounds.length === 0;
       const audioFilterComplex = audioMixProvided && !audioMixSilent
         ? buildAudioMixFilterComplex({
             audioMix: mix,
@@ -1119,7 +1127,8 @@ async function exportVideoWithFallback(options) {
             duration,
             tmap: timeMap,
             sounds,
-            soundInput
+            soundInput,
+            outDur: outputDuration
           })
         : null;
       const usingAudioMix = audioFilterComplex !== null || audioMixSilent;
@@ -1909,22 +1918,23 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
   const hasVolumeChange = Math.abs(effectiveVolume - 1) > 0.001;
 
   let audioMix = extraOptions && Array.isArray(extraOptions.audioMix) ? extraOptions.audioMix : null;
-  const audioMixSilent = Array.isArray(audioMix) && audioMix.length === 0;
   const layers = await loadExportLayers(clipName, getSettings);
   const exportStart = Number(start) || 0;
   const timeMap = buildTimeMap(layers, exportStart, duration, effectiveSpeed);
   const sounds = planSounds(layers, exportStart, duration, timeMap);
+  const audioMixSilent = Array.isArray(audioMix) && audioMix.length === 0 && sounds.length === 0;
   // speed layers and sounds need the graph; a single-track clip gets a mix of its one stream
   if (!audioMix && (timeMap.segmented || sounds.length > 0)) {
     try {
       const probe = await ffprobeAsync(inputPath);
       const first = (probe.streams || []).find((st) => st.codec_type === 'audio');
       if (first) audioMix = [{ streamIndex: first.index, ordinal: 0, volume: 1 }];
+      else if (sounds.length > 0) audioMix = [];
     } catch (error) {
       logger.warn(`[ffmpeg] audio export probe failed, speed layers and sounds skipped: ${error.message}`);
     }
   }
-  const audioFilterComplex = Array.isArray(audioMix) && audioMix.length > 0
+  const audioFilterComplex = Array.isArray(audioMix) && (audioMix.length > 0 || sounds.length > 0)
     ? buildAudioMixFilterComplex({
         audioMix,
         effectiveVolume,
@@ -1936,7 +1946,8 @@ async function exportAudio(clipName, start, end, volume, speed, savePath, getSet
         duration,
         tmap: timeMap,
         sounds,
-        soundInput: 1
+        soundInput: 1,
+        outDur: timeMap.outDur
       })
     : null;
 

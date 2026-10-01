@@ -108,6 +108,36 @@ test('zoom, blur, speed and sound layers export', async (t) => {
     assert.ok(mp3 - quiet > 15, `beep in the mp3, ${mp3} dB vs ${quiet} dB after it`);
   });
 
+  await t.test('a sound still plays with every track muted', async () => {
+    await makeBeep();
+    await layers.saveLayers(f.name, [{ id: 'b', kind: 'sound', start: 1, end: 2, file: beep, name: 'beep', level: 1, fade: 0, duration: 1 }], f.settings);
+    const video = f.keep(await api.exportVideo(f.name, 0, 4, 1, 1, path.join(f.dir, 'muted.mp4'), f.settings, null, { audioMix: [] }));
+    near((await api.ffprobeAsync(video.path)).format.duration, 4, 0.3);
+    // the bed is stereo, the mono beep loses 3 dB to the upmix
+    assert.ok((await peak(video.path, 1.2, 1.8, highs)) > -24, 'beep over the muted tracks');
+    assert.ok((await peak(video.path, 2.5, 3.5)) < -60, 'silence after the beep');
+    const audio = f.keep(await api.exportAudio(f.name, 0, 4, 1, 1, path.join(f.dir, 'muted.mp3'), f.settings, { audioMix: [] }));
+    assert.ok((await peak(audio.path, 1.2, 1.8, highs)) > -24, 'beep in the mp3');
+  });
+
+  await t.test('a sound plays on a clip without an audio stream', async () => {
+    const name = `Silent ${f.name}`;
+    await command(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '4',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', path.join(f.dir, name)]);
+    const silentMedia = path.join(f.dir, '.clip_metadata', 'layers_media', name);
+    await fs.mkdir(silentMedia, { recursive: true });
+    const file = path.join(silentMedia, 'snd-beep.wav');
+    await command(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=3000:sample_rate=48000:duration=1', file]);
+    await layers.saveLayers(name, [{ id: 'b', kind: 'sound', start: 1, end: 2, file, name: 'beep', level: 1, fade: 0, duration: 1 }], f.settings);
+    const video = f.keep(await api.exportVideo(name, 0, 4, 1, 1, path.join(f.dir, 'silent.mp4'), f.settings));
+    const info = await api.ffprobeAsync(video.path);
+    near(info.format.duration, 4, 0.3);
+    assert.ok(info.streams.some((s) => s.codec_type === 'audio'), 'an audio stream for the sound');
+    assert.ok((await peak(video.path, 1.2, 1.8, highs)) > -24, 'beep in the video');
+    const audio = f.keep(await api.exportAudio(name, 0, 4, 1, 1, path.join(f.dir, 'silent.mp3'), f.settings));
+    assert.ok((await peak(audio.path, 1.2, 1.8, highs)) > -24, 'beep in the mp3');
+  });
+
   await t.test('zoom and blur change the picture only inside their time', async () => {
     const plain = f.keep(await (async () => {
       await layers.saveLayers(f.name, [], f.settings);
