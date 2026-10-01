@@ -209,7 +209,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     if (!clip) return;
     const ok = await confirm({
       title: "Delete clip",
-      message: `Delete “${clip.customName}”? This permanently removes the file.`,
+      message: `Move “${clip.customName}” to the Recycle Bin?`,
       confirmLabel: "Delete",
       danger: true,
     });
@@ -220,7 +220,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       const res = await window.clips.deleteClip(originalName);
       if (res && res.success === false) throw new Error(res.error);
       removeClips([originalName]);
-      toast.show("Clip deleted", "success");
+      toast.show("Moved to the Recycle Bin", "success");
     } catch (err) {
       toast.show(
         (err as Error)?.message ? `Failed to delete: ${(err as Error).message}` : "Failed to delete clip",

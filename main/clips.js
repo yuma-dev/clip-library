@@ -535,7 +535,7 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
   const favoritePath = path.join(metadataFolder, `${safeName}.favorite`);
   const thumbnailPath = thumbnailsModule.generateThumbnailPath(clipPath);
 
-  const filesToDelete = [clipPath, customNamePath, trimDataPath, layersPath, favoritePath, thumbnailPath];
+  const sidecars = [customNamePath, trimDataPath, layersPath, favoritePath, thumbnailPath];
 
   if (videoPlayer) {
     videoPlayer.src = "";
@@ -544,45 +544,15 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
   const maxRetries = 50; // ~5s total retry time
   const retryDelay = 100; // 0.1 s between attempts
 
-  // telemetry only: which mechanism produced the last error, and its errno
-  let via = process.platform === 'win32' ? 'trash' : 'unlink';
+  // the video only ever goes to the recycle bin, never unlinked. electron reports a file held by
+  // the player or antivirus as a generic failure, so every error gets the retry budget
   let retryErrno;
-
+  let lastError = null;
+  let trashed = false;
   for (let retry = 0; retry < maxRetries; retry++) {
     try {
-      for (const file of filesToDelete) {
-        try {
-          if (process.platform === 'win32') {
-            via = 'trash';
-            await shell.trashItem(file);
-          } else {
-            via = 'unlink';
-            await fs.unlink(file);
-          }
-        } catch (e) {
-          if (e.code === 'ENOENT') {
-            continue;
-          }
-
-          if (process.platform === 'win32') {
-            try {
-              via = 'unlink';
-              await fs.unlink(file);
-              continue;
-            } catch (e2) {
-              if (e2.code === 'ENOENT') {
-                continue;
-              }
-              throw e2;
-            }
-          }
-
-          // let unexpected errors reach the retry logic below
-          throw e;
-        }
-      }
-
-      logActivity('delete', { clipName });
+      await shell.trashItem(clipPath);
+      trashed = true;
       if (retry > 0) {
         // locked files cost up to ~5s of retries today with nothing reported
         telemetry.event('clip_delete_retried', {
@@ -592,28 +562,49 @@ async function deleteClip(clipName, getSettings, thumbnailsModule, videoPlayer) 
           coalesceMs: 600000
         });
       }
-      return { success: true };
+      break;
     } catch (error) {
-      if ((error.code === "EBUSY" || error.code === "EPERM") && retry < maxRetries - 1) {
-        retryErrno = error.code;
-        await delay(retryDelay);
-      } else {
-        logger.error(`Error deleting clip ${clipName}:`, error);
-        telemetry.event('clip_delete_failed', {
-          kind: telemetry.KIND.ERROR,
-          severity: telemetry.SEVERITY.ERROR,
-          context: { errno: error.code, retries_used: retry, via },
-          error
-        });
-        return { success: false, error: error.message };
+      lastError = error;
+      // trashItem has no ENOENT code, so a vanished file only shows up on stat
+      if (!(await fs.stat(clipPath).then(() => true, () => false))) {
+        trashed = true;
+        break;
+      }
+      retryErrno = error.code;
+      if (retry < maxRetries - 1) await delay(retryDelay);
+    }
+  }
+
+  if (!trashed) {
+    logger.error(`Error deleting clip ${clipName}:`, lastError);
+    telemetry.event('clip_delete_failed', {
+      kind: telemetry.KIND.ERROR,
+      severity: telemetry.SEVERITY.ERROR,
+      context: { errno: lastError?.code, retries_used: maxRetries, via: 'trash' },
+      error: lastError
+    });
+    return {
+      success: false,
+      error: "Could not move the clip to the Recycle Bin. The file may be in use.",
+    };
+  }
+
+  // sidecars go along so a restore from the bin keeps the name and trim. unlink is fine for them,
+  // the video is already gone and a leftover .trim would stick to the next clip with this name
+  for (const file of sidecars) {
+    try {
+      await shell.trashItem(file);
+    } catch {
+      try {
+        await fs.unlink(file);
+      } catch (e) {
+        if (e.code !== 'ENOENT') logger.warn(`Could not remove ${path.basename(file)} for ${clipName}:`, e);
       }
     }
   }
 
-  return {
-    success: false,
-    error: "Failed to delete clip after multiple attempts. The file may be in use.",
-  };
+  logActivity('delete', { clipName });
+  return { success: true };
 }
 
 /**

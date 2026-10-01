@@ -139,8 +139,8 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     const ok = await confirm({
       title: multi ? `Delete ${targets.length} clips` : "Delete clip",
       message: multi
-        ? `Delete ${targets.length} selected clips? This permanently removes the files.`
-        : `Delete “${targets[0].customName}”? This permanently removes the file.`,
+        ? `Move ${targets.length} selected clips to the Recycle Bin?`
+        : `Move “${targets[0].customName}” to the Recycle Bin?`,
       confirmLabel: "Delete",
       danger: true,
     });
@@ -148,13 +148,14 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     let failed = 0;
     for (const t of targets) {
       try {
-        await window.clips.deleteClip(t.originalName);
+        const res = await window.clips.deleteClip(t.originalName);
+        if (res && res.success === false) throw new Error(res.error);
         onDeleted(t.originalName);
       } catch {
         failed++;
       }
     }
-    if (failed === 0) toast.show(multi ? `${targets.length} clips deleted` : "Clip deleted", "success");
+    if (failed === 0) toast.show(multi ? `${targets.length} clips moved to the Recycle Bin` : "Moved to the Recycle Bin", "success");
     else toast.show(`Failed to delete ${failed} of ${targets.length} clips`, "error");
   };
 
