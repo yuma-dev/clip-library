@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::ipc::{Connection, OP_CLOSE, OP_PING};
-use crate::{handshake, request, ReqError, CLIENT_ID};
+use crate::{handshake, is_capacity_error, request, ReqError, CLIENT_ID};
 
 const LOGO_ASSET: &str = "logo";
 const SITE_URL: &str = "https://cliplib.app";
@@ -146,17 +146,24 @@ fn run(rx: Receiver<Cmd>) {
         }
 
         let Some(activity) = want.clone() else {
-            if let Some(c) = conn.take() {
+            // the pipe stays open: a reconnect costs ~30 s of Discord holding the handshake,
+            // and the next game should show the moment it starts
+            if let Some(c) = conn.as_ref() {
                 nonce += 1;
-                let _ = request(
-                    &c,
+                let cleared = request(
+                    c,
                     &format!("p{nonce}"),
                     "SET_ACTIVITY",
                     json!({ "pid": std::process::id() }),
-                    Duration::from_secs(2),
+                    Duration::from_secs(5),
                 );
-                info!("presence: cleared");
                 sent_at.push_back(Instant::now());
+                if cleared.is_ok() {
+                    info!("presence: cleared");
+                } else {
+                    // a stuck pipe: dropping it also clears, Discord ends a gone client's activity
+                    conn = None;
+                }
             }
             shown = None;
             shown_game = None;
@@ -171,7 +178,9 @@ fn run(rx: Receiver<Cmd>) {
                 Ok(c) => conn = Some(c),
                 Err(e) => {
                     debug!("presence: not connected: {e:#}");
-                    next_connect = Instant::now() + RECONNECT_EVERY;
+                    // a full RPC server only fills further with every retry
+                    let wait = if is_capacity_error(&e) { RECONNECT_EVERY * 4 } else { RECONNECT_EVERY };
+                    next_connect = Instant::now() + wait;
                     continue;
                 }
             }

@@ -6,6 +6,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::windows::io::AsRawHandle;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -31,6 +33,18 @@ pub type Frame = (u32, Value);
 pub struct Connection {
     writer: Mutex<File>,
     pub frames: Receiver<Frame>,
+    /// set on drop: the reader holds its own handle to the pipe, and Discord counts the
+    /// connection as open until that one closes too. Leaked readers filled Discord up until it
+    /// refused every new connection with 1006 "Server at capacity".
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // tell Discord we're leaving, as the protocol expects, before the handles close
+        let _ = self.send(OP_CLOSE, &serde_json::json!({}));
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Connection {
@@ -44,13 +58,16 @@ impl Connection {
                         .try_clone()
                         .map_err(|e| anyhow!("clone pipe handle: {e}"))?;
                     let (tx, rx) = crossbeam_channel::unbounded();
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let reader_stop = Arc::clone(&stop);
                     std::thread::Builder::new()
                         .name("clipdip-discord-rx".into())
-                        .spawn(move || read_loop(reader, tx))
+                        .spawn(move || read_loop(reader, tx, reader_stop))
                         .map_err(|e| anyhow!("spawn reader: {e}"))?;
                     return Ok(Self {
                         writer: Mutex::new(file),
                         frames: rx,
+                        stop,
                     });
                 }
                 Err(_) => continue,
@@ -62,10 +79,13 @@ impl Connection {
     /// Serializes `payload` to JSON, framed with the opcode + length header.
     pub fn send(&self, op: u32, payload: &Value) -> Result<()> {
         let data = serde_json::to_vec(payload)?;
+        // header and body in one write, the way other RPC clients send a frame
+        let mut frame = Vec::with_capacity(8 + data.len());
+        frame.extend_from_slice(&op.to_le_bytes());
+        frame.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&data);
         let mut f = self.writer.lock();
-        f.write_all(&op.to_le_bytes())?;
-        f.write_all(&(data.len() as u32).to_le_bytes())?;
-        f.write_all(&data)?;
+        f.write_all(&frame)?;
         f.flush()?;
         Ok(())
     }
@@ -87,10 +107,14 @@ impl Connection {
 /// Never blocks in `ReadFile`: since `try_clone` shares the file object with
 /// the writer, a blocking read would deadlock the request/response cycle.
 /// `PeekNamedPipe` polls for available bytes instead, sleeping between peeks.
-fn read_loop(mut reader: File, tx: Sender<Frame>) {
+fn read_loop(mut reader: File, tx: Sender<Frame>, stop: Arc<AtomicBool>) {
     let handle = HANDLE(reader.as_raw_handle() as _);
     let mut acc: Vec<u8> = Vec::new();
     loop {
+        // the connection was dropped: returning drops our handle, which closes the pipe
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         let mut avail: u32 = 0;
         // err means pipe closed/broken
         if unsafe { PeekNamedPipe(handle, None, 0, None, Some(&mut avail), None) }.is_err() {
@@ -125,6 +149,26 @@ fn read_loop(mut reader: File, tx: Sender<Frame>) {
             if tx.send((op, val)).is_err() {
                 return; // manager gone
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs Discord running, takes about a minute. A reconnect from the same process gets READY
+    /// only after Discord's ~30 s hold; this must still succeed, and dropped connections must
+    /// not pile up into 1006 "Server at capacity".
+    #[test]
+    #[ignore]
+    fn reconnects_wait_out_discords_hold() {
+        for i in 0..3 {
+            let t = std::time::Instant::now();
+            let conn = Connection::connect().expect("Discord running");
+            crate::handshake(&conn, crate::CLIENT_ID).unwrap_or_else(|e| panic!("round {i}: {e:#}"));
+            eprintln!("round {i}: READY after {:?}", t.elapsed());
+            drop(conn);
         }
     }
 }

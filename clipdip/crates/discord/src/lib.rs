@@ -36,6 +36,13 @@ const REDIRECT_URI: &str = "http://localhost";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Reconnect delay after the pipe drops or Discord closes.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(3);
+/// After a client disconnects, Discord holds the next handshake from the same process for
+/// about 30 s (measured: READY after 29 s, every time). Giving up sooner and retrying only
+/// restarts that wait, so the old 10 s timeout never connected again.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(45);
+/// Discord closed us with 1006 "Server at capacity": its local RPC server is full, and every
+/// retry is one more connection, so wait this long instead.
+const CAPACITY_BACKOFF: Duration = Duration::from_secs(60);
 /// Refresh this long before expiry so a poll never races it.
 const REFRESH_SLACK: Duration = Duration::from_secs(6 * 3600);
 /// Backoff for a transient token-endpoint failure, without tearing down the RPC session.
@@ -278,15 +285,20 @@ impl Manager {
                 continue;
             }
 
+            let mut wait = RECONNECT_BACKOFF;
             if let Err(e) = self.session(has_token) {
                 if !self.stopped() {
                     debug!("discord session ended: {e:#}");
+                }
+                if is_capacity_error(&e) {
+                    warn!("discord: RPC server at capacity, retrying in {CAPACITY_BACKOFF:?}");
+                    wait = CAPACITY_BACKOFF;
                 }
             }
             if self.stopped() {
                 break;
             }
-            self.sleep_backoff();
+            self.sleep_backoff(wait);
         }
         info!("discord manager stopped");
     }
@@ -648,10 +660,10 @@ impl Manager {
 
     /// Only a Connect arriving DURING the wait cuts it short; a flag already
     /// armed on entry still serves the full backoff, else it spins at 200ms.
-    fn sleep_backoff(&self) {
+    fn sleep_backoff(&self, wait: Duration) {
         let armed_on_entry = self.want_authorize.load(Ordering::Relaxed);
         let mut waited = Duration::ZERO;
-        while waited < RECONNECT_BACKOFF && !self.stopped() {
+        while waited < wait && !self.stopped() {
             std::thread::sleep(Duration::from_millis(200));
             waited += Duration::from_millis(200);
             self.drain_commands();
@@ -677,7 +689,7 @@ impl Manager {
 /// Send the handshake and wait for the `READY` dispatch.
 fn handshake(conn: &Connection, client_id: &str) -> anyhow::Result<()> {
     conn.send(OP_HANDSHAKE, &json!({ "v": 1, "client_id": client_id }))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
     loop {
         let rem = deadline
             .checked_duration_since(Instant::now())
@@ -687,7 +699,8 @@ fn handshake(conn: &Connection, client_id: &str) -> anyhow::Result<()> {
                 if op == OP_PING {
                     let _ = conn.pong(&val);
                 } else if op == OP_CLOSE {
-                    anyhow::bail!("pipe closed during handshake");
+                    // keep Discord's reason, "Server at capacity" changes how long we wait
+                    anyhow::bail!("pipe closed during handshake: {val}");
                 } else if val.get("evt").and_then(Value::as_str) == Some("READY") {
                     return Ok(());
                 }
@@ -696,6 +709,11 @@ fn handshake(conn: &Connection, client_id: &str) -> anyhow::Result<()> {
             Err(RecvTimeoutError::Disconnected) => anyhow::bail!("pipe closed during handshake"),
         }
     }
+}
+
+/// Discord's RPC server refused the connection because it holds too many.
+fn is_capacity_error(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("Server at capacity")
 }
 
 /// Send a `FRAME` command and wait for the matching-nonce response,
