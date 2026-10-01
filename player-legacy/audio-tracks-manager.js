@@ -13,6 +13,13 @@ const COLOR_PALETTE = [
   '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'
 ];
 const BOOSTED_COLOR = '#f59e0b';
+// this install's own default colors, rolled once in main/track-palette.js; COLOR_PALETTE when
+// the prefs have none (read failed, or an old main)
+const PALETTE_KEY = 'track-palette';
+const paletteOf = (prefs) => {
+  const colors = prefs && prefs[PALETTE_KEY] && prefs[PALETTE_KEY].colors;
+  return Array.isArray(colors) && colors.length > 0 && colors.every((c) => /^#[0-9a-f]{6}$/i.test(c)) ? colors : COLOR_PALETTE;
+};
 const ICON_X = '<svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>';
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // Snap to unity (1.0 gain == 100%) within ±5% to give the slider a detent.
@@ -111,6 +118,7 @@ class AudioTracksManager {
 
     const persisted = (persistedState && persistedState.tracks) || {};
     const prefs = globalPrefs || {};
+    this.palette = paletteOf(prefs);
     // loudness-matched gain for tracks without their own level; null when matching is off
     // or the clip has a custom master volume
     this.normalizedGain = Number.isFinite(persistedState?.normalizedGain) ? persistedState.normalizedGain : null;
@@ -153,9 +161,10 @@ class AudioTracksManager {
       // `hidden` = removed to the floating tray (global pref); `muted` = right-click soft
       // mute, per-clip. Either silences the track.
       const hidden = globalPref.hidden !== undefined ? !!globalPref.hidden : hiddenByDefault(trackName);
+      const defaultColor = this.palette[meta.ordinal % this.palette.length];
       const color = typeof globalPref.color === 'string' && /^#[0-9a-f]{6}$/i.test(globalPref.color)
         ? globalPref.color
-        : COLOR_PALETTE[meta.ordinal % COLOR_PALETTE.length];
+        : defaultColor;
 
       // matched gains above 2x reach the node unclamped; the row shows the clamp
       gainNode.gain.setValueAtTime((hidden || muted) ? 0 : (normalized ? trueVolume : volume), this.audioContext.currentTime);
@@ -178,7 +187,8 @@ class AudioTracksManager {
         // custom: the user set this track's level, persisted and never overwritten by matching
         custom,
         normalized,
-        color
+        color,
+        defaultColor
       });
     }
 
@@ -661,7 +671,7 @@ class AudioTracksManager {
     const el = document.createElement('div');
     el.className = 'mixer__palette';
     el.hidden = true;
-    COLOR_PALETTE.forEach((color) => {
+    this.palette.forEach((color) => {
       const sw = document.createElement('button');
       sw.type = 'button';
       sw.className = 'mixer__swatch';
@@ -671,7 +681,8 @@ class AudioTracksManager {
       sw.addEventListener('click', (e) => {
         e.stopPropagation();
         this._applyColorByName(track.name, color);
-        this._persistGlobal(track, { color });
+        // the track's own default drops the key, so a saved color always means a real pick
+        this._persistGlobal(track, { color: color.toLowerCase() === track.defaultColor.toLowerCase() ? null : color });
         this._closePalette();
       });
       el.appendChild(sw);
@@ -899,7 +910,6 @@ class AudioTracksManager {
 // single-track clips: the audio stays on <video> and the master gain, so this is only the mixer's
 // look over the player's volume. one row, no name, no hide or mute; the colour tints the timeline
 const SINGLE_DEFAULT_COLOR = '#ffffff';
-const SINGLE_PALETTE = [SINGLE_DEFAULT_COLOR, ...COLOR_PALETTE];
 // own key in trackPreferences.json so it never shares a colour with a multi-track stream name
 const SINGLE_PREF_KEY = 'single-track';
 
@@ -914,6 +924,7 @@ class SingleTrackMixer {
     this.onReset = onReset;
     this.onPersistGlobal = onPersistGlobal || (() => {});
     const pref = (globalPrefs && globalPrefs[SINGLE_PREF_KEY]) || {};
+    this.palette = [SINGLE_DEFAULT_COLOR, ...paletteOf(globalPrefs)];
     this.color = typeof pref.color === 'string' && /^#[0-9a-f]{6}$/i.test(pref.color) ? pref.color : SINGLE_DEFAULT_COLOR;
     this.volume = 1;
     this.matched = false;
@@ -1012,7 +1023,7 @@ class SingleTrackMixer {
   _buildSwatches() {
     const { palette } = this._els;
     palette.innerHTML = '';
-    SINGLE_PALETTE.forEach((color) => {
+    this.palette.forEach((color) => {
       const sw = document.createElement('button');
       sw.type = 'button';
       sw.className = 'mixer__swatch';

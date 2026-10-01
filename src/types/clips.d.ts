@@ -556,6 +556,8 @@ export interface ClipsApi {
   getTrackState(...args: any[]): Promise<any>;
   saveTrackState(...args: any[]): Promise<any>;
   getTrackPreferences(...args: any[]): Promise<any>;
+  /** dev builds only: new palette, every saved track color dropped; resolves to the colors */
+  devRerollTrackPalette(): Promise<string[]>;
   saveTrackPreferences(...args: any[]): Promise<any>;
 
   loadGlobalTags(): Promise<any>;

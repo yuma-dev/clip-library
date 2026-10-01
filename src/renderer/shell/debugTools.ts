@@ -102,6 +102,18 @@ export function installDebugTools(): () => void {
   (window as unknown as { loadingScreenTest: typeof loadingScreenTest }).loadingScreenTest =
     loadingScreenTest;
 
+  // dev: __shuffleTrackColors() rolls a new track palette, drops every saved track color and
+  // reopens the open clip so the mixer repaints
+  if (import.meta.env.DEV) {
+    (window as unknown as Record<string, unknown>).__shuffleTrackColors = async () => {
+      const colors = await window.clips.devRerollTrackPalette();
+      const clip = window.legacyState?.currentClip;
+      if (clip?.originalName) await window.legacyPlayer?.openClip(clip.originalName, clip.customName);
+      console.log("track palette:", colors.map((c) => `%c ${c} `).join(""), ...colors.map((c) => `background:${c};color:#000`));
+      return colors;
+    };
+  }
+
   const onKeyDown = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
       loadingScreenTest.toggle();

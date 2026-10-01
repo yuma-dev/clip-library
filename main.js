@@ -1519,6 +1519,11 @@ ipcMain.handle("save-track-preferences", async (event, trackName, patch) => {
   return metadataModule.saveTrackPreferences(trackName, patch, app.getPath.bind(app));
 });
 
+// dev: window.__shuffleTrackColors() in the renderer console
+if (isDev) {
+  ipcMain.handle("dev-reroll-track-palette", async () => metadataModule.rerollTrackPalette(app.getPath.bind(app)));
+}
+
 ipcMain.handle("get-trim", async (event, clipName) => {
   return metadataModule.getTrimData(clipName, getSettings);
 });

@@ -206,6 +206,7 @@ const api = {
   getTrackState: invoke("get-track-state"),
   saveTrackState: invoke("save-track-state"),
   getTrackPreferences: invoke("get-track-preferences"),
+  devRerollTrackPalette: invoke("dev-reroll-track-palette"),
   saveTrackPreferences: invoke("save-track-preferences"),
 
   // global tags

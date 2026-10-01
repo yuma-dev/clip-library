@@ -5,6 +5,7 @@ const fs = require('fs').promises;
 const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 const { logActivity } = require('../utils/activity-tracker');
+const trackPalette = require('./track-palette');
 
 // file utilities
 
@@ -345,29 +346,76 @@ async function saveTrackState(clipName, trackState, getSettings) {
 // track prefs keyed by name: color+hidden shared across clips, volume stays per-clip.
 // stored at userData/trackPreferences.json; cached since only this module writes it
 let trackPrefsCache = null;
+// not a track: this install's default colors, see track-palette.js. same reserved-name trick as
+// the single-track mixer's 'single-track'
+const PALETTE_KEY = 'track-palette';
+
+let trackPrefsLoading = null;
 
 async function getTrackPreferences(getAppPath) {
   if (trackPrefsCache) return trackPrefsCache;
+  // the open batch and the ipc call land together on the first open; one read, one palette roll
+  trackPrefsLoading ??= loadTrackPreferences(getAppPath)
+    .then((prefs) => {
+      trackPrefsCache = prefs;
+      return prefs;
+    })
+    .finally(() => {
+      trackPrefsLoading = null;
+    });
+  return trackPrefsLoading;
+}
+
+async function loadTrackPreferences(getAppPath) {
+  const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
   let raw;
+  let prefs;
   try {
-    const prefsPath = path.join(getAppPath('userData'), 'trackPreferences.json');
     raw = await fs.readFile(prefsPath, 'utf8');
     const parsed = JSON.parse(raw);
-    trackPrefsCache = (parsed && typeof parsed === 'object') ? parsed : {};
+    prefs = (parsed && typeof parsed === 'object') ? parsed : {};
   } catch (error) {
-    if (error.code !== 'ENOENT') logger.error('Error reading track preferences:', error);
-    // Every track colour and hidden flag the user set is gone, and the next
-    // save writes the empty cache back over the file.
-    if (raw !== undefined) {
-      telemetry.event('metadata_parse_failed', {
-        kind: telemetry.KIND.DATA_LOSS,
-        severity: telemetry.SEVERITY.ERROR,
-        context: { kind: 'track_prefs', file_bytes: Buffer.byteLength(raw, 'utf8') }
-      });
+    if (error.code !== 'ENOENT') {
+      logger.error('Error reading track preferences:', error);
+      // Every track colour and hidden flag the user set is gone, and the next
+      // save writes the empty cache back over the file.
+      if (raw !== undefined) {
+        telemetry.event('metadata_parse_failed', {
+          kind: telemetry.KIND.DATA_LOSS,
+          severity: telemetry.SEVERITY.ERROR,
+          context: { kind: 'track_prefs', file_bytes: Buffer.byteLength(raw, 'utf8') }
+        });
+      }
+      // no palette write over a file that failed to read, its bytes stay for this run
+      return {};
     }
-    trackPrefsCache = {};
+    prefs = {};
   }
-  return trackPrefsCache;
+  if (trackPalette.isPalette(prefs[PALETTE_KEY]?.colors)) return prefs;
+  // this install's colors, rolled the first time they're missing and kept after
+  const next = { ...prefs, [PALETTE_KEY]: { colors: trackPalette.makePalette() } };
+  try {
+    await writeFileAtomically(prefsPath, JSON.stringify(next));
+    return next;
+  } catch (error) {
+    logger.error('Error saving the track palette:', error);
+    return prefs;
+  }
+}
+
+/** dev: a fresh palette and every saved track color dropped, hidden flags stay */
+async function rerollTrackPalette(getAppPath) {
+  const prefs = await getTrackPreferences(getAppPath);
+  const next = {};
+  for (const [name, pref] of Object.entries(prefs)) {
+    if (name === PALETTE_KEY) continue;
+    const { color, ...rest } = pref || {};
+    if (Object.keys(rest).length) next[name] = rest;
+  }
+  next[PALETTE_KEY] = { colors: trackPalette.makePalette() };
+  await writeFileAtomically(path.join(getAppPath('userData'), 'trackPreferences.json'), JSON.stringify(next));
+  trackPrefsCache = next;
+  return next[PALETTE_KEY].colors;
 }
 
 async function saveTrackPreferences(trackName, patch, getAppPath) {
@@ -1036,6 +1084,7 @@ module.exports = {
   // Global per-device track preferences (color, hidden)
   getTrackPreferences,
   saveTrackPreferences,
+  rerollTrackPalette,
 
   // Clip tags
   getClipTags,
