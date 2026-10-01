@@ -5,7 +5,7 @@
 //! ```text
 //! {output_dir}/
 //!   foo-1700000000.mp4
-//!   .clip_metadata/foo-1700000000.mp4.gameinfo   JSON: title + icon_file
+//!   .clip_metadata/foo-1700000000.mp4.gameinfo   JSON: title, icon_file, exe_path, game
 //!   icons/Game.png                               PNG (deduped per-exe)
 //! ```
 
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clipdip_core::config::MetadataConfig;
+use clipdip_gamedb::{Game, GameDb};
 use tracing::{debug, warn};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -92,13 +93,21 @@ pub struct ResolvedMetadata {
     /// set when the exe matched ignored_processes; write_gameinfo skips creating
     /// .clip_metadata/ entirely when true.
     pub ignored: bool,
+    pub game: Option<Game>,
 }
 
 /// runs in parallel with pipeline.save_clip() so the 200ms SendMessageTimeoutW
-/// calls and icon GDI/DIB work don't add to save latency.
-pub fn resolve(snap: ForegroundSnapshot, cfg: &MetadataConfig) -> ResolvedMetadata {
+/// calls and icon GDI/DIB work don't add to save latency. `live_game` is the
+/// watcher's session when it belongs to this pid, so the save skips matching.
+pub fn resolve(
+    snap: ForegroundSnapshot,
+    cfg: &MetadataConfig,
+    games: &GameDb,
+    live_game: Option<Game>,
+) -> ResolvedMetadata {
     let hwnd = HWND(snap.hwnd as *mut _);
-    let title = window_title(hwnd).unwrap_or_else(|| "Unknown".to_string());
+    let raw_title = window_title(hwnd);
+    let title = raw_title.clone().unwrap_or_else(|| "Unknown".to_string());
     let exe_path = exe_path_for_pid(snap.pid);
     let exe_basename = exe_path.as_deref().and_then(file_name_lossy);
 
@@ -111,9 +120,16 @@ pub fn resolve(snap: ForegroundSnapshot, cfg: &MetadataConfig) -> ResolvedMetada
                 icon_filename: None,
                 icon_png: None,
                 ignored: true,
+                game: None,
             };
         }
     }
+
+    let game = live_game.or_else(|| {
+        exe_path
+            .as_deref()
+            .and_then(|p| games.resolve(Some(p), None, &mut || raw_title.clone()))
+    });
 
     let (icon_filename, icon_png) = if cfg.capture_icon {
         match (exe_path.as_deref(), exe_basename.as_deref()) {
@@ -143,6 +159,7 @@ pub fn resolve(snap: ForegroundSnapshot, cfg: &MetadataConfig) -> ResolvedMetada
         icon_filename,
         icon_png,
         ignored: false,
+        game,
     }
 }
 
@@ -200,6 +217,11 @@ pub fn write_gameinfo(
                 .map(|p| p.to_string_lossy().to_string())
                 .into(),
         );
+        if let Some(g) = &r.game {
+            if let Ok(v) = serde_json::to_value(g) {
+                json.insert("game".into(), v);
+            }
+        }
     }
     if let Some(d) = discord {
         json.insert("discord".into(), d.clone());
@@ -221,7 +243,7 @@ fn file_name_lossy(p: &Path) -> Option<String> {
     p.file_name().map(|s| s.to_string_lossy().to_string())
 }
 
-fn window_title(hwnd: HWND) -> Option<String> {
+pub(crate) fn window_title(hwnd: HWND) -> Option<String> {
     unsafe {
         if !IsWindow(hwnd).as_bool() {
             return None;
@@ -260,7 +282,7 @@ fn window_title(hwnd: HWND) -> Option<String> {
     }
 }
 
-fn exe_path_for_pid(pid: u32) -> Option<PathBuf> {
+pub(crate) fn exe_path_for_pid(pid: u32) -> Option<PathBuf> {
     if pid == 0 {
         return None;
     }

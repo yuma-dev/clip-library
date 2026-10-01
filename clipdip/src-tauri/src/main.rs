@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod game_presence;
+mod game_watch;
 mod machine_profile;
 mod metadata;
 mod shutdown_watch;
@@ -193,6 +195,12 @@ struct AppState {
     /// most recent `pipeline-error`, for the control server's `status`;
     /// cleared on a successful pipeline (re)start.
     pipeline_error: Arc<Mutex<Option<String>>>,
+    /// matches exes to games, shared by live detection and the save path
+    gamedb: Arc<clipdip_gamedb::GameDb>,
+    /// the game being played right now, kept by the foreground watcher
+    game_session: game_watch::SessionSlot,
+    /// the game rich presence, with the session's clip counts
+    game_presence: Arc<game_presence::GamePresence>,
 }
 
 /// emits `pipeline-error` and retains it for the control server's `status` command.
@@ -2515,6 +2523,15 @@ fn run_capture_loop(
                     .try_state::<AppState>()
                     .and_then(|s| s.discord.roster());
 
+                // the watcher already matched this window's game; only a different
+                // foreground process needs the matcher at save time
+                let gamedb = app.try_state::<AppState>().map(|s| s.gamedb.clone());
+                let live_game = foreground.and_then(|f| {
+                    let state = app.try_state::<AppState>()?;
+                    let session = state.game_session.lock().unwrap();
+                    session.as_ref().filter(|s| s.pid == f.pid).map(|s| s.game.clone())
+                });
+
                 // re-read config so notification settings reflect changes since the pipeline started
                 let cur = clipdip_core::config::Config::load_or_default(&config_path)
                     .unwrap_or_default();
@@ -2615,11 +2632,12 @@ fn run_capture_loop(
                     // SendMessageTimeoutW calls + GDI icon walk would otherwise add ~0.5s if run
                     // serially after.
                     let meta_thread = if cur.metadata.enabled {
-                        foreground.map(|snap| {
+                        foreground.zip(gamedb.clone()).map(|(snap, db)| {
                             let meta_cfg = cur.metadata.clone();
+                            let live_game = live_game.clone();
                             s.spawn(move || {
                                 let t_start = t0.elapsed().as_millis();
-                                let r = metadata::resolve(snap, &meta_cfg);
+                                let r = metadata::resolve(snap, &meta_cfg, &db, live_game);
                                 if prof {
                                     let t_end = t0.elapsed().as_millis();
                                     info!(
@@ -2669,6 +2687,10 @@ fn run_capture_loop(
                             } else {
                                 None
                             };
+                            if let Some(state) = app.try_state::<AppState>() {
+                                let game_id = resolved.as_ref().and_then(|r| r.game.as_ref()).map(|g| g.id.as_str());
+                                state.game_presence.on_clip_saved(game_id);
+                            }
                             if resolved.is_some() || discord_json.is_some() {
                                 if let Err(e) = metadata::write_gameinfo(
                                     &path,
@@ -3097,6 +3119,11 @@ fn handle_cli_query_flags() {
                 })),
                 None => Err("--preview-filename requires a template argument".into()),
             })
+        } else if let Some(pos) = argv.iter().position(|a| a == "--resolve-games") {
+            Some(match argv.get(pos + 1) {
+                Some(file) => resolve_games_cli(std::path::Path::new(file)),
+                None => Err("--resolve-games requires an input file".into()),
+            })
         } else {
             return;
         };
@@ -3114,6 +3141,45 @@ fn handle_cli_query_flags() {
         // Payloads above are always objects; unreachable in practice.
         _ => std::process::exit(1),
     }
+}
+
+/// Batch matcher for ClipLib's backfill of old clips. Input is a JSON array of
+/// `{ key, exe_path?, stem?, title? }`; prints `{ index_version, results: {key: game|null} }`.
+/// Fetches the Discord list first when the cache is missing or a week old.
+fn resolve_games_cli(file: &std::path::Path) -> Result<serde_json::Value, String> {
+    #[derive(serde::Deserialize)]
+    struct Item {
+        key: String,
+        #[serde(default)]
+        exe_path: Option<String>,
+        #[serde(default)]
+        stem: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    }
+    let raw = std::fs::read(file).map_err(|e| format!("read {}: {e}", file.display()))?;
+    let items: Vec<Item> = serde_json::from_slice(&raw).map_err(|e| format!("bad input: {e}"))?;
+
+    let db = clipdip_gamedb::GameDb::open();
+    let refresh_error = db.refresh_if_stale().err().map(|e| format!("{e:#}"));
+
+    let mut results = serde_json::Map::new();
+    for it in items {
+        let path = it.exe_path.as_deref().map(std::path::Path::new);
+        let title = it.title.clone();
+        let game = db.resolve(path, it.stem.as_deref(), &mut || title.clone());
+        results.insert(
+            it.key,
+            game.and_then(|g| serde_json::to_value(g).ok())
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    Ok(serde_json::json!({
+        "index_version": db.version(),
+        "apps": db.app_count(),
+        "refresh_error": refresh_error,
+        "results": results,
+    }))
 }
 
 // control server
@@ -3226,6 +3292,17 @@ fn control_dispatch(app: &AppHandle, token: &str, line: &str) -> serde_json::Val
     }
 }
 
+/// `{ game, started_at_ms, presence }`; `presence` is true when Discord is
+/// being told about the game right now.
+fn game_status(state: &AppState) -> serde_json::Value {
+    let session = state.game_session.lock().unwrap().clone();
+    serde_json::json!({
+        "game": session.as_ref().map(|s| &s.game),
+        "started_at_ms": session.as_ref().map(|s| s.started_at_ms),
+        "presence": state.game_presence.showing(),
+    })
+}
+
 /// control command set: thin adapters over the same functions the Tauri
 /// commands use, so behavior matches the legacy window and ClipLib.
 fn run_control_command(
@@ -3245,7 +3322,14 @@ fn run_control_command(
             "discord": state.discord.status(),
             "audio_sources": state.audio_status.lock().unwrap().clone(),
             "version": env!("CARGO_PKG_VERSION"),
+            "game": game_status(&state),
         })),
+        // ClipLib polls this to step its own presence aside while a game shows
+        "game_status" => Ok(game_status(&state)),
+        "refresh_presence" => {
+            state.game_presence.apply();
+            Ok(game_status(&state))
+        }
         "get_pipeline_running" => Ok(serde_json::json!({
             "running": get_pipeline_running(state),
         })),
@@ -3436,6 +3520,16 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("."));
     let discord = Arc::new(clipdip_discord::spawn(discord_dir, discord_enabled));
 
+    // live game detection feeds the rich presence and the save path's game field
+    // its threads start in setup, a --reload invocation that only forwards its argv runs none
+    let gamedb = clipdip_gamedb::GameDb::open();
+    let game_session: game_watch::SessionSlot = Arc::new(Mutex::new(None));
+    let game_presence = game_presence::GamePresence::new(
+        Arc::new(clipdip_discord::spawn_presence()),
+        config_path.clone(),
+        game_session.clone(),
+    );
+
     // opt-out diagnostics client reports failures/crashes + a heartbeat; inert
     // without a compiled-in CLIPDIP_INGEST_KEY or if opted out. wired to the
     // log-level reload handle for server-triggered debug.
@@ -3527,6 +3621,9 @@ fn main() {
             discord: discord.clone(),
             diagnostics: diagnostics.clone(),
             pipeline_error: Arc::new(Mutex::new(None)),
+            gamedb: gamedb.clone(),
+            game_session: game_session.clone(),
+            game_presence: game_presence.clone(),
         })
         .setup(move |app| {
             // a control invocation with no running instance becomes the primary
@@ -3647,6 +3744,12 @@ fn main() {
             // react to audio devices coming/going: a reconnected headset or default
             // switch re-points sources instead of leaving silent tracks until reboot.
             spawn_audio_device_watcher(loop_tx.clone());
+
+            gamedb.spawn_refresher();
+            game_watch::spawn(gamedb.clone(), game_session.clone(), {
+                let game_presence = game_presence.clone();
+                move |session| game_presence.on_session(session)
+            });
 
             // control surface for ClipLib's settings UI (TCP JSON-lines on localhost; port + token
             // published via control.json)

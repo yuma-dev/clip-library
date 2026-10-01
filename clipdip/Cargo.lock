@@ -483,6 +483,7 @@ dependencies = [
  "clipdip-core",
  "clipdip-diagnostics",
  "clipdip-discord",
+ "clipdip-gamedb",
  "clipdip-hotkey",
  "clipdip-profile",
  "clipdip-ringbuf",
@@ -613,6 +614,19 @@ dependencies = [
  "tracing",
  "windows 0.58.0",
  "windows-core 0.58.0",
+]
+
+[[package]]
+name = "clipdip-gamedb"
+version = "3.6.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]

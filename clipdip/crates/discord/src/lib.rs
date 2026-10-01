@@ -10,6 +10,9 @@
 
 mod ipc;
 mod oauth;
+mod presence;
+
+pub use presence::{spawn_presence, GameActivity, PresenceHandle};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -380,31 +383,8 @@ impl Manager {
         }
     }
 
-    /// Send the handshake and wait for the `READY` dispatch.
     fn handshake(&self, conn: &Connection) -> anyhow::Result<()> {
-        conn.send(
-            OP_HANDSHAKE,
-            &json!({ "v": 1, "client_id": CLIENT_ID }),
-        )?;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let rem = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or_else(|| anyhow::anyhow!("handshake timed out"))?;
-            match conn.frames.recv_timeout(rem) {
-                Ok((op, val)) => {
-                    if op == OP_PING {
-                        let _ = conn.pong(&val);
-                    } else if op == OP_CLOSE {
-                        anyhow::bail!("pipe closed during handshake");
-                    } else if val.get("evt").and_then(Value::as_str) == Some("READY") {
-                        return Ok(());
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => anyhow::bail!("handshake timed out"),
-                Err(RecvTimeoutError::Disconnected) => anyhow::bail!("pipe closed during handshake"),
-            }
-        }
+        handshake(conn, CLIENT_ID)
     }
 
     /// Prefers the cached access token so a plain reconnect never rotates
@@ -609,8 +589,6 @@ impl Manager {
         Ok(())
     }
 
-    /// Send a `FRAME` command and wait for the matching-nonce response
-    /// answering pings while it waits.
     fn request(
         &self,
         conn: &Connection,
@@ -618,39 +596,7 @@ impl Manager {
         args: Value,
         timeout: Duration,
     ) -> Result<Value, ReqError> {
-        let nonce = self.next_nonce();
-        if conn.send_command(cmd, args, &nonce).is_err() {
-            return Err(ReqError::Closed);
-        }
-        debug!("discord: -> sent '{cmd}' (nonce {nonce}), awaiting response");
-        let deadline = Instant::now() + timeout;
-        loop {
-            let Some(rem) = deadline.checked_duration_since(Instant::now()) else {
-                return Err(ReqError::Timeout);
-            };
-            match conn.frames.recv_timeout(rem) {
-                Ok((op, val)) => {
-                    if op == OP_PING {
-                        let _ = conn.pong(&val);
-                        continue;
-                    }
-                    if op == OP_CLOSE {
-                        return Err(ReqError::Closed);
-                    }
-                    if val.get("nonce").and_then(Value::as_str) == Some(nonce.as_str()) {
-                        if val.get("evt").and_then(Value::as_str) == Some("ERROR") {
-                            return Err(ReqError::Rpc(
-                                val.get("data").cloned().unwrap_or(Value::Null),
-                            ));
-                        }
-                        return Ok(val.get("data").cloned().unwrap_or(Value::Null));
-                    }
-                    // some other dispatch/response, ignore and keep waiting
-                }
-                Err(RecvTimeoutError::Timeout) => return Err(ReqError::Timeout),
-                Err(RecvTimeoutError::Disconnected) => return Err(ReqError::Closed),
-            }
-        }
+        request(conn, &self.next_nonce(), cmd, args, timeout)
     }
 
     // small helpers
@@ -725,6 +671,71 @@ impl Manager {
 
     fn stopped(&self) -> bool {
         self.shutdown.load(Ordering::Relaxed)
+    }
+}
+
+/// Send the handshake and wait for the `READY` dispatch.
+fn handshake(conn: &Connection, client_id: &str) -> anyhow::Result<()> {
+    conn.send(OP_HANDSHAKE, &json!({ "v": 1, "client_id": client_id }))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let rem = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| anyhow::anyhow!("handshake timed out"))?;
+        match conn.frames.recv_timeout(rem) {
+            Ok((op, val)) => {
+                if op == OP_PING {
+                    let _ = conn.pong(&val);
+                } else if op == OP_CLOSE {
+                    anyhow::bail!("pipe closed during handshake");
+                } else if val.get("evt").and_then(Value::as_str) == Some("READY") {
+                    return Ok(());
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => anyhow::bail!("handshake timed out"),
+            Err(RecvTimeoutError::Disconnected) => anyhow::bail!("pipe closed during handshake"),
+        }
+    }
+}
+
+/// Send a `FRAME` command and wait for the matching-nonce response,
+/// answering pings while it waits.
+fn request(
+    conn: &Connection,
+    nonce: &str,
+    cmd: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<Value, ReqError> {
+    if conn.send_command(cmd, args, nonce).is_err() {
+        return Err(ReqError::Closed);
+    }
+    debug!("discord: -> sent '{cmd}' (nonce {nonce}), awaiting response");
+    let deadline = Instant::now() + timeout;
+    loop {
+        let Some(rem) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(ReqError::Timeout);
+        };
+        match conn.frames.recv_timeout(rem) {
+            Ok((op, val)) => {
+                if op == OP_PING {
+                    let _ = conn.pong(&val);
+                    continue;
+                }
+                if op == OP_CLOSE {
+                    return Err(ReqError::Closed);
+                }
+                if val.get("nonce").and_then(Value::as_str) == Some(nonce) {
+                    if val.get("evt").and_then(Value::as_str) == Some("ERROR") {
+                        return Err(ReqError::Rpc(val.get("data").cloned().unwrap_or(Value::Null)));
+                    }
+                    return Ok(val.get("data").cloned().unwrap_or(Value::Null));
+                }
+                // some other dispatch/response, ignore and keep waiting
+            }
+            Err(RecvTimeoutError::Timeout) => return Err(ReqError::Timeout),
+            Err(RecvTimeoutError::Disconnected) => return Err(ReqError::Closed),
+        }
     }
 }
 

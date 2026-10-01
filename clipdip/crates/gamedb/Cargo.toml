@@ -1,0 +1,16 @@
+[package]
+name = "clipdip-gamedb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+directories.workspace = true
+# discord's detectable list, fetched weekly with If-None-Match; gzip cuts 13 MB to ~2 MB
+ureq = { version = "2", features = ["json"] }
