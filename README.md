@@ -97,4 +97,4 @@ ClipDip’s built-in recording currently requires Windows and an NVIDIA GPU. You
 
 ---
 
-[Development](DEVELOPMENT.md) · [Report an issue](https://github.com/yuma-dev/clip-library/issues) · [Privacy](PRIVACY.md) · [Terms](TERMS.md)
+[Report an issue](https://github.com/yuma-dev/clip-library/issues) · [Privacy](PRIVACY.md) · [Terms](TERMS.md)

@@ -267,8 +267,7 @@ the fresh list and tags commit about 1.3 s later than they otherwise would.
 ## Tooling
 
 This file documents packaged startup tooling. The root `benchmark*` npm
-commands are a separate source-level React scenario runner documented in
-`DEVELOPMENT.md`.
+commands are a separate source-level React scenario runner.
 
 - `npm run bench:build` builds the renderer and packages `dist/win-unpacked`
   without the installer or the clipdip build.

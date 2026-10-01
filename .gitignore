@@ -53,3 +53,10 @@ CLAUDE.md
 
 # local mcp config
 .mcp.json
+
+# internal docs and agent config, local only
+DEVELOPMENT.md
+DESIGN-SYSTEM.md
+ASSET-PIPELINE.md
+AGENTS.md
+.claude/
