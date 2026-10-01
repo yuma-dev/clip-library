@@ -25,7 +25,7 @@ function LibrarySearchScene(spec: ExportSpec): ReactElement {
   const tags={saved:new Set<string>(),temporary:new Set<string>(),isTemporary:false};
   const filteredClips=filterClips(clips,{query,tags,collection:"all",applyTags:false});
   const noop=()=>{};
-  const filter:UseLibraryFilter={query,setQuery:noop,collection:"all",setCollection:noop,allTags:["Epic","Favorite"],globalTags:["Epic","Favorite"],tags,selectedCount:2,totalCount:2,toggleTag:noop,focusTag:noop,showAllTags:noop,hideAllTags:noop,clearFocus:noop,addGlobalTag:noop,renameGlobalTag:noop,removeGlobalTag:noop,filteredClips};
+  const filter:UseLibraryFilter={query,setQuery:noop,collection:"all",setCollection:noop,game:null,setGame:noop,allTags:["Epic","Favorite"],globalTags:["Epic","Favorite"],tags,selectedCount:2,totalCount:2,toggleTag:noop,focusTag:noop,showAllTags:noop,hideAllTags:noop,clearFocus:noop,addGlobalTag:noop,renameGlobalTag:noop,removeGlobalTag:noop,filteredClips};
   return <div id="export-root" style={{position:"relative",width:1000,height:480,padding:50}}>
     <div data-layer="background" style={{position:"absolute",inset:0,background:spec.background ?? "#050608"}}/>
     <div data-layer="search" style={{position:"relative",width:600,marginBottom:35}}><RailSearch filter={filter} clips={clips}/></div>

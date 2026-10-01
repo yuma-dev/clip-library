@@ -1,5 +1,5 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, FolderOpen, Plus, RotateCcw, Scissors, Search, Star, StarOff, Tag, Trash2, Upload } from "lucide-react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { Ban, Check, ChevronLeft, ChevronRight, FolderOpen, Gamepad2, Plus, RotateCcw, Scissors, Search, Star, StarOff, Tag, Trash2, Upload } from "lucide-react";
 import ContextMenu from "../ui/ContextMenu";
 import { MenuDivider, MenuItem, MenuList } from "../ui/Menu";
 import { useToast } from "../ui/Toast";
@@ -9,6 +9,8 @@ import { hideExportProgress, showExportProgress } from "../player/exportToast";
 import type { LocalClip } from "./types";
 import { Merge } from "lucide-react";
 import { mergePair, pairsFor } from "../storage/overlaps";
+import { getGameOfClip, getLibraryGames } from "./games";
+import type { GameSearchResult } from "../../types/clips";
 
 export interface ContextMenuHandle {
   /** With `selection` > 1 clip, menu switches to bulk mode: actions apply to all. */
@@ -26,7 +28,7 @@ interface ContextMenuHostProps {
   addGlobalTag: (tag: string) => void;
 }
 
-type View = "root" | "tags";
+type View = "root" | "tags" | "game";
 
 /**
  * Isolated context-menu host: own open/position/clip state so opening it does
@@ -42,6 +44,9 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
   const [tagMap, setTagMap] = useState<Map<string, Set<string>>>(new Map());
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const [gameQuery, setGameQuery] = useState("");
+  const [gameResults, setGameResults] = useState<GameSearchResult[]>([]);
+  const gameSearchRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
   const { confirm } = useConfirm();
 
@@ -53,6 +58,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
         setState({ x, y, clips });
         setView("root");
         setQuery("");
+        setGameQuery("");
         setTagMap(new Map(clips.map((c) => [c.originalName, new Set(c.tags)])));
       },
     }),
@@ -159,6 +165,54 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
     else toast.show(`Failed to delete ${failed} of ${targets.length} clips`, "error");
   };
 
+  // game panel: empty query lists the library's own games, typing searches Discord's list too
+  useEffect(() => {
+    if (view !== "game") return;
+    let alive = true;
+    const t = window.setTimeout(
+      () => {
+        window.clips
+          .searchGames(gameQuery, getLibraryGames())
+          .then((r) => {
+            if (alive) setGameResults(Array.isArray(r) ? r : []);
+          })
+          .catch(() => {
+            if (alive) setGameResults([]);
+          });
+      },
+      gameQuery ? 120 : 0,
+    );
+    return () => {
+      alive = false;
+      window.clearTimeout(t);
+    };
+  }, [view, gameQuery]);
+
+  // checked only when every clip in scope already has that game
+  const currentGame = useMemo(() => {
+    if (view !== "game" || clips.length === 0) return null;
+    const of = getGameOfClip();
+    const first = of.get(clips[0].originalName) ?? null;
+    return clips.every((c) => (of.get(c.originalName) ?? null) === first) ? first : null;
+  }, [view, clips]);
+
+  const pickGame = async (game: GameSearchResult | null) => {
+    const names = clips.map((c) => c.originalName);
+    close();
+    try {
+      await window.clips.setClipGame(names, game);
+      const what = multi ? `${names.length} clips` : "Clip";
+      toast.show(game ? `${what} set to ${game.name}` : `${what} marked as not a game`, "success");
+    } catch {
+      toast.show("Failed to set the game", "error");
+    }
+  };
+
+  const openGame = () => {
+    setView("game");
+    requestAnimationFrame(() => gameSearchRef.current?.focus());
+  };
+
   // tag panel
   const q = query.trim().toLowerCase();
   const shownTags = useMemo(() => {
@@ -232,6 +286,13 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
             <span className="menu-label">Manage tags</span>
             <ChevronRight size={14} className="ctx-submenu-caret" />
           </button>
+          <button type="button" role="menuitem" className="menu-item ctx-submenu" onClick={openGame}>
+            <span className="menu-icon">
+              <Gamepad2 size={15} />
+            </span>
+            <span className="menu-label">Set game</span>
+            <ChevronRight size={14} className="ctx-submenu-caret" />
+          </button>
           <MenuItem icon={allFavorite ? <StarOff size={15} /> : <Star size={15} />} onClick={toggleFavorite}>
             {allFavorite ? "Remove from favorites" : "Add to favorites"}
           </MenuItem>
@@ -257,6 +318,65 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
             {multi ? `Delete ${clips.length} clips` : "Delete"}
           </MenuItem>
         </MenuList>
+      ) : view === "game" ? (
+        <div className="menu ctx-tags">
+          <button type="button" className="ctx-tags-head" onClick={() => setView("root")}>
+            <ChevronLeft size={14} />
+            <span>{multi ? `Set game · ${clips.length} clips` : "Set game"}</span>
+          </button>
+          <div className="ctx-tags-search-row">
+            <label className="ctx-tags-search">
+              <Search size={13} />
+              <input
+                ref={gameSearchRef}
+                value={gameQuery}
+                onChange={(e) => setGameQuery(e.target.value)}
+                placeholder="Search games…"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    if (gameQuery) setGameQuery("");
+                    else setView("root");
+                  } else if (e.key === "Enter" && gameResults[0]) {
+                    e.preventDefault();
+                    void pickGame(gameResults[0]);
+                  }
+                }}
+              />
+            </label>
+          </div>
+          <div className="ctx-tags-list">
+            {!gameQuery ? (
+              <button type="button" className="ctx-tag-row" onClick={() => void pickGame(null)}>
+                <span className="ctx-game-icon none" aria-hidden="true">
+                  <Ban size={12} />
+                </span>
+                <span className="ctx-tag-label">Not a game</span>
+              </button>
+            ) : null}
+            {gameResults.map((g) => {
+              const checked = currentGame === g.id;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  className={`ctx-tag-row${checked ? " checked" : ""}`}
+                  onClick={() => void pickGame(g)}
+                  title={g.name}
+                >
+                  {g.icon_url ? (
+                    <img className="ctx-game-icon" src={g.icon_url} alt="" loading="lazy" draggable={false} />
+                  ) : (
+                    <span className="ctx-game-icon" aria-hidden="true" />
+                  )}
+                  <span className="ctx-tag-label">{g.name}</span>
+                  {checked ? <Check size={12} strokeWidth={3} className="ctx-game-check" /> : null}
+                </button>
+              );
+            })}
+            {gameResults.length === 0 && gameQuery ? <div className="ctx-tags-empty">No matching games</div> : null}
+          </div>
+        </div>
       ) : (
         <div className="menu ctx-tags">
           <button type="button" className="ctx-tags-head" onClick={() => setView("root")}>

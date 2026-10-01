@@ -160,6 +160,11 @@ const api = {
   getGameIcon: invoke("get-game-icon"),
   getGameIconsBatch: invoke("get-game-icons-batch"),
   getClipParticipants: invoke("get-clip-participants"),
+  getLibraryGames: invoke("get-library-games"),
+  getPlayedGames: invoke("get-played-games"),
+  searchGames: invoke("search-games"),
+  setClipGame: invoke("set-clip-game"),
+  runGameBackfill: invoke("run-game-backfill"),
 
   // per-clip metadata
   saveCustomName: invoke("save-custom-name"),
@@ -334,6 +339,7 @@ const api = {
   // events, main to renderer; each returns an unsubscribe fn
   onLog: subscribe("log"),
   onNewClipAdded: subscribe("new-clip-added"),
+  onGameInfoUpdated: subscribe("game-info-updated"),
   onAnalysisProgress: subscribe("analysis-progress"),
   onAnalysisReady: subscribe("analysis-ready"),
   onLoudnessMeasured: subscribe("loudness-measured"),

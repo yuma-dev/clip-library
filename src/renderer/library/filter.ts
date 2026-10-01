@@ -111,6 +111,12 @@ export interface FilterInput {
   /** clipName to lowercased participant tokens; omitted means the roster
    * hasn't loaded, so `@mention` filtering is skipped until the scan resolves. */
   mentionIndex?: Map<string, Set<string>>;
+  /** clipName to lowercased game name; plain words match it too */
+  gameIndex?: Map<string, string>;
+  /** rail game filter: only clips from this game id */
+  game?: string | null;
+  /** clipName to game id, required for `game` */
+  gameOf?: Map<string, string>;
 }
 
 // Clip objects are replaced by useClips when names/tags change. Weak keys let
@@ -138,11 +144,13 @@ export function filterClips(clips: LocalClip[], input: FilterInput): LocalClip[]
   clipLoop: for (const clip of clips) {
     if (cutoff !== null && !(clip.createdAt < cutoff)) continue;
     if (!matchesCollection(clip, input.collection)) continue;
+    if (input.game && input.gameOf?.get(clip.originalName) !== input.game) continue;
     if (applyTags && !matchesTagFilter(clip, input.tags)) continue;
     if (text.length || tags.length) {
       const entry = searchable(clip);
+      const game = input.gameIndex?.get(clip.originalName);
       for (const word of text) {
-        if (!entry.name.includes(word) && !entry.original.includes(word)) continue clipLoop;
+        if (!entry.name.includes(word) && !entry.original.includes(word) && !game?.includes(word)) continue clipLoop;
       }
       for (const tag of tags) {
         if (!entry.tags.some((t) => t.includes(tag))) continue clipLoop;

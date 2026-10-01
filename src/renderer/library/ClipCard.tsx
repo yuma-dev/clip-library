@@ -5,7 +5,7 @@ import { useSelection } from "./selectionContext";
 import { useRename } from "./renameContext";
 import { useFavorite } from "./favoriteContext";
 import { absoluteTime, relativeTime } from "./time";
-import { getCachedGameIcon, loadGameIcon, type GameIcon } from "./gameIcon";
+import { getCachedGameIcon, loadGameIcon, watchGameIcon, type GameIcon } from "./gameIcon";
 import ParticipantAvatars from "./ParticipantAvatars";
 import { Layers2, Star } from "lucide-react";
 import { useHasOverlap } from "../storage/overlaps";
@@ -58,14 +58,25 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators, medi
     let alive = true;
     void loadGameIcon(clip.originalName).then((res) => {
       // Most clips resolve to "no icon", skip the state update/re-render unless there's something to show.
-      if (alive && (res.path || res.title || res.discord)) setIcon(res);
+      if (alive && (res.path || res.title || res.discord || res.game)) setIcon(res);
     });
     return () => {
       alive = false;
     };
   }, [clip.originalName, icon]);
 
+  // the library backfill can name this clip's game after the icon was cached
+  useEffect(
+    () =>
+      watchGameIcon(clip.originalName, () => {
+        void loadGameIcon(clip.originalName).then(setIcon);
+      }),
+    [clip.originalName],
+  );
+
   const src = errored ? fallbackUrl : thumbnailPath ? `file://${thumbnailPath}` : shimmerUrl;
+  // the exe icon clipdip saved, else the matched game's art (backfilled clips have no exe icon)
+  const iconSrc = icon?.path ? `file://${icon.path}` : (icon?.game?.icon_url ?? null);
   const visibleTags = clip.tags.slice(0, 3);
   const extraTags = clip.tags.slice(3);
 
@@ -184,11 +195,11 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators, medi
           </div>
         </div>
 
-        {icon?.path ? (
-          <span className="clip-game" title={icon.title ?? undefined}>
+        {iconSrc ? (
+          <span className="clip-game" title={icon?.game?.name ?? icon?.title ?? undefined}>
             <img
               className={grayscaleIcons ? "grayscale" : undefined}
-              src={`file://${icon.path}`}
+              src={iconSrc}
               alt=""
               draggable={false}
             />

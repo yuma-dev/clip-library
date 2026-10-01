@@ -839,7 +839,12 @@ async function getGameIcon(clipName, getSettings) {
     return null;
   }
 
-  const response = { path: null, title: parsed.window_title || null, discord: normalizeDiscordInfo(parsed.discord) };
+  const response = {
+    path: null,
+    title: parsed.window_title || null,
+    discord: normalizeDiscordInfo(parsed.discord),
+    game: normalizeGame(parsed.game)
+  };
 
   if (parsed.icon_file) {
     const iconPath = path.join(settings.clipLocation, 'icons', parsed.icon_file);
@@ -858,6 +863,23 @@ async function getGameIcon(clipName, getSettings) {
   }
 
   return response;
+}
+
+/**
+ * the `game` block clipdip writes on save, the library backfill or a manual pick writes later.
+ * `false` means picked as not a game
+ * @param {any} raw
+ * @returns {{id: string, name: string, steam_appid: string|null, icon_url: string|null}|null}
+ */
+function normalizeGame(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || typeof raw.name !== 'string') return null;
+  if (!raw.id || !raw.name) return null;
+  return {
+    id: raw.id,
+    name: raw.name,
+    steam_appid: typeof raw.steam_appid === 'string' ? raw.steam_appid : null,
+    icon_url: typeof raw.icon_url === 'string' ? raw.icon_url : null
+  };
 }
 
 /**
@@ -926,7 +948,12 @@ async function getGameIconsBatch(clipNames, getSettings) {
       return [clipName, null];
     }
 
-    const response = { path: null, title: parsed.window_title || null, discord: normalizeDiscordInfo(parsed.discord) };
+    const response = {
+      path: null,
+      title: parsed.window_title || null,
+      discord: normalizeDiscordInfo(parsed.discord),
+      game: normalizeGame(parsed.game)
+    };
     if (parsed.icon_file) {
       const iconPath = path.join(settings.clipLocation, 'icons', parsed.icon_file);
       if (await checkIcon(iconPath)) response.path = iconPath;
@@ -1058,6 +1085,7 @@ module.exports = {
   ensureDirectoryExists,
   writeFileAtomically,
   getMetadataFolder,
+  metadataSafeName,
 
   // Custom name
   saveCustomName,
@@ -1108,5 +1136,6 @@ module.exports = {
   // Game info
   getGameIcon,
   getGameIconsBatch,
-  getClipParticipants
+  getClipParticipants,
+  normalizeGame
 };

@@ -66,7 +66,8 @@ export interface ClipdipConfig {
     capture_icon?: boolean;
     ignored_processes?: string[];
   };
-  discord?: { enabled?: boolean };
+  /** enabled: call roster on save; presence: detected game as Discord rich presence */
+  discord?: { enabled?: boolean; presence?: boolean; presence_hidden?: string[] };
   telemetry?: { enabled?: boolean };
   profile?: { report_interval_ms?: number };
   [key: string]: unknown;
@@ -459,6 +460,34 @@ type ClipsUnsubscribe = () => void;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ClipsEventCallback = (...args: any[]) => void;
 
+/** game a clip was recorded in, from the recorder or the library backfill */
+export interface ClipGame {
+  /** Discord application id, or steam:<appid> / epic:<id> */
+  id: string;
+  name: string;
+  steam_appid: string | null;
+  icon_url?: string | null;
+}
+
+/** a game with how many of the library's clips are from it */
+export interface LibraryGame {
+  id: string;
+  name: string;
+  /** Discord or Steam art */
+  icon_url: string | null;
+  /** the exe icon clipdip extracted, used when there's no art */
+  iconPath: string | null;
+  count: number;
+}
+
+/** a Set game picker result */
+export interface GameSearchResult {
+  id: string;
+  name: string;
+  icon_url: string | null;
+  steam_appid: string | null;
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface ClipsApi {
   getClips(): Promise<any[]>;
@@ -487,7 +516,7 @@ export interface ClipsApi {
   getGameIcon(game: string): Promise<any>;
   getGameIconsBatch(
     clipNames: string[],
-  ): Promise<Record<string, { path: string | null; title: string | null; discord: unknown } | null>>;
+  ): Promise<Record<string, { path: string | null; title: string | null; discord: unknown; game: ClipGame | null } | null>>;
   getClipParticipants(clipNames: string[]): Promise<{
     people: Array<{
       id: string;
@@ -500,6 +529,15 @@ export interface ClipsApi {
     }>;
     byClip: Record<string, string[]>;
   }>;
+  getLibraryGames(clipNames: string[]): Promise<{ games: LibraryGame[]; byClip: Record<string, string> }>;
+  /** games clipdip has shown in the Discord status, newest first; last_seen is unix ms */
+  getPlayedGames(): Promise<Array<{ id: string; name: string; icon_url: string | null; last_seen: number }>>;
+  /** empty query lists `libraryGames` back; otherwise library games rank first */
+  searchGames(query: string, libraryGames: LibraryGame[]): Promise<GameSearchResult[]>;
+  /** null marks the clips as not a game */
+  setClipGame(clipNames: string[], game: GameSearchResult | null): Promise<{ written: number }>;
+  /** null when a pass was already running */
+  runGameBackfill(): Promise<{ tagged: number; without: number } | { error: string } | null>;
 
   saveCustomName(originalName: string, customName: string): Promise<{ success: boolean; customName?: string; error?: string }>;
   getClipInfo(clip: any): Promise<any>;
@@ -694,6 +732,8 @@ export interface ClipsApi {
 
   onLog(cb: ClipsEventCallback): ClipsUnsubscribe;
   onNewClipAdded(cb: ClipsEventCallback): ClipsUnsubscribe;
+  /** the library backfill tagged these clips with their game */
+  onGameInfoUpdated(cb: (clipNames: string[]) => void): ClipsUnsubscribe;
   onAnalysisProgress(cb: (p: AnalysisProgress) => void): ClipsUnsubscribe;
   onAnalysisReady(cb: (p: { clipName: string; waveform: ClipWaveform }) => void): ClipsUnsubscribe;
   onLoudnessMeasured(cb: (p: { clipName: string; gain: number; gainDb: number; lufs: number | null }) => void): ClipsUnsubscribe;

@@ -5,6 +5,7 @@ import { useToast } from "../ui/Toast";
 import { useProfile } from "./useProfile";
 import { useClipsFolderSize, formatBytes } from "./useClipsFolderSize";
 import RailTags from "./RailTags";
+import RailGames from "./RailGames";
 import RailProfile from "./RailProfile";
 import RailSearch from "./RailSearch";
 import UpdatePill from "./UpdatePill";
@@ -173,6 +174,8 @@ function Sidebar({
               ))}
             </div>
           </div>
+
+          <RailGames filter={filter} />
 
           <RailTags filter={filter} />
 

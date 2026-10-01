@@ -228,6 +228,11 @@ const dialogsModule = lazyModule('./main/dialogs');
 // Integrated clipdip (clipdip binary): process lifecycle + TOML config bridge
 const clipdipModule = lazyModule('./main/clipdip');
 
+// tags clips with their game when the recorder didn't (older clips, no .gameinfo)
+const gameBackfillModule = lazyModule('./main/game-backfill');
+// library game list, the Set game picker's search, manual picks
+const gamesModule = lazyModule('./main/games');
+
 // FFmpeg verification (and the NVENC probe it chains) runs from
 // runDeferredServices() once the library is on screen; see there.
 
@@ -1157,11 +1162,27 @@ async function createWindow() {
   } catch (error) {
     logger.error('Thumbnail cache init failed; thumbnails will be regenerated on demand:', error);
   }
+  if (!isBenchmarkMode) {
+    gameBackfillModule.init({
+      getSettings,
+      getClipNames: async () => lastClipNames,
+      resolveGames: (items) => clipdipModule.resolveGames(items),
+      userDataDir: app.getPath('userData'),
+      onUpdated: (names) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('game-info-updated', names);
+      }
+    });
+  }
   if (benchmarkHarness) benchmarkHarness.markStartup('fileWatcherSetup');
   fileWatcherModule.setupFileWatcher(settings.clipLocation, {
     onNewClip: (fileName) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('new-clip-added', fileName);
+      }
+      if (!isBenchmarkMode) {
+        // clipdip writes the game itself; this catches saves it couldn't place, after it's done
+        gameBackfillModule.noteNewClip(fileName);
+        gameBackfillModule.schedule(60000);
       }
       // front of the queue so a fresh recording has its waveform and level before its first open
       analysisModule.enqueue(fileName, true);
@@ -1187,6 +1208,8 @@ async function createWindow() {
   // its brand screen out at the same moment).
   ipcMain.once('renderer-ready', () => {
     bootTrace.mark('renderer_ready');
+    // well after the grid settles; the first pass reads every clip's .gameinfo once
+    if (!isBenchmarkMode) gameBackfillModule.schedule(30000);
     // process start to a usable library; the only startup number a user ever notices.
     telemetry.metric('startup.total_ms', Math.round(perfNow()), { unit: 'ms', dims: { cold: true } });
     firstPaintSeen = true;
@@ -2064,6 +2087,23 @@ ipcMain.handle("get-game-icons-batch", async (event, clipNames) => {
 ipcMain.handle("get-clip-participants", async (event, clipNames) => {
   return metadataModule.getClipParticipants(clipNames, getSettings);
 });
+
+ipcMain.handle('get-library-games', (event, clipNames) => gamesModule.getLibraryGames(clipNames, getSettings));
+
+ipcMain.handle('get-played-games', () => gamesModule.getPlayedGames());
+
+ipcMain.handle('search-games', (event, query, libraryGames) =>
+  gamesModule.searchGames(query, libraryGames, (items) => clipdipModule.resolveGames(items)));
+
+ipcMain.handle('set-clip-game', async (event, clipNames, game) => {
+  const written = await gamesModule.setClipGame(clipNames, game, getSettings);
+  if (written.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('game-info-updated', written);
+  }
+  return { written: written.length };
+});
+
+ipcMain.handle('run-game-backfill', () => gameBackfillModule.runNow());
 
 // renderer passes the names it just got from get-clips, so this doesn't walk the library twice.
 ipcMain.handle('get-new-clips-info', async (_event, knownNames) => {

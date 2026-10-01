@@ -12,6 +12,7 @@ import {
   participantsLoaded,
   useParticipantsVersion,
 } from "./participants";
+import { ensureGames, getGameNameIndex, getGameOfClip, useGamesVersion } from "./games";
 import { shuffleClips, shuffleSettings } from "./shuffle";
 import type { LocalClip } from "./types";
 
@@ -21,6 +22,9 @@ export interface UseLibraryFilter {
 
   collection: Collection;
   setCollection: (value: Collection) => void;
+  /** rail game filter, a game id or null for every game */
+  game: string | null;
+  setGame: (value: string | null) => void;
 
   /** system tags first, then global, in display order */
   allTags: string[];
@@ -67,6 +71,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     updateQuery(value);
   }, [reshuffle]);
   const [collection, setCollection] = useState<Collection>("all");
+  const [game, setGame] = useState<string | null>(null);
   const [loadedTags, setLoadedTags] = useState<string[]>([]);
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [temporary, setTemporary] = useState<Set<string>>(new Set());
@@ -279,6 +284,12 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
     if (hasMentionQuery) ensureParticipants(clips.map((c) => c.originalName));
   }, [hasMentionQuery, clips]);
 
+  // game list loads with the library, the rail shows it right away
+  const gamesVersion = useGamesVersion();
+  useEffect(() => {
+    ensureGames(clips.map((c) => c.originalName));
+  }, [clips]);
+
   // filtering (and the 2000-card grid it feeds) runs against a deferred copy of the
   // criteria so the grid re-renders as a low-priority pass, not blocking each keystroke
   const criteria = useMemo(
@@ -292,9 +303,12 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       // participantsVersion forces a re-run once the scan resolves
       mentionIndex:
         hasMentionQuery && participantsLoaded() ? getMentionIndex() : undefined,
+      gameIndex: getGameNameIndex(),
+      game,
+      gameOf: getGameOfClip(),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [query, tags, collection, ready, hasMentionQuery, participantsVersion, shuffleSession],
+    [query, tags, collection, game, ready, hasMentionQuery, participantsVersion, gamesVersion, shuffleSession],
   );
   const deferredCriteria = useDeferredValue(criteria);
 
@@ -325,6 +339,8 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       setQuery,
       collection,
       setCollection,
+      game,
+      setGame,
       allTags,
       globalTags,
       tags,
@@ -346,6 +362,7 @@ export function useLibraryFilter(clips: LocalClip[]): UseLibraryFilter {
       setQuery,
       query,
       collection,
+      game,
       allTags,
       globalTags,
       tags,

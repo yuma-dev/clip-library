@@ -1,6 +1,7 @@
 // drives the shared #export-toast markup (rendered once by VideoPlayer); both player exports
 // and grid context-menu exports feed it, hence the imperative DOM logic living here
 import type { ProgressFn } from "./playerExport";
+import { setExportProgress } from "./discordPresence";
 
 // one toast, one dismiss timer, a module-level handle is enough
 let exportTimer: number | undefined;
@@ -15,6 +16,7 @@ export const showExportProgress: ProgressFn = (current, total, clipboard = false
 
   toastEl.classList.add("show");
   const pct = Math.min(Math.round((current / total) * 100), 100);
+  setExportProgress(pct);
   content.style.setProperty("--progress", `${pct}%`);
   progressText.textContent = `${pct}%`;
 
@@ -39,6 +41,7 @@ export const showExportProgress: ProgressFn = (current, total, clipboard = false
 
 /** hides + resets the export toast, used on error */
 export function hideExportProgress(): void {
+  setExportProgress(null);
   const toastEl = document.getElementById("export-toast");
   const content = toastEl?.querySelector(".export-toast-content") as HTMLElement | null;
   window.clearTimeout(exportTimer);

@@ -149,6 +149,11 @@ async function setConfig(patch) {
   await fsp.writeFile(tmp, serialized, 'utf8');
   await fsp.rename(tmp, file);
 
+  // clipdip reads the presence flag when a game session changes; apply it to a running game now
+  if (patch?.discord && typeof patch.discord === 'object' && ('presence' in patch.discord || 'presence_hidden' in patch.discord)) {
+    control('refresh_presence').catch(() => {});
+  }
+
   // debounce: a full restart clears the replay buffer, so a burst of edits costs one, not one each
   pendingReload = Math.max(pendingReload, reloadLevelFor(patch));
   if (reloadTimer) clearTimeout(reloadTimer);
@@ -359,6 +364,37 @@ const listAudioDevices = () => query('--list-audio-devices');
 const listMonitors = () => query('--list-monitors');
 const getFilenameVariables = () => query('--filename-variables');
 const previewFilename = (template) => query('--preview-filename', [String(template ?? '')]);
+
+// batch game matching for the library backfill; input goes through a temp file since a few
+// hundred exe paths and titles can outgrow the command line. first call may download Discord's
+// app list (~2 MB), hence the long timeout
+async function resolveGames(items) {
+  let exe;
+  try {
+    exe = await resolveBinaryPath();
+    await fsp.access(exe, fs.constants.X_OK);
+  } catch {
+    return { ok: false, error: 'binary_not_found' };
+  }
+  const input = path.join(os.tmpdir(), `cliplib-resolve-games-${process.pid}-${Date.now()}.json`);
+  await fsp.writeFile(input, JSON.stringify(items), 'utf8');
+  try {
+    return await new Promise((resolve) => {
+      execFile(
+        exe,
+        ['--resolve-games', input],
+        { windowsHide: true, timeout: 120000, maxBuffer: 16 * 1024 * 1024 },
+        (error, stdout) => {
+          const parsed = lastJsonLine(stdout);
+          if (parsed) return resolve(parsed);
+          resolve({ ok: false, error: error ? error.message : 'no JSON output from --resolve-games' });
+        }
+      );
+    });
+  } finally {
+    fsp.unlink(input).catch(() => {});
+  }
+}
 
 // control server client: primary listens on 127.0.0.1 (port+token in control.json), JSON-lines
 // request/response, connection closes; never throws to renderer
@@ -667,6 +703,7 @@ async function setEnabled(enabled) {
 }
 
 module.exports = {
+  resolveGames,
   writtenByClipLib,
   pickFfmpegPath,
   init,

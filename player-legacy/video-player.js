@@ -825,6 +825,7 @@ function handleTrimDrag(e) {
     elements.videoPlayer.currentTime = newTime;
 
     saveTrimChanges();
+    if (callbacks.markEditing) callbacks.markEditing('trim');
   }
 }
 
@@ -2488,6 +2489,7 @@ let callbacks = {
   showCustomConfirm: null,
   isBenchmarkMode: false,
   updateDiscordPresence: null,
+  markEditing: null,
   getActionFromEvent: null,
   navigateToVideo: null,
   exportAudioWithFileSelection: null,    // Called to export audio with file picker

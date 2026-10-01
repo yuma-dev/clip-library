@@ -644,6 +644,62 @@ body.ui-blur-exit .app-body {
   color: var(--color-text-muted);
 }
 
+/* Set game picker rows reuse the tag rows, the game's art sits where the checkbox goes */
+.ctx-game-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+.ctx-game-icon.none {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+.ctx-game-check {
+  margin-left: auto;
+  flex: none;
+  color: var(--color-accent-glyph);
+}
+
+/* games: collection rows with the game's art as the icon. four 34px rows plus gaps show, the
+   rest scrolls with the scrollbar hidden and a bottom fade hinting at more, like the tag list */
+.rail-games-list {
+  max-height: 152px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.rail-games-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.rail-games-wrap.more .rail-games-list {
+  padding-bottom: 16px;
+}
+.rail-games-wrap.more {
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent 100%);
+}
+.rail-game-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  object-fit: cover;
+}
+.rail-game-icon.blank {
+  background: rgba(255, 255, 255, 0.08);
+}
+.rail-collection .rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* tag filter (the liked purple system, rehomed into the rail) */
 .tagf-search {
   display: flex;

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, Upload, X } from "lucide-react";
+import { setSharePhase } from "./discordPresence";
 import { useToast } from "../ui/Toast";
 import { invalidateFeedListCache } from "../feed/useFeedClips";
 import { baseRate } from "./layers/speed";
@@ -41,6 +42,13 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState<Stage>("form");
   const [progress, setProgress] = useState<ShareProgress | null>(null);
+
+  // Discord shows "Sharing a clip" while this exports and uploads
+  useEffect(() => {
+    const p = progress?.phase;
+    setSharePhase(p === "uploading" ? "uploading" : p === "preparing" || p === "exporting" ? "exporting" : null);
+  }, [progress]);
+  useEffect(() => () => setSharePhase(null), []);
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // discord ids from this clip's .gameinfo, preselects matching accounts in "Featuring"

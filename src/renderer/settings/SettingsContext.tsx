@@ -39,6 +39,8 @@ export const LOUDNESS_DEFAULTS: LoudnessSettings = { enabled: true, targetLufs: 
 
 export interface AppSettings {
   enableDiscordRPC: boolean;
+  /** what the library's Discord presence may show (player/discordPresence.ts); absent means all on */
+  discordPresence?: { clipNames?: boolean; game?: boolean; facts?: boolean; editing?: boolean };
   uiFont: string;
   iconGreyscale: boolean;
   showNewClipsIndicators: boolean;

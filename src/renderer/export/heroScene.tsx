@@ -35,7 +35,7 @@ export function HeroScene({spec,Player}:{spec:ExportSpec;Player:(s:ExportSpec)=>
   const shown=arrived?[{...spec.fixtures[0].clip,customName:'Clean Finish',createdAt:Date.UTC(2026,8,18),isNewSinceLastSession:true},...spec.fixtures.slice(1).map(f=>f.clip)]:spec.fixtures.slice(1).map(f=>f.clip);
   const globalTags=['Epic','Favorite','League of Legends','Overwatch'];
   const tags={saved:new Set([...globalTags,'Untagged','Unnamed']),temporary:new Set<string>(),isTemporary:false};
-  const filter:UseLibraryFilter={query:'',setQuery:noop,collection:'all',setCollection:noop,allTags:[...tags.saved],globalTags,tags,selectedCount:6,totalCount:6,toggleTag:noop,focusTag:noop,showAllTags:noop,hideAllTags:noop,clearFocus:noop,addGlobalTag:noop,renameGlobalTag:noop,removeGlobalTag:noop,filteredClips:shown};
+  const filter:UseLibraryFilter={query:'',setQuery:noop,collection:'all',setCollection:noop,game:null,setGame:noop,allTags:[...tags.saved],globalTags,tags,selectedCount:6,totalCount:6,toggleTag:noop,focusTag:noop,showAllTags:noop,hideAllTags:noop,clearFocus:noop,addGlobalTag:noop,renameGlobalTag:noop,removeGlobalTag:noop,filteredClips:shown};
   // Interpolate screen-space translation and scale together: no multiplied pan arc.
   const notification= cameraEase(t,6.5,9)*(1-cameraEase(t,15.6,17.1));
   const exporting=cameraEase(t,26.3,26.9);

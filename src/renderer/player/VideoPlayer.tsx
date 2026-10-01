@@ -22,6 +22,8 @@ import {
   updateDiscordPresence,
   updateDiscordPresenceBasedOnState,
   updateDiscordPresenceForClip,
+  markEditing,
+  setPresenceLibrary,
 } from "./discordPresence";
 import { initGamepad } from "./gamepad";
 import {
@@ -48,7 +50,7 @@ import { installLayerKeys } from "./layers/keys";
 import { installSpeedLayers } from "./layers/speed";
 import { installZoom } from "./layers/fx";
 import { installSoundLayers } from "./layers/sound";
-import { closeClip, getLayers, loadClip, select, useLayers } from "./layers/store";
+import { closeClip, getLayers, loadClip, select, subscribe as subscribeLayers, useLayers } from "./layers/store";
 import "./layers/layers.css";
 import { fingerprint, reportEvent } from "../telemetry";
 import "./player.css";
@@ -182,6 +184,36 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
     const next = document.getElementById("next-video") as HTMLButtonElement | null;
     if (prev) prev.disabled = index <= 0;
     if (next) next.disabled = index < 0 || index >= list.length - 1;
+  }, []);
+
+  useEffect(() => {
+    setPresenceLibrary(allClips);
+  }, [allClips]);
+
+  // a layer change on the open clip is editing; loading or closing a clip swaps `clip`, which isn't
+  useEffect(() => {
+    let prev = getLayers();
+    const off = subscribeLayers(() => {
+      const next = getLayers();
+      if (next.clip && next.clip === prev.clip && next.items !== prev.items) {
+        const old = new Set<Layer>(prev.items);
+        const changed = next.items.find((l) => !old.has(l)) ?? prev.items.find((l) => !next.items.includes(l));
+        const kind = !changed
+          ? "effects"
+          : changed.kind === "text"
+            ? (changed as { source?: string }).source === "subtitles"
+              ? "subtitles"
+              : "text"
+            : changed.kind === "gif" || changed.kind === "image"
+              ? "media"
+              : "effects";
+        markEditing(kind);
+      }
+      prev = next;
+    });
+    return () => {
+      off();
+    };
   }, []);
 
   useEffect(() => {
@@ -337,6 +369,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       isBenchmarkMode: window.__benchmarkConfig?.enabled === true,
       updateDiscordPresence: (details: string, state?: string | null) =>
         updateDiscordPresence(details, state ?? null),
+      markEditing: (kind: "trim") => markEditing(kind),
       getActionFromEvent: (e: KeyboardEvent) => getActionFromEvent(e),
       navigateToVideo: (direction: number) => navigate(direction),
       updateNavigationButtons: () => updateNavButtons(),
@@ -486,12 +519,19 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
       const clip = window.legacyState?.currentClip;
       if (clip) updateDiscordPresenceForClip(clip, false);
     };
+    // presence carries the playback position as timestamps, a speed change moves the end
+    const onRate = () => {
+      const clip = window.legacyState?.currentClip;
+      if (clip) updateDiscordPresenceForClip(clip, !video.paused);
+    };
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
+    video.addEventListener("ratechange", onRate);
     return () => {
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
+      video.removeEventListener("ratechange", onRate);
     };
   }, []);
 
