@@ -26,6 +26,10 @@ const RECONNECT_EVERY: Duration = Duration::from_secs(15);
 const BUDGET: usize = 5;
 const WINDOW: Duration = Duration::from_secs(20);
 const SLOW: Duration = Duration::from_secs(15);
+/// `Extra::hold` resends this often while nothing changes, 4 per WINDOW so one send of the budget
+/// stays free for a real change. league-rpc found League's own status winning back the spot within
+/// seconds when the card goes quiet.
+const HOLD_EVERY: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameActivity {
@@ -63,6 +67,8 @@ pub struct Extra {
     pub playtime: Option<String>,
     /// ranked match: Competing (5) instead of Playing (0)
     pub competing: bool,
+    /// resend the unchanged card every HOLD_EVERY, for games that set their own status over ours
+    pub hold: bool,
 }
 
 impl GameActivity {
@@ -186,7 +192,16 @@ fn run(rx: Receiver<Cmd>) {
 
         let now = now_ms();
         let want_key = want.as_ref().map(|a| activity_json(a, Shape::Full, now).to_string());
-        if want_key == shown {
+        let t = Instant::now();
+        while sent_at.front().map(|s| t.duration_since(*s) >= WINDOW).unwrap_or(false) {
+            sent_at.pop_front();
+        }
+        let resend = want_key.is_some()
+            && want_key == shown
+            && want.as_ref().is_some_and(|a| a.extra.hold)
+            && sent_at.len() < BUDGET - 1
+            && sent_at.back().is_none_or(|s| t.duration_since(*s) >= HOLD_EVERY);
+        if want_key == shown && !resend {
             continue;
         }
 
@@ -197,14 +212,10 @@ fn run(rx: Receiver<Cmd>) {
                     || live_line(a, now).as_deref() == Some("Just clipped something")
             }
         };
-        let t = Instant::now();
-        while sent_at.front().map(|s| t.duration_since(*s) >= WINDOW).unwrap_or(false) {
-            sent_at.pop_front();
-        }
         if sent_at.len() >= BUDGET {
             continue;
         }
-        if !urgent && sent_at.back().map(|s| t.duration_since(*s) < SLOW).unwrap_or(false) {
+        if !urgent && !resend && sent_at.back().map(|s| t.duration_since(*s) < SLOW).unwrap_or(false) {
             continue;
         }
 
@@ -262,7 +273,11 @@ fn run(rx: Receiver<Cmd>) {
             });
             match request(c, &format!("p{nonce}"), "SET_ACTIVITY", args, Duration::from_secs(5)) {
                 Ok(_) => {
-                    info!(game = %activity.game, "presence: set");
+                    if resend {
+                        debug!(game = %activity.game, "presence: held");
+                    } else {
+                        info!(game = %activity.game, "presence: set");
+                    }
                     sent = true;
                     break;
                 }

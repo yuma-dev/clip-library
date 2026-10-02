@@ -3269,6 +3269,7 @@ fn live_preview_cli(req: &str) -> Result<serde_json::Value, String> {
             party: live.party,
             playtime: live.playtime,
             competing: live.competing && req.competing.unwrap_or(true),
+            hold: false,
         },
     };
     Ok(serde_json::json!({ "activity": clipdip_discord::preview_activity(&activity) }))

@@ -8,6 +8,8 @@ here under MIT). The MIT, BSD-3-Clause and Apache-2.0 texts are below.
 |---|---|---|
 | league | [league-rpc](https://github.com/Its-Haze/league-rpc) | Copyright (c) 2026 Its-Haze |
 | league | [Irelia](https://github.com/AlsoSylv/Irelia) | Copyright 2023 Cynthia, burgerindividual |
+| league | [MayhemStatsTracker](https://github.com/MyNamesEMurray/MayhemStatsTracker) | Copyright (c) 2026 Ryan Murphy (Yhprum) |
+| league | [rank-analysis](https://github.com/wnzzer/rank-analysis) | Copyright (c) 2024 wnzzer |
 | valorant | [valorant-rpc](https://github.com/Its-Haze/valorant-rpc) | Copyright (c) 2026 Its-Haze |
 | cs2 | [cs2-gsi](https://github.com/ccc007ccc/cs2-gsi) | Copyright (c) 2026 ccc007ccc and cs2-gsi contributors |
 | dota2 | [dota-gsi](https://github.com/tomasfarias/dota-gsi) | Copyright (c) 2022 Tomás Farías Santana |

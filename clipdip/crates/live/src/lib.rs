@@ -60,6 +60,10 @@ pub struct Live {
     /// Playing activity, the game's own included
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub competing: bool,
+    /// the game sets its own Discord status over ours (League's client does): resend the card
+    /// every few seconds so it stays the newest activity
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold: bool,
 }
 
 impl Live {
@@ -79,6 +83,7 @@ impl Live {
             party: self.party.or(other.party),
             playtime: self.playtime.or_else(|| other.playtime.clone()),
             competing: self.competing || other.competing,
+            hold: self.hold || other.hold,
         }
     }
 }

@@ -105,6 +105,17 @@ pub const SUMMONER: &str = "/lol-summoner/v1/current-summoner";
 pub const TFT_COMPANION: &str = "/lol-cosmetics/v1/inventories/tft/companions";
 pub const CHAMP_SELECT: &str = "/lol-champ-select/v1/session";
 pub const TFT_EOG: &str = "/lol-end-of-game/v1/tft-eog-stats";
+pub const SESSION: &str = "/lol-gameflow/v1/session";
+pub const LOCALE: &str = "/riotclient/region-locale";
+/// has the game id right away, the match list can lag minutes behind
+pub const EOG: &str = "/lol-end-of-game/v1/eog-stats-block";
+/// the game's own end-of-game block, also served during InProgress
+pub const GAMECLIENT_EOG: &str = "/lol-end-of-game/v1/gameclient-eog-stats-block";
+pub const MASTERY: &str = "/lol-champion-mastery/v1/local-player/champion-mastery";
+
+pub fn match_path(game_id: i64) -> String {
+    format!("/lol-match-history/v1/games/{game_id}")
+}
 
 pub fn queue_path(id: i64) -> String {
     format!("/lol-game-queues/v1/queues/{id}")
@@ -169,12 +180,177 @@ pub struct RankedQueue {
     pub league_points: i64,
     pub rated_tier: String,
     pub rated_rating: i64,
+    pub wins: u32,
+    pub losses: u32,
 }
 
 #[derive(Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Summoner {
     pub profile_icon_id: i64,
+    pub puuid: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Session {
+    pub game_data: SessionGame,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SessionGame {
+    pub game_id: i64,
+    pub queue: SessionQueue,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct SessionQueue {
+    pub id: i64,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct RegionLocale {
+    pub locale: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EogBlock {
+    pub game_id: i64,
+}
+
+/// Field names from wnzzer/rank-analysis's models; the player's PUUID key is capitalized there.
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GameclientEog {
+    pub game_id: i64,
+    pub stats_block: GameclientBlock,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GameclientBlock {
+    pub game_id: i64,
+    pub players: Vec<GameclientPlayer>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GameclientPlayer {
+    #[serde(rename = "PUUID", alias = "puuid")]
+    pub puuid: String,
+    pub subteam_standing: u32,
+}
+
+impl GameclientEog {
+    /// Arena standing of our duo, only when the block is about this game: the client keeps the
+    /// last game's block around
+    pub fn standing(&self, game_id: i64, puuid: &str) -> Option<u32> {
+        let id = if self.game_id > 0 { self.game_id } else { self.stats_block.game_id };
+        if game_id <= 0 || id != game_id || puuid.is_empty() {
+            return None;
+        }
+        self.stats_block
+            .players
+            .iter()
+            .find(|p| p.puuid == puuid)
+            .map(|p| p.subteam_standing)
+            .filter(|s| (1..=8).contains(s))
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Mastery {
+    pub champion_id: i64,
+    pub champion_level: u32,
+}
+
+/// /lol-match-history/v1/games/{id}, LCU shape (MayhemStatsTracker's extractParticipants reads
+/// the same fields)
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Match {
+    pub game_id: i64,
+    pub participants: Vec<Participant>,
+    pub participant_identities: Vec<Identity>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Participant {
+    pub participant_id: i64,
+    pub puuid: String,
+    pub stats: MatchStats,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MatchStats {
+    pub win: bool,
+    pub kills: u32,
+    pub deaths: u32,
+    pub assists: u32,
+    pub total_minions_killed: u32,
+    pub neutral_minions_killed: u32,
+    pub champ_level: u32,
+    /// Arena 1..=8, 0 elsewhere
+    pub subteam_placement: u32,
+    pub player_augment1: i64,
+    pub player_augment2: i64,
+    pub player_augment3: i64,
+    pub player_augment4: i64,
+    pub player_augment5: i64,
+    pub player_augment6: i64,
+}
+
+impl MatchStats {
+    pub fn augment_ids(&self) -> Vec<i64> {
+        [
+            self.player_augment1,
+            self.player_augment2,
+            self.player_augment3,
+            self.player_augment4,
+            self.player_augment5,
+            self.player_augment6,
+        ]
+        .into_iter()
+        .filter(|id| *id > 0)
+        .collect()
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Identity {
+    pub participant_id: i64,
+    pub player: IdentityPlayer,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct IdentityPlayer {
+    pub puuid: String,
+}
+
+impl Match {
+    pub fn mine(&self, puuid: &str) -> Option<&MatchStats> {
+        if puuid.is_empty() {
+            return None;
+        }
+        let id = self
+            .participant_identities
+            .iter()
+            .find(|i| i.player.puuid == puuid)
+            .map(|i| i.participant_id);
+        self.participants
+            .iter()
+            .find(|p| p.puuid == puuid || (id.is_some() && Some(p.participant_id) == id))
+            .map(|p| &p.stats)
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -328,38 +504,129 @@ fn apply_custom(l: &mut Lobby) -> bool {
     true
 }
 
+/// One queue's standing as the client reports it.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Rank {
+    pub tier: String,
+    pub division: String,
+    pub lp: i64,
+    pub wins: u32,
+    pub losses: u32,
+    /// Arena's (ratedTier, ratedRating) instead of a tier
+    pub rated: Option<(String, i64)>,
+}
+
+impl Rank {
+    fn from_queue(q: &RankedQueue) -> Rank {
+        Rank {
+            tier: q.tier.clone(),
+            division: q.division.clone(),
+            lp: q.league_points,
+            wins: q.wins,
+            losses: q.losses,
+            rated: (!q.rated_tier.is_empty()).then(|| (q.rated_tier.clone(), q.rated_rating)),
+        }
+    }
+
+    fn ranked(&self) -> bool {
+        !(self.tier.is_empty() || self.tier == "NONE" || self.tier == "UNRANKED")
+    }
+
+    /// "Gold IV: 57 LP", plus "41W 37L" when `record`
+    pub fn text(&self, record: bool) -> Option<String> {
+        let base = match &self.rated {
+            Some((tier, rating)) => arena_text(tier, *rating),
+            None => rank_text(&self.tier, &self.division, self.lp),
+        }?;
+        if record && self.wins + self.losses > 0 {
+            return Some(format!("{base} · {}W {}L", self.wins, self.losses));
+        }
+        Some(base)
+    }
+
+    /// tier and division as one number, higher is better
+    fn score(&self) -> i64 {
+        const TIERS: &[&str] = &[
+            "IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER",
+            "GRANDMASTER", "CHALLENGER",
+        ];
+        const DIVS: &[&str] = &["IV", "III", "II", "I"];
+        let t = TIERS.iter().position(|t| *t == self.tier).unwrap_or(0) as i64;
+        let d = DIVS.iter().position(|d| *d == self.division).unwrap_or(3) as i64;
+        t * 4 + d
+    }
+}
+
+/// What a game did to the rank: "+21 LP", "Promoted to Gold I", "Placed in Silver II".
+/// Nothing until the client counted the game, it updates a few seconds after the end.
+pub fn rank_change(before: &Rank, after: &Rank) -> Option<String> {
+    if after.wins + after.losses <= before.wins + before.losses {
+        return None;
+    }
+    if let (Some((_, b)), Some((_, a))) = (&before.rated, &after.rated) {
+        return Some(format!("{:+} rating", a - b));
+    }
+    if !after.ranked() {
+        return None;
+    }
+    let name = |r: &Rank| {
+        let div = if r.division.is_empty() || r.division == "NA" {
+            String::new()
+        } else {
+            format!(" {}", r.division)
+        };
+        format!("{}{div}", capitalize(&r.tier))
+    };
+    if !before.ranked() {
+        return Some(format!("Placed in {}", name(after)));
+    }
+    Some(match after.score().cmp(&before.score()) {
+        std::cmp::Ordering::Greater => format!("Promoted to {}", name(after)),
+        std::cmp::Ordering::Less => format!("Demoted to {}", name(after)),
+        std::cmp::Ordering::Equal => format!("{:+} LP", after.lp - before.lp),
+    })
+}
+
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Ranks {
-    pub solo: Option<String>,
-    pub flex: Option<String>,
-    pub tft: Option<String>,
-    pub arena: Option<String>,
+    pub solo: Option<Rank>,
+    pub flex: Option<Rank>,
+    pub tft: Option<Rank>,
+    pub double_up: Option<Rank>,
+    pub arena: Option<Rank>,
 }
 
 impl Ranks {
     pub fn from_resp(r: &RankedResp) -> Ranks {
         let mut out = Ranks::default();
         for q in &r.queues {
-            match q.queue_type.as_str() {
-                "RANKED_SOLO_5x5" => out.solo = rank_text(&q.tier, &q.division, q.league_points),
-                "RANKED_FLEX_SR" => out.flex = rank_text(&q.tier, &q.division, q.league_points),
-                "RANKED_TFT" => out.tft = rank_text(&q.tier, &q.division, q.league_points),
-                "CHERRY" => out.arena = arena_text(&q.rated_tier, q.rated_rating),
-                _ => {}
-            }
+            let slot = match q.queue_type.as_str() {
+                "RANKED_SOLO_5x5" => &mut out.solo,
+                "RANKED_FLEX_SR" => &mut out.flex,
+                "RANKED_TFT" => &mut out.tft,
+                "RANKED_TFT_DOUBLE_UP" => &mut out.double_up,
+                "CHERRY" => &mut out.arena,
+                _ => continue,
+            };
+            *slot = Some(Rank::from_queue(q));
         }
         out
     }
 
-    /// league-rpc's getRankForQueue; 1100 is ranked TFT, 1090 normal TFT as in the original
-    pub fn for_queue(&self, queue_id: i64) -> Option<&str> {
+    /// league-rpc's getRankForQueue; 1090 normal TFT shows the ranked TFT rank as in the original
+    pub fn for_queue(&self, queue_id: i64) -> Option<&Rank> {
         match queue_id {
-            420 => self.solo.as_deref(),
-            440 => self.flex.as_deref(),
-            1090 | 1100 => self.tft.as_deref(),
-            1700 => self.arena.as_deref(),
+            420 => self.solo.as_ref(),
+            440 => self.flex.as_ref(),
+            1090 | 1100 => self.tft.as_ref(),
+            1160 => self.double_up.as_ref(),
+            1700 | 1710 => self.arena.as_ref(),
             _ => None,
         }
+    }
+
+    pub fn text_for(&self, queue_id: i64, record: bool) -> Option<String> {
+        self.for_queue(queue_id)?.text(record)
     }
 }
 
@@ -426,7 +693,7 @@ mod tests {
     fn ranks() {
         let r: RankedResp = serde_json::from_str(
             r#"{"queues":[
-                {"queueType":"RANKED_SOLO_5x5","tier":"GOLD","division":"IV","leaguePoints":57},
+                {"queueType":"RANKED_SOLO_5x5","tier":"GOLD","division":"IV","leaguePoints":57,"wins":41,"losses":37},
                 {"queueType":"RANKED_FLEX_SR","tier":"MASTER","division":"NA","leaguePoints":812},
                 {"queueType":"RANKED_TFT","tier":"","division":"NA","leaguePoints":0},
                 {"queueType":"CHERRY","ratedTier":"PURPLE","ratedRating":1234}
@@ -434,11 +701,87 @@ mod tests {
         )
         .unwrap();
         let r = Ranks::from_resp(&r);
-        assert_eq!(r.for_queue(420), Some("Gold IV: 57 LP"));
-        assert_eq!(r.for_queue(440), Some("Master: 812 LP"));
-        assert_eq!(r.for_queue(1100), None);
-        assert_eq!(r.for_queue(1700), Some("Gold · Rating: 1234"));
-        assert_eq!(r.for_queue(450), None);
+        assert_eq!(r.text_for(420, false).as_deref(), Some("Gold IV: 57 LP"));
+        assert_eq!(r.text_for(420, true).as_deref(), Some("Gold IV: 57 LP · 41W 37L"));
+        assert_eq!(r.text_for(440, true).as_deref(), Some("Master: 812 LP"));
+        assert_eq!(r.text_for(1100, false), None);
+        assert_eq!(r.text_for(1710, false).as_deref(), Some("Gold · Rating: 1234"));
+        assert_eq!(r.text_for(450, false), None);
+    }
+
+    #[test]
+    fn rank_changes() {
+        let r = |tier: &str, div: &str, lp: i64, games: u32| Rank {
+            tier: tier.into(),
+            division: div.into(),
+            lp,
+            wins: games,
+            ..Rank::default()
+        };
+        assert_eq!(rank_change(&r("GOLD", "II", 40, 10), &r("GOLD", "II", 40, 10)), None);
+        assert_eq!(
+            rank_change(&r("GOLD", "II", 40, 10), &r("GOLD", "II", 61, 11)).as_deref(),
+            Some("+21 LP")
+        );
+        assert_eq!(
+            rank_change(&r("GOLD", "II", 10, 10), &r("GOLD", "II", 0, 11)).as_deref(),
+            Some("-10 LP")
+        );
+        assert_eq!(
+            rank_change(&r("GOLD", "II", 90, 10), &r("GOLD", "I", 5, 11)).as_deref(),
+            Some("Promoted to Gold I")
+        );
+        assert_eq!(
+            rank_change(&r("PLATINUM", "IV", 0, 10), &r("GOLD", "I", 75, 11)).as_deref(),
+            Some("Demoted to Gold I")
+        );
+        assert_eq!(
+            rank_change(&r("DIAMOND", "I", 95, 10), &r("MASTER", "I", 12, 11)).as_deref(),
+            Some("Promoted to Master I")
+        );
+        assert_eq!(
+            rank_change(&Rank::default(), &r("SILVER", "II", 0, 5)).as_deref(),
+            Some("Placed in Silver II")
+        );
+        let arena = |rating: i64, games: u32| Rank {
+            rated: Some(("PURPLE".into(), rating)),
+            wins: games,
+            ..Rank::default()
+        };
+        assert_eq!(rank_change(&arena(1200, 3), &arena(1235, 4)).as_deref(), Some("+35 rating"));
+    }
+
+    #[test]
+    fn match_history_finds_me() {
+        let m: Match = serde_json::from_str(
+            r#"{"gameId":7,"participantIdentities":[
+                {"participantId":1,"player":{"puuid":"a"}},{"participantId":2,"player":{"puuid":"me"}}],
+              "participants":[
+                {"participantId":1,"stats":{"win":false}},
+                {"participantId":2,"stats":{"win":true,"kills":9,"subteamPlacement":2,
+                  "playerAugment1":1205,"playerAugment2":0,"playerAugment3":93}}]}"#,
+        )
+        .unwrap();
+        let me = m.mine("me").unwrap();
+        assert!(me.win);
+        assert_eq!(me.subteam_placement, 2);
+        assert_eq!(me.augment_ids(), vec![1205, 93]);
+        assert!(m.mine("").is_none());
+        assert!(m.mine("nobody").is_none());
+    }
+
+    #[test]
+    fn arena_standing_needs_this_game() {
+        let e: GameclientEog = serde_json::from_str(
+            r#"{"gameId":5,"statsBlock":{"players":[{"PUUID":"me","subteamStanding":3},{"PUUID":"x","subteamStanding":1}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(e.standing(5, "me"), Some(3));
+        assert_eq!(e.standing(4, "me"), None);
+        assert_eq!(e.standing(5, ""), None);
+        let e: GameclientEog =
+            serde_json::from_str(r#"{"statsBlock":{"players":[{"PUUID":"me","subteamStanding":3}]}}"#).unwrap();
+        assert_eq!(e.standing(5, "me"), None);
     }
 
     #[test]

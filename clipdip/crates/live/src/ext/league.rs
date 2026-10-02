@@ -5,24 +5,33 @@
 //! internal/presence/template, pkg/types. Client discovery and Live Client
 //! Data types from Irelia by AlsoSylv (MIT), https://github.com/AlsoSylv/Irelia:
 //! utils/process_info.rs, in_game/types.rs.
+//!
+//! Beyond the original: augments in Arena and ARAM: Mayhem (see augments.rs),
+//! the result after a game from match history (MayhemStatsTracker by
+//! MyNamesEMurray, MIT, src/main/lcu.ts and db.ts extractParticipants), Arena
+//! standing from the game's end-of-game block (field names from rank-analysis
+//! by wnzzer, MIT), LP won or lost, mastery and replays.
 
+mod augments;
 mod champs;
 mod lcu;
 mod live;
+mod store;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::util::{self, clamp, now_ms};
 use crate::{Credit, Ctx, Live, Manifest, Opt, Preview, Settings, Target};
 
+use augments::{Augment, Augments};
 use champs::{Champs, Resolved};
-use lcu::{Lcu, Lobby, QueueInfo, Ranks};
+use lcu::{Lcu, Lobby, QueueInfo, Rank, Ranks};
 
 pub static MANIFEST: Manifest = Manifest {
     id: "league",
     name: "League of Legends and TFT",
-    blurb: "Queue, champion and skin art, KDA and CS, game clock and rank. TFT shows your little legend and level.",
+    blurb: "Queue, champion and skin art, KDA and CS, rank and LP, augments in Arena and ARAM: Mayhem, and how each game ended. TFT shows your little legend and level.",
     setup: None,
     credits: &[
         Credit {
@@ -32,14 +41,57 @@ pub static MANIFEST: Manifest = Manifest {
             license: "MIT",
         },
         Credit { project: "Irelia", author: "AlsoSylv", url: "https://github.com/AlsoSylv/Irelia", license: "MIT" },
+        Credit {
+            project: "MayhemStatsTracker",
+            author: "MyNamesEMurray",
+            url: "https://github.com/MyNamesEMurray/MayhemStatsTracker",
+            license: "MIT",
+        },
+        Credit {
+            project: "rank-analysis",
+            author: "wnzzer",
+            url: "https://github.com/wnzzer/rank-analysis",
+            license: "MIT",
+        },
     ],
     options: &[
         Opt::toggle("show_rank", "Show rank", "Solo/Duo, Flex, TFT or Arena rank for the queue you're in.", true),
+        Opt::toggle("show_record", "Show wins and losses", "This split's record next to the rank.", false),
         Opt::toggle("show_stats", "Show KDA and CS", "Kills, deaths, assists and creep score in game.", true),
+        Opt::toggle(
+            "show_augments",
+            "Show augments",
+            "Arena and ARAM: Mayhem. Ones that give a summoner spell show during the game, all of them after it.",
+            true,
+        ),
+        Opt::choice(
+            "picture",
+            "Big picture",
+            "Champion art, or the icon of an augment you picked.",
+            "flash",
+            &[
+                ("flash", "New augments"),
+                ("champion", "Champion"),
+                ("augment", "Last augment"),
+            ],
+        ),
+        Opt::toggle(
+            "show_result",
+            "Show the result",
+            "Victory or defeat, Arena and TFT placement, and the LP it cost or won.",
+            true,
+        ),
+        Opt::toggle("show_mastery", "Show champion mastery", "Mastery level on the picture's hover.", true),
         Opt::toggle(
             "show_in_client",
             "Show while idle in the client",
             "Also fill the card on the home screen and after a game, not just in lobby, queue, champ select and games.",
+            true,
+        ),
+        Opt::toggle(
+            "hold",
+            "Stay above League's own status",
+            "League sets its own Discord status too. This resends your card every few seconds so it stays on top.",
             true,
         ),
     ],
@@ -74,24 +126,52 @@ const TICK: Duration = Duration::from_secs(5);
 const IDLE_TICK: Duration = Duration::from_secs(12);
 const RANK_EVERY: Duration = Duration::from_secs(600);
 const COMPANION_EVERY: Duration = Duration::from_secs(600);
+/// an Arena round is about a minute
+const STANDING_EVERY: Duration = Duration::from_secs(15);
 /// gameTime drifts by a few hundred ms between polls, don't move the clock for that
 const CLOCK_SLACK_MS: i64 = 2000;
-/// tft-eog-stats can lag behind the EndOfGame phase
-const EOG_TRIES: u8 = 3;
+/// match history and LP can take a while after the game, two minutes of ticks
+const OUTCOME_TRIES: u8 = 24;
+/// "New augments" shows a fresh pick this long
+const AUGMENT_FLASH_MS: i64 = 60_000;
+
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+enum Picture {
+    #[default]
+    Flash,
+    Champion,
+    Augment,
+}
 
 #[derive(Clone, Copy, Default)]
 struct Opts {
     rank: bool,
+    record: bool,
     stats: bool,
+    augments: bool,
+    picture: Picture,
+    result: bool,
+    mastery: bool,
     in_client: bool,
+    hold: bool,
 }
 
 impl Opts {
     fn from(s: &Settings) -> Opts {
         Opts {
             rank: s.flag("show_rank"),
+            record: s.flag("show_record"),
             stats: s.flag("show_stats"),
+            augments: s.flag("show_augments"),
+            picture: match s.choice("picture").as_str() {
+                "champion" => Picture::Champion,
+                "augment" => Picture::Augment,
+                _ => Picture::Flash,
+            },
+            result: s.flag("show_result"),
+            mastery: s.flag("show_mastery"),
             in_client: s.flag("show_in_client"),
+            hold: s.flag("hold"),
         }
     }
 }
@@ -104,18 +184,35 @@ const SCENARIOS: &[(&str, &str)] = &[
     ("locked", "Locked in"),
     ("loading", "Loading"),
     ("game", "In game"),
+    ("mayhem", "ARAM: Mayhem"),
+    ("augment", "New augment"),
     ("arena", "Arena"),
-    ("post", "Post game"),
+    ("post", "Victory"),
+    ("arena_post", "Arena result"),
     ("tft", "TFT"),
+    ("tft_post", "TFT result"),
     ("spectate", "Spectating"),
+    ("replay", "Replay"),
 ];
 
-fn sample_champ(alias: &str, name: &str, skin_num: i64, skin_name: &str) -> Resolved {
+fn sample_champ(key: i64, alias: &str, name: &str, skin_num: i64, skin_name: &str) -> Resolved {
     Resolved {
+        key,
         alias: alias.into(),
         name: name.into(),
         skin_num,
         skin_name: skin_name.into(),
+    }
+}
+
+const ICONS: &str = "https://raw.communitydragon.org/latest/game/assets/ux/cherry/augments/icons";
+
+fn sample_augment(name: &str, file: &str, rarity: &'static str, at_ms: i64) -> Augment {
+    Augment {
+        name: name.into(),
+        icon: Some(format!("{ICONS}/{file}_large.png")),
+        rarity,
+        at_ms,
     }
 }
 
@@ -124,7 +221,7 @@ fn sample_champ(alias: &str, name: &str, skin_num: i64, skin_name: &str) -> Reso
 fn preview(s: &Settings, scenario: &str) -> Preview {
     let o = Opts::from(s);
     let now = now_ms();
-    let ahri = sample_champ("Ahri", "Ahri", 86, "Immortalized Legend Ahri");
+    let ahri = sample_champ(103, "Ahri", "Ahri", 86, "Immortalized Legend Ahri");
     let ranked_game = Game {
         mode: "CLASSIC".into(),
         map: 11,
@@ -136,6 +233,7 @@ fn preview(s: &Settings, scenario: &str) -> Preview {
             creep_score: 112,
         })),
         start_ms: Some(now - (14 * 60 + 32) * 1000),
+        mastery: Some(12),
         ..Game::default()
     };
     let lobby = Lobby {
@@ -146,15 +244,26 @@ fn preview(s: &Settings, scenario: &str) -> Preview {
         max_players: 5,
         ..Lobby::default()
     };
+    let rank = |tier: &str, division: &str, lp: i64, wins: u32, losses: u32| Rank {
+        tier: tier.into(),
+        division: division.into(),
+        lp,
+        wins,
+        losses,
+        rated: None,
+    };
     let ranks = Ranks {
-        solo: Some("Gold II: 64 LP".into()),
-        tft: Some("Platinum IV: 12 LP".into()),
-        arena: Some("Gold · Rating: 1480".into()),
+        solo: Some(rank("GOLD", "II", 64, 41, 37)),
+        tft: Some(rank("PLATINUM", "IV", 12, 18, 15)),
+        arena: Some(Rank {
+            rated: Some(("PURPLE".into(), 1480)),
+            ..Rank::default()
+        }),
         ..Ranks::default()
     };
     let card = |queue: &str, lobby: Lobby, since_s: i64| {
         let rank = if o.rank {
-            ranks.for_queue(lobby.queue_id).map(str::to_string)
+            ranks.text_for(lobby.queue_id, o.record)
         } else {
             None
         };
@@ -170,7 +279,75 @@ fn preview(s: &Settings, scenario: &str) -> Preview {
                 .map(|u| (u, "Choncc the Wise".to_string())),
             since_ms: now - since_s * 1000,
             ranked: !custom && is_ranked_queue(lobby.queue_id),
+            now_ms: now,
         }
+    };
+    let mayhem_lobby = Lobby {
+        queue_id: 2400,
+        game_mode: "KIWI".into(),
+        map_id: 12,
+        players: 3,
+        max_players: 5,
+        ..Lobby::default()
+    };
+    let mayhem = |fresh: bool| Game {
+        mode: "KIWI".into(),
+        map: 12,
+        champ: Some(sample_champ(222, "Jinx", "Jinx", 1, "Crime City Jinx")),
+        stats: Some(Stats::Kda(live::Scores {
+            kills: 11,
+            deaths: 6,
+            assists: 23,
+            creep_score: 41,
+        })),
+        start_ms: Some(now - (9 * 60 + 48) * 1000),
+        augments: vec![
+            sample_augment("ADAPt", "adapt", "Silver", now - 300_000),
+            sample_augment("Apex Inventor", "apexinventor", "Gold", if fresh { now - 8_000 } else { now - 200_000 }),
+        ],
+        mastery: Some(7),
+        ..Game::default()
+    };
+    let arena_lobby = Lobby {
+        queue_id: 1700,
+        game_mode: "CHERRY".into(),
+        map_id: 30,
+        players: 2,
+        max_players: 2,
+        ..Lobby::default()
+    };
+    let arena = Game {
+        mode: "CHERRY".into(),
+        map: 30,
+        champ: Some(sample_champ(360, "Samira", "Samira", 30, "Soul Fighter Samira")),
+        stats: Some(Stats::Arena(
+            live::Scores {
+                kills: 6,
+                deaths: 2,
+                assists: 5,
+                creep_score: 0,
+            },
+            14,
+        )),
+        start_ms: Some(now - (11 * 60 + 5) * 1000),
+        augments: vec![sample_augment("Warmup Routine", "warmuproutine", "Prismatic", now - 400_000)],
+        standing: Some(2),
+        ..Game::default()
+    };
+    let tft_lobby = Lobby {
+        queue_id: 1100,
+        game_mode: "TFT".into(),
+        map_id: 22,
+        players: 1,
+        max_players: 1,
+        ..Lobby::default()
+    };
+    let tft = Game {
+        mode: "TFT".into(),
+        map: 22,
+        level: 7,
+        start_ms: Some(now - (18 * 60 + 40) * 1000),
+        ..Game::default()
     };
 
     let key = SCENARIOS
@@ -183,7 +360,7 @@ fn preview(s: &Settings, scenario: &str) -> Preview {
         "queue" => (Scene::Queue, card("Ranked Solo/Duo", lobby, 107)),
         "pick" => (
             Scene::ChampSelect {
-                champ: Some(sample_champ("Ahri", "Ahri", 0, "Ahri")),
+                champ: Some(sample_champ(103, "Ahri", "Ahri", 0, "Ahri")),
                 locked: false,
             },
             card("Ranked Solo/Duo", lobby, 38),
@@ -205,33 +382,9 @@ fn preview(s: &Settings, scenario: &str) -> Preview {
             Scene::Game(ranked_game.clone()),
             card("Ranked Solo/Duo", lobby, 0),
         ),
-        "arena" => {
-            let g = Game {
-                mode: "CHERRY".into(),
-                map: 30,
-                champ: Some(sample_champ("Samira", "Samira", 30, "Soul Fighter Samira")),
-                stats: Some(Stats::Arena(
-                    live::Scores {
-                        kills: 6,
-                        deaths: 2,
-                        assists: 5,
-                        creep_score: 0,
-                    },
-                    14,
-                )),
-                start_ms: Some(now - (11 * 60 + 5) * 1000),
-                ..Game::default()
-            };
-            let l = Lobby {
-                queue_id: 1700,
-                game_mode: "CHERRY".into(),
-                map_id: 30,
-                players: 2,
-                max_players: 2,
-                ..Lobby::default()
-            };
-            (Scene::Game(g), card("Arena", l, 0))
-        }
+        "mayhem" => (Scene::Game(mayhem(false)), card("ARAM: Mayhem", mayhem_lobby, 0)),
+        "augment" => (Scene::Game(mayhem(true)), card("ARAM: Mayhem", mayhem_lobby, 0)),
+        "arena" => (Scene::Game(arena.clone()), card("Arena", arena_lobby.clone(), 0)),
         "post" => {
             let g = Game {
                 stats: Some(Stats::Kda(live::Scores {
@@ -245,36 +398,58 @@ fn preview(s: &Settings, scenario: &str) -> Preview {
             (
                 Scene::PostGame {
                     game: Some(g),
-                    placement: None,
+                    outcome: Outcome {
+                        win: Some(true),
+                        rank: Some("+21 LP".into()),
+                        ..Outcome::default()
+                    },
                 },
                 card("Ranked Solo/Duo", lobby, 15),
             )
         }
-        "tft" => {
+        "arena_post" => {
             let g = Game {
-                mode: "TFT".into(),
-                map: 22,
-                level: 7,
-                start_ms: Some(now - (18 * 60 + 40) * 1000),
-                ..Game::default()
+                augments: vec![],
+                standing: None,
+                ..arena.clone()
             };
-            let l = Lobby {
-                queue_id: 1100,
-                game_mode: "TFT".into(),
-                map_id: 22,
-                players: 1,
-                max_players: 1,
-                ..Lobby::default()
-            };
-            (Scene::Game(g), card("Ranked Teamfight Tactics", l, 0))
+            (
+                Scene::PostGame {
+                    game: Some(g),
+                    outcome: Outcome {
+                        win: Some(true),
+                        placement: Some(2),
+                        rank: Some("+35 rating".into()),
+                        augments: vec![
+                            sample_augment("Warmup Routine", "warmuproutine", "Prismatic", 0),
+                            sample_augment("Apex Inventor", "apexinventor", "Gold", 0),
+                            sample_augment("ADAPt", "adapt", "Silver", 0),
+                        ],
+                    },
+                },
+                card("Arena", arena_lobby, 20),
+            )
         }
-        "spectate" => {
+        "tft" => (Scene::Game(tft.clone()), card("Ranked Teamfight Tactics", tft_lobby.clone(), 0)),
+        "tft_post" => (
+            Scene::PostGame {
+                game: Some(tft.clone()),
+                outcome: Outcome {
+                    placement: Some(3),
+                    rank: Some("+35 LP".into()),
+                    ..Outcome::default()
+                },
+            },
+            card("Ranked Teamfight Tactics", tft_lobby, 12),
+        ),
+        "spectate" | "replay" => {
             let g = Game {
                 mode: "ARAM".into(),
                 map: 12,
-                champ: Some(sample_champ("Lux", "Lux", 7, "Elementalist Lux")),
+                champ: Some(sample_champ(99, "Lux", "Lux", 7, "Elementalist Lux")),
                 start_ms: Some(now - (6 * 60 + 12) * 1000),
                 spectating: true,
+                replay: key == "replay",
                 ..Game::default()
             };
             (Scene::Game(g), card("ARAM", Lobby::default(), 0))
@@ -308,6 +483,25 @@ struct Game {
     level: u32,
     start_ms: Option<i64>,
     spectating: bool,
+    /// a replay from the client, shown like spectating
+    replay: bool,
+    /// in pick order, the ones the live api reveals
+    augments: Vec<Augment>,
+    /// Arena: where our duo stands, 1..=8
+    standing: Option<u32>,
+    mastery: Option<u32>,
+}
+
+/// How a game ended, read after it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Outcome {
+    win: Option<bool>,
+    /// Arena and TFT
+    placement: Option<u32>,
+    /// "+21 LP", "Promoted to Gold I"
+    rank: Option<String>,
+    /// every augment, from match history
+    augments: Vec<Augment>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,7 +519,7 @@ enum Scene {
     Game(Game),
     PostGame {
         game: Option<Game>,
-        placement: Option<u32>,
+        outcome: Outcome,
     },
 }
 
@@ -343,11 +537,13 @@ struct Card {
     since_ms: i64,
     /// Ranked Solo/Duo, Flex or TFT: champ select and the game itself compete
     ranked: bool,
+    /// for how long a new augment stays the picture
+    now_ms: i64,
 }
 
-/// 420 Solo/Duo, 440 Flex, 1100 Ranked TFT. Arena's rating isn't a ranked queue.
+/// 420 Solo/Duo, 440 Flex, 1100 Ranked TFT, 1160 Double Up. Arena's rating isn't a ranked queue.
 fn is_ranked_queue(queue_id: i64) -> bool {
-    matches!(queue_id, 420 | 440 | 1100)
+    matches!(queue_id, 420 | 440 | 1100 | 1160)
 }
 
 fn run(ctx: &Ctx) {
@@ -369,14 +565,22 @@ struct State {
     lcu: Option<Lcu>,
     game_api: ureq::Agent,
     champs: Champs,
+    augments: Augments,
+    locale_known: bool,
     phase: String,
     since_ms: i64,
     lobby: Option<Lobby>,
     refresh_lobby: bool,
     queues: HashMap<i64, QueueInfo>,
+    /// the running game's queue and id from the gameflow session, 0 until known
+    queue_id: i64,
+    game_id: i64,
     ranks: Ranks,
     ranks_at: Option<Instant>,
+    /// the game's queue before it started, to tell what it did to the rank
+    rank_before: Option<Rank>,
     icon: Option<i64>,
+    puuid: String,
     companion: Option<(String, String)>,
     companion_at: Option<Instant>,
     /// champ select: (champion key, full skin id, locked)
@@ -386,8 +590,14 @@ struct State {
     game: Option<Game>,
     game_up: bool,
     last_game: Option<Game>,
-    placement: Option<u32>,
-    eog_tries: u8,
+    /// summoner spell names seen this game, the first ones are the real spells
+    spells: HashSet<String>,
+    spells_known: bool,
+    mastery_tried: bool,
+    standing_at: Option<Instant>,
+    outcome: Outcome,
+    outcome_tries: u8,
+    outcome_done: bool,
 }
 
 impl State {
@@ -396,14 +606,20 @@ impl State {
             lcu: None,
             game_api: util::http::loopback_agent(),
             champs: Champs::new(ctx.cache_dir()),
+            augments: Augments::new(ctx.cache_dir()),
+            locale_known: false,
             phase: String::new(),
             since_ms: now_ms(),
             lobby: None,
             refresh_lobby: true,
             queues: HashMap::new(),
+            queue_id: 0,
+            game_id: 0,
             ranks: Ranks::default(),
             ranks_at: None,
+            rank_before: None,
             icon: None,
+            puuid: String::new(),
             companion: None,
             companion_at: None,
             pick: None,
@@ -412,8 +628,13 @@ impl State {
             game: None,
             game_up: false,
             last_game: None,
-            placement: None,
-            eog_tries: 0,
+            spells: HashSet::new(),
+            spells_known: false,
+            mastery_tried: false,
+            standing_at: None,
+            outcome: Outcome::default(),
+            outcome_tries: 0,
+            outcome_done: false,
         }
     }
 
@@ -421,6 +642,7 @@ impl State {
     fn tick(&mut self, target: &Target, o: Opts) -> bool {
         if self.lcu.is_none() {
             self.lcu = lcu::discover(target);
+            self.locale_known = false;
         }
         let mut answered = false;
         if self.lcu.is_some() {
@@ -435,14 +657,38 @@ impl State {
         }
 
         let in_game = matches!(self.phase.as_str(), "InProgress" | "Reconnect" | "Watching");
+        // a replay runs the game with the client idle
+        let replay = self.lcu.is_some() && self.phase == "None";
         // without a client the game api answering is the only signal
-        if in_game || self.lcu.is_none() {
-            self.game_up = self.game_tick(o);
+        if in_game || replay || self.lcu.is_none() {
+            self.game_up = self.game_tick(o, replay);
             answered |= self.game_up;
+            if replay && !self.game_up && self.game.is_some() {
+                self.game = None;
+                self.riot_id.clear();
+            }
         } else {
             self.game_up = false;
         }
         answered
+    }
+
+    fn new_game(&mut self) {
+        self.game = None;
+        self.last_game = None;
+        self.pick = None;
+        self.pick_champ = None;
+        self.riot_id.clear();
+        self.queue_id = 0;
+        self.game_id = 0;
+        self.rank_before = None;
+        self.spells.clear();
+        self.spells_known = false;
+        self.mastery_tried = false;
+        self.standing_at = None;
+        self.outcome = Outcome::default();
+        self.outcome_tries = 0;
+        self.outcome_done = false;
     }
 
     fn set_phase(&mut self, p: String) {
@@ -451,13 +697,7 @@ impl State {
         }
         match p.as_str() {
             "None" | "Lobby" | "Matchmaking" | "CheckedIntoTournament" => {
-                self.game = None;
-                self.last_game = None;
-                self.pick = None;
-                self.pick_champ = None;
-                self.placement = None;
-                self.eog_tries = 0;
-                self.riot_id.clear();
+                self.new_game();
                 if p == "None" {
                     self.lobby = None;
                 }
@@ -479,6 +719,15 @@ impl State {
         self.phase = p;
     }
 
+    /// the session's queue in a game, the lobby's before it
+    fn queue(&self) -> i64 {
+        if self.queue_id > 0 {
+            self.queue_id
+        } else {
+            self.lobby.as_ref().map(|l| l.queue_id).unwrap_or(0)
+        }
+    }
+
     fn client_tick(&mut self, o: Opts) -> Result<(), lcu::Down> {
         let Some(l) = self.lcu.take() else {
             return Ok(());
@@ -494,6 +743,17 @@ impl State {
         }
         let phase = self.phase.clone();
         let in_game = matches!(phase.as_str(), "InProgress" | "Reconnect" | "Watching");
+        let post_game = matches!(
+            phase.as_str(),
+            "WaitingForStats" | "PreEndOfGame" | "EndOfGame"
+        );
+
+        if !self.locale_known {
+            self.locale_known = true;
+            if let Some(r) = l.get::<lcu::RegionLocale>(lcu::LOCALE)? {
+                self.augments.set_locale(&r.locale);
+            }
+        }
 
         // member count changes while in the lobby, otherwise once per phase
         if phase == "Lobby" || self.refresh_lobby {
@@ -508,40 +768,56 @@ impl State {
                     .and_then(|m| m.current_lobby_status)
                     .map(|s| lcu::lobby_from_status(&s)),
             };
-            if let Some(mut lobby) = lobby {
-                if lobby.fixed_name.is_none()
-                    && lobby.queue_id > 0
-                    && !self.queues.contains_key(&lobby.queue_id)
-                {
-                    if let Some(q) = l.get::<QueueInfo>(&lcu::queue_path(lobby.queue_id))? {
-                        self.queues.insert(lobby.queue_id, q);
-                    }
-                }
-                // the metadata path has no mode or map, the queue does
-                if let Some(q) = self.queues.get(&lobby.queue_id) {
-                    if lobby.game_mode.is_empty() {
-                        lobby.game_mode = q.game_mode.clone();
-                    }
-                    if lobby.map_id == 0 {
-                        lobby.map_id = q.map_id;
-                    }
-                }
+            if let Some(lobby) = lobby {
                 self.lobby = Some(lobby);
             }
         }
 
-        if o.rank && !in_game && self.ranks_at.is_none_or(|t| t.elapsed() > RANK_EVERY) {
+        // the session knows the queue and game id even when the lobby is gone (reconnects)
+        if (in_game || post_game || phase == "ChampSelect") && (self.queue_id == 0 || self.game_id == 0) {
+            if let Some(s) = l.get::<lcu::Session>(lcu::SESSION)? {
+                if s.game_data.queue.id > 0 {
+                    self.queue_id = s.game_data.queue.id;
+                }
+                if s.game_data.game_id > 0 {
+                    self.game_id = s.game_data.game_id;
+                }
+            }
+        }
+
+        let qid = self.queue();
+        if qid > 0 && !self.queues.contains_key(&qid) && self.lobby.as_ref().is_none_or(|l| l.fixed_name.is_none()) {
+            if let Some(q) = l.get::<QueueInfo>(&lcu::queue_path(qid))? {
+                self.queues.insert(qid, q);
+            }
+        }
+        // the metadata path has no mode or map, the queue does
+        if let (Some(lobby), Some(q)) = (self.lobby.as_mut(), self.queues.get(&qid)) {
+            if lobby.game_mode.is_empty() {
+                lobby.game_mode = q.game_mode.clone();
+            }
+            if lobby.map_id == 0 {
+                lobby.map_id = q.map_id;
+            }
+        }
+
+        let want_ranks = o.rank || o.result;
+        if want_ranks && !in_game && self.ranks_at.is_none_or(|t| t.elapsed() > RANK_EVERY) {
             if let Some(r) = l.get::<lcu::RankedResp>(lcu::RANKED)? {
                 self.ranks = Ranks::from_resp(&r);
                 self.ranks_at = Some(Instant::now());
             }
         }
+        // the standing going in, for what the game did to it
+        if self.rank_before.is_none() && self.ranks_at.is_some() && matches!(phase.as_str(), "ChampSelect" | "GameStart" | "InProgress") {
+            self.rank_before = self.ranks.for_queue(qid).cloned();
+        }
 
-        if self.icon.is_none() && !in_game {
-            self.icon = l
-                .get::<lcu::Summoner>(lcu::SUMMONER)?
-                .map(|s| s.profile_icon_id)
-                .filter(|id| *id > 0);
+        if (self.icon.is_none() || self.puuid.is_empty()) && !in_game {
+            if let Some(s) = l.get::<lcu::Summoner>(lcu::SUMMONER)? {
+                self.icon = Some(s.profile_icon_id).filter(|id| *id > 0);
+                self.puuid = s.puuid;
+            }
         }
 
         if self.is_tft()
@@ -569,19 +845,122 @@ impl State {
             }
         }
 
-        let post_game = matches!(
-            phase.as_str(),
-            "WaitingForStats" | "PreEndOfGame" | "EndOfGame"
-        );
-        let tft_ended = self.last_game.as_ref().is_some_and(|g| g.mode == "TFT");
-        if post_game && tft_ended && self.placement.is_none() && self.eog_tries < EOG_TRIES {
-            self.eog_tries += 1;
-            self.placement = l
-                .get::<lcu::TftEog>(lcu::TFT_EOG)?
-                .map(|e| e.local_player.ffa_standing)
-                .filter(|p| (1..=8).contains(p));
+        if in_game && phase != "Watching" {
+            self.in_game_extras(l, o)?;
+        }
+        if post_game && !self.outcome_done && self.outcome_tries < OUTCOME_TRIES {
+            self.outcome_tries += 1;
+            self.read_outcome(l, o)?;
         }
         Ok(())
+    }
+
+    /// mastery once per game, Arena standing every round or so
+    fn in_game_extras(&mut self, l: &Lcu, o: Opts) -> Result<(), lcu::Down> {
+        let key = self
+            .game
+            .as_ref()
+            .and_then(|g| g.champ.as_ref())
+            .map(|c| c.key)
+            .unwrap_or(0);
+        if o.mastery && !self.mastery_tried && key > 0 {
+            self.mastery_tried = true;
+            let level = l
+                .get::<Vec<lcu::Mastery>>(lcu::MASTERY)?
+                .and_then(|list| list.into_iter().find(|m| m.champion_id == key))
+                .map(|m| m.champion_level)
+                .filter(|lv| *lv > 0);
+            if let Some(g) = self.game.as_mut() {
+                g.mastery = level;
+            }
+        }
+
+        let arena = self.game.as_ref().is_some_and(|g| g.mode == "CHERRY");
+        if arena && self.standing_at.is_none_or(|t| t.elapsed() > STANDING_EVERY) {
+            self.standing_at = Some(Instant::now());
+            let standing = l
+                .get::<lcu::GameclientEog>(lcu::GAMECLIENT_EOG)?
+                .and_then(|e| e.standing(self.game_id, &self.puuid));
+            if let (Some(g), Some(s)) = (self.game.as_mut(), standing) {
+                g.standing = Some(s);
+            }
+        }
+        Ok(())
+    }
+
+    /// Result, placement, every augment and the rank change, as they become available.
+    fn read_outcome(&mut self, l: &Lcu, o: Opts) -> Result<(), lcu::Down> {
+        let tft = self.last_game.as_ref().is_some_and(|g| g.mode == "TFT");
+        let mut found = false;
+        if tft {
+            if self.outcome.placement.is_none() {
+                self.outcome.placement = l
+                    .get::<lcu::TftEog>(lcu::TFT_EOG)?
+                    .map(|e| e.local_player.ffa_standing)
+                    .filter(|p| (1..=8).contains(p));
+            }
+            found = self.outcome.placement.is_some();
+        } else if self.outcome.win.is_none() {
+            if self.game_id == 0 {
+                self.game_id = l
+                    .get::<lcu::EogBlock>(lcu::EOG)?
+                    .map(|e| e.game_id)
+                    .unwrap_or(0);
+            }
+            if self.game_id > 0 && !self.puuid.is_empty() {
+                if let Some(m) = l.get::<lcu::Match>(&lcu::match_path(self.game_id))? {
+                    if let Some(me) = m.mine(&self.puuid).cloned() {
+                        found = true;
+                        self.apply_match(&me, o);
+                    }
+                }
+            }
+        } else {
+            found = true;
+        }
+
+        let mut rank_done = self.outcome.rank.is_some() || self.rank_before.is_none();
+        if !rank_done {
+            if let Some(r) = l.get::<lcu::RankedResp>(lcu::RANKED)? {
+                self.ranks = Ranks::from_resp(&r);
+                self.ranks_at = Some(Instant::now());
+                let after = self.ranks.for_queue(self.queue());
+                self.outcome.rank = self
+                    .rank_before
+                    .as_ref()
+                    .zip(after)
+                    .and_then(|(b, a)| lcu::rank_change(b, a));
+                rank_done = self.outcome.rank.is_some();
+            }
+        }
+        self.outcome_done = found && rank_done;
+        Ok(())
+    }
+
+    fn apply_match(&mut self, me: &lcu::MatchStats, o: Opts) {
+        self.outcome.win = Some(me.win);
+        self.outcome.placement = Some(me.subteam_placement).filter(|p| (1..=8).contains(p));
+        if o.augments {
+            self.outcome.augments = me
+                .augment_ids()
+                .into_iter()
+                .filter_map(|id| self.augments.by_id(id))
+                .collect();
+        }
+        // the final line beats the last poll from a few seconds before the end
+        if let Some(g) = self.last_game.as_mut() {
+            let s = live::Scores {
+                kills: me.kills,
+                deaths: me.deaths,
+                assists: me.assists,
+                creep_score: me.total_minions_killed + me.neutral_minions_killed,
+            };
+            g.stats = match g.stats {
+                Some(Stats::Arena(_, lv)) => Some(Stats::Arena(s, me.champ_level.max(lv))),
+                Some(Stats::Swarm(..)) => g.stats,
+                _ => Some(Stats::Kda(s)),
+            };
+        }
     }
 
     fn is_tft(&self) -> bool {
@@ -595,7 +974,7 @@ impl State {
     }
 
     /// league-rpc's poller: champion once, scores and clock every tick.
-    fn game_tick(&mut self, o: Opts) -> bool {
+    fn game_tick(&mut self, o: Opts, replay: bool) -> bool {
         let Some(gs) = live::get::<live::GameStats>(&self.game_api, "gamestats") else {
             return false;
         };
@@ -604,6 +983,7 @@ impl State {
         let g = self.game.get_or_insert_with(Game::default);
         g.mode = gs.game_mode;
         g.map = gs.map_number;
+        g.replay = replay;
         let start = now_ms() - (gs.game_time.max(0.0) * 1000.0) as i64;
         if g.start_ms
             .is_none_or(|s| (s - start).abs() > CLOCK_SLACK_MS)
@@ -618,14 +998,14 @@ impl State {
             return true;
         }
 
-        if self.riot_id.is_empty() && !watching {
+        if self.riot_id.is_empty() && !watching && !replay {
             if let Some(ap) = live::get::<live::ActivePlayer>(&self.game_api, "activeplayer") {
                 self.riot_id = ap.id().to_string();
                 // spectator mode answers with an error object instead of a player
                 g.spectating = no_client && self.riot_id.is_empty();
             }
         }
-        if watching {
+        if watching || replay {
             g.spectating = true;
         }
 
@@ -662,6 +1042,30 @@ impl State {
                 (_, Some(s)) => Some(Stats::Kda(s)),
             };
         }
+
+        let mode = augments::mode_of(&g.mode);
+        if let (true, Some(mode), false, false) = (o.augments, mode, g.spectating, self.riot_id.is_empty()) {
+            if let Some(sp) =
+                live::get::<live::SummonerSpells>(&self.game_api, &live::spells_path(&self.riot_id))
+            {
+                let now = now_ms();
+                let names: Vec<String> = sp.names().map(str::to_string).collect();
+                for name in names {
+                    if !self.spells.insert(name.clone()) || !self.spells_known {
+                        continue;
+                    }
+                    let Some(a) = self.augments.by_spell_name(&name, mode, now) else {
+                        continue;
+                    };
+                    let g = self.game.get_or_insert_with(Game::default);
+                    if !g.augments.iter().any(|x| x.name == a.name) {
+                        g.augments.push(a);
+                    }
+                }
+                // the first answer is the summoners picked in champ select
+                self.spells_known = true;
+            }
+        }
         true
     }
 
@@ -669,6 +1073,7 @@ impl State {
         let s = match self.phase.as_str() {
             // no client: only the game api
             "" => Scene::Game(self.game.clone().filter(|_| self.game_up)?),
+            "None" if self.game_up => Scene::Game(self.game.clone()?),
             "InProgress" | "Reconnect" | "Watching" => match (&self.game, self.game_up) {
                 (Some(g), true) => Scene::Game(g.clone()),
                 _ => Scene::Loading {
@@ -683,7 +1088,7 @@ impl State {
             "Lobby" => Scene::Lobby,
             "WaitingForStats" | "PreEndOfGame" | "EndOfGame" => Scene::PostGame {
                 game: self.last_game.clone(),
-                placement: self.placement,
+                outcome: self.outcome.clone(),
             },
             _ => Scene::Client,
         };
@@ -692,6 +1097,7 @@ impl State {
 
     fn card(&self, o: Opts) -> Card {
         let lobby = self.lobby.as_ref();
+        let qid = self.queue();
         let mode = self
             .game
             .as_ref()
@@ -700,15 +1106,9 @@ impl State {
             .filter(|m| !m.is_empty())
             .or_else(|| lobby.map(|l| l.game_mode.clone()))
             .unwrap_or_default();
-        let queue = queue_name(
-            lobby,
-            lobby.and_then(|l| self.queues.get(&l.queue_id)),
-            &mode,
-        );
+        let queue = queue_name(lobby, self.queues.get(&qid), &mode);
         let rank = if o.rank {
-            lobby
-                .and_then(|l| self.ranks.for_queue(l.queue_id))
-                .map(str::to_string)
+            self.ranks.text_for(qid, o.record)
         } else {
             None
         };
@@ -725,7 +1125,8 @@ impl State {
             icon: self.icon.map(champs::profile_icon_url),
             companion: self.companion.clone(),
             since_ms: self.since_ms,
-            ranked: lobby.is_some_and(|l| !custom && is_ranked_queue(l.queue_id)),
+            ranked: !custom && is_ranked_queue(qid),
+            now_ms: now_ms(),
         }
     }
 }
@@ -762,6 +1163,8 @@ fn mode_name(mode: &str) -> String {
             "Summoner's Rift (Tutorial)"
         }
         "URF" => "Summoner's Rift (URF)",
+        "ARURF" => "ARURF",
+        "ONEFORALL" => "One for All",
         "NEXUSBLITZ" => "Nexus Blitz",
         "CHERRY" => "Arena",
         "STRAWBERRY" => "Swarm",
@@ -828,8 +1231,57 @@ fn champ_details(queue: &str, champ: Option<&Resolved>) -> Option<String> {
     }
 }
 
+/// skin, rank, "Mastery 12" and the augment names, whichever are on, joined by middle dots
+fn hover(skin: Option<&str>, rank: Option<&str>, mastery: Option<u32>, augments: &[Augment]) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    parts.extend(skin.map(str::to_string));
+    parts.extend(rank.map(str::to_string));
+    parts.extend(mastery.map(|m| format!("Mastery {m}")));
+    if !augments.is_empty() {
+        parts.push(augments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "));
+    }
+    clamp(parts.join(" · "))
+}
+
+/// The augment that takes the big picture, when the setting and timing call for one.
+fn featured<'a>(augments: &'a [Augment], c: &Card, o: Opts) -> Option<&'a Augment> {
+    if !o.augments {
+        return None;
+    }
+    let last = augments.last().filter(|a| a.icon.is_some())?;
+    match o.picture {
+        Picture::Augment => Some(last),
+        Picture::Flash => (last.at_ms > 0 && c.now_ms - last.at_ms < AUGMENT_FLASH_MS).then_some(last),
+        Picture::Champion => None,
+    }
+}
+
+fn augment_art(a: &Augment) -> (Option<String>, Option<String>) {
+    (a.icon.clone(), clamp(format!("{} · {} augment", a.name, a.rarity)))
+}
+
+/// "Victory", "2nd place" or "Game over", then the rank change
+fn result_line(out: &Outcome, o: Opts) -> String {
+    if !o.result {
+        return "Game over".to_string();
+    }
+    let head = match (out.placement, out.win) {
+        (Some(p), _) => format!("{} place", ordinal(p)),
+        (None, Some(true)) => "Victory".to_string(),
+        (None, Some(false)) => "Defeat".to_string(),
+        (None, None) => "Game over".to_string(),
+    };
+    match &out.rank {
+        Some(r) => format!("{head} · {r}"),
+        None => head,
+    }
+}
+
 fn build(scene: &Scene, c: &Card, o: Opts) -> Option<Live> {
-    let mut live = Live::default();
+    let mut live = Live {
+        hold: o.hold,
+        ..Live::default()
+    };
     match scene {
         Scene::Client => {
             if !o.in_client {
@@ -884,14 +1336,15 @@ fn build(scene: &Scene, c: &Card, o: Opts) -> Option<Live> {
             }
         }
         Scene::Game(g) if g.spectating => {
+            let what = if g.replay { "Watching a replay" } else { "Spectating" };
             live.details = clamp(mode_name(&g.mode)).or_else(|| clamp(&c.queue));
-            live.state = clamp("Spectating");
+            live.state = clamp(what);
             live.start_ms = g.start_ms;
             live.large_image = Some(match &g.champ {
                 Some(ch) => champs::tile_url(&ch.alias, ch.skin_num),
                 None => champs::map_icon_url(g.map),
             });
-            live.large_text = clamp("Spectating");
+            live.large_text = clamp(what);
         }
         Scene::Game(g) if g.mode == "TFT" => {
             live.competing = c.ranked;
@@ -910,29 +1363,34 @@ fn build(scene: &Scene, c: &Card, o: Opts) -> Option<Live> {
         Scene::Game(g) => {
             live.competing = c.ranked;
             live.details = champ_details(&c.queue, g.champ.as_ref());
-            if o.stats {
-                live.state = g.stats.as_ref().and_then(|s| clamp(stats_line(s)));
-            }
+            let standing = g.standing.map(|s| format!("{} place", ordinal(s)));
+            let stats = g.stats.as_ref().filter(|_| o.stats).map(stats_line);
+            live.state = match (standing, stats) {
+                (Some(p), Some(s)) => clamp(format!("{p} · {s}")),
+                (p, s) => p.or(s).and_then(clamp),
+            };
             live.start_ms = g.start_ms;
-            match &g.champ {
-                Some(ch) => {
-                    live.large_image = Some(champs::tile_url(&ch.alias, ch.skin_num));
-                    live.large_text = clamp(with_rank(&ch.skin_name, c.rank.as_deref()));
-                }
-                None => live.large_text = c.rank.as_deref().and_then(clamp),
+            let augs: &[Augment] = if o.augments { &g.augments } else { &[] };
+            if let Some(a) = featured(augs, c, o) {
+                (live.large_image, live.large_text) = augment_art(a);
+            } else {
+                live.large_image = g.champ.as_ref().map(|ch| champs::tile_url(&ch.alias, ch.skin_num));
+                live.large_text = hover(
+                    g.champ.as_ref().map(|ch| ch.skin_name.as_str()),
+                    c.rank.as_deref(),
+                    g.mastery.filter(|_| o.mastery),
+                    augs,
+                );
             }
         }
-        Scene::PostGame { game, placement } => {
+        Scene::PostGame { game, outcome } => {
             if !o.in_client {
                 return None;
             }
             match game {
                 Some(g) if g.mode == "TFT" => {
                     live.details = clamp(&c.queue);
-                    live.state = clamp(match placement {
-                        Some(p) => format!("Game over · Placed {}", ordinal(*p)),
-                        None => "Game over".to_string(),
-                    });
+                    live.state = clamp(result_line(outcome, o));
                     if let Some((url, name)) = &c.companion {
                         live.large_image = Some(url.clone());
                         live.large_text = clamp(name);
@@ -940,14 +1398,25 @@ fn build(scene: &Scene, c: &Card, o: Opts) -> Option<Live> {
                 }
                 Some(g) if !g.spectating => {
                     live.details = champ_details(&c.queue, g.champ.as_ref());
-                    let stats = g.stats.as_ref().filter(|_| o.stats).map(stats_line);
-                    live.state = clamp(match stats {
-                        Some(s) => format!("Game over · {s}"),
-                        None => "Game over".to_string(),
+                    let head = result_line(outcome, o);
+                    live.state = clamp(match g.stats.as_ref().filter(|_| o.stats).map(stats_line) {
+                        Some(s) => format!("{head} · {s}"),
+                        None => head,
                     });
-                    if let Some(ch) = &g.champ {
-                        live.large_image = Some(champs::tile_url(&ch.alias, ch.skin_num));
-                        live.large_text = clamp(&ch.skin_name);
+                    // match history has all of them, the live api only some
+                    let augs: &[Augment] = match (o.augments, outcome.augments.is_empty()) {
+                        (false, _) => &[],
+                        (true, false) => &outcome.augments,
+                        (true, true) => &g.augments,
+                    };
+                    match augs.last().filter(|a| o.picture == Picture::Augment && a.icon.is_some()) {
+                        Some(a) => (live.large_image, live.large_text) = augment_art(a),
+                        None => {
+                            live.large_image =
+                                g.champ.as_ref().map(|ch| champs::tile_url(&ch.alias, ch.skin_num));
+                            live.large_text =
+                                hover(g.champ.as_ref().map(|ch| ch.skin_name.as_str()), None, None, augs);
+                        }
                     }
                 }
                 _ => {
@@ -967,12 +1436,19 @@ mod tests {
 
     const ON: Opts = Opts {
         rank: true,
+        record: false,
         stats: true,
+        augments: true,
+        picture: Picture::Flash,
+        result: true,
+        mastery: true,
         in_client: true,
+        hold: true,
     };
 
     fn chogath() -> Resolved {
         Resolved {
+            key: 31,
             alias: "Chogath".into(),
             name: "Cho'Gath".into(),
             skin_num: 5,
@@ -988,7 +1464,17 @@ mod tests {
             party: Some([2, 5]),
             icon: Some(champs::profile_icon_url(29)),
             since_ms: 1_000,
+            now_ms: 1_000_000,
             ..Card::default()
+        }
+    }
+
+    fn aug(name: &str, at_ms: i64) -> Augment {
+        Augment {
+            name: name.into(),
+            icon: Some(format!("https://x/{name}.png")),
+            rarity: "Gold",
+            at_ms,
         }
     }
 
@@ -1027,6 +1513,7 @@ mod tests {
                 creep_score: 182,
             })),
             start_ms: Some(42),
+            mastery: Some(9),
             ..Game::default()
         };
         let l = build(&Scene::Game(g.clone()), &card(), ON).unwrap();
@@ -1038,9 +1525,10 @@ mod tests {
         );
         assert_eq!(
             l.large_text.as_deref(),
-            Some("Battlecast Prime Cho'Gath · Gold IV: 57 LP")
+            Some("Battlecast Prime Cho'Gath · Gold IV: 57 LP · Mastery 9")
         );
         assert_eq!(l.start_ms, Some(42));
+        assert!(l.hold);
 
         let l = build(
             &Scene::Game(g),
@@ -1048,11 +1536,137 @@ mod tests {
             Opts {
                 rank: false,
                 stats: false,
-                in_client: true,
+                mastery: false,
+                hold: false,
+                ..ON
             },
         )
         .unwrap();
         assert_eq!(l.state, None);
+        // the rank comes with the card, `card()` leaves it out when show_rank is off
+        assert_eq!(l.large_text.as_deref(), Some("Battlecast Prime Cho'Gath · Gold IV: 57 LP"));
+        assert!(!l.hold);
+    }
+
+    #[test]
+    fn augments_take_the_picture_for_a_minute() {
+        let c = card();
+        let g = Game {
+            mode: "KIWI".into(),
+            champ: Some(chogath()),
+            augments: vec![aug("ADAPt", 1), aug("Tank Engine", c.now_ms - 10_000)],
+            ..Game::default()
+        };
+        let l = build(&Scene::Game(g.clone()), &c, ON).unwrap();
+        assert_eq!(l.large_image.as_deref(), Some("https://x/Tank Engine.png"));
+        assert_eq!(l.large_text.as_deref(), Some("Tank Engine · Gold augment"));
+
+        let later = Card {
+            now_ms: c.now_ms + AUGMENT_FLASH_MS,
+            ..c.clone()
+        };
+        let l = build(&Scene::Game(g.clone()), &later, ON).unwrap();
+        assert!(l.large_image.unwrap().ends_with("Chogath_5.jpg"));
+        assert_eq!(
+            l.large_text.as_deref(),
+            Some("Battlecast Prime Cho'Gath · Gold IV: 57 LP · ADAPt, Tank Engine")
+        );
+
+        let keep = Opts {
+            picture: Picture::Augment,
+            ..ON
+        };
+        let l = build(&Scene::Game(g.clone()), &later, keep).unwrap();
+        assert_eq!(l.large_image.as_deref(), Some("https://x/Tank Engine.png"));
+
+        let champ = Opts {
+            picture: Picture::Champion,
+            ..ON
+        };
+        assert!(build(&Scene::Game(g.clone()), &c, champ).unwrap().large_image.unwrap().ends_with("Chogath_5.jpg"));
+
+        let off = Opts {
+            augments: false,
+            ..ON
+        };
+        let l = build(&Scene::Game(g), &c, off).unwrap();
+        assert_eq!(l.large_text.as_deref(), Some("Battlecast Prime Cho'Gath · Gold IV: 57 LP"));
+    }
+
+    #[test]
+    fn arena_standing_leads_the_line() {
+        let g = Game {
+            mode: "CHERRY".into(),
+            champ: Some(chogath()),
+            stats: Some(Stats::Arena(
+                live::Scores {
+                    kills: 3,
+                    deaths: 1,
+                    assists: 4,
+                    creep_score: 0,
+                },
+                12,
+            )),
+            standing: Some(2),
+            ..Game::default()
+        };
+        let l = build(&Scene::Game(g), &card(), ON).unwrap();
+        assert_eq!(l.state.as_deref(), Some("2nd place · 3/1/4 · Level 12"));
+    }
+
+    #[test]
+    fn post_game_result() {
+        let g = Game {
+            mode: "CLASSIC".into(),
+            champ: Some(chogath()),
+            stats: Some(Stats::Kda(live::Scores {
+                kills: 9,
+                deaths: 3,
+                assists: 11,
+                creep_score: 214,
+            })),
+            ..Game::default()
+        };
+        let won = Outcome {
+            win: Some(true),
+            rank: Some("+21 LP".into()),
+            ..Outcome::default()
+        };
+        let scene = |outcome: Outcome| Scene::PostGame {
+            game: Some(g.clone()),
+            outcome,
+        };
+        let l = build(&scene(won.clone()), &card(), ON).unwrap();
+        assert_eq!(l.state.as_deref(), Some("Victory · +21 LP · 9/3/11 · 214 CS"));
+        assert_eq!(l.large_text.as_deref(), Some("Battlecast Prime Cho'Gath"));
+
+        let lost = Outcome {
+            win: Some(false),
+            ..Outcome::default()
+        };
+        assert_eq!(build(&scene(lost), &card(), ON).unwrap().state.as_deref(), Some("Defeat · 9/3/11 · 214 CS"));
+        let pending = build(&scene(Outcome::default()), &card(), ON).unwrap();
+        assert_eq!(pending.state.as_deref(), Some("Game over · 9/3/11 · 214 CS"));
+        let quiet = Opts {
+            result: false,
+            ..ON
+        };
+        assert_eq!(build(&scene(won), &card(), quiet).unwrap().state.as_deref(), Some("Game over · 9/3/11 · 214 CS"));
+
+        let arena = Outcome {
+            win: Some(true),
+            placement: Some(2),
+            augments: vec![aug("Warmup Routine", 0), aug("ADAPt", 0)],
+            ..Outcome::default()
+        };
+        let l = build(&scene(arena.clone()), &card(), ON).unwrap();
+        assert!(l.state.unwrap().starts_with("2nd place · "));
+        assert_eq!(l.large_text.as_deref(), Some("Battlecast Prime Cho'Gath · Warmup Routine, ADAPt"));
+        let pic = Opts {
+            picture: Picture::Augment,
+            ..ON
+        };
+        assert_eq!(build(&scene(arena), &card(), pic).unwrap().large_image.as_deref(), Some("https://x/ADAPt.png"));
     }
 
     #[test]
@@ -1085,13 +1699,17 @@ mod tests {
         let l = build(
             &Scene::PostGame {
                 game: Some(g),
-                placement: Some(3),
+                outcome: Outcome {
+                    placement: Some(3),
+                    rank: Some("+35 LP".into()),
+                    ..Outcome::default()
+                },
             },
             &c,
             ON,
         )
         .unwrap();
-        assert_eq!(l.state.as_deref(), Some("Game over · Placed 3rd"));
+        assert_eq!(l.state.as_deref(), Some("3rd place · +35 LP"));
     }
 
     #[test]
@@ -1136,7 +1754,7 @@ mod tests {
         assert!(build(
             &Scene::PostGame {
                 game: None,
-                placement: None
+                outcome: Outcome::default(),
             },
             &c,
             off
@@ -1163,6 +1781,7 @@ mod tests {
         };
         assert_eq!(queue_name(None, Some(&q), "CLASSIC"), "Ranked Solo/Duo");
         assert_eq!(queue_name(None, None, "ARAM"), "Howling Abyss (ARAM)");
+        assert_eq!(queue_name(None, None, "KIWI"), "ARAM: Mayhem");
         assert_eq!(queue_name(None, None, ""), "League of Legends");
         let l = Lobby {
             fixed_name: Some("Custom Game"),
@@ -1178,7 +1797,7 @@ mod tests {
         assert_eq!(on.state.as_deref(), Some("5/2/7 · 112 CS"));
         assert_eq!(
             on.large_text.as_deref(),
-            Some("Immortalized Legend Ahri · Gold II: 64 LP")
+            Some("Immortalized Legend Ahri · Gold II: 64 LP · Mastery 12")
         );
         assert!(on
             .large_image
@@ -1191,7 +1810,7 @@ mod tests {
         .live;
         assert_eq!(no_stats.state, None);
         let no_rank = preview(
-            &Settings::new(&MANIFEST, serde_json::json!({ "show_rank": false })),
+            &Settings::new(&MANIFEST, serde_json::json!({ "show_rank": false, "show_mastery": false })),
             "game",
         )
         .live;
@@ -1199,6 +1818,8 @@ mod tests {
             no_rank.large_text.as_deref(),
             Some("Immortalized Legend Ahri")
         );
+        let record = preview(&Settings::new(&MANIFEST, serde_json::json!({ "show_record": true })), "lobby").live;
+        assert_eq!(record.state.as_deref(), Some("In lobby · Gold II: 64 LP · 41W 37L"));
     }
 
     #[test]
@@ -1224,6 +1845,10 @@ mod tests {
         );
         let p = preview(&s, "locked").live;
         assert_eq!(p.state.as_deref(), Some("Locked in Ahri · Gold II: 64 LP"));
+        assert!(preview(&s, "augment").live.large_image.unwrap().ends_with("apexinventor_large.png"));
+        assert!(preview(&s, "mayhem").live.large_image.unwrap().ends_with(".jpg"));
+        assert_eq!(preview(&s, "replay").live.state.as_deref(), Some("Watching a replay"));
+        assert_eq!(preview(&s, "post").live.state.as_deref(), Some("Victory · +21 LP · 9/3/11 · 214 CS"));
     }
 
     #[test]
@@ -1232,7 +1857,7 @@ mod tests {
         for key in ["pick", "locked", "loading", "game", "tft"] {
             assert!(preview(&s, key).live.competing, "{key}");
         }
-        for key in ["client", "lobby", "queue", "arena", "post", "spectate"] {
+        for key in ["client", "lobby", "queue", "mayhem", "augment", "arena", "post", "arena_post", "tft_post", "spectate", "replay"] {
             assert!(!preview(&s, key).live.competing, "{key}");
         }
         let mut c = card();
@@ -1242,7 +1867,7 @@ mod tests {
             ..Game::default()
         };
         assert!(!build(&Scene::Game(g), &c, ON).unwrap().competing);
-        assert!(!is_ranked_queue(450) && !is_ranked_queue(1700) && is_ranked_queue(440));
+        assert!(!is_ranked_queue(450) && !is_ranked_queue(1700) && is_ranked_queue(440) && is_ranked_queue(1160));
     }
 
     #[test]
@@ -1262,9 +1887,11 @@ mod tests {
             start_ms: Some(1),
             ..Game::default()
         };
-        let l = build(&Scene::Game(g), &card(), ON).unwrap();
+        let l = build(&Scene::Game(g.clone()), &card(), ON).unwrap();
         assert_eq!(l.details.as_deref(), Some("Howling Abyss (ARAM)"));
         assert_eq!(l.state.as_deref(), Some("Spectating"));
         assert!(l.large_image.unwrap().contains("/aram/"));
+        let replay = Game { replay: true, ..g };
+        assert_eq!(build(&Scene::Game(replay), &card(), ON).unwrap().state.as_deref(), Some("Watching a replay"));
     }
 }

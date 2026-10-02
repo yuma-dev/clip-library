@@ -85,6 +85,33 @@ pub fn scores_path(riot_id: &str) -> String {
     format!("playerscores?riotId={}", query_escape(riot_id))
 }
 
+/// playersummonerspells: a few hundred bytes, polled for augments instead of allgamedata
+#[derive(Deserialize, Default, Debug)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SummonerSpells {
+    pub summoner_spell_one: Spell,
+    pub summoner_spell_two: Spell,
+}
+
+#[derive(Deserialize, Default, Debug)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Spell {
+    pub display_name: String,
+}
+
+impl SummonerSpells {
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        [&self.summoner_spell_one, &self.summoner_spell_two]
+            .into_iter()
+            .map(|s| s.display_name.as_str())
+            .filter(|n| !n.is_empty())
+    }
+}
+
+pub fn spells_path(riot_id: &str) -> String {
+    format!("playersummonerspells?riotId={}", query_escape(riot_id))
+}
+
 /// Go's url.QueryEscape, which league-rpc uses on the "name#tag" riot id
 pub fn query_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);

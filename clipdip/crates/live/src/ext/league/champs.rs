@@ -5,13 +5,13 @@
 //! ~35 KB instead of Meraki's multi-MB dump. Both cached on disk.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use crate::util;
+use super::store::Store;
 
 const CDRAGON_DATA: &str =
     "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1";
@@ -24,8 +24,6 @@ const CDRAGON_ASSETS: &str =
 /// a patch every two weeks, a new champion or skin shows up as a miss and refetches
 const SUMMARY_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
 const CHAMPION_MAX_AGE: Duration = Duration::from_secs(3 * 24 * 3600);
-/// don't hammer CommunityDragon when it or the network is down
-const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Deserialize, Clone)]
 #[serde(default)]
@@ -69,6 +67,8 @@ struct Chroma {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
+    /// numeric champion id, 31; 0 when CommunityDragon was out of reach
+    pub key: i64,
     /// Data Dragon id, "Chogath"
     pub alias: String,
     /// "Cho'Gath"
@@ -80,23 +80,19 @@ pub struct Resolved {
 }
 
 pub struct Champs {
-    dir: Option<PathBuf>,
-    agent: ureq::Agent,
+    store: Store,
     summary: Option<Vec<Summary>>,
     summary_refetched: bool,
     champions: HashMap<i64, Champion>,
-    failed_at: Option<Instant>,
 }
 
 impl Champs {
     pub fn new(dir: Option<PathBuf>) -> Champs {
         Champs {
-            dir,
-            agent: util::http::agent(),
+            store: Store::new(dir),
             summary: None,
             summary_refetched: false,
             champions: HashMap::new(),
-            failed_at: None,
         }
     }
 
@@ -126,6 +122,7 @@ impl Champs {
                 display.to_string()
             };
             return Some(Resolved {
+                key: 0,
                 alias,
                 skin_name: name.clone(),
                 name,
@@ -188,6 +185,7 @@ impl Champs {
             None => (0, s.name.clone()),
         };
         Resolved {
+            key: s.id,
             alias: s.alias.clone(),
             name: s.name.clone(),
             skin_num,
@@ -204,42 +202,11 @@ impl Champs {
     }
 
     fn fetch_to<T: DeserializeOwned>(&mut self, remote: &str, cached: &str) -> Option<T> {
-        if self.failed_at.is_some_and(|t| t.elapsed() < RETRY_AFTER) {
-            return None;
-        }
-        let body = self
-            .agent
-            .get(&format!("{CDRAGON_DATA}/{remote}"))
-            .call()
-            .ok()
-            .and_then(|r| r.into_string().ok());
-        let parsed = body
-            .as_deref()
-            .and_then(|b| serde_json::from_str::<T>(b).ok().map(|v| (b, v)));
-        let Some((raw, value)) = parsed else {
-            self.failed_at = Some(Instant::now());
-            return None;
-        };
-        if let Some(dir) = &self.dir {
-            write_atomic(&dir.join(cached), raw);
-        }
-        Some(value)
+        self.store.fetch(&format!("{CDRAGON_DATA}/{remote}"), cached)
     }
 
     fn load_cached<T: DeserializeOwned>(&self, name: &str, max_age: Duration) -> Option<T> {
-        let path = self.dir.as_ref()?.join(name);
-        let age = std::fs::metadata(&path).ok()?.modified().ok()?;
-        if SystemTime::now().duration_since(age).unwrap_or_default() > max_age {
-            return None;
-        }
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-    }
-}
-
-fn write_atomic(path: &Path, body: &str) {
-    let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+        self.store.cached(name, max_age)
     }
 }
 

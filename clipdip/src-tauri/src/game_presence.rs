@@ -148,6 +148,7 @@ impl GamePresence {
             party: l.party,
             playtime: l.playtime,
             competing,
+            hold: l.hold,
         };
         let activity = session.filter(|s| self.allowed(&s.game.id)).map(|s| {
             let st = self.stats.lock().unwrap();
