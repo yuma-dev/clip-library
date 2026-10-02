@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clipdip_gamedb::{Game, GameDb};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HWND, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessTimes, OpenProcess, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -184,7 +184,12 @@ impl Watcher {
             return;
         }
         if p.weak && self.away_since.map(|t| t.elapsed() >= WEAK_LAPSE).unwrap_or(false) {
-            self.end("out of focus");
+            // focus can come back without a foreground event (a popup closing hands it back), so
+            // look at what's in front before ending a session someone is still playing
+            self.consider(unsafe { GetForegroundWindow() });
+            if self.away_since.is_some() {
+                self.end("out of focus");
+            }
         }
     }
 
@@ -199,23 +204,32 @@ impl Watcher {
         }
         let current = self.slot.lock().unwrap().clone();
         if current.as_ref().map(|s| s.pid) == Some(pid) {
-            self.away_since = None;
+            self.back();
             return;
         }
+        let path = exe_path_for_pid(pid);
         if current.is_some() && self.away_since.is_none() {
             self.away_since = Some(Instant::now());
+            let exe = path.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
+            debug!(exe = exe.as_deref().unwrap_or("?"), pid, "gamewatch: focus left the game");
         }
-        let Some(path) = exe_path_for_pid(pid) else { return };
+        let Some(path) = path else { return };
         let Some(game) = self.db.resolve(Some(&path), None, &mut || window_title(hwnd)) else {
             return;
         };
         // launcher and game resolving to the same app (LeagueClientUx and League of Legends)
         // keep the session and its start time
         if current.as_ref().map(|s| s.game.id == game.id).unwrap_or(false) {
-            self.away_since = None;
+            self.back();
             return;
         }
         self.start(pid, game, &path);
+    }
+
+    fn back(&mut self) {
+        if let Some(t) = self.away_since.take() {
+            debug!(away_secs = t.elapsed().as_secs(), "gamewatch: focus back on the game");
+        }
     }
 
     fn start(&mut self, pid: u32, game: Game, path: &Path) {

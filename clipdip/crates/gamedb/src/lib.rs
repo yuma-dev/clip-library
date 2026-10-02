@@ -54,16 +54,30 @@ pub enum Source {
     ExeTitle,
     Exe,
     HostTitle,
+    /// a store folder whose app Discord lists as a game
+    SteamListed,
+    EpicListed,
+    /// a store folder Discord doesn't know, could be a tool (Wallpaper Engine)
     Steam,
     Epic,
     TitleStem,
 }
 
 impl Source {
-    /// Exe rules and emulator titles. The rest can catch a tool installed
-    /// through Steam, so live detection lets those sessions lapse out of focus.
+    /// Exe rules, emulator titles and store apps Discord lists as games. The rest can catch a
+    /// tool installed through Steam, so live detection lets those sessions lapse out of focus.
+    /// Listed store apps count because an idle game left running in the background (Find The
+    /// Needle) lost its card after 10 minutes.
     pub fn is_strong(self) -> bool {
-        matches!(self, Source::ExePath | Source::ExeTitle | Source::Exe | Source::HostTitle)
+        matches!(
+            self,
+            Source::ExePath
+                | Source::ExeTitle
+                | Source::Exe
+                | Source::HostTitle
+                | Source::SteamListed
+                | Source::EpicListed
+        )
     }
 }
 
@@ -283,10 +297,12 @@ impl GameDb {
                             .and_then(|base| idx.by_name.get(base.trim_end()).copied())
                     })
                 });
-                let source = if local.store == "steam" { Source::Steam } else { Source::Epic };
+                let steam = local.store == "steam";
                 if let Some(app) = mapped {
-                    return Some(game_from(&idx, app, source));
+                    let listed = if steam { Source::SteamListed } else { Source::EpicListed };
+                    return Some(game_from(&idx, app, listed));
                 }
+                let source = if steam { Source::Steam } else { Source::Epic };
                 return Some(Game {
                     id: format!("{}:{}", local.store, local.id),
                     name: local.name,
@@ -586,7 +602,10 @@ mod tests {
         let exe = steamapps.join("common").join("Find The Needle Demo").join("FindTheNeedle.exe");
         let g = db().resolve(Some(&exe), None, &mut || None).unwrap();
         let _ = std::fs::remove_dir_all(&lib);
-        assert_eq!((g.name.as_str(), g.id.as_str(), g.source), ("Find The Needle", "13", Source::Steam));
+        assert_eq!((g.name.as_str(), g.id.as_str(), g.source), ("Find The Needle", "13", Source::SteamListed));
+        // Discord lists it, so alt-tabbing away for a while keeps the session
+        assert!(g.source.is_strong());
+        assert!(!Source::Steam.is_strong());
         assert!(g.icon_url.unwrap().contains("/app-icons/13/abc.png"));
     }
 
