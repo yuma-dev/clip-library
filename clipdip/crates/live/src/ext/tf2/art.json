@@ -1,0 +1,218 @@
+{
+  "ctf_2fort": {
+    "name": "2Fort",
+    "url": "https://wiki.teamfortress.com/w/images/a/a1/Ctf_2fort_bridge_ss.png"
+  },
+  "ctf_2fort_invasion": {
+    "name": "2Fort Invasion",
+    "url": "https://wiki.teamfortress.com/w/images/d/dd/Ctf_2fort_invasion.png"
+  },
+  "ctf_applejack": {
+    "name": "Applejack",
+    "url": "https://wiki.teamfortress.com/w/images/0/0b/Ctf_applejack.png"
+  },
+  "cp_5gorge": {
+    "name": "5Gorge",
+    "url": "https://wiki.teamfortress.com/w/images/8/81/5gorge1.png"
+  },
+  "cp_badlands": {
+    "name": "Badlands (Control Point)",
+    "url": "https://wiki.teamfortress.com/w/images/7/79/Badlands2.png"
+  },
+  "cp_canaveral_5cp": {
+    "name": "Canaveral",
+    "url": "https://wiki.teamfortress.com/w/images/3/39/Cp_canaveral_5cp.png"
+  },
+  "cp_altitude": {
+    "name": "Altitude",
+    "url": "https://wiki.teamfortress.com/w/images/6/68/Cp_altitude.png"
+  },
+  "cp_brew": {
+    "name": "Brew",
+    "url": "https://wiki.teamfortress.com/w/images/3/32/Cp_brew.png"
+  },
+  "cp_cargo": {
+    "name": "Cargo",
+    "url": "https://wiki.teamfortress.com/w/images/3/3a/Cp_cargo.png"
+  },
+  "cp_carrier": {
+    "name": "Carrier",
+    "url": "https://wiki.teamfortress.com/w/images/6/69/Cp_carrier.png"
+  },
+  "cp_burghausen": {
+    "name": "Burghausen",
+    "url": "https://wiki.teamfortress.com/w/images/8/89/Cp_burghausen.png"
+  },
+  "pl_aquarius": {
+    "name": "Aquarius",
+    "url": "https://wiki.teamfortress.com/w/images/1/1d/Pl_aquarius.png"
+  },
+  "pl_badwater": {
+    "name": "Badwater Basin",
+    "url": "https://wiki.teamfortress.com/w/images/3/3a/Plbadwater.png"
+  },
+  "pl_barnblitz": {
+    "name": "Barnblitz",
+    "url": "https://wiki.teamfortress.com/w/images/7/7b/Barnblitz.PNG"
+  },
+  "pl_bloodwater": {
+    "name": "Bloodwater",
+    "url": "https://wiki.teamfortress.com/w/images/6/64/Pl_bloodwater.png"
+  },
+  "pl_borneo": {
+    "name": "Borneo",
+    "url": "https://wiki.teamfortress.com/w/images/2/2f/Pl_Borneo.png"
+  },
+  "pl_breadspace": {
+    "name": "Bread Space",
+    "url": "https://wiki.teamfortress.com/w/images/9/91/Pl_breadspace.png"
+  },
+  "pl_fifthcurve_event": {
+    "name": "Brimstone",
+    "url": "https://wiki.teamfortress.com/w/images/6/6d/Pl_fifthcurve_event.png"
+  },
+  "pl_cactuscanyon": {
+    "name": "Cactus Canyon",
+    "url": "https://wiki.teamfortress.com/w/images/1/17/Cactus_Canyon.png"
+  },
+  "pl_camber": {
+    "name": "Camber",
+    "url": "https://wiki.teamfortress.com/w/images/5/53/Pl_camber.png"
+  },
+  "pl_cashworks": {
+    "name": "Cashworks",
+    "url": "https://wiki.teamfortress.com/w/images/3/32/Pl_cashworks.png"
+  },
+  "pl_chilly": {
+    "name": "Chilly",
+    "url": "https://wiki.teamfortress.com/w/images/d/d5/Pl_chilly.png"
+  },
+  "plr_bananabay": {
+    "name": "Banana Bay",
+    "url": "https://wiki.teamfortress.com/w/images/8/87/Bananabay_main.jpg"
+  },
+  "plr_hacksaw_event": {
+    "name": "Bonesaw",
+    "url": "https://wiki.teamfortress.com/w/images/2/21/Plr_hacksaw_event.png"
+  },
+  "arena_afterlife": {
+    "name": "Afterlife",
+    "url": "https://wiki.teamfortress.com/w/images/6/63/Arena_Afterlife.png"
+  },
+  "arena_badlands": {
+    "name": "Badlands (Arena)",
+    "url": "https://wiki.teamfortress.com/w/images/4/46/Arenabadlands.jpg"
+  },
+  "arena_byre": {
+    "name": "Byre",
+    "url": "https://wiki.teamfortress.com/w/images/d/da/Arena_byre_b40007.jpg"
+  },
+  "2koth_abbey": {
+    "name": "Abbey",
+    "url": "https://wiki.teamfortress.com/w/images/f/fa/2koth_abbey.png"
+  },
+  "koth_badlands": {
+    "name": "Badlands (King of the Hill)",
+    "url": "https://wiki.teamfortress.com/w/images/3/31/Koth_badlands.png"
+  },
+  "koth_blowout": {
+    "name": "Blowout",
+    "url": "https://wiki.teamfortress.com/w/images/0/08/Koth_blowout.png"
+  },
+  "koth_boardwalk": {
+    "name": "Boardwalk",
+    "url": "https://wiki.teamfortress.com/w/images/b/bc/Koth_boardwalk.png"
+  },
+  "koth_brazil": {
+    "name": "Brazil",
+    "url": "https://wiki.teamfortress.com/w/images/2/20/Koth_brazil.png"
+  },
+  "koth_cachoeira": {
+    "name": "Cachoeira",
+    "url": "https://wiki.teamfortress.com/w/images/c/c0/Cachoeira.png"
+  },
+  "koth_cascade": {
+    "name": "Cascade",
+    "url": "https://wiki.teamfortress.com/w/images/6/62/Koth_cascade.png"
+  },
+  "koth_bagel_event": {
+    "name": "Cauldron",
+    "url": "https://wiki.teamfortress.com/w/images/2/2e/Koth_bagel_event.png"
+  },
+  "koth_camp_saxton": {
+    "name": "Camp Saxton",
+    "url": "https://wiki.teamfortress.com/w/images/f/f7/Camp_Saxton.png"
+  },
+  "sd_doomsday_event": {
+    "name": "Carnival of Carnage",
+    "url": "https://wiki.teamfortress.com/w/images/5/5b/Carnival_of_Carnage.png"
+  },
+  "mvm_bigrock": {
+    "name": "Bigrock",
+    "url": "https://wiki.teamfortress.com/w/images/6/6b/Mvm_bigrock.png"
+  },
+  "rd_asteroid": {
+    "name": "Asteroid",
+    "url": "https://wiki.teamfortress.com/w/images/3/31/Rdasteroid.png"
+  },
+  "pass_brickyard": {
+    "name": "Brickyard",
+    "url": "https://wiki.teamfortress.com/w/images/e/e2/Pass_brickyard.png"
+  },
+  "pd_atom_smash": {
+    "name": "Atom Smash",
+    "url": "https://wiki.teamfortress.com/w/images/c/c5/Pd_atom_smash.png"
+  },
+  "pd_circus": {
+    "name": "Circus",
+    "url": "https://wiki.teamfortress.com/w/images/4/48/Pd_circus.png"
+  },
+  "zi_atoll": {
+    "name": "Atoll",
+    "url": "https://wiki.teamfortress.com/w/images/3/39/Zi_atoll.png"
+  },
+  "zi_blazehattan": {
+    "name": "Blazehattan",
+    "url": "https://wiki.teamfortress.com/w/images/c/c0/Zi_blazehattan.png"
+  },
+  "background01": {
+    "name": "background01",
+    "url": "https://wiki.teamfortress.com/w/images/c/c7/Mapbackground01.png"
+  },
+  "Scout": {
+    "name": "Scout",
+    "url": "https://wiki.teamfortress.com/w/images/6/69/Scout.png"
+  },
+  "Soldier": {
+    "name": "Soldier",
+    "url": "https://wiki.teamfortress.com/w/images/7/7b/Soldier.png"
+  },
+  "Pyro": {
+    "name": "Pyro",
+    "url": "https://wiki.teamfortress.com/w/images/c/c8/Pyro.png"
+  },
+  "Demoman": {
+    "name": "Demoman",
+    "url": "https://wiki.teamfortress.com/w/images/f/fd/Demoman.png"
+  },
+  "Heavy": {
+    "name": "Heavy",
+    "url": "https://wiki.teamfortress.com/w/images/0/08/Heavy.png"
+  },
+  "Engineer": {
+    "name": "Engineer",
+    "url": "https://wiki.teamfortress.com/w/images/d/d8/Engineer.png"
+  },
+  "Medic": {
+    "name": "Medic",
+    "url": "https://wiki.teamfortress.com/w/images/2/26/Medic.png"
+  },
+  "Sniper": {
+    "name": "Sniper",
+    "url": "https://wiki.teamfortress.com/w/images/8/8f/Sniper.png"
+  },
+  "Spy": {
+    "name": "Spy",
+    "url": "https://wiki.teamfortress.com/w/images/3/36/Spy.png"
+  }
+}

@@ -210,8 +210,7 @@ function editActivity(clip: PresenceClip, kind: EditKind): PresenceActivity {
   };
 }
 
-function exportActivity(pct: number): PresenceActivity {
-  const clip = legacyState()?.currentClip as PresenceClip | undefined;
+function exportActivity(pct: number, clip = legacyState()?.currentClip as PresenceClip | undefined): PresenceActivity {
   return {
     details: "Exporting a clip",
     state: `${pct}% done`,
@@ -221,8 +220,7 @@ function exportActivity(pct: number): PresenceActivity {
   };
 }
 
-function shareActivity(phase: string): PresenceActivity {
-  const clip = legacyState()?.currentClip as PresenceClip | undefined;
+function shareActivity(phase: string, clip = legacyState()?.currentClip as PresenceClip | undefined): PresenceActivity {
   return {
     details: "Sharing a clip",
     state: phase === "uploading" ? "Uploading" : "Getting it ready",
@@ -316,6 +314,48 @@ export function setSharePhase(phase: "exporting" | "uploading" | null): void {
   if (phase === sharePhase) return;
   sharePhase = phase;
   refresh();
+}
+
+/** Every library state for the settings preview, built by the same functions as the real card with
+ * `p` in place of the saved prefs. Browsing has one variant per library fact, the way the real card
+ * rotates them. Watching is 9 s into a 31 s clip, from `now`. */
+export function previewLibraryStates(
+  p: PresencePrefs,
+  clip: PresenceClip,
+  now = Date.now(),
+): Array<{ key: string; label: string; variants: PresenceActivity[] }> {
+  const saved = prefs;
+  const savedFact = factIndex;
+  prefs = { ...PRESENCE_PREFS_DEFAULTS, ...p };
+  try {
+    const video = (paused: boolean) => ({ paused, currentTime: 9, duration: 31, playbackRate: 1 }) as HTMLVideoElement;
+    const browse: PresenceActivity[] = [];
+    const facts = prefs.facts ? libraryFacts().length : 0;
+    for (let i = 0; i < Math.max(1, facts); i++) {
+      factIndex = i;
+      browse.push(browseActivity());
+    }
+    const watching = watchActivity(clip, video(false));
+    const span = (watching.endTimestamp ?? 0) - (watching.startTimestamp ?? 0);
+    const out = [
+      { key: "browse", label: "Browsing", variants: browse },
+      {
+        key: "watch",
+        label: "Watching",
+        variants: [{ ...watching, startTimestamp: now - 9_000, endTimestamp: now - 9_000 + span }],
+      },
+      { key: "paused", label: "Paused", variants: [watchActivity(clip, video(true))] },
+    ];
+    if (prefs.editing) {
+      out.push({ key: "edit", label: "Editing", variants: [editActivity(clip, "trim")] });
+      out.push({ key: "export", label: "Exporting", variants: [exportActivity(60, clip)] });
+      out.push({ key: "share", label: "Sharing", variants: [shareActivity("uploading", clip)] });
+    }
+    return out;
+  } finally {
+    prefs = saved;
+    factIndex = savedFact;
+  }
 }
 
 /** settings toggle hook, refreshes presence immediately when re-enabled */

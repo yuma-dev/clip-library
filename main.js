@@ -1462,6 +1462,12 @@ ipcMain.handle('clipdip-list-monitors', () => clipdipModule.listMonitors());
 
 ipcMain.handle('clipdip-filename-variables', () => clipdipModule.getFilenameVariables());
 
+ipcMain.handle('clipdip-live-extensions', () => clipdipModule.liveExtensions());
+
+ipcMain.handle('clipdip-live-preview', (event, req) => clipdipModule.livePreview(req));
+
+ipcMain.handle('discord-app-assets', () => discordModule.getAppAssets());
+
 ipcMain.handle('clipdip-preview-filename', (event, template) =>
   clipdipModule.previewFilename(template));
 

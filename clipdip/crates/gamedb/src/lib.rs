@@ -72,6 +72,8 @@ pub struct Game {
     /// Discord application id, or `steam:<appid>` / `epic:<catalog id>` for
     /// games Discord doesn't list
     pub id: String,
+    /// Discord's own app name, verbatim, case included: Discord drops its detected
+    /// "Playing <name>" only when our activity's name matches it exactly
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steam_appid: Option<String>,
@@ -199,6 +201,13 @@ impl GameDb {
                     std::thread::sleep(wait);
                 }
             });
+    }
+
+    /// a Discord app by id, for settings previews of games not played yet
+    pub fn app_by_id(&self, id: &str) -> Option<Game> {
+        let idx = self.index.read().clone();
+        let app = idx.apps.iter().position(|a| a.id == id)?;
+        Some(game_from(&idx, app as u32, Source::Exe))
     }
 
     /// `stem` defaults to the exe file stem. `title` is only called when a
@@ -361,12 +370,21 @@ fn host_title(idx: &Index, stem: &str, forms: &[String]) -> Option<u32> {
     best.map(|(_, app)| app)
 }
 
+// Discord's own icon is wrong for these (Star Citizen's is a power button), ours come from the art pack
+const ICON_FIX: &[(&str, &str)] = &[(
+    "452295596917784577",
+    "https://cdn.jsdelivr.net/gh/yuma-dev/cliplib-rpc-assets@v3/star-citizen/logo.webp",
+)];
+
 fn game_from(idx: &Index, app: u32, source: Source) -> Game {
     let a = &idx.apps[app as usize];
-    let icon_url = a
-        .icon
-        .as_ref()
-        .map(|h| format!("https://cdn.discordapp.com/app-icons/{}/{h}.png?size=512", a.id))
+    let fixed = ICON_FIX.iter().find(|(id, _)| *id == a.id).map(|(_, url)| url.to_string());
+    let icon_url = fixed
+        .or_else(|| {
+            a.icon
+                .as_ref()
+                .map(|h| format!("https://cdn.discordapp.com/app-icons/{}/{h}.png?size=512", a.id))
+        })
         .or_else(|| a.steam.as_deref().map(steam_art));
     Game {
         id: a.id.clone(),

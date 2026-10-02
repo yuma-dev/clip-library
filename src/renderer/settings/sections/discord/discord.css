@@ -1,0 +1,996 @@
+/* settings > discord: preview and the general switches pinned on the left, every game as a list on the right */
+
+.dset {
+  min-width: 0;
+}
+/* the page doesn't scroll as a whole: the left column and the games list scroll on their own, so
+   the preview stays in view next to whatever row is hovered */
+@media (min-width: 981px) {
+  .settings-content:has(> .settings-page.wide) {
+    overflow: hidden;
+  }
+  .settings-page.wide {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0;
+  }
+  .settings-page.wide > .dset {
+    flex: 1;
+    min-height: 0;
+  }
+  .dset-frame {
+    height: 100%;
+  }
+  .dl {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .dset-side,
+  .dl-scroll {
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+.dset-frame {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 24px;
+}
+.dset-side {
+  display: grid;
+  /* minmax: a long card line would otherwise widen the column */
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+  padding-bottom: 24px;
+  scrollbar-width: none;
+}
+.dset-rail {
+  min-width: 0;
+  padding: 14px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 70% at 100% 0%, rgba(88, 101, 242, 0.2), transparent 60%),
+    radial-gradient(100% 60% at 0% 100%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 65%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.dset-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 0.5px solid var(--color-border);
+}
+.dset-tabs button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.dset-tabs button:hover {
+  color: var(--color-text-primary);
+}
+.dset-tabs button.on {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--color-text-primary);
+}
+.dset-preview-wrap {
+  position: relative;
+  transition: opacity 160ms ease, filter 160ms ease;
+}
+.dset-preview-wrap.off .dc-pop {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+.dset-off-note {
+  position: absolute;
+  inset: auto 14px 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--color-text-primary);
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+}
+
+/* the general switches under the preview */
+.dset-compact {
+  display: grid;
+  gap: 12px;
+}
+.dset-compact .set-group {
+  padding: 2px 16px 4px;
+}
+.dset-compact .set-group-head {
+  padding: 12px 0 2px;
+}
+.dset-compact .set-row {
+  padding: 9px 0;
+  gap: 14px;
+}
+.dset-compact .set-row-title {
+  font-size: 13px;
+}
+.dset-compact .set-row-desc {
+  margin-top: 1px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* the games list */
+.dl {
+  min-width: 0;
+  transition: opacity 160ms ease;
+}
+.dl-scroll {
+  padding-bottom: 30px;
+  scrollbar-width: none;
+}
+.dl-scroll::-webkit-scrollbar,
+.dset-side::-webkit-scrollbar {
+  display: none;
+}
+.dl.dim {
+  opacity: 0.6;
+}
+.dl-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+}
+.dl-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 280px;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  margin-right: 4px;
+  border-radius: 10px;
+  border: 0.5px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--color-text-muted);
+}
+.dl-search:focus-within {
+  border-color: var(--color-border-hover);
+  background: rgba(255, 255, 255, 0.07);
+}
+.dl-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.dl-search input::placeholder {
+  color: var(--color-text-muted);
+}
+.dl-search button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.dl-chip {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 0.5px solid var(--color-border-hover);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.dl-chip span {
+  margin-left: 3px;
+  opacity: 0.55;
+}
+.dl-chip:hover {
+  color: var(--color-text-primary);
+}
+.dl-chip.on {
+  background: var(--color-text-primary);
+  border-color: transparent;
+  color: #0b0b0e;
+}
+.dl-playing {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.dl-playing i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #23a55a;
+  box-shadow: 0 0 0 3px rgba(35, 165, 90, 0.22);
+}
+.dl-empty {
+  padding: 28px 8px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+.dl-group + .dl-group {
+  margin-top: 6px;
+}
+.dl-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 4px 8px;
+}
+.dl-group-head b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.dl-group-head span {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.dl-row {
+  position: relative;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  border: 0.5px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+  isolation: isolate;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.dl-row:hover {
+  border-color: var(--color-border-hover);
+}
+.dl-row.open {
+  border-color: color-mix(in srgb, var(--color-accent-glyph) 40%, transparent);
+  background: rgba(255, 255, 255, 0.04);
+}
+/* banner art only on hover, behind the scenario chips */
+.dl-art {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 74px;
+  width: 70%;
+  z-index: -1;
+  background-size: cover;
+  background-position: center 30%;
+  mask-image: linear-gradient(90deg, transparent, #000 55%);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+.dl-row:hover .dl-art {
+  opacity: 0.85;
+}
+.dl-head {
+  width: 100%;
+  height: 74px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px 0 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dl-head img,
+.dl-noicon {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  transition: filter 160ms ease, opacity 160ms ease;
+}
+.dl-text {
+  flex: 1;
+  min-width: 0;
+}
+.dl-text b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.dl-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-badge,
+.dl-live {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.dl-badge {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(250, 204, 21, 0.16);
+  color: #fcd34d;
+}
+.dl-live {
+  color: #4ade80;
+}
+.dl-views {
+  display: flex;
+  gap: 5px;
+  flex: none;
+  /* room for the switch, which sits outside the button */
+  margin-right: 60px;
+  transition: opacity 160ms ease;
+}
+.dl-views span {
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: rgba(0, 0, 0, 0.55);
+}
+.dl-row.open .dl-views {
+  opacity: 0;
+}
+.dl-chev {
+  flex: none;
+  color: var(--color-text-muted);
+  transition: transform 200ms ease;
+}
+.dl-row.open .dl-chev {
+  transform: rotate(180deg);
+}
+.dl-toggle {
+  position: absolute;
+  top: 37px;
+  right: 46px;
+  transform: translateY(-50%);
+}
+.dl-row.off .dl-head img {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+.dl-row.off .dl-text {
+  opacity: 0.6;
+}
+.dl-row.skeleton {
+  height: 74px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
+  background-size: 200% 100%;
+  animation: dl-shimmer 1.4s linear infinite;
+}
+@keyframes dl-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* an open row: its settings in place, no banner */
+.dl-config {
+  display: grid;
+  gap: 12px;
+  /* lines up with the name, past the icon */
+  padding: 0 18px 18px 70px;
+}
+.dl-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+.dl-note.live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #23a55a;
+  box-shadow: 0 0 0 3px rgba(35, 165, 90, 0.22);
+}
+.dl-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
+  align-items: start;
+}
+.dl-opts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  transition: opacity 160ms ease;
+}
+.dl-opts.off {
+  opacity: 0.5;
+}
+.dl-opt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 62px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 0.5px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: border-color 140ms ease;
+}
+.dl-opt:hover {
+  border-color: var(--color-border-hover);
+}
+.dl-opt.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  cursor: default;
+}
+.dl-opt.empty {
+  grid-column: span 2;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  cursor: default;
+}
+.dl-opt-text {
+  flex: 1;
+  min-width: 0;
+}
+.dl-opt b,
+.dl-opt-text b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dl-opt span,
+.dl-opt-text span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+.dl-seg {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 0.5px solid var(--color-border);
+}
+.dl-seg button {
+  height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dl-seg button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+.dl-seg button.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-primary);
+}
+.dl-seg button:disabled {
+  cursor: default;
+}
+
+.dl-side {
+  display: grid;
+  gap: 12px;
+}
+.dl-side-title {
+  margin-bottom: 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.dl-scen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dl-scen button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 0.5px solid var(--color-border-hover);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.dl-scen button:hover {
+  color: var(--color-text-primary);
+}
+.dl-scen button.on {
+  background: var(--color-text-primary);
+  border-color: transparent;
+  color: #0b0b0e;
+}
+.dl-setup {
+  display: flex;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 0.5px solid rgba(250, 204, 21, 0.25);
+  background: rgba(250, 204, 21, 0.06);
+  color: #fcd34d;
+}
+.dl-setup b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--color-text-primary);
+}
+.dl-setup p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.dl-credits {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+.dl-credits button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.dl-credits button:hover {
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 1250px) {
+  .dl-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dl-views {
+    display: none;
+  }
+}
+@media (max-width: 980px) {
+  .dset-frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dset-side {
+    max-width: 380px;
+  }
+  .dl-opts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* the Discord-styled profile popout, colors from Discord's dark theme */
+.dc-pop {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #232428;
+  color: #dbdee1;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  font-family: "gg sans", "Noto Sans", var(--font-sans);
+  transition: opacity 160ms ease;
+}
+.dc-pop.loading {
+  opacity: 0.85;
+}
+.dc-banner {
+  height: 64px;
+  background: linear-gradient(120deg, #5865f2 0%, var(--color-accent) 100%);
+}
+.dc-avatar {
+  position: absolute;
+  top: 22px;
+  left: 14px;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 6px solid #232428;
+  background: #313338;
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  font-weight: 700;
+  color: #dbdee1;
+}
+.dc-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.dc-status {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #23a55a;
+  border: 4px solid #232428;
+}
+.dc-user {
+  padding: 44px 16px 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #f2f3f5;
+}
+.dc-pop-body {
+  padding: 10px 12px 12px;
+}
+.dc-empty {
+  padding: 18px;
+  border-radius: 8px;
+  background: #1e1f22;
+  text-align: center;
+  font-size: 12px;
+  color: #949ba4;
+}
+.dc-activity {
+  padding: 12px;
+  border-radius: 8px;
+  background: #1e1f22;
+}
+.dc-activity-head {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #dbdee1;
+}
+.dc-activity-body {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.dc-art {
+  position: relative;
+  flex: none;
+  width: 64px;
+  height: 64px;
+}
+.dc-art-large {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #2b2d31;
+}
+.dc-art-missing {
+  background: #1e1f22;
+}
+.dc-art-small {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #2b2d31;
+  box-shadow: 0 0 0 3px #1e1f22;
+}
+.dc-art-small img {
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  display: block;
+}
+.dc-lines {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dc-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f2f3f5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-line {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: #b5bac1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-time {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #23a55a;
+}
+.dc-time-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #23a55a;
+}
+.dc-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #b5bac1;
+}
+.dc-progress-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: #4e5058;
+  overflow: hidden;
+}
+.dc-progress-bar div {
+  height: 100%;
+  background: #f2f3f5;
+  border-radius: 2px;
+  transition: width 1s linear;
+}
+.dc-buttons {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.dc-button {
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #4e5058;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+}
+
+
+/* hover texts, the way Discord shows them */
+.dc-tip-host {
+  min-width: 0;
+}
+.dc-tip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transform: translate(-50%, calc(-100% - 8px));
+  background: #111214;
+  color: #dbdee1;
+  font-family: "gg sans", "Noto Sans", var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: center;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: dc-tip-in 90ms ease-out;
+}
+.dc-tip i {
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  background: #111214;
+}
+@keyframes dc-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - 4px));
+  }
+}
+
+.dc-live {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+.dc-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #23a55a;
+  box-shadow: 0 0 0 2px rgba(35, 165, 90, 0.3);
+}
+.dc-banner {
+  position: relative;
+}
+
+/* which moment the preview shows: arrows, a label that opens the list, a bar until the next */
+.dc-step {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
+  padding-bottom: 6px;
+}
+.dc-step-arrow,
+.dc-step-label {
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.dc-step-arrow {
+  width: 26px;
+  display: grid;
+  place-items: center;
+}
+.dc-step-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+.dc-step-label span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+  font-weight: 550;
+}
+.dc-step-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.dc-step-arrow:hover,
+.dc-step-label:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+.dc-step-bar {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.dc-step-bar div {
+  height: 100%;
+  width: 100%;
+  transform-origin: left;
+  background: color-mix(in srgb, var(--color-accent-glyph) 70%, transparent);
+  animation: dc-step-fill linear forwards;
+}
+@keyframes dc-step-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.dc-step-menu {
+  position: absolute;
+  z-index: 20;
+  left: 30px;
+  right: 30px;
+  bottom: calc(100% + 4px);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  border: 0.5px solid var(--color-border-hover);
+  background: var(--color-bg-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+.dc-step-menu button {
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-step-menu button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+.dc-step-menu button.on {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}

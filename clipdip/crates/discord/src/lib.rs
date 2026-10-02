@@ -12,7 +12,7 @@ mod ipc;
 mod oauth;
 mod presence;
 
-pub use presence::{spawn_presence, GameActivity, PresenceHandle};
+pub use presence::{preview_activity, spawn_presence, Extra, GameActivity, PresenceHandle};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

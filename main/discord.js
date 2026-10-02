@@ -213,7 +213,48 @@ function destroyDiscordRPC() {
   }
 }
 
+// art_*, badge_* and logo as uploaded to the app; the settings preview draws the same images Discord
+// does. the list is public. ids as of 2026-10 stand in when discord.com can't be reached
+const ASSET_FALLBACK = {
+  logo: '1555161570789822574',
+  art_edit: '1555223203461341314',
+  art_watch: '1555223204392337430',
+  art_browse: '1555223205738713108',
+  badge_edit: '1555223356423413850',
+  badge_export_upload: '1555223356528132096',
+  badge_pause_filled: '1555223356536520845',
+  badge_play: '1555223356620542052',
+  badge_play_filled: '1555223356632993873',
+  badge_export: '1555223356645707836',
+  badge_share: '1555223356654227568',
+  badge_pause: '1555223356671000687',
+  badge_edit_scissors: '1555223356901425262',
+  badge_share_send: '1555223358252130334',
+};
+let assetUrls = null;
+
+async function getAppAssets() {
+  if (assetUrls) return assetUrls;
+  let ids = ASSET_FALLBACK;
+  try {
+    const { net } = require('electron');
+    const res = await net.fetch(`https://discord.com/api/v10/oauth2/applications/${CLIENT_ID}/assets`);
+    if (res.ok) {
+      const list = await res.json();
+      if (Array.isArray(list) && list.length) ids = Object.fromEntries(list.map((a) => [a.name, a.id]));
+    }
+  } catch (error) {
+    logger.warn(`Discord asset list unavailable: ${error.message}`);
+  }
+  const urls = Object.fromEntries(
+    Object.entries(ids).map(([name, id]) => [name, `https://cdn.discordapp.com/app-assets/${CLIENT_ID}/${id}.png`])
+  );
+  if (ids !== ASSET_FALLBACK) assetUrls = urls;
+  return urls;
+}
+
 module.exports = {
+  getAppAssets,
   initDiscordRPC,
   updateDiscordPresence,
   clearDiscordPresence,

@@ -1,0 +1,24 @@
+[package]
+name = "clipdip-live"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ureq = { version = "2", features = ["json"] }
+# same rustls ureq links, only for the loopback verifier Riot's local APIs need
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+base64 = "0.22"
+flate2 = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+keyvalues-parser = "0.2"
+windows = { workspace = true, features = [
+    "Wdk_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+] }

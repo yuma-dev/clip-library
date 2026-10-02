@@ -1,0 +1,54 @@
+{
+  "isValid": true,
+  "isIdle": false,
+  "provisioningFlow": "Matchmaking",
+  "queueId": "competitive",
+  "partyId": "9f9b1a30-1111-4a2b-9d4c-0d1f2e3a4b5c",
+  "partySize": 2,
+  "maxPartySize": 5,
+  "partyOwnerMatchScoreAllyTeam": 9,
+  "partyOwnerMatchScoreEnemyTeam": 4,
+  "matchPresenceData": {
+    "gameScoreType": "Rounds",
+    "sessionLoopState": "INGAME",
+    "matchMap": "/Game/Maps/Ascent/Ascent",
+    "provisioningFlow": "Matchmaking",
+    "queueId": "competitive"
+  },
+  "partyPresenceData": {
+    "partyId": "9f9b1a30-1111-4a2b-9d4c-0d1f2e3a4b5c",
+    "isPartyOwner": true,
+    "partyState": "DEFAULT",
+    "partyAccessibility": "CLOSED",
+    "partySize": 2,
+    "maxPartySize": 5,
+    "partyLFM": false,
+    "partyOwnerMatchMap": "/Game/Maps/Ascent/Ascent",
+    "partyOwnerSessionLoopState": "INGAME",
+    "partyOwnerMatchScoreAllyTeam": 9,
+    "partyOwnerMatchScoreEnemyTeam": 4,
+    "partyClientVersion": "release-11.00-shipping-7-3512345",
+    "partyVersion": 1758290000,
+    "queueEntryTime": "2026.09.19-14.32.07",
+    "customGameName": "",
+    "customGameTeam": ""
+  },
+  "playerPresenceData": {
+    "accountLevel": 214,
+    "competitiveTier": 21,
+    "leaderboardPosition": 0,
+    "platformOverride": "PC",
+    "playerCardId": "c2e6c2a0-0000-4000-8000-000000000001",
+    "playerTitleId": "c2e6c2a0-0000-4000-8000-000000000002",
+    "preferredLevelBorderId": "c2e6c2a0-0000-4000-8000-000000000003"
+  },
+  "premierPresenceData": {
+    "division": 0,
+    "plating": 0,
+    "rosterId": "",
+    "rosterName": "",
+    "rosterTag": "",
+    "rosterType": "NONE",
+    "score": 0
+  }
+}

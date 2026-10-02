@@ -1,0 +1,23 @@
+[
+  {
+    "class_name": "hero_inferno",
+    "name": "Infernus",
+    "images": {
+      "icon_hero_card": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card.png",
+      "icon_hero_card_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card.webp",
+      "icon_image_small": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_sm.png",
+      "icon_image_small_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_sm.webp",
+      "minimap_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_mm.png",
+      "minimap_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_mm.webp",
+      "hero_card_critical": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_critical.png",
+      "hero_card_critical_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_critical.webp",
+      "hero_card_gloat": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_gloat.png",
+      "hero_card_gloat_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_card_gloat.webp",
+      "top_bar_vertical_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_vertical.png",
+      "top_bar_vertical_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/inferno_vertical.webp",
+      "background_image": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/infernus_bg.png",
+      "background_image_webp": "https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/backgrounds/infernus_bg.webp",
+      "name_image": "https://assets-bucket.deadlock-api.com/assets-api-res/icons/heroes/hero_names/infernus.svg"
+    }
+  }
+]

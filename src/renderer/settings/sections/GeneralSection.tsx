@@ -1,24 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { FolderOpen, Gamepad2, Tags } from "lucide-react";
 import { SetGroup, SetRow } from "../rows";
 import Toggle from "../../ui/Toggle";
 import TagManagerModal from "../TagManagerModal";
-import PresenceGamesModal from "../PresenceGamesModal";
-import { useSettings } from "../SettingsContext";
 import { useToast } from "../../ui/Toast";
-import {
-  PRESENCE_PREFS_DEFAULTS,
-  setDiscordPresenceEnabled,
-  setPresencePrefs,
-  type PresencePrefs,
-} from "../../player/discordPresence";
 import type { UseClips } from "../../library/useClips";
 import type { UseLibraryFilter } from "../../library/useLibraryFilter";
 import { getBootPrefs, setBootPrefs, type BootPrefs } from "../../boot/bootPrefs";
 import { getGameOfClip, useGamesVersion } from "../../library/games";
 
 export default function GeneralSection({ lib, filter }: { lib: UseClips; filter: UseLibraryFilter }) {
-  const { settings, set } = useSettings();
   const toast = useToast();
   const [changingLocation, setChangingLocation] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
@@ -43,36 +34,6 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
     }
   };
 
-  // game presence lives in clipdip's config, it runs there even with the library closed
-  const [gamePresence, setGamePresence] = useState<boolean | null>(null);
-  const [hiddenGames, setHiddenGames] = useState<string[]>([]);
-  const [gamesOpen, setGamesOpen] = useState(false);
-  useEffect(() => {
-    window.clips.clipdip
-      .getConfig()
-      .then((r: { config?: { discord?: { presence?: boolean; presence_hidden?: string[] } } }) => {
-        setGamePresence(r?.config?.discord?.presence !== false);
-        setHiddenGames(Array.isArray(r?.config?.discord?.presence_hidden) ? r.config.discord.presence_hidden : []);
-      })
-      .catch(() => setGamePresence(true));
-  }, []);
-  const saveHiddenGames = async (ids: string[]) => {
-    setHiddenGames(ids);
-    try {
-      await window.clips.clipdip.setConfig({ discord: { presence_hidden: ids } });
-    } catch {
-      toast.show("Failed to save setting", "error");
-    }
-  };
-  const toggleGamePresence = async (enabled: boolean) => {
-    setGamePresence(enabled);
-    try {
-      await window.clips.clipdip.setConfig({ discord: { presence: enabled } });
-    } catch {
-      toast.show("Failed to save setting", "error");
-    }
-  };
-
   useGamesVersion();
   const tagged = lib.clips.reduce((n, c) => n + (getGameOfClip().has(c.originalName) ? 1 : 0), 0);
   const [scanning, setScanning] = useState(false);
@@ -86,27 +47,6 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
     } finally {
       setScanning(false);
     }
-  };
-
-  const presencePrefs: PresencePrefs = { ...PRESENCE_PREFS_DEFAULTS, ...(settings.discordPresence ?? {}) };
-  const setPresencePref = async (key: keyof PresencePrefs, value: boolean) => {
-    const next = { ...presencePrefs, [key]: value };
-    setPresencePrefs(next);
-    const ok = await set("discordPresence", next);
-    if (!ok) toast.show("Failed to save setting", "error");
-  };
-  const rpcOff = !settings.enableDiscordRPC;
-
-  const toggleDiscord = async (enabled: boolean) => {
-    const ok = await set("enableDiscordRPC", enabled);
-    try {
-      await window.clips.toggleDiscordRpc(enabled);
-    } catch {
-      /* RPC connection issues are non-fatal; the saved setting still applies next launch */
-    }
-    // flips the renderer-side gate + re-asserts presence when re-enabled
-    setDiscordPresenceEnabled(enabled);
-    if (!ok) toast.show("Failed to save setting", "error");
   };
 
   return (
@@ -124,68 +64,7 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
 
       {/* sound group is tall; left column groups stack on their own so its height can't push them down */}
       <div className="set-col">
-        <SetGroup title="Integration">
-          <SetRow title="Discord Rich Presence" description="Show what you're watching in your Discord status">
-            <Toggle
-              checked={Boolean(settings.enableDiscordRPC)}
-              onChange={(v) => void toggleDiscord(v)}
-              aria-label="Discord Rich Presence"
-            />
-          </SetRow>
-          <SetRow title="Show clip names" description="Clips tagged Private never show theirs">
-            <Toggle
-              checked={presencePrefs.clipNames}
-              disabled={rpcOff}
-              onChange={(v) => void setPresencePref("clipNames", v)}
-              aria-label="Show clip names"
-            />
-          </SetRow>
-          <SetRow title="Show the game" description="The game's art and name while you watch its clips">
-            <Toggle
-              checked={presencePrefs.game}
-              disabled={rpcOff}
-              onChange={(v) => void setPresencePref("game", v)}
-              aria-label="Show the game"
-            />
-          </SetRow>
-          <SetRow title="Show library facts" description="Rotating stats about your library while you browse">
-            <Toggle
-              checked={presencePrefs.facts}
-              disabled={rpcOff}
-              onChange={(v) => void setPresencePref("facts", v)}
-              aria-label="Show library facts"
-            />
-          </SetRow>
-          <SetRow title="Show editing and exporting" description="Trimming, adding layers, exporting and sharing">
-            <Toggle
-              checked={presencePrefs.editing}
-              disabled={rpcOff}
-              onChange={(v) => void setPresencePref("editing", v)}
-              aria-label="Show editing and exporting"
-            />
-          </SetRow>
-        </SetGroup>
-
         <SetGroup title="Games">
-          <SetRow
-            title="Show game in Discord status"
-            description="While you play, Discord shows the game with a ClipLib badge"
-          >
-            <Toggle
-              checked={gamePresence !== false}
-              disabled={gamePresence === null}
-              onChange={(v) => void toggleGamePresence(v)}
-              aria-label="Show game in Discord status"
-            />
-          </SetRow>
-          <SetRow
-            title="Games that show"
-            description={hiddenGames.length === 0 ? "Every game shows" : `${hiddenGames.length} hidden`}
-          >
-            <button type="button" className="btn" onClick={() => setGamesOpen(true)} disabled={gamePresence === false}>
-              Choose games
-            </button>
-          </SetRow>
           <SetRow
             title="Find games for older clips"
             description={`${tagged} of ${lib.clips.length} clips have a game. Right click a clip to set one by hand.`}
@@ -228,12 +107,6 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
 
 
       <TagManagerModal open={tagsOpen} onClose={() => setTagsOpen(false)} lib={lib} filter={filter} />
-      <PresenceGamesModal
-        open={gamesOpen}
-        onClose={() => setGamesOpen(false)}
-        hidden={hiddenGames}
-        onChange={(ids) => void saveHiddenGames(ids)}
-      />
     </>
   );
 }

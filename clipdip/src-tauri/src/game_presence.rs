@@ -6,10 +6,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use clipdip_discord::{GameActivity, PresenceHandle};
+use clipdip_discord::{Extra, GameActivity, PresenceHandle};
 use tracing::debug;
 
 use crate::game_watch::{self, GameSession, SessionSlot};
+use crate::live_presence::LivePresence;
 
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm"];
 
@@ -27,16 +28,50 @@ pub struct GamePresence {
     config_path: PathBuf,
     session: SessionSlot,
     stats: Mutex<Stats>,
+    live: Arc<LivePresence>,
+    /// the activity last handed to Discord, for ClipLib's settings preview
+    card: Mutex<Option<serde_json::Value>>,
 }
 
 impl GamePresence {
     pub fn new(handle: Arc<PresenceHandle>, config_path: PathBuf, session: SessionSlot) -> Arc<Self> {
-        Arc::new(Self {
+        let live = LivePresence::new(config_path.clone());
+        let me = Arc::new(Self {
             handle,
             config_path,
             session,
             stats: Mutex::new(Stats::default()),
-        })
+            live: live.clone(),
+            card: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&me);
+        live.set_on_change(move || {
+            if let Some(me) = weak.upgrade() {
+                me.apply();
+            }
+        });
+        me
+    }
+
+    /// Settings changed: helpers follow the new toggles, the card the rest.
+    pub fn refresh(&self) {
+        self.warm();
+        self.sync_live();
+        self.apply();
+    }
+
+    /// Connects to Discord at startup, not when the first game shows, while game presence is on.
+    pub fn warm(&self) {
+        let on = clipdip_core::config::Config::load_or_default(&self.config_path)
+            .map(|c| c.discord.presence)
+            .unwrap_or(true);
+        self.handle.warm(on);
+    }
+
+    /// Live extensions run only for a game that is actually shown.
+    fn sync_live(&self) {
+        let session = self.session.lock().unwrap().clone();
+        self.live.sync(session.as_ref().filter(|s| self.allowed(&s.game.id)));
     }
 
     /// The watcher's session started, switched or ended.
@@ -68,6 +103,7 @@ impl GamePresence {
             // relaunching the same game later is a new session with its own count
             *self.stats.lock().unwrap() = Stats::default();
         }
+        self.sync_live();
         self.apply();
     }
 
@@ -97,6 +133,22 @@ impl GamePresence {
     /// toggle applies without a restart.
     pub fn apply(&self) {
         let session = self.session.lock().unwrap().clone();
+        let l = self.live.merged();
+        let competing = l.competing
+            && clipdip_core::config::Config::load_or_default(&self.config_path)
+                .map(|c| c.discord.competing)
+                .unwrap_or(true);
+        let extra = Extra {
+            details: l.details,
+            state: l.state,
+            large_image: l.large_image,
+            large_text: l.large_text,
+            start_ms: l.start_ms,
+            end_ms: l.end_ms,
+            party: l.party,
+            playtime: l.playtime,
+            competing,
+        };
         let activity = session.filter(|s| self.allowed(&s.game.id)).map(|s| {
             let st = self.stats.lock().unwrap();
             let own = st.game_id.as_deref() == Some(s.game.id.as_str());
@@ -108,9 +160,16 @@ impl GamePresence {
                 last_clip_ms: if own { st.last_clip_ms } else { None },
                 game_clips: if own { st.game_clips } else { None },
                 total_clips: st.total_clips,
+                extra,
             }
         });
+        *self.card.lock().unwrap() = activity.as_ref().map(clipdip_discord::preview_activity);
         self.handle.set(activity);
+    }
+
+    /// What the card says right now, None while nothing shows.
+    pub fn card(&self) -> Option<serde_json::Value> {
+        self.card.lock().unwrap().clone()
     }
 
     /// Whether Discord is being told about the game running now.

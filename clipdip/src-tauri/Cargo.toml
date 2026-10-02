@@ -35,7 +35,7 @@ crossbeam-channel.workspace = true
 getrandom = "0.3"
 png = "0.17"
 # foreground hook for live game detection
-windows = { workspace = true, features = ["Win32_UI_Accessibility"] }
+windows = { workspace = true, features = ["Win32_UI_Accessibility", "Win32_System_JobObjects"] }
 directories.workspace = true
 # Telemetry machine profile: CPU model string from the registry + OS build.
 winreg = "0.55"
@@ -55,3 +55,4 @@ clipdip-audio.workspace = true
 clipdip-discord.workspace = true
 clipdip-diagnostics.workspace = true
 clipdip-gamedb.workspace = true
+clipdip-live.workspace = true

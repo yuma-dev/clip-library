@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod game_presence;
+mod live_presence;
 mod game_watch;
 mod machine_profile;
 mod metadata;
@@ -3119,6 +3120,13 @@ fn handle_cli_query_flags() {
                 })),
                 None => Err("--preview-filename requires a template argument".into()),
             })
+        } else if argv.iter().any(|a| a == "--live-extensions") {
+            Some(Ok(live_extensions_cli()))
+        } else if let Some(pos) = argv.iter().position(|a| a == "--live-preview") {
+            Some(match argv.get(pos + 1) {
+                Some(req) => live_preview_batch_cli(req),
+                None => Err("--live-preview requires a JSON request".into()),
+            })
         } else if let Some(pos) = argv.iter().position(|a| a == "--resolve-games") {
             Some(match argv.get(pos + 1) {
                 Some(file) => resolve_games_cli(std::path::Path::new(file)),
@@ -3141,6 +3149,129 @@ fn handle_cli_query_flags() {
         // Payloads above are always objects; unreachable in practice.
         _ => std::process::exit(1),
     }
+}
+
+/// Sample game card for ClipLib's Discord settings:
+/// `{ id?, scenario?, settings?, game?, icon?, total_clips?, playtime? }`. With an extension id it
+/// shows that extension's sample in `scenario`, without one the plain card for `game`. `playtime`
+/// holds the Steam hours settings when they're on, applied to Steam games and plain cards. `clips`
+/// picks the session line: "fresh" (just saved), "none" (nothing saved yet), else two clips.
+// names and icons of every game an extension covers, so the settings page has art for games never played
+fn live_extensions_cli() -> serde_json::Value {
+    let extensions = clipdip_live::describe_all();
+    let db = clipdip_gamedb::GameDb::open();
+    let mut games = serde_json::Map::new();
+    for id in extensions
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get("game_ids")?.as_array())
+        .flatten()
+        .filter_map(|v| v.as_str())
+    {
+        if let Some(g) = db.app_by_id(id) {
+            games.insert(id.to_string(), serde_json::json!({ "name": g.name, "icon_url": g.icon_url }));
+        }
+    }
+    serde_json::json!({ "extensions": extensions, "games": games })
+}
+
+// an array renders every card in one process: the settings page prefetches a game's scenarios at once
+fn live_preview_batch_cli(req: &str) -> Result<serde_json::Value, String> {
+    match serde_json::from_str::<serde_json::Value>(req) {
+        Ok(serde_json::Value::Array(reqs)) => {
+            let activities: Vec<serde_json::Value> = reqs
+                .iter()
+                .map(|r| {
+                    live_preview_cli(&r.to_string())
+                        .ok()
+                        .and_then(|v| v.get("activity").cloned())
+                        .unwrap_or(serde_json::Value::Null)
+                })
+                .collect();
+            Ok(serde_json::json!({ "activities": activities }))
+        }
+        _ => live_preview_cli(req),
+    }
+}
+
+fn live_preview_cli(req: &str) -> Result<serde_json::Value, String> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        settings: serde_json::Value,
+        #[serde(default)]
+        game: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        #[serde(default)]
+        total_clips: Option<u32>,
+        #[serde(default)]
+        scenario: String,
+        #[serde(default)]
+        clips: String,
+        #[serde(default)]
+        competing: Option<bool>,
+        #[serde(default)]
+        playtime: Option<serde_json::Value>,
+    }
+    let req: Req = serde_json::from_str(req).map_err(|e| format!("bad request: {e}"))?;
+    let steamy = match req.id.as_deref() {
+        Some(id) => clipdip_live::find(id).map(|m| m.steam_game).unwrap_or(false),
+        None => true,
+    };
+    let playtime = match (req.playtime, clipdip_live::find("steam")) {
+        (Some(s), Some(steam)) if steamy => (steam.preview)(&clipdip_live::Settings::new(steam, s), "").live.playtime,
+        _ => None,
+    };
+    let (game, icon, mut live) = match req.id.as_deref() {
+        Some(id) => {
+            let m = clipdip_live::find(id).ok_or_else(|| format!("no extension {id}"))?;
+            let p = (m.preview)(&clipdip_live::Settings::new(m, req.settings), &req.scenario);
+            // the sample's own icon, else the one ClipLib knows for the game
+            (p.game.to_string(), p.icon.map(str::to_string).or(req.icon), p.live)
+        }
+        None => (req.game.unwrap_or_else(|| "Your game".into()), req.icon, clipdip_live::Live::default()),
+    };
+    live.playtime = live.playtime.or(playtime);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    // some samples carry fixed timestamps from when they were written; a timer counting from then
+    // reads thousands of hours, so move the start to a few minutes ago and keep the length
+    if let Some(start) = live.start_ms.filter(|&t| now - t > 12 * 3_600_000) {
+        let shift = now - 14 * 60_000 - start;
+        live.start_ms = Some(start + shift);
+        live.end_ms = live.end_ms.map(|e| e + shift);
+    }
+    let activity = clipdip_discord::GameActivity {
+        game,
+        image_url: icon,
+        started_at_ms: now - 23 * 60_000,
+        session_clips: if req.clips == "none" { 0 } else { 2 },
+        last_clip_ms: match req.clips.as_str() {
+            "none" => None,
+            "fresh" => Some(now - 5_000),
+            _ => Some(now - 6 * 60_000),
+        },
+        game_clips: Some(24),
+        total_clips: req.total_clips.or(Some(1_204)),
+        extra: clipdip_discord::Extra {
+            details: live.details,
+            state: live.state,
+            large_image: live.large_image,
+            large_text: live.large_text,
+            start_ms: live.start_ms,
+            end_ms: live.end_ms,
+            party: live.party,
+            playtime: live.playtime,
+            competing: live.competing && req.competing.unwrap_or(true),
+        },
+    };
+    Ok(serde_json::json!({ "activity": clipdip_discord::preview_activity(&activity) }))
 }
 
 /// Batch matcher for ClipLib's backfill of old clips. Input is a JSON array of
@@ -3300,6 +3431,7 @@ fn game_status(state: &AppState) -> serde_json::Value {
         "game": session.as_ref().map(|s| &s.game),
         "started_at_ms": session.as_ref().map(|s| s.started_at_ms),
         "presence": state.game_presence.showing(),
+        "card": state.game_presence.card(),
     })
 }
 
@@ -3327,7 +3459,7 @@ fn run_control_command(
         // ClipLib polls this to step its own presence aside while a game shows
         "game_status" => Ok(game_status(&state)),
         "refresh_presence" => {
-            state.game_presence.apply();
+            state.game_presence.refresh();
             Ok(game_status(&state))
         }
         "get_pipeline_running" => Ok(serde_json::json!({
@@ -3405,6 +3537,20 @@ fn run_control_command(
 // main
 
 fn main() {
+    // a live presence helper (see live_presence.rs): stdout is its channel to clipdip, logs go to
+    // stderr, which clipdip folds into its own log
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(pos) = argv.iter().position(|a| a == "--live-ext") {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
+            .init();
+        let code = clipdip_live::run_helper(argv.get(pos + 1).map(String::as_str).unwrap_or(""));
+        std::process::exit(code);
+    }
     // stateless query flags exit here, before logging (stdout must stay pure JSON), single-instance
     // forwarding, and tauri init
     handle_cli_query_flags();
@@ -3746,6 +3892,8 @@ fn main() {
             spawn_audio_device_watcher(loop_tx.clone());
 
             gamedb.spawn_refresher();
+            // the presence pipe opens now, ahead of any game, see PresenceHandle::warm
+            game_presence.warm();
             game_watch::spawn(gamedb.clone(), game_session.clone(), {
                 let game_presence = game_presence.clone();
                 move |session| game_presence.on_session(session)

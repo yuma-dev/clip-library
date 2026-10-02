@@ -17,6 +17,7 @@ import { reportMetric, setTelemetryRoute } from "./telemetry";
 import { bootMark } from "./perf/bootMarks";
 import { installBootReveal, prepareBootReveal } from "./boot/bootReveal";
 import type { Route } from "./routes";
+import { openSection, resolveSection } from "./settings/nav";
 import { setBenchmarkContext } from "./benchmark/context";
 
 // Surfaces that are not on screen at launch load as their own chunks, so the
@@ -47,8 +48,11 @@ export default function App() {
   routeRef.current = route;
   // Open rail switch, closed by the effect below once the new view has painted.
   const switchRef = useRef<{ from: Route; to: Route; startedAt: number } | null>(null);
+  // settings' back button returns where settings was opened from
+  const backRoute = useRef<Route>("library");
   const navigate = useCallback((next: Route) => {
     const from = routeRef.current;
+    if (next === "settings" && from !== "settings") backRoute.current = from;
     if (from !== next) switchRef.current = { from, to: next, startedAt: performance.now() };
     setProfileUserId(null);
     setRoute(next);
@@ -62,9 +66,11 @@ export default function App() {
         setRoute("library");
       },
       openSettings: (section?: string) => {
+        if (routeRef.current !== "settings") backRoute.current = routeRef.current;
         setProfileUserId(null);
         setRoute("settings");
-        setSettingsIntent({ section, nonce: Date.now() });
+        const id = resolveSection(section);
+        if (id) openSection(id);
       },
     }),
     [],
@@ -92,18 +98,14 @@ export default function App() {
     return unsubscribe;
   }, [toast]);
 
-  // deep links from main (cliplib://settings/<section>, e.g. tray icon opening
-  // Settings to Clipdip); nonce re-applies the section even on repeat clicks
-  const [settingsIntent, setSettingsIntent] = useState<{ section?: string; nonce: number } | null>(null);
+  // deep links from main (cliplib://settings/<section>, e.g. tray icon opening Settings to Clipdip)
   useEffect(() => {
     const unsubscribe = window.clips?.onCliplibNavigate?.((payload: { view?: string; section?: string }) => {
       if (payload?.view !== "settings") return;
-      setProfileUserId(null);
-      setRoute("settings");
-      setSettingsIntent({ section: payload.section, nonce: Date.now() });
+      appNav.openSettings(payload.section);
     });
     return unsubscribe;
-  }, []);
+  }, [appNav]);
 
   // keep-alive: once visited, library/feed stay mounted (.route-host hidden) so
   // switching is a style flip; remounting cost 585-930ms in the 2026-07-08 trace
@@ -291,6 +293,7 @@ export default function App() {
           filter={filter}
           dynamic={railDynamic}
           collapsed={railCollapsed}
+          backRoute={backRoute.current}
         />
         <main className="app-main">
           {/* profile overlay stays over the routed view, which stays MOUNTED (.route-host
@@ -324,7 +327,7 @@ export default function App() {
           <div className={`route-host${profileUserId || route !== "settings" ? " hidden" : ""}`}>
             {route === "settings" ? (
               <Suspense fallback={null}>
-                <SettingsView lib={lib} filter={filter} intent={settingsIntent} />
+                <SettingsView lib={lib} filter={filter} />
               </Suspense>
             ) : null}
           </div>

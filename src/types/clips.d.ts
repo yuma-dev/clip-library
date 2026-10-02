@@ -66,8 +66,15 @@ export interface ClipdipConfig {
     capture_icon?: boolean;
     ignored_processes?: string[];
   };
-  /** enabled: call roster on save; presence: detected game as Discord rich presence */
-  discord?: { enabled?: boolean; presence?: boolean; presence_hidden?: string[] };
+  /** enabled: call roster on save; presence: detected game as Discord rich presence;
+   * live: per extension settings for live game details (see LiveExtension) */
+  discord?: {
+    enabled?: boolean;
+    presence?: boolean;
+    presence_hidden?: string[];
+    live?: Record<string, Record<string, unknown>>;
+    competing?: boolean;
+  };
   telemetry?: { enabled?: boolean };
   profile?: { report_interval_ms?: number };
   [key: string]: unknown;
@@ -285,6 +292,50 @@ export interface FilenameVariable {
   token: string;
   description: string;
   example?: string;
+}
+
+/** Live game details extension from `clipdip --live-extensions`. Its settings live in clipdip's
+ * config under `discord.live[id]`: `enabled` plus each option's key. */
+/** A SET_ACTIVITY payload as clipdip sends it (subset the settings preview renders). */
+export interface DiscordActivity {
+  /** 0 Playing, 3 Watching, 5 Competing */
+  type?: number;
+  name?: string;
+  details?: string;
+  state?: string;
+  timestamps?: { start?: number; end?: number };
+  assets?: { large_image?: string; large_text?: string; small_image?: string; small_text?: string };
+  party?: { id?: string; size?: [number, number] };
+  buttons?: Array<{ label: string; url: string }>;
+}
+
+export interface LiveExtension {
+  id: string;
+  name: string;
+  /** Discord application ids of the games it covers */
+  game_ids: string[];
+  /** wide banner art for its settings page */
+  art: string | null;
+  /** false for card data every game shares (Steam hours), toggled with the game card */
+  listed: boolean;
+  /** a Steam game, so hours played applies */
+  steam_game: boolean;
+  /** moments the preview can show, in session order */
+  scenarios: Array<{ key: string; label: string }>;
+  blurb: string;
+  setup: string | null;
+  credits: Array<{ project: string; author: string; url: string; license: string }>;
+  options: Array<
+    | { key: string; label: string; description: string; type: "toggle"; default: boolean }
+    | {
+        key: string;
+        label: string;
+        description: string;
+        type: "choice";
+        default: string;
+        choices: Array<{ value: string; label: string }>;
+      }
+  >;
 }
 
 /** Discord RPC connection state (control status response's discord field). */
@@ -629,6 +680,8 @@ export interface ClipsApi {
   showDiagnosticsSaveDialog(...args: any[]): Promise<any>;
 
   updateDiscordPresence(...args: any[]): Promise<any>;
+  /** asset name (logo, art_*, badge_*) to its CDN url on ClipLib's Discord app */
+  getDiscordAssets(): Promise<Record<string, string>>;
   toggleDiscordRpc(...args: any[]): Promise<any>;
   clearDiscordPresence(): Promise<any>;
 
@@ -701,6 +754,28 @@ export interface ClipsApi {
     listMonitors(): Promise<{ ok: boolean; error?: string; monitors?: MonitorInfo[] }>;
     getFilenameVariables(): Promise<{ ok: boolean; error?: string; variables?: FilenameVariable[] }>;
     previewFilename(template: string): Promise<{ ok: boolean; error?: string; preview?: string }>;
+    liveExtensions(): Promise<{
+      ok: boolean;
+      error?: string;
+      extensions?: LiveExtension[];
+      games?: Record<string, { name: string; icon_url?: string | null }>;
+    }>;
+    livePreview(req: {
+      id?: string;
+      settings?: Record<string, unknown>;
+      game?: string;
+      icon?: string | null;
+      total_clips?: number;
+      scenario?: string;
+      /** the Steam hours settings when they're on */
+      playtime?: Record<string, unknown>;
+      /** ranked matches as Competing, the user's toggle */
+      competing?: boolean;
+    }): Promise<{ ok: boolean; error?: string; activity?: DiscordActivity }>;
+    /** several cards from one clipdip process, null where one failed */
+    livePreviews(
+      reqs: Array<Parameters<ClipsApi["clipdip"]["livePreview"]>[0]>,
+    ): Promise<{ ok: boolean; error?: string; activities?: Array<DiscordActivity | null> }>;
 
     /** Generic control-server call; resolves {ok:false, error:"not_running"}
      * when clipdip isn't up, never rejects. */

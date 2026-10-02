@@ -150,7 +150,7 @@ async function setConfig(patch) {
   await fsp.rename(tmp, file);
 
   // clipdip reads the presence flag when a game session changes; apply it to a running game now
-  if (patch?.discord && typeof patch.discord === 'object' && ('presence' in patch.discord || 'presence_hidden' in patch.discord)) {
+  if (patch?.discord && typeof patch.discord === 'object' && !('enabled' in patch.discord && Object.keys(patch.discord).length === 1)) {
     control('refresh_presence').catch(() => {});
   }
 
@@ -364,6 +364,10 @@ const listAudioDevices = () => query('--list-audio-devices');
 const listMonitors = () => query('--list-monitors');
 const getFilenameVariables = () => query('--filename-variables');
 const previewFilename = (template) => query('--preview-filename', [String(template ?? '')]);
+// live game details extensions with their options and credits, for the settings page
+const liveExtensions = () => query('--live-extensions');
+// sample game card through clipdip's own composer, so the settings preview can't drift from Discord
+const livePreview = (req) => query('--live-preview', [JSON.stringify(req ?? {})]);
 
 // batch game matching for the library backfill; input goes through a temp file since a few
 // hundred exe paths and titles can outgrow the command line. first call may download Discord's
@@ -725,6 +729,8 @@ module.exports = {
   listMonitors,
   getFilenameVariables,
   previewFilename,
+  liveExtensions,
+  livePreview,
   control,
   collectDiagnosticFiles,
   getDiagnosticsSnapshot

@@ -264,6 +264,7 @@ const api = {
 
   // discord rpc
   updateDiscordPresence: invoke("update-discord-presence"),
+  getDiscordAssets: invoke("discord-app-assets"),
   toggleDiscordRpc: invoke("toggle-discord-rpc"),
   clearDiscordPresence: invoke("clear-discord-presence"),
 
@@ -317,6 +318,9 @@ const api = {
       listMonitors: invoke("clipdip-list-monitors"),
       getFilenameVariables: invoke("clipdip-filename-variables"),
       previewFilename: invoke("clipdip-preview-filename"),
+      liveExtensions: invoke("clipdip-live-extensions"),
+      livePreview: invoke("clipdip-live-preview"),
+      livePreviews: invoke("clipdip-live-preview"),
       // control server on the running instance; {ok:false,error:"not_running"} when down
       control,
       getLiveStatus: () => control("status"),

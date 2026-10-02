@@ -2,6 +2,10 @@
 //! the same Discord app as the voice roster: that one is named ClipLib and
 //! owns the `logo` asset. SET_ACTIVITY needs no OAuth, so unlike the voice
 //! roster this works for every account.
+//!
+//! Live game details (clipdip-live) only fill text, the big image and the
+//! clock. ClipLib always keeps the logo badge, the one button and
+//! "Clipping using ClipLib" in whichever line is free.
 
 use std::time::{Duration, Instant};
 
@@ -38,6 +42,34 @@ pub struct GameActivity {
     pub game_clips: Option<u32>,
     /// clips in the whole library, for the logo's hover text
     pub total_clips: Option<u32>,
+    /// what a live extension adds, empty without one
+    pub extra: Extra,
+}
+
+/// Live game details. Unset fields keep the plain card's value.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Extra {
+    pub details: Option<String>,
+    pub state: Option<String>,
+    pub large_image: Option<String>,
+    pub large_text: Option<String>,
+    /// unix ms, replaces the session start
+    pub start_ms: Option<i64>,
+    /// unix ms, counts down to it
+    pub end_ms: Option<i64>,
+    /// [current, max]
+    pub party: Option<[u32; 2]>,
+    /// "312 h played", joins the big image's hover text
+    pub playtime: Option<String>,
+    /// ranked match: Competing (5) instead of Playing (0)
+    pub competing: bool,
+}
+
+impl GameActivity {
+    /// the big image as sent: the extension's art over the game's icon
+    fn image(&self) -> Option<&String> {
+        self.extra.large_image.as_ref().or(self.image_url.as_ref())
+    }
 }
 
 /// "Just clipped something" this long after a save
@@ -45,6 +77,7 @@ const JUST_CLIPPED_MS: i64 = 30_000;
 
 enum Cmd {
     Set(Option<GameActivity>),
+    Warm(bool),
 }
 
 pub struct PresenceHandle {
@@ -55,6 +88,13 @@ impl PresenceHandle {
     /// Latest call wins. `None` clears the activity and drops the pipe.
     pub fn set(&self, activity: Option<GameActivity>) {
         let _ = self.tx.send(Cmd::Set(activity));
+    }
+
+    /// Hold the pipe open even with nothing to show. Discord keeps one Playing activity per user
+    /// and breaks ties between rich ones by which RPC client connected first, so being connected
+    /// before the game starts is what puts our card over a game's own presence.
+    pub fn warm(&self, on: bool) {
+        let _ = self.tx.send(Cmd::Warm(on));
     }
 }
 
@@ -85,15 +125,38 @@ fn run(rx: Receiver<Cmd>) {
     let mut conn: Option<Connection> = None;
     let mut next_connect = Instant::now();
     let mut nonce: u64 = 0;
+    let mut warm = false;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Cmd::Set(a)) => want = a,
+            Ok(Cmd::Warm(on)) => warm = on,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
-        while let Ok(Cmd::Set(a)) = rx.try_recv() {
-            want = a;
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                Cmd::Set(a) => want = a,
+                Cmd::Warm(on) => warm = on,
+            }
+        }
+        if !warm && want.is_none() && shown.is_none() && conn.is_some() {
+            // presence turned off: no reason to hold a slot on Discord's RPC server
+            conn = None;
+            debug!("presence: pipe closed, presence off");
+        }
+        if warm && conn.is_none() && Instant::now() >= next_connect {
+            match Connection::connect().and_then(|c| handshake(&c, CLIENT_ID).map(|_| c)) {
+                Ok(c) => {
+                    info!("presence: connected ahead of any game");
+                    conn = Some(c);
+                }
+                Err(e) => {
+                    debug!("presence: not connected: {e:#}");
+                    let wait = if is_capacity_error(&e) { RECONNECT_EVERY * 4 } else { RECONNECT_EVERY };
+                    next_connect = Instant::now() + wait;
+                }
+            }
         }
 
         // keep an idle pipe alive and notice Discord quitting
@@ -130,7 +193,7 @@ fn run(rx: Receiver<Cmd>) {
         let urgent = match &want {
             None => true,
             Some(a) => {
-                shown_game.as_ref() != Some(&(a.game.clone(), a.image_url.clone()))
+                shown_game.as_ref() != Some(&(a.game.clone(), a.image().cloned()))
                     || live_line(a, now).as_deref() == Some("Just clipped something")
             }
         };
@@ -189,7 +252,7 @@ fn run(rx: Receiver<Cmd>) {
 
         let mut sent = false;
         for shape in [Shape::Full, Shape::NoImage, Shape::Plain] {
-            if shape == Shape::NoImage && activity.image_url.is_none() {
+            if shape == Shape::NoImage && activity.image().is_none() {
                 continue;
             }
             nonce += 1;
@@ -210,7 +273,7 @@ fn run(rx: Receiver<Cmd>) {
         if sent {
             sent_at.push_back(Instant::now());
             shown = want_key;
-            shown_game = Some((activity.game.clone(), activity.image_url.clone()));
+            shown_game = Some((activity.game.clone(), activity.image().cloned()));
         } else {
             // dead pipe or every shape refused; reconnect later instead of spinning
             conn = None;
@@ -219,6 +282,11 @@ fn run(rx: Receiver<Cmd>) {
             next_connect = Instant::now() + RECONNECT_EVERY;
         }
     }
+}
+
+/// The activity exactly as it would go to Discord, for ClipLib's settings preview.
+pub fn preview_activity(a: &GameActivity) -> Value {
+    activity_json(a, Shape::Full, now_ms())
 }
 
 fn now_ms() -> i64 {
@@ -263,16 +331,35 @@ fn live_line(a: &GameActivity, now: i64) -> Option<String> {
     })
 }
 
+/// Discord rejects the whole activity over a text outside 2..=128 chars
+fn fit(s: &str) -> Option<String> {
+    let s = s.trim();
+    match s.chars().count() {
+        0..=1 => None,
+        2..=128 => Some(s.to_string()),
+        _ => Some(format!("{}...", s.chars().take(125).collect::<String>())),
+    }
+}
+
+const CLIPPING: &str = "Clipping using ClipLib";
+const JUST_CLIPPED: &str = "Just clipped something";
+
 fn activity_json(a: &GameActivity, shape: Shape, now: i64) -> Value {
-    let large_text = match a.game_clips {
-        Some(n) if n > 0 => format!("{} · {}", a.game, clips(n)),
-        _ => a.game.clone(),
-    };
+    let x = &a.extra;
+    let x_details = x.details.as_deref().and_then(fit);
+    let x_state = x.state.as_deref().and_then(fit);
+    let mut hover = vec![x.large_text.as_deref().and_then(fit).unwrap_or_else(|| a.game.clone())];
+    hover.extend(x.playtime.clone());
+    if let Some(n) = a.game_clips.filter(|n| *n > 0) {
+        hover.push(clips(n));
+    }
+    let large_text = hover.join(" · ");
+    let large_text = fit(&large_text).unwrap_or_else(|| a.game.clone());
     let small_text = match a.total_clips {
-        Some(n) if n > 0 => format!("ClipLib · {}", clips(n)),
-        _ => "ClipLib".to_string(),
+        Some(n) if n > 0 => format!("{CLIPPING} · {}", clips(n)),
+        _ => CLIPPING.to_string(),
     };
-    let assets = match (&a.image_url, shape) {
+    let assets = match (a.image(), shape) {
         (Some(url), Shape::Full) => json!({
             "large_image": url,
             "large_text": large_text,
@@ -282,23 +369,39 @@ fn activity_json(a: &GameActivity, shape: Shape, now: i64) -> Value {
         _ => json!({ "large_image": LOGO_ASSET, "large_text": large_text }),
     };
     let line = live_line(a, now);
+    let just = line.as_deref() == Some(JUST_CLIPPED);
+    let mut timestamps = json!({ "start": x.start_ms.unwrap_or(a.started_at_ms) });
+    if let Some(end) = x.end_ms.filter(|e| *e > now) {
+        timestamps["end"] = json!(end);
+    }
     let mut v = json!({
-        "type": 0,
-        "timestamps": { "start": a.started_at_ms },
+        // Discord sorts Competing above every Playing activity, a game's own presence included
+        "type": if x.competing { 5 } else { 0 },
+        "timestamps": timestamps,
         "assets": assets,
-        // only other people see buttons, Discord never shows them on your own card
+        // the only button, extensions can't add one; other people see it, you never do
         "buttons": [{ "label": "Get ClipLib", "url": SITE_URL }],
     });
-    if shape == Shape::Plain {
-        v["details"] = json!(a.game);
-        v["state"] = json!(line.unwrap_or_else(|| "Clipping using ClipLib".into()));
+    let (details, state) = if shape == Shape::Plain {
+        (Some(a.game.clone()), x_details.or(line).or_else(|| Some(CLIPPING.into())))
     } else {
         // a local client may rename the activity: the card title and "Playing <game>" in the
         // member list both read the game instead of the app name
         v["name"] = json!(a.game);
-        v["details"] = json!("Clipping using ClipLib");
-        if let Some(line) = line {
-            v["state"] = json!(line);
+        match x_details {
+            // a fresh save beats the extension's second line for its 30 s
+            Some(d) => (Some(d), if just { line } else { x_state.or(line).or_else(|| Some(CLIPPING.into())) }),
+            None => (Some(CLIPPING.into()), if just { line } else { x_state.or(line) }),
+        }
+    };
+    if let Some(d) = details {
+        v["details"] = json!(d);
+    }
+    if let Some(s) = state {
+        v["state"] = json!(s);
+        // Discord shows the party as "(1 of 5)" after the state, and only with an id
+        if let Some([cur, max]) = x.party.filter(|[c, m]| *c > 0 && m >= c) {
+            v["party"] = json!({ "id": "cliplib", "size": [cur, max] });
         }
     }
     v
@@ -319,6 +422,7 @@ mod tests {
             last_clip_ms: None,
             game_clips: None,
             total_clips: None,
+            extra: Extra::default(),
         }
     }
 
@@ -355,7 +459,7 @@ mod tests {
         a.total_clips = Some(2125);
         let v = activity_json(&a, Shape::Full, NOW);
         assert_eq!(v["assets"]["large_text"], "VALORANT · 67 clips");
-        assert_eq!(v["assets"]["small_text"], "ClipLib · 2,125 clips");
+        assert_eq!(v["assets"]["small_text"], "Clipping using ClipLib · 2,125 clips");
     }
 
     #[test]
@@ -366,5 +470,81 @@ mod tests {
         assert!(plain.get("name").is_none());
         assert_eq!(plain["details"], "VALORANT");
         assert_eq!(activity_json(&act(None), Shape::Full, NOW)["assets"]["large_image"], LOGO_ASSET);
+    }
+
+    #[test]
+    fn extra_fills_lines_and_keeps_cliplib() {
+        let mut a = act(Some("https://x/game.png"));
+        a.extra = Extra {
+            details: Some("Ranked Solo/Duo, Ahri".into()),
+            large_image: Some("https://x/ahri.jpg".into()),
+            large_text: Some("Ahri".into()),
+            ..Extra::default()
+        };
+        a.game_clips = Some(3);
+        let v = activity_json(&a, Shape::Full, NOW);
+        assert_eq!(v["details"], "Ranked Solo/Duo, Ahri");
+        assert_eq!(v["state"], "Clipping using ClipLib");
+        assert_eq!(v["assets"]["large_image"], "https://x/ahri.jpg");
+        assert_eq!(v["assets"]["large_text"], "Ahri · 3 clips");
+        assert_eq!(v["assets"]["small_image"], LOGO_ASSET);
+        assert_eq!(v["buttons"].as_array().unwrap().len(), 1);
+
+        a.extra.state = Some("5/2/7, 182 CS".into());
+        a.extra.party = Some([2, 5]);
+        a.session_clips = 1;
+        a.last_clip_ms = Some(NOW - 5_000);
+        let v = activity_json(&a, Shape::Full, NOW);
+        assert_eq!(v["state"], "Just clipped something");
+        assert_eq!(v["party"]["size"], json!([2, 5]));
+        a.last_clip_ms = Some(NOW - 60_000);
+        assert_eq!(activity_json(&a, Shape::Full, NOW)["state"], "5/2/7, 182 CS");
+
+        // no extension details: ClipLib keeps the first line, the extension's state the second
+        a.extra.details = None;
+        let v = activity_json(&a, Shape::Full, NOW);
+        assert_eq!(v["details"], "Clipping using ClipLib");
+        assert_eq!(v["state"], "5/2/7, 182 CS");
+    }
+
+    #[test]
+    fn extra_text_is_clamped_and_clock_used() {
+        let mut a = act(None);
+        a.extra.details = Some("x".repeat(300));
+        a.extra.state = Some("y".into());
+        a.extra.start_ms = Some(NOW - 1000);
+        a.extra.end_ms = Some(NOW + 60_000);
+        let v = activity_json(&a, Shape::Full, NOW);
+        assert_eq!(v["details"].as_str().unwrap().chars().count(), 128);
+        // a 1 char state is invalid, ClipLib's line takes its place
+        assert_eq!(v["state"], "Clipping using ClipLib");
+        assert_eq!(v["timestamps"]["start"], NOW - 1000);
+        assert_eq!(v["timestamps"]["end"], NOW + 60_000);
+    }
+
+    #[test]
+    fn no_image_shape_drops_extension_art_too() {
+        let mut a = act(None);
+        a.extra.large_image = Some("https://x/map.png".into());
+        assert_eq!(activity_json(&a, Shape::Full, NOW)["assets"]["large_image"], "https://x/map.png");
+        assert_eq!(activity_json(&a, Shape::NoImage, NOW)["assets"]["large_image"], LOGO_ASSET);
+    }
+
+    #[test]
+    fn ranked_matches_compete() {
+        let mut a = act(None);
+        assert_eq!(activity_json(&a, Shape::Full, NOW)["type"], 0);
+        a.extra.competing = true;
+        assert_eq!(activity_json(&a, Shape::Full, NOW)["type"], 5);
+    }
+
+    #[test]
+    fn playtime_joins_the_hover() {
+        let mut a = act(None);
+        a.game_clips = Some(4);
+        a.extra.playtime = Some("312 h played".into());
+        assert_eq!(activity_json(&a, Shape::Full, NOW)["assets"]["large_text"], "VALORANT · 312 h played · 4 clips");
+        a.extra.large_text = Some("Ascent".into());
+        assert_eq!(activity_json(&a, Shape::Full, NOW)["assets"]["large_text"], "Ascent · 312 h played · 4 clips");
     }
 }

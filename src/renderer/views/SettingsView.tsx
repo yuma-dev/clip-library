@@ -1,22 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  AudioLines,
-  Bell,
-  Clapperboard,
-  FolderOpen,
-  HardDrive,
-  Info,
-  Keyboard,
-  Mic,
-  MonitorPlay,
-  Palette,
-  Settings2,
-  Share2,
-  Video,
-  Videotape,
-  type LucideIcon,
-} from "lucide-react";
 import GeneralSection from "../settings/sections/GeneralSection";
 import AppearanceSection from "../settings/sections/AppearanceSection";
 import PlayerSection from "../settings/sections/PlayerSection";
@@ -27,6 +10,7 @@ import StorageSection from "../settings/sections/StorageSection";
 import ShortcutsSection from "../settings/sections/ShortcutsSection";
 import AboutSection from "../settings/sections/AboutSection";
 import CliplibSection from "../settings/sections/CliplibSection";
+import DiscordSection from "../settings/sections/discord/DiscordSection";
 import { ClipdipProvider } from "../settings/sections/clipdip/ClipdipContext";
 import ClipdipGeneralSection from "../settings/sections/clipdip/ClipdipGeneralSection";
 import ClipdipVideoSection from "../settings/sections/clipdip/ClipdipVideoSection";
@@ -35,84 +19,20 @@ import ClipdipOutputSection from "../settings/sections/clipdip/ClipdipOutputSect
 import ClipdipHotkeysSection from "../settings/sections/clipdip/ClipdipHotkeysSection";
 import ClipdipNotificationsSection from "../settings/sections/clipdip/ClipdipNotificationsSection";
 import { useSettings } from "../settings/SettingsContext";
+import { ALL_SECTIONS, useSettingsNav, type SectionId } from "../settings/nav";
 import { useToast } from "../ui/Toast";
 import type { UseClips } from "../library/useClips";
 import type { UseLibraryFilter } from "../library/useLibraryFilter";
 
-type SectionId =
-  | "general"
-  | "appearance"
-  | "player"
-  | "audio"
-  | "export"
-  | "storage"
-  | "shortcuts"
-  | "cliplib"
-  | "about"
-  | "clipdip-general"
-  | "clipdip-video"
-  | "clipdip-audio"
-  | "clipdip-output"
-  | "clipdip-hotkeys"
-  | "clipdip-notifications";
-
-interface SectionDef {
-  id: SectionId;
-  label: string;
-  icon: LucideIcon;
-  blurb: string;
-}
-
-export const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
-  {
-    items: [
-      { id: "general", label: "General", icon: Settings2, blurb: "Library location, integrations, and tags" },
-      { id: "appearance", label: "Appearance", icon: Palette, blurb: "Font and library visuals" },
-      { id: "player", label: "Player", icon: MonitorPlay, blurb: "Previews and the ambient glow" },
-      { id: "audio", label: "Audio", icon: AudioLines, blurb: "Waveforms and even loudness across clips" },
-      { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
-      { id: "storage", label: "Storage", icon: HardDrive, blurb: "What takes up space, and ways to get it back" },
-      { id: "shortcuts", label: "Shortcuts", icon: Keyboard, blurb: "Player keyboard bindings" },
-      { id: "cliplib", label: "ClipLib", icon: Share2, blurb: "Account, invite codes, and API tokens" },
-      { id: "about", label: "About", icon: Info, blurb: "Version, updates, and diagnostics" },
-    ],
-  },
-  {
-    label: "Clipdip",
-    items: [
-      { id: "clipdip-general", label: "General", icon: Videotape, blurb: "Process, autostart, and diagnostics" },
-      { id: "clipdip-video", label: "Video", icon: Video, blurb: "Replay buffer, capture, and quality" },
-      { id: "clipdip-audio", label: "Audio", icon: Mic, blurb: "Recorded sources and mixing" },
-      { id: "clipdip-output", label: "Output", icon: FolderOpen, blurb: "Where clips land and how they're named" },
-      { id: "clipdip-hotkeys", label: "Hotkeys", icon: Keyboard, blurb: "Global capture keys" },
-      { id: "clipdip-notifications", label: "Notifications", icon: Bell, blurb: "The on-screen save overlay" },
-    ],
-  },
-];
-
-const ALL_SECTIONS = NAV_GROUPS.flatMap((g) => g.items);
-
-/** Deep-link intent section, mapped to nav section (legacy "clipdip" targets the group). */
-const INTENT_ALIASES: Record<string, SectionId> = { clipdip: "clipdip-general" };
+export { NAV_GROUPS } from "../settings/nav";
 
 interface SettingsViewProps {
   lib: UseClips;
   filter: UseLibraryFilter;
-  /** Deep-link intent from main (cliplib://settings/<section>); the nonce
-   *  re-applies the section on repeated tray clicks. */
-  intent?: { section?: string; nonce: number } | null;
 }
 
-export default function SettingsView({ lib, filter, intent }: SettingsViewProps) {
-  const [section, setSection] = useState<SectionId>("general");
-
-  useEffect(() => {
-    if (!intent?.section) return;
-    const target = INTENT_ALIASES[intent.section] ?? intent.section;
-    if (ALL_SECTIONS.some((s) => s.id === target)) {
-      setSection(target as SectionId);
-    }
-  }, [intent]);
+export default function SettingsView({ lib, filter }: SettingsViewProps) {
+  const { section, focus } = useSettingsNav();
   const active = ALL_SECTIONS.find((s) => s.id === section) ?? ALL_SECTIONS[0];
   const { undo, redo } = useSettings();
   const toast = useToast();
@@ -150,9 +70,26 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, toast]);
 
+  // a search hit brings its row into view once the page has mounted (it animates in over 140 ms)
+  useEffect(() => {
+    if (!focus?.title) return;
+    const t = setTimeout(() => {
+      const els = document.querySelectorAll<HTMLElement>(".settings-page .set-row-title, .settings-page .set-group-title");
+      const el = [...els].find((e) => e.textContent?.trim().toLowerCase().startsWith(focus.title!.toLowerCase()));
+      const target = el?.closest<HTMLElement>(".set-row, .set-group") ?? el;
+      if (!target) return;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      target.classList.remove("settings-flash");
+      void target.offsetWidth;
+      target.classList.add("settings-flash");
+    }, 220);
+    return () => clearTimeout(t);
+  }, [focus]);
+
   // section render map, adding a section stays one line
   const renderers: Record<SectionId, () => ReactNode> = {
     general: () => <GeneralSection lib={lib} filter={filter} />,
+    discord: () => <DiscordSection lib={lib} />,
     appearance: () => <AppearanceSection />,
     player: () => <PlayerSection sampleThumb={sampleThumb} />,
     audio: () => (
@@ -176,27 +113,6 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
 
   return (
     <div className="settings-view">
-      {/* Section rail (inside the view; the app rail stays for top-level nav). */}
-      <nav className="settings-nav" aria-label="Settings sections">
-        <div className="settings-nav-title">Settings</div>
-        {NAV_GROUPS.map((group, gi) => (
-          <div key={group.label ?? gi} className="settings-nav-group">
-            {group.label ? <div className="settings-nav-label">{group.label}</div> : null}
-            {group.items.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                className={`settings-nav-item${section === id ? " active" : ""}`}
-                onClick={() => setSection(id)}
-              >
-                <Icon size={15} />
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-        ))}
-      </nav>
-
       <div className="settings-content">
         {/* Shared clipdip state survives switches between clipdip sections;
             its polling only runs while one of them is active. */}
@@ -204,7 +120,7 @@ export default function SettingsView({ lib, filter, intent }: SettingsViewProps)
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={section}
-              className="settings-page"
+              className={`settings-page${section === "discord" ? " wide" : ""}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}

@@ -8,6 +8,7 @@ import RailTags from "./RailTags";
 import RailGames from "./RailGames";
 import RailProfile from "./RailProfile";
 import RailSearch from "./RailSearch";
+import SettingsRail from "./SettingsRail";
 import UpdatePill from "./UpdatePill";
 import AnalysisPill from "./AnalysisPill";
 import FeedRailFilters from "../feed/FeedRailFilters";
@@ -25,6 +26,8 @@ interface SidebarProps {
   /** hover-to-expand rail */
   dynamic: boolean;
   collapsed: boolean;
+  /** where the settings rail's back button goes */
+  backRoute?: Route;
 }
 
 const COLLECTIONS: { id: Collection; label: string; icon: typeof Layers }[] = [
@@ -46,6 +49,7 @@ function Sidebar({
   filter,
   dynamic,
   collapsed,
+  backRoute = "library",
 }: SidebarProps) {
   const toast = useToast();
   // feed requires a ClipLib login, the nav item locks while logged out
@@ -113,86 +117,93 @@ function Sidebar({
       onMouseOver={onRailOver}
       onMouseLeave={() => setTip(null)}
     >
-      <RailSearch filter={filter} clips={clips} />
-
-      <nav className="rail-nav">
-        {routes.map(({ id, label, icon: Icon, disabled }) => {
-          const locked = disabled || (id === "feed" && feedLocked);
-          const tip = disabled ? `${label} (soon)` : locked ? `${label} (sign in)` : label;
-          const active = activeRoute === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              data-rail-tip={tip}
-              className={`rail-item${active ? " active" : ""}${locked ? " soon" : ""}`}
-              onClick={() => {
-                if (disabled) toast.show(`${label} is coming soon`);
-                else if (locked) toast.show("Connect to ClipLib to browse the feed");
-                else onNavigate(id);
-              }}
-            >
-              {active ? <span className="rail-item-mark" aria-hidden="true" /> : null}
-              <span className="r-ico">
-                <Icon size={17} />
-              </span>
-              <span className="rail-label">{label}</span>
-              {id === "library" ? <span className="rail-count-pill r-label">{counts.total}</span> : null}
-              {disabled ? <span className="rail-soon r-label">soon</span> : null}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="rail-divider" />
-
-      {route === "feed" ? (
-        /* feed route: contextual filters replace the library sections */
-        <FeedRailFilters />
+      {route === "settings" ? (
+        /* settings takes over the rail: its sections replace the app nav, the page gets the width */
+        <SettingsRail back={backRoute} onBack={() => onNavigate(backRoute)} />
       ) : (
         <>
-          {/* collections stay pinned; only the tag list below scrolls */}
-          <div className="rail-section rail-section-fixed">
-            <div className="rail-section-head">
-              <span className="rail-section-title">Collections</span>
-            </div>
-            <div className="rail-collections">
-              {COLLECTIONS.map(({ id, label, icon: Icon }) => (
+          <RailSearch filter={filter} clips={clips} />
+
+          <nav className="rail-nav">
+            {routes.map(({ id, label, icon: Icon, disabled }) => {
+              const locked = disabled || (id === "feed" && feedLocked);
+              const tip = disabled ? `${label} (soon)` : locked ? `${label} (sign in)` : label;
+              const active = activeRoute === id;
+              return (
                 <button
                   key={id}
                   type="button"
-                  data-rail-tip={label}
-                  className={`rail-collection${filter.collection === id ? " active" : ""}`}
-                  onClick={() => filter.setCollection(id)}
+                  data-rail-tip={tip}
+                  className={`rail-item${active ? " active" : ""}${locked ? " soon" : ""}`}
+                  onClick={() => {
+                    if (disabled) toast.show(`${label} is coming soon`);
+                    else if (locked) toast.show("Connect to ClipLib to browse the feed");
+                    else onNavigate(id);
+                  }}
                 >
+                  {active ? <span className="rail-item-mark" aria-hidden="true" /> : null}
                   <span className="r-ico">
-                    <Icon size={15} />
+                    <Icon size={17} />
                   </span>
                   <span className="rail-label">{label}</span>
-                  <span className="rail-collection-count r-label">{collectionCount(id)}</span>
+                  {id === "library" ? <span className="rail-count-pill r-label">{counts.total}</span> : null}
+                  {disabled ? <span className="rail-soon r-label">soon</span> : null}
                 </button>
-              ))}
-            </div>
-          </div>
+              );
+            })}
+          </nav>
 
-          <RailGames filter={filter} />
+          <div className="rail-divider" />
 
-          <RailTags filter={filter} />
+          {route === "feed" ? (
+            /* feed route: contextual filters replace the library sections */
+            <FeedRailFilters />
+          ) : (
+            <>
+              {/* collections stay pinned; only the tag list below scrolls */}
+              <div className="rail-section rail-section-fixed">
+                <div className="rail-section-head">
+                  <span className="rail-section-title">Collections</span>
+                </div>
+                <div className="rail-collections">
+                  {COLLECTIONS.map(({ id, label, icon: Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      data-rail-tip={label}
+                      className={`rail-collection${filter.collection === id ? " active" : ""}`}
+                      onClick={() => filter.setCollection(id)}
+                    >
+                      <span className="r-ico">
+                        <Icon size={15} />
+                      </span>
+                      <span className="rail-label">{label}</span>
+                      <span className="rail-collection-count r-label">{collectionCount(id)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-          <div className="rail-stats r-extra">
-            <div className="rail-stat">
-              <div className="rail-stat-figure">{counts.total}</div>
-              <div className="rail-stat-label">clips</div>
-            </div>
-            <div className="rail-stat">
-              <div className="rail-stat-figure accent">{counts.week}</div>
-              <div className="rail-stat-label">this week</div>
-            </div>
-            <div className="rail-stat">
-              <div className="rail-stat-figure">{folderBytes == null ? "—" : formatBytes(folderBytes)}</div>
-              <div className="rail-stat-label">on disk</div>
-            </div>
-          </div>
+              <RailGames filter={filter} />
+
+              <RailTags filter={filter} />
+
+              <div className="rail-stats r-extra">
+                <div className="rail-stat">
+                  <div className="rail-stat-figure">{counts.total}</div>
+                  <div className="rail-stat-label">clips</div>
+                </div>
+                <div className="rail-stat">
+                  <div className="rail-stat-figure accent">{counts.week}</div>
+                  <div className="rail-stat-label">this week</div>
+                </div>
+                <div className="rail-stat">
+                  <div className="rail-stat-figure">{folderBytes == null ? "—" : formatBytes(folderBytes)}</div>
+                  <div className="rail-stat-label">on disk</div>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
 

@@ -12,6 +12,7 @@ members = [
     "crates/discord",
     "crates/diagnostics",
     "crates/gamedb",
+    "crates/live",
     "src-tauri",
     "crates/launcher",
 ]
@@ -93,6 +94,7 @@ clipdip-profile = { path = "crates/profile" }
 clipdip-discord = { path = "crates/discord" }
 clipdip-diagnostics = { path = "crates/diagnostics" }
 clipdip-gamedb = { path = "crates/gamedb" }
+clipdip-live = { path = "crates/live" }
 
 [profile.release]
 opt-level = 3

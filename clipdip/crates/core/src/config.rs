@@ -712,6 +712,11 @@ pub struct DiscordConfig {
     pub presence: bool,
     /// game ids (as in .gameinfo's `game.id`) that never show as presence
     pub presence_hidden: Vec<String>,
+    /// live game details per extension id (`[discord.live.league]` etc.):
+    /// `enabled` plus the extension's own options, see clipdip-live
+    pub live: std::collections::BTreeMap<String, serde_json::Value>,
+    /// ranked matches show as "Competing in <game>", which Discord puts above the game's own presence
+    pub competing: bool,
 }
 
 impl Default for DiscordConfig {
@@ -720,6 +725,8 @@ impl Default for DiscordConfig {
             enabled: true,
             presence: true,
             presence_hidden: Vec::new(),
+            live: Default::default(),
+            competing: true,
         }
     }
 }
