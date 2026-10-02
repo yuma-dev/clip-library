@@ -12,7 +12,7 @@ export const GENRES: { name: string; ids: string[] }[] = [
     name: "Survival and co-op",
     ids: ["abiotic_factor", "rv_there_yet", "subnautica_2", "satisfactory", "valheim", "peak", "repo", "phasmophobia"],
   },
-  { name: "Sandbox", ids: ["minecraft", "roblox", "hytale"] },
+  { name: "Sandbox", ids: ["minecraft", "roblox", "hytale", "find_the_needle"] },
   { name: "Online RPGs", ids: ["path_of_exile", "warframe", "guild_wars_2"] },
   { name: "Sports and party", ids: ["rocket_league", "fall_guys", "golf_it"] },
 ];

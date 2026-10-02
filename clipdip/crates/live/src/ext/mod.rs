@@ -11,6 +11,7 @@ pub mod dota2;
 pub mod ea_wrc;
 pub mod elite_dangerous;
 pub mod f1;
+pub mod find_the_needle;
 pub mod fall_guys;
 pub mod fortnite;
 pub mod forza;
@@ -94,6 +95,7 @@ pub static ALL: &[&Manifest] = &[
     &hearthstone::MANIFEST,
     &guild_wars_2::MANIFEST,
     &runeterra::MANIFEST,
+    &find_the_needle::MANIFEST,
 ];
 
 #[cfg(test)]

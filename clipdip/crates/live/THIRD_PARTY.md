@@ -50,7 +50,7 @@ The Modrinth App's database is only read, none of its (GPL) code is used. Game d
 runtime from the public endpoints named in each module and isn't part of this repository.
 
 These were read for their data formats only, no code was copied: balatro (balatro-rs, Distro); deadlock (deadlock-rpc, Deadlock-Rich-Presence); guild_wars_2 (GW2RPC); tarkov (TarkovMonitor); tf2 (tf2-rich-presence). The other games are built from the game's own logs, saves or public docs (Valve, EA, Riot, Epic, Microsoft,
-Laminar Research, Fortnite-API, the Team Fortress and Warframe wikis), named in each module.
+Laminar Research, Fortnite-API, Godot, the Team Fortress and Warframe wikis), named in each module.
 
 ## MIT License
 
