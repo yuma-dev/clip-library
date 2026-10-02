@@ -2766,6 +2766,8 @@ body.ui-blur-exit .app-body {
 .settings-page.wide {
   max-width: none;
   display: block;
+  /* the base start alignment shrinks the page to its content, an opened row then widened it */
+  align-items: stretch;
 }
 /* a settings search hit pulses once where it landed */
 .settings-flash {

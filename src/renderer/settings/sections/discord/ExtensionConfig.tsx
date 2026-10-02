@@ -78,78 +78,79 @@ export default function ExtensionConfig({ ext, settings, onChange, playing, game
         </div>
       ) : null}
 
-      <div className="dl-config-grid">
-        <div className={`dl-opts${on ? "" : " off"}`}>
-          {ext.options.length === 0 ? (
-            <div className="dl-opt empty">
-              <b>Nothing to set</b>
-              <span>It shows everything the game reports.</span>
-            </div>
-          ) : (
-            ext.options.map((o) => {
-              if (o.type === "toggle") {
-                return (
-                  <label key={o.key} className="dl-opt">
-                    <div className="dl-opt-text">
-                      <b>{o.label}</b>
-                      {o.description ? <span>{o.description}</span> : null}
-                    </div>
-                    <Toggle
-                      checked={Boolean(value(o.key, o.default))}
-                      disabled={!on}
-                      onChange={(v) => set(o.key, v)}
-                      aria-label={o.label}
-                    />
-                  </label>
-                );
-              }
-              const choices = o.choices.map((c) => ({ value: c.value, label: c.label }));
-              const current = String(value(o.key, o.default));
+      {/* before the options, its text points at them as "below" */}
+      {ext.setup ? (
+        <div className="dl-setup">
+          <Wrench size={14} />
+          <div>
+            <b>One time setup</b>
+            <p>{ext.setup}</p>
+          </div>
+        </div>
+      ) : null}
+
+      <div className={`dl-opts${on ? "" : " off"}`}>
+        {ext.options.length === 0 ? (
+          <div className="dl-opt empty">
+            <b>Nothing to set</b>
+            <span>It shows everything the game reports.</span>
+          </div>
+        ) : (
+          ext.options.map((o) => {
+            if (o.type === "toggle") {
               return (
-                <div key={o.key} className="dl-opt stacked">
+                <label key={o.key} className="dl-opt">
                   <div className="dl-opt-text">
                     <b>{o.label}</b>
                     {o.description ? <span>{o.description}</span> : null}
                   </div>
-                  {segmentable(choices) ? (
-                    <Segmented value={current} choices={choices} onChange={(v) => set(o.key, v)} disabled={!on} label={o.label} />
-                  ) : (
-                    <Select value={current} options={choices} onChange={(v) => set(o.key, v)} disabled={!on} width={300} aria-label={o.label} />
-                  )}
-                </div>
+                  <Toggle
+                    checked={Boolean(value(o.key, o.default))}
+                    disabled={!on}
+                    onChange={(v) => set(o.key, v)}
+                    aria-label={o.label}
+                  />
+                </label>
               );
-            })
-          )}
+            }
+            const choices = o.choices.map((c) => ({ value: c.value, label: c.label }));
+            const current = String(value(o.key, o.default));
+            return (
+              <div key={o.key} className="dl-opt stacked">
+                <div className="dl-opt-text">
+                  <b>{o.label}</b>
+                  {o.description ? <span>{o.description}</span> : null}
+                </div>
+                {segmentable(choices) ? (
+                  <Segmented value={current} choices={choices} onChange={(v) => set(o.key, v)} disabled={!on} label={o.label} />
+                ) : (
+                  <Select value={current} options={choices} onChange={(v) => set(o.key, v)} disabled={!on} width="fill" aria-label={o.label} />
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="dl-foot">
+        <div className="dl-scen-block">
+          <div className="dl-foot-title">What friends can see</div>
+          <div className="dl-scen">
+            {ext.scenarios.map((sc) => (
+              <button
+                key={sc.key}
+                type="button"
+                className={picked === sc.key ? "on" : ""}
+                onClick={() => onPick(sc.key)}
+                title="Show this in the preview"
+              >
+                {sc.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <aside className="dl-side">
-          <div className="dl-side-block">
-            <div className="dl-side-title">What friends can see</div>
-            <div className="dl-scen">
-              {ext.scenarios.map((sc) => (
-                <button
-                  key={sc.key}
-                  type="button"
-                  className={picked === sc.key ? "on" : ""}
-                  onClick={() => onPick(sc.key)}
-                  title="Show this in the preview"
-                >
-                  {sc.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {ext.setup ? (
-            <div className="dl-setup">
-              <Wrench size={14} />
-              <div>
-                <b>One time setup</b>
-                <p>{ext.setup}</p>
-              </div>
-            </div>
-          ) : null}
-
+        {ext.credits.length ? (
           <div className="dl-credits">
             <span>Built on</span>
             {ext.credits.map((c) => (
@@ -159,7 +160,7 @@ export default function ExtensionConfig({ ext, settings, onChange, playing, game
               </button>
             ))}
           </div>
-        </aside>
+        ) : null}
       </div>
     </div>
   );

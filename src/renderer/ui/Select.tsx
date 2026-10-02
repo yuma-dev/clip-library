@@ -16,8 +16,8 @@ interface SelectProps {
   options: SelectOption[];
   onChange: (value: string) => void;
   disabled?: boolean;
-  /** Trigger width in px (menu matches at minimum). */
-  width?: number;
+  /** Trigger width in px (menu matches at minimum), "fill" takes the parent's width. */
+  width?: number | "fill";
   "aria-label"?: string;
 }
 
@@ -76,7 +76,7 @@ export default function Select({ value, options, onChange, disabled, width = 230
         ref={anchorRef}
         type="button"
         className="select-trigger"
-        style={{ width }}
+        style={{ width: width === "fill" ? "100%" : width }}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -91,7 +91,7 @@ export default function Select({ value, options, onChange, disabled, width = 230
       </button>
 
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={anchorRef}>
-        <div className="menu select-menu" role="listbox" ref={listRef} style={{ minWidth: width }}>
+        <div className="menu select-menu" role="listbox" ref={listRef} style={{ minWidth: width === "fill" ? anchorRef.current?.offsetWidth : width }}>
           {options.map((opt, idx) => (
             <button
               key={opt.value}

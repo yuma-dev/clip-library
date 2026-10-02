@@ -367,7 +367,27 @@ const previewFilename = (template) => query('--preview-filename', [String(templa
 // live game details extensions with their options and credits, for the settings page
 const liveExtensions = () => query('--live-extensions');
 // sample game card through clipdip's own composer, so the settings preview can't drift from Discord
-const livePreview = (req) => query('--live-preview', [JSON.stringify(req ?? {})]);
+// a batch goes as one argument and windows caps a command line at 32767 chars (ENAMETOOLONG),
+// so big batches split into several calls
+const PREVIEW_ARG_MAX = 24000;
+async function livePreview(req) {
+  if (!Array.isArray(req)) return query('--live-preview', [JSON.stringify(req ?? {})]);
+  const chunks = [[]];
+  let size = 2;
+  for (const r of req) {
+    const len = JSON.stringify(r).length + 1;
+    if (size + len > PREVIEW_ARG_MAX && chunks[chunks.length - 1].length) {
+      chunks.push([]);
+      size = 2;
+    }
+    chunks[chunks.length - 1].push(r);
+    size += len;
+  }
+  const results = await Promise.all(chunks.map((c) => query('--live-preview', [JSON.stringify(c)])));
+  const failed = results.find((r) => !r.ok);
+  if (failed) return failed;
+  return { ok: true, activities: results.flatMap((r) => r.activities ?? []) };
+}
 
 // batch game matching for the library backfill; input goes through a temp file since a few
 // hundred exe paths and titles can outgrow the command line. first call may download Discord's

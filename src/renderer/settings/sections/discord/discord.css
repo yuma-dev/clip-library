@@ -433,15 +433,9 @@
   background: #23a55a;
   box-shadow: 0 0 0 3px rgba(35, 165, 90, 0.22);
 }
-.dl-config-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 18px;
-  align-items: start;
-}
 .dl-opts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 8px;
   transition: opacity 160ms ease;
 }
@@ -469,8 +463,12 @@
   gap: 10px;
   cursor: default;
 }
+/* the control sits at the bottom, so controls in one row line up whatever the text above */
+.dl-opt.stacked > :last-child {
+  margin-top: auto;
+}
 .dl-opt.empty {
-  grid-column: span 2;
+  grid-column: 1 / -1;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
@@ -480,13 +478,14 @@
   flex: 1;
   min-width: 0;
 }
-.dl-opt b,
+/* not a bare .dl-opt span, that also hit the switch knob */
+.dl-opt.empty b,
 .dl-opt-text b {
   display: block;
   font-size: 13px;
   font-weight: 600;
 }
-.dl-opt span,
+.dl-opt.empty span,
 .dl-opt-text span {
   display: block;
   margin-top: 2px;
@@ -524,11 +523,18 @@
   cursor: default;
 }
 
-.dl-side {
-  display: grid;
-  gap: 12px;
+.dl-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding-top: 2px;
 }
-.dl-side-title {
+.dl-scen-block {
+  min-width: 0;
+}
+.dl-foot-title {
   margin-bottom: 8px;
   font-size: 10.5px;
   font-weight: 700;
@@ -562,6 +568,7 @@
 }
 .dl-setup {
   display: flex;
+  align-items: flex-start;
   gap: 10px;
   padding: 11px 12px;
   border-radius: 12px;
@@ -575,9 +582,12 @@
   color: var(--color-text-primary);
 }
 .dl-setup p {
-  margin: 2px 0 0;
+  margin: 3px 0 0;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--color-text-secondary);
+  /* package names like Microsoft.624F8B84B80_8wekyb3d8bbwe have no break points */
+  overflow-wrap: anywhere;
 }
 .dl-credits {
   display: flex;
@@ -606,9 +616,6 @@
 }
 
 @media (max-width: 1250px) {
-  .dl-config-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
   .dl-views {
     display: none;
   }
@@ -619,9 +626,6 @@
   }
   .dset-side {
     max-width: 380px;
-  }
-  .dl-opts {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
