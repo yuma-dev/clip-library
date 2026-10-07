@@ -7,9 +7,10 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use windows::core::Interface;
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{
@@ -23,6 +24,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIDevice};
+use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
@@ -34,17 +36,19 @@ use crate::CapturedFrame;
 const POOL_SIZE: usize = 4;
 /// WGC frame pool depth; 2 is the minimum since we drain to newest every acquire.
 const WGC_BUFFERS: i32 = 2;
+/// A session can go silent without firing `Closed` (2026-10-05: 5.5 h of one
+/// still, every save frozen). A fresh session always sends an initial frame, so
+/// reopening after this much quiet is free on a static screen and bounds a dead one.
+const SILENT_REOPEN_AFTER: Duration = Duration::from_secs(3);
 
 pub struct WgcCapturer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    // dropping stops delivery
-    frame_pool: Direct3D11CaptureFramePool,
-    session: GraphicsCaptureSession,
-    _item: GraphicsCaptureItem,
-    /// Set from the item's `Closed` event; once set, `acquire_frame` errors
-    /// so the caller can rebuild.
-    closed: Arc<AtomicBool>,
+    output_index: u32,
+    include_cursor: bool,
+    session: Session,
+    /// Last time the pool actually delivered a frame, or the session opened.
+    last_delivery: Instant,
     width: u32,
     height: u32,
     /// NVENC rejects back-to-back submissions of the same input pointer.
@@ -54,33 +58,23 @@ pub struct WgcCapturer {
     last_pts: i64,
 }
 
-impl WgcCapturer {
-    /// `device` should be the one driving NVENC (avoids cross-device copies).
-    /// `output_index` selects the DXGI output on its adapter.
-    pub fn new(
-        device: ID3D11Device,
-        context: ID3D11DeviceContext,
-        output_index: u32,
-        include_cursor: bool,
-    ) -> Result<Self> {
+struct Session {
+    // dropping stops delivery
+    frame_pool: Direct3D11CaptureFramePool,
+    session: GraphicsCaptureSession,
+    _item: GraphicsCaptureItem,
+    /// Set from the item's `Closed` event; once set, `acquire_frame` errors
+    /// so the caller can rebuild.
+    closed: Arc<AtomicBool>,
+    width: u32,
+    height: u32,
+}
+
+impl Session {
+    fn open(device: &ID3D11Device, output_index: u32, include_cursor: bool) -> Result<Self> {
         unsafe {
-            // WinRT activation needs the thread initialized; RPC_E_CHANGED_MODE is fine here
-            let _ = RoInitialize(RO_INIT_MULTITHREADED);
-
-            if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
-                return Err(anyhow!(
-                    "Windows.Graphics.Capture not supported on this OS build"
-                ));
-            }
-
-            // HMONITOR for the requested output
             let dxgi_device: IDXGIDevice = device.cast()?;
-            let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
-            let output = adapter
-                .EnumOutputs(output_index)
-                .with_context(|| format!("no DXGI output at index {output_index}"))?;
-            let out_desc = output.GetDesc()?;
-            let hmonitor = out_desc.Monitor;
+            let hmonitor = monitor_for_output(&dxgi_device, output_index)?;
 
             let interop =
                 windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
@@ -127,20 +121,68 @@ impl WgcCapturer {
             session.StartCapture().context("StartCapture failed")?;
 
             Ok(Self {
-                device,
-                context,
                 frame_pool,
                 session,
                 _item: item,
                 closed,
                 width: size.Width.max(0) as u32,
                 height: size.Height.max(0) as u32,
-                pool: Default::default(),
-                next_slot: 0,
-                last_slot: None,
-                last_pts: 0,
             })
         }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.session.Close();
+        let _ = self.frame_pool.Close();
+    }
+}
+
+/// Resolved on every open, a replugged monitor gets a new HMONITOR.
+fn monitor_for_output(dxgi_device: &IDXGIDevice, output_index: u32) -> Result<HMONITOR> {
+    unsafe {
+        let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
+        let output = adapter
+            .EnumOutputs(output_index)
+            .with_context(|| format!("no DXGI output at index {output_index}"))?;
+        Ok(output.GetDesc()?.Monitor)
+    }
+}
+
+impl WgcCapturer {
+    /// `device` should be the one driving NVENC (avoids cross-device copies).
+    /// `output_index` selects the DXGI output on its adapter.
+    pub fn new(
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        output_index: u32,
+        include_cursor: bool,
+    ) -> Result<Self> {
+        // WinRT activation needs the thread initialized; RPC_E_CHANGED_MODE is fine here
+        let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+
+        if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
+            return Err(anyhow!(
+                "Windows.Graphics.Capture not supported on this OS build"
+            ));
+        }
+
+        let session = Session::open(&device, output_index, include_cursor)?;
+        Ok(Self {
+            device,
+            context,
+            output_index,
+            include_cursor,
+            width: session.width,
+            height: session.height,
+            session,
+            last_delivery: Instant::now(),
+            pool: Default::default(),
+            next_slot: 0,
+            last_slot: None,
+            last_pts: 0,
+        })
     }
 
     pub fn width(&self) -> u32 {
@@ -155,7 +197,7 @@ impl WgcCapturer {
     /// `Ok(None)` before the first frame, repeat frame if nothing new.
     pub fn acquire_frame(&mut self, _timeout_ms: u32) -> Result<Option<CapturedFrame>> {
         let _t = clipdip_profile::start("capture.acquire");
-        if self.closed.load(Ordering::Relaxed) {
+        if self.session.closed.load(Ordering::Relaxed) {
             return Err(anyhow!(
                 "WGC capture item closed (monitor removed or display mode torn down)"
             ));
@@ -163,15 +205,19 @@ impl WgcCapturer {
 
         // drain to newest so latency never builds up
         let mut newest = None;
-        while let Ok(frame) = self.frame_pool.TryGetNextFrame() {
+        while let Ok(frame) = self.session.frame_pool.TryGetNextFrame() {
             if let Some(prev) = newest.replace(frame) {
                 let _ = prev.Close();
             }
         }
 
         let Some(frame) = newest else {
+            if self.last_delivery.elapsed() >= SILENT_REOPEN_AFTER {
+                self.reopen()?;
+            }
             return self.emit_repeat();
         };
+        self.last_delivery = Instant::now();
 
         let result = (|| -> Result<Option<CapturedFrame>> {
             let surface = frame.Surface()?;
@@ -218,6 +264,21 @@ impl WgcCapturer {
 
         let _ = frame.Close();
         result
+    }
+
+    /// Swaps in a fresh session; the texture ring stays so NVENC keeps its pointers.
+    /// Its first frame lands on a later acquire, repeats cover the gap.
+    fn reopen(&mut self) -> Result<()> {
+        let session = Session::open(&self.device, self.output_index, self.include_cursor)
+            .context("reopen silent WGC session")?;
+        debug!(
+            silent_ms = self.last_delivery.elapsed().as_millis() as u64,
+            "WGC: no frames, reopened session"
+        );
+        // old one closes on drop
+        self.session = session;
+        self.last_delivery = Instant::now();
+        Ok(())
     }
 
     /// Re-emits the last image from a fresh ring slot (fresh pointer for NVENC).
@@ -280,12 +341,5 @@ impl WgcCapturer {
         let dst = dst.ok_or_else(|| anyhow!("CreateTexture2D returned null"))?;
         self.pool[slot] = Some(dst.clone());
         Ok(dst)
-    }
-}
-
-impl Drop for WgcCapturer {
-    fn drop(&mut self) {
-        let _ = self.session.Close();
-        let _ = self.frame_pool.Close();
     }
 }
