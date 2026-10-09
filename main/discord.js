@@ -16,6 +16,8 @@ const BUDGET = 5;
 const WINDOW_MS = 20000;
 const SLOW_MS = 15000;
 const BUTTONS = [{ label: 'Get ClipLib', url: 'https://cliplib.app' }];
+// the renderer's browse art (player/discordPresence.ts ART), shown until it sends its own
+const BROWSE_ART = 'https://cdn.jsdelivr.net/gh/yuma-dev/cliplib-rpc-assets@v4/cliplib/browse.webp';
 
 let rpc = null;
 let rpcReady = false;
@@ -60,7 +62,7 @@ async function initDiscordRPC(getSettingsFn) {
     shown = null;
     sentAt = [];
     await checkGamePresence();
-    if (!desired) desired = buildActivity({ details: 'Browsing clips', largeImageKey: 'art_browse' });
+    if (!desired) desired = buildActivity({ details: 'Browsing clips', largeImageKey: BROWSE_ART, smallImageKey: 'logo', smallImageText: 'ClipLib' });
     apply();
     clearInterval(gamePoll);
     gamePoll = setInterval(() => void checkGamePresence(), GAME_POLL_MS);

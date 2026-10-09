@@ -3,8 +3,13 @@ import { getGameOfClip, getLibraryGames } from "../library/games";
 
 // what the library shows in Discord. one state wins, strongest first: exporting, sharing, editing,
 // watching, browsing. details = top line, state = second line; main adds the button. the big image
-// is the state's art (art_* assets on the ClipLib Discord app); the badge is the clip's game icon
-// when known, else the state's badge_*. browsing has no badge, its art already carries the logo.
+// is the state's animated art; the badge is the clip's game icon when known, else the state's
+// badge_*. browsing's art is the library grid, so its badge is the logo.
+
+// animated webp from cliplib-rpc-assets: uploaded app assets can't move, image urls can.
+// main/discord.js has the browse one too, for the moment before the renderer reports in
+const ART_BASE = "https://cdn.jsdelivr.net/gh/yuma-dev/cliplib-rpc-assets@v4/cliplib";
+const ART = { browse: `${ART_BASE}/browse.webp`, watch: `${ART_BASE}/watch.webp`, edit: `${ART_BASE}/edit.webp` };
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // matches main.js IDLE_TIMEOUT
 /** facts rotate this often while browsing; Discord takes ~5 updates per 20 s */
@@ -150,8 +155,10 @@ function browseActivity(): PresenceActivity {
   return {
     details: "Browsing clips",
     state: facts.length ? facts[factIndex % facts.length] : null,
-    largeImageKey: "art_browse",
+    largeImageKey: ART.browse,
     largeImageText: total ? `${plural(total, "clip")}${folderBytes ? ` · ${formatBytes(folderBytes)}` : ""}` : "ClipLib",
+    smallImageKey: "logo",
+    smallImageText: "ClipLib",
   };
 }
 
@@ -182,7 +189,7 @@ function watchActivity(clip: PresenceClip, video: HTMLVideoElement): PresenceAct
   const base = {
     type: 3,
     details: clipTitle(clip, "Watching a clip"),
-    largeImageKey: "art_watch",
+    largeImageKey: ART.watch,
     largeImageText: playing ? "Watching a clip" : "Paused",
     ...badge(clip, playing ? "badge_play_filled" : "badge_pause_filled", playing ? "Playing" : "Paused"),
   };
@@ -204,7 +211,7 @@ function editActivity(clip: PresenceClip, kind: EditKind): PresenceActivity {
   return {
     details: "Editing a clip",
     state: EDIT_LABEL[kind],
-    largeImageKey: "art_edit",
+    largeImageKey: ART.edit,
     largeImageText: EDIT_LABEL[kind],
     ...badge(clip, kind === "trim" ? "badge_edit_scissors" : "badge_edit", EDIT_LABEL[kind]),
   };
@@ -214,7 +221,7 @@ function exportActivity(pct: number, clip = legacyState()?.currentClip as Presen
   return {
     details: "Exporting a clip",
     state: `${pct}% done`,
-    largeImageKey: "art_edit",
+    largeImageKey: ART.edit,
     largeImageText: "Exporting",
     ...badge(clip, "badge_export", "Exporting"),
   };
@@ -224,7 +231,7 @@ function shareActivity(phase: string, clip = legacyState()?.currentClip as Prese
   return {
     details: "Sharing a clip",
     state: phase === "uploading" ? "Uploading" : "Getting it ready",
-    largeImageKey: "art_watch",
+    largeImageKey: ART.watch,
     largeImageText: "Sharing",
     ...badge(clip, "badge_share", "Sharing"),
   };
