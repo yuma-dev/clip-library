@@ -256,6 +256,23 @@ async function loadSettings() {
   }
 }
 
+// saves run one at a time: overlapping in-place writes, or a kill mid-write during the
+// first-run restarts, left a truncated settings.json that loadSettings then reset
+let saveChain = Promise.resolve();
+
+async function writeSettingsFile(payload) {
+  const tmp = `${SETTINGS_FILE}.tmp`;
+  await fs.writeFile(tmp, payload);
+  try {
+    await fs.rename(tmp, SETTINGS_FILE);
+  } catch (error) {
+    await fs.unlink(tmp).catch(() => {});
+    // antivirus or an editor holding settings.json open blocks the replace on windows
+    if (error.code !== 'EPERM' && error.code !== 'EBUSY' && error.code !== 'EACCES') throw error;
+    await fs.writeFile(SETTINGS_FILE, payload);
+  }
+}
+
 async function saveSettings(newSettings) {
   let payloadBytes = 0;
   try {
@@ -268,7 +285,9 @@ async function saveSettings(newSettings) {
     const payload = JSON.stringify(completeSettings, null, 2);
     payloadBytes = Buffer.byteLength(payload, 'utf8');
 
-    await fs.writeFile(SETTINGS_FILE, payload);
+    const write = saveChain.then(() => writeSettingsFile(payload));
+    saveChain = write.catch(() => {});
+    await write;
     logger.info('Settings saved successfully');
     return true;
   } catch (error) {
