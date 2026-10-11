@@ -4,7 +4,9 @@
 use anyhow::{anyhow, Context, Result};
 use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, TRUE};
-use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
+use windows::Win32::Graphics::Direct3D::{
+    D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0,
+};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -13,7 +15,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIAdapter1, IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGISurface1,
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGISurface1,
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
     DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
 };
@@ -503,13 +505,12 @@ pub struct OutputInfo {
     pub device_name: String,
 }
 
-/// Every DXGI output on the default adapter, for picking `video.output_index`.
+/// Every DXGI output on the display adapter, for picking `video.output_index`.
 pub fn list_outputs() -> Result<Vec<OutputInfo>> {
     let (device, _context) = create_d3d11_device()?;
     let mut out = Vec::new();
     unsafe {
-        let dxgi_device: IDXGIDevice = device.cast()?;
-        let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
+        let adapter = display_adapter(&device)?;
         let mut i = 0u32;
         loop {
             match adapter.EnumOutputs(i) {
@@ -537,14 +538,78 @@ pub fn list_outputs() -> Result<Vec<OutputInfo>> {
     Ok(out)
 }
 
+const NVIDIA_VENDOR_ID: u32 = 0x10DE;
+
+/// The NVIDIA adapter when the default one isn't NVIDIA. On a hybrid laptop the
+/// default is the iGPU and NVENC refuses a device there (status 1,
+/// NV_ENC_ERR_NO_ENCODE_DEVICE). None keeps the default adapter.
+fn nvenc_adapter() -> Option<IDXGIAdapter1> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let is_nvidia = |a: &IDXGIAdapter1| {
+            a.GetDesc1().map(|d| d.VendorId == NVIDIA_VENDOR_ID).unwrap_or(false)
+        };
+        if is_nvidia(&factory.EnumAdapters1(0).ok()?) {
+            return None;
+        }
+        let mut i = 1;
+        while let Ok(a) = factory.EnumAdapters1(i) {
+            if is_nvidia(&a) {
+                return Some(a);
+            }
+            i += 1;
+        }
+        None
+    }
+}
+
+/// Adapter whose outputs `output_index` counts. Normally the device's own; a dGPU
+/// with no displays attached (hybrid laptop) falls back to the first adapter that
+/// has some. WGC captures across adapters, DXGI duplication can't.
+pub(crate) fn display_adapter(device: &ID3D11Device) -> Result<IDXGIAdapter1> {
+    unsafe {
+        let dxgi_device: IDXGIDevice = device.cast()?;
+        let own: IDXGIAdapter1 = dxgi_device.GetParent()?;
+        if own.EnumOutputs(0).is_ok() {
+            return Ok(own);
+        }
+        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
+        let mut i = 0;
+        while let Ok(a) = factory.EnumAdapters1(i) {
+            if a.EnumOutputs(0).is_ok() {
+                return Ok(a);
+            }
+            i += 1;
+        }
+        Ok(own)
+    }
+}
+
 fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     unsafe {
         let mut device = None;
         let mut context = None;
         let feature_levels = [D3D_FEATURE_LEVEL_11_0];
+        let adapter: Option<IDXGIAdapter> = nvenc_adapter().and_then(|a| {
+            let name = a
+                .GetDesc1()
+                .map(|d| String::from_utf16_lossy(&d.Description))
+                .unwrap_or_default();
+            info!(
+                "d3d11 device on non-default adapter for NVENC: {}",
+                name.trim_end_matches(char::from(0))
+            );
+            a.cast().ok()
+        });
+        // an explicit adapter requires DRIVER_TYPE_UNKNOWN
+        let driver_type = if adapter.is_some() {
+            D3D_DRIVER_TYPE_UNKNOWN
+        } else {
+            D3D_DRIVER_TYPE_HARDWARE
+        };
         D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
+            adapter.as_ref(),
+            driver_type,
             HMODULE::default(),
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             Some(&feature_levels),

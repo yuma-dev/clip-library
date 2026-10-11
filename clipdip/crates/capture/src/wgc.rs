@@ -23,7 +23,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIDevice};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
@@ -74,7 +74,7 @@ impl Session {
     fn open(device: &ID3D11Device, output_index: u32, include_cursor: bool) -> Result<Self> {
         unsafe {
             let dxgi_device: IDXGIDevice = device.cast()?;
-            let hmonitor = monitor_for_output(&dxgi_device, output_index)?;
+            let hmonitor = monitor_for_output(device, output_index)?;
 
             let interop =
                 windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
@@ -140,9 +140,9 @@ impl Drop for Session {
 }
 
 /// Resolved on every open, a replugged monitor gets a new HMONITOR.
-fn monitor_for_output(dxgi_device: &IDXGIDevice, output_index: u32) -> Result<HMONITOR> {
+fn monitor_for_output(device: &ID3D11Device, output_index: u32) -> Result<HMONITOR> {
     unsafe {
-        let adapter: IDXGIAdapter1 = dxgi_device.GetParent()?;
+        let adapter = crate::display_adapter(device)?;
         let output = adapter
             .EnumOutputs(output_index)
             .with_context(|| format!("no DXGI output at index {output_index}"))?;
