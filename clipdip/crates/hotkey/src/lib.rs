@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 use tracing::{debug, info};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -247,7 +248,12 @@ struct ListenerState {
     event_txs: Vec<Sender<()>>,
     /// modifier-key bitmask currently held
     modifiers_held: u32,
+    started: Instant,
 }
+
+/// a key held while the listener (re)starts, e.g. while rebinding it in settings,
+/// releases as an orphan up; don't treat that as a press
+const ORPHAN_UP_GRACE: Duration = Duration::from_secs(2);
 
 thread_local! {
     static LISTENER: RefCell<Option<ListenerState>> = const { RefCell::new(None) };
@@ -289,6 +295,7 @@ fn run_thread(
             bindings,
             event_txs,
             modifiers_held: 0,
+            started: Instant::now(),
         });
     });
 
@@ -442,6 +449,18 @@ unsafe fn handle_raw_input(h_raw_input: HRAWINPUT) {
                     }
                     state.key_pressed[i] = true;
                 } else {
+                    // up with no down: something upstream ate the down (another app's
+                    // low-level hook bound to the same key). seen in the wild with F8
+                    if !state.key_pressed[i]
+                        && state.modifiers_held == binding.modifiers.0
+                        && state.started.elapsed() >= ORPHAN_UP_GRACE
+                    {
+                        info!(
+                            "hotkey fired on orphan key-up: vk=0x{:02X} mods=0x{:02X}",
+                            vk, binding.modifiers.0
+                        );
+                        let _ = state.event_txs[i].send(());
+                    }
                     state.key_pressed[i] = false;
                 }
             }
