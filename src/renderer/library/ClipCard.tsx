@@ -7,6 +7,7 @@ import { useFavorite } from "./favoriteContext";
 import { absoluteTime, relativeTime } from "./time";
 import { getCachedGameIcon, loadGameIcon, watchGameIcon, type GameIcon } from "./gameIcon";
 import ParticipantAvatars from "./ParticipantAvatars";
+import { listIconUrl } from "./games";
 import { Layers2, Star } from "lucide-react";
 import { useHasOverlap } from "../storage/overlaps";
 import Tooltip from "../ui/Tooltip";
@@ -76,7 +77,7 @@ function ClipCard({ clip, thumbnailPath, grayscaleIcons, showNewIndicators, medi
 
   const src = errored ? fallbackUrl : thumbnailPath ? `file://${thumbnailPath}` : shimmerUrl;
   // the exe icon clipdip saved, else the matched game's art (backfilled clips have no exe icon)
-  const iconSrc = icon?.path ? `file://${icon.path}` : (icon?.game?.icon_url ?? null);
+  const iconSrc = icon?.path ? `file://${icon.path}` : listIconUrl(icon?.game?.icon_url);
   const visibleTags = clip.tags.slice(0, 3);
   const extraTags = clip.tags.slice(3);
 

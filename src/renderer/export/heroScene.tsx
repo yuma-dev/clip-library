@@ -97,7 +97,7 @@ export function HeroScene({spec,Player}:{spec:ExportSpec;Player:(s:ExportSpec)=>
 
             </div>
           </div>
-          <div id="boot-reveal" style={{position:'absolute',display:t<7?'block':'none'}}>
+          <div id="boot-reveal" className="boot-legacy" style={{position:'absolute',display:t<7?'block':'none'}}>
             <div className="boot-cover run"/><div className="boot-vignette run"/>
             <div className="boot-flash run" style={{left:576,top:191,width:448,height:448}}/>
             <img className="boot-hero run" src={logo} style={{left:730,top:345,width:140,height:140}}/>

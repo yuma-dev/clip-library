@@ -38,6 +38,8 @@ const DEFAULT_SETTINGS = {
   onboardingVersion: 0,
   // the one-time audio analysis card for people past the tour; the tour sets it too
   analysisIntroSeen: false,
+  // the one-time "ClipLib is now Setsu" card (RebrandGate), after the tour
+  setsuIntroSeen: false,
   iconGreyscale: false,
   // loudness matching: clips without a custom volume play at targetLufs; null target
   // means the library median. levels come from the audio analysis every clip gets once

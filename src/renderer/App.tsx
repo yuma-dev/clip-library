@@ -9,6 +9,7 @@ import { useToast } from "./ui/Toast";
 import { useProfile } from "./shell/useProfile";
 import VideoPlayer from "./player/VideoPlayer";
 import OnboardingGate from "./onboarding/OnboardingGate";
+import RebrandGate from "./onboarding/RebrandGate";
 import AnalysisIntro from "./onboarding/AnalysisIntro";
 import { useClips } from "./library/useClips";
 import { useLibraryFilter } from "./library/useLibraryFilter";
@@ -347,6 +348,7 @@ export default function App() {
       <FeedPlayer />
       {/* one-time 3.0 intro + ClipDip setup; wizard chunk loads only when opened, reopenable via __showOnboarding() */}
       <OnboardingGate />
+      <RebrandGate />
       {/* the analysis heads-up for anyone past the tour; shows once when the library listen starts */}
       <AnalysisIntro />
     </div>

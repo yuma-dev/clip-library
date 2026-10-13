@@ -412,6 +412,8 @@ function revealMainWindow() {
   scheduleDeferredServices();
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setOpacity(0);
+  // held transparent through the launcher's reveal; clicks meant for the desktop stay there
+  if (splashHandoff) mainWindow.setIgnoreMouseEvents(true);
   mainWindow.show();
   mainWindow.maximize();
   mainWindow.focus();
@@ -421,16 +423,20 @@ function revealMainWindow() {
   const opaqueNow = () => {
     if (mainWindow.isDestroyed()) return;
     mainWindow.setOpacity(1);
+    if (splashHandoff) mainWindow.setIgnoreMouseEvents(false);
     bootTrace.mark('window_opaque');
     if (bootTrace.enabled && frameWatchAttached) watchRevealFrames();
     else stopFrameWatch();
   };
   // renderer draws cards turned away + the launcher's logo in the first frame and reports back
   // once the compositor has it; only then does the window go opaque. a timeout caps a slow renderer.
-  const makeOpaque = (secondFrameSeen) => {
+  // read when it runs, not when it was asked for: frames that land during the splash hold
+  // still earn the animation
+  let secondFrameSeen = false;
+  const makeOpaque = () => {
     if (opaque || mainWindow.isDestroyed()) return;
     opaque = true;
-    const animate = framed && secondFrameSeen === true;
+    const animate = framed && secondFrameSeen;
     let done = false;
     const go = () => {
       if (done) return;
@@ -451,14 +457,15 @@ function revealMainWindow() {
       if (frames <= 2) bootTrace.mark(`shown_frame_${frames}`);
       if (frames >= 2) {
         dbg.removeListener('message', onFrame);
-        makeOpaque(true);
+        secondFrameSeen = true;
+        afterSplashHandoff(makeOpaque);
       }
     };
     dbg.on('message', onFrame);
   }
   // window is at opacity 0 meanwhile (launcher's splash still covers it), so waiting a little
   // longer costs nothing visible.
-  setTimeout(() => makeOpaque(false), 400);
+  setTimeout(() => afterSplashHandoff(makeOpaque), 400);
 }
 
 // boot-trace only: keeps the screencast running through the reveal animation, recording each
@@ -871,6 +878,35 @@ const splashLogoRect = (() => {
   const n = arg.slice('--splash-logo='.length).split(',').map(Number);
   return n.length === 4 && n.every(Number.isFinite) ? { x: n[0], y: n[1], w: n[2], h: n[3] } : null;
 })();
+
+// launcher's reveal clock: start (unix ms), hold, loop, blink from/to (ms into the loop), see
+// clipdip/crates/launcher. the window stays transparent until the name has landed and the
+// star is between blinks, so the takeover never cuts the reveal or lands mid-blink
+const splashHandoff = (() => {
+  const arg = process.argv.find((a) => a.startsWith('--splash-handoff='));
+  if (!arg) return null;
+  const n = arg.slice('--splash-handoff='.length).split(',').map(Number);
+  if (n.length !== 5 || !n.every(Number.isFinite) || n[2] <= 0) return null;
+  return { start: n[0], hold: n[1], loop: n[2], blinkFrom: n[3], blinkTo: n[4] };
+})();
+// boot-reveal-armed can take up to 250ms after makeOpaque, the star has to still be at rest then
+const SPLASH_ARM_MS = 300;
+
+function splashHandoffDelay(now = Date.now()) {
+  if (!splashHandoff) return 0;
+  const { start, hold, loop, blinkFrom, blinkTo } = splashHandoff;
+  const t = now - start;
+  // capped: a clock that jumped must not hold the window for long
+  if (t < hold) return Math.min(hold - t, hold);
+  const p = (t - hold) % loop;
+  return p >= blinkFrom - SPLASH_ARM_MS && p < blinkTo ? blinkTo - p : 0;
+}
+
+function afterSplashHandoff(fn) {
+  const wait = splashHandoffDelay();
+  if (wait > 0) setTimeout(fn, wait);
+  else fn();
+}
 
 ipcMain.handle('get-boot-logo-rect', () => splashLogoInContent());
 

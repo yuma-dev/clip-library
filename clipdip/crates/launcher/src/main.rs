@@ -1,16 +1,15 @@
-//! ClipLib launcher, what shortcuts/taskbar pins point at. Draws the splash
-//! within tens of ms of the click, starts `ClipLib.exe` with the same args
-//! plus `--splash-logo=x,y,w,h` (physical pixels, so the app can take the
-//! logo over in place), fades out once the app window is visible and opaque.
-//! Covers Electron's ~1.5s startup at no renderer cost.
+//! ClipLib launcher, what shortcuts/taskbar pins point at. Plays the Setsu
+//! reveal within tens of ms of the click, starts `ClipLib.exe` with the same
+//! args plus `--splash-logo=x,y,w,h` (physical pixels, so the app can take the
+//! mark over in place) and `--splash-handoff` (when it may), fades out once
+//! the app window is visible and opaque.
 
 #![windows_subsystem = "windows"]
 
 use std::env;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::w;
 use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
@@ -26,90 +25,135 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetLayeredWindowAttributes,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PeekMessageW,
-    RegisterClassW, ShowWindow, SystemParametersInfoW, TranslateMessage, UpdateLayeredWindow,
-    GWL_EXSTYLE, LWA_ALPHA, MSG, PM_REMOVE, SPI_GETWORKAREA, SW_SHOWNOACTIVATE,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, ULW_ALPHA, WINDOW_EX_STYLE, WNDCLASSW, WS_EX_LAYERED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
+    GetLayeredWindowAttributes, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    IsWindowVisible, PeekMessageW, RegisterClassW, ShowWindow, SystemParametersInfoW,
+    TranslateMessage, UpdateLayeredWindow, GWL_EXSTYLE, LWA_ALPHA, MSG, PM_REMOVE, SPI_GETWORKAREA,
+    SW_SHOWNOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, ULW_ALPHA, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const APP_EXE: &str = "ClipLib.exe";
-const LOGO_PNG: &[u8] = include_bytes!("../../../../assets/title.png");
+// baked by scripts/bake-splash.mjs from the setsu web component, format documented there.
+// empty when it was not baked, then there is no splash
+const SPLASH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/splash.bin"));
 
-// matches the old in-app splash layout
-const WIN_W: i32 = 480;
-const WIN_H: i32 = 360;
-const LOGO_W: i32 = 140;
-const BAR_W: i32 = 200;
-const BAR_H: i32 = 2;
-const GAP: i32 = 28;
-
-const FADE_IN: Duration = Duration::from_millis(260);
-// short: the app draws the same logo at the same spot once opaque and animates from there
+// short: the app draws the same mark at the same spot once opaque and animates from there
 const FADE_OUT: Duration = Duration::from_millis(120);
-const SWEEP_PERIOD: Duration = Duration::from_millis(1800);
-// accent halo behind the logo, breathes on the same period as the sweep
-const HALO_RADIUS: i32 = 87;
-const HALO_PERIOD: Duration = Duration::from_millis(1800);
 // longer than the app's own 30s never-ready fallback, so no gap before it reveals the window
 const MAX_WAIT: Duration = Duration::from_secs(35);
 
-struct Rgba {
-    width: usize,
-    height: usize,
-    pixels: Vec<u8>, // straight (non-premultiplied) RGBA
+fn u16_at(b: &[u8], at: usize) -> usize {
+    b.get(at..at + 2).map_or(0, |s| u16::from_le_bytes([s[0], s[1]]) as usize)
 }
 
-fn decode_logo() -> Option<Rgba> {
-    let decoder = png::Decoder::new(Cursor::new(LOGO_PNG));
-    let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).ok()?;
-    let (width, height) = (info.width as usize, info.height as usize);
-    let pixels = match info.color_type {
-        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
-        png::ColorType::Rgb => buf[..info.buffer_size()]
-            .chunks(3)
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect(),
-        _ => return None,
-    };
-    Some(Rgba { width, height, pixels })
+fn u32_at(b: &[u8], at: usize) -> usize {
+    b.get(at..at + 4).map_or(0, |s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as usize)
 }
 
-/// box-filter downscale, logo is 1024px drawn at ~140px
-fn downscale(src: &Rgba, dst_w: usize, dst_h: usize) -> Rgba {
-    let mut out = vec![0u8; dst_w * dst_h * 4];
-    for y in 0..dst_h {
-        let sy0 = y * src.height / dst_h;
-        let sy1 = ((y + 1) * src.height / dst_h).max(sy0 + 1).min(src.height);
-        for x in 0..dst_w {
-            let sx0 = x * src.width / dst_w;
-            let sx1 = ((x + 1) * src.width / dst_w).max(sx0 + 1).min(src.width);
-            let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
-            for sy in sy0..sy1 {
-                for sx in sx0..sx1 {
-                    let i = (sy * src.width + sx) * 4;
-                    let pa = src.pixels[i + 3] as u64;
-                    // weight by alpha so transparent pixels don't darken edges
-                    r += src.pixels[i] as u64 * pa;
-                    g += src.pixels[i + 1] as u64 * pa;
-                    b += src.pixels[i + 2] as u64 * pa;
-                    a += pa;
-                    n += 1;
-                }
-            }
-            let o = (y * dst_w + x) * 4;
-            if a > 0 {
-                out[o] = (r / a) as u8;
-                out[o + 1] = (g / a) as u8;
-                out[o + 2] = (b / a) as u8;
-                out[o + 3] = (a / n) as u8;
+/// One scale's frames, each a delta against the frame before. The last one takes the picture
+/// back to frame `hold`, so the loop goes on at `hold + 1` with deltas only.
+struct Splash {
+    scale: f32,
+    win_w: i32,
+    win_h: i32,
+    // logical px in the window: x, y, size
+    mark: (f32, f32, f32),
+    fps: u64,
+    frames: usize,
+    hold_ms: u64,
+    loop_ms: u64,
+    blink_ms: (u64, u64),
+    // known once reached, frames are walked in order the first time round
+    offsets: Vec<Option<usize>>,
+}
+
+impl Splash {
+    /// largest baked scale not above the system's, else the smallest
+    fn load(system_scale: f32) -> Option<Splash> {
+        let b = SPLASH;
+        if b.len() < 32 || &b[0..4] != b"STSU" || u16_at(b, 4) != 1 {
+            return None;
+        }
+        let fits = |s: f32| s <= system_scale + 0.01;
+        let mut pick: Option<(f32, usize)> = None;
+        for k in 0..u16_at(b, 28) {
+            let scale = u16_at(b, 32 + k * 8) as f32 / 100.0;
+            let offset = u32_at(b, 32 + k * 8 + 4);
+            let better = match pick {
+                None => true,
+                Some((p, _)) if fits(p) => fits(scale) && scale > p,
+                Some((p, _)) => fits(scale) || scale < p,
+            };
+            if better {
+                pick = Some((scale, offset));
             }
         }
+        let (scale, offset) = pick?;
+        let (fps, frames) = (u16_at(b, 16) as u64, u16_at(b, 18));
+        let (hold_ms, loop_ms) = (u16_at(b, 20) as u64, u16_at(b, 22) as u64);
+        let hold = (hold_ms * fps / 1000) as usize;
+        if fps == 0 || loop_ms == 0 || hold + 1 >= frames || offset >= b.len() {
+            return None;
+        }
+        let mut offsets = vec![None; frames];
+        offsets[0] = Some(offset);
+        Some(Splash {
+            scale,
+            win_w: (u16_at(b, 6) as f32 * scale).round() as i32,
+            win_h: (u16_at(b, 8) as f32 * scale).round() as i32,
+            mark: (u16_at(b, 10) as f32 / 100.0, u16_at(b, 12) as f32 / 100.0, u16_at(b, 14) as f32 / 100.0),
+            fps,
+            frames,
+            hold_ms,
+            loop_ms,
+            blink_ms: (u16_at(b, 24) as u64 * loop_ms / 1000, u16_at(b, 26) as u64 * loop_ms / 1000),
+            offsets,
+        })
     }
-    Rgba { width: dst_w, height: dst_h, pixels: out }
+
+    /// stored frame for the `step`th one played
+    fn frame_at(&self, step: u64) -> usize {
+        let last = self.frames as u64 - 1;
+        if step <= last {
+            return step as usize;
+        }
+        let hold = self.hold_ms * self.fps / 1000;
+        (hold + 1 + (step - last - 1) % (last - hold)) as usize
+    }
+
+    /// adds frame `i`'s delta onto the canvas; false on a broken file
+    fn apply(&mut self, i: usize, canvas: &mut Canvas) -> bool {
+        let Some(at) = self.offsets.get(i).copied().flatten() else { return false };
+        let b = SPLASH;
+        let (x, y, w, h) = (u16_at(b, at), u16_at(b, at + 2), u16_at(b, at + 4), u16_at(b, at + 6));
+        let end = at + 12 + u32_at(b, at + 8);
+        if end > b.len() {
+            return false;
+        }
+        if let Some(next) = self.offsets.get_mut(i + 1) {
+            *next = Some(end);
+        }
+        if w == 0 || h == 0 {
+            return true;
+        }
+        if x + w > canvas.width as usize || y + h > canvas.height as usize {
+            return false;
+        }
+        let Ok(delta) = miniz_oxide::inflate::decompress_to_vec_zlib(&b[at + 12..end]) else { return false };
+        if delta.len() != w * h * 4 {
+            return false;
+        }
+        let stride = canvas.width as usize * 4;
+        for (row, src) in delta.chunks_exact(w * 4).enumerate() {
+            // SAFETY: row and box are inside the canvas, checked above
+            let dst = unsafe { std::slice::from_raw_parts_mut(canvas.pixels.add((y + row) * stride + x * 4), w * 4) };
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d = d.wrapping_add(*s);
+            }
+        }
+        true
+    }
 }
 
 struct Canvas {
@@ -118,6 +162,7 @@ struct Canvas {
     hdc: HDC,
     bitmap: HBITMAP,
     old: windows::Win32::Graphics::Gdi::HGDIOBJ,
+    // premultiplied BGRA, top-down, zeroed by CreateDIBSection
     pixels: *mut u8,
 }
 
@@ -143,47 +188,6 @@ impl Canvas {
         let old = SelectObject(hdc, bitmap);
         Some(Canvas { width, height, hdc, bitmap, old, pixels: pixels as *mut u8 })
     }
-
-    fn clear(&mut self) {
-        unsafe { std::ptr::write_bytes(self.pixels, 0, (self.width * self.height * 4) as usize) };
-    }
-
-    /// premultiplied BGRA write, source-over blending
-    fn blend(&mut self, x: i32, y: i32, r: u8, g: u8, b: u8, a: u8) {
-        if x < 0 || y < 0 || x >= self.width || y >= self.height || a == 0 {
-            return;
-        }
-        let i = ((y * self.width + x) * 4) as usize;
-        unsafe {
-            let p = self.pixels.add(i);
-            let sa = a as u32;
-            let inv = 255 - sa;
-            let db = *p as u32;
-            let dg = *p.add(1) as u32;
-            let dr = *p.add(2) as u32;
-            let da = *p.add(3) as u32;
-            *p = ((b as u32 * sa + db * inv) / 255) as u8;
-            *p.add(1) = ((g as u32 * sa + dg * inv) / 255) as u8;
-            *p.add(2) = ((r as u32 * sa + dr * inv) / 255) as u8;
-            *p.add(3) = (sa + da * inv / 255) as u8;
-        }
-    }
-
-    fn draw_image(&mut self, img: &Rgba, x0: i32, y0: i32) {
-        for y in 0..img.height {
-            for x in 0..img.width {
-                let i = (y * img.width + x) * 4;
-                self.blend(
-                    x0 + x as i32,
-                    y0 + y as i32,
-                    img.pixels[i],
-                    img.pixels[i + 1],
-                    img.pixels[i + 2],
-                    img.pixels[i + 3],
-                );
-            }
-        }
-    }
 }
 
 impl Drop for Canvas {
@@ -200,7 +204,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
+// npm run dev: CLIPLIB_DEV_APP is the electron binary, CLIPLIB_DEV_APP_DIR the project it runs
+const DEV_APP: &str = "CLIPLIB_DEV_APP";
+const DEV_APP_DIR: &str = "CLIPLIB_DEV_APP_DIR";
+
 fn app_exe_path() -> Option<PathBuf> {
+    if let Some(dev) = env::var_os(DEV_APP) {
+        return Some(PathBuf::from(dev));
+    }
     let exe = env::current_exe().ok()?;
     let dir = exe.parent()?;
     let app = dir.join(APP_EXE);
@@ -234,7 +245,7 @@ unsafe extern "system" fn enum_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if cloaked != 0 {
         return BOOL(1);
     }
-    // app shows at opacity 0 then opaque one frame later (hides Windows' first white frame)
+    // app shows at opacity 0 and stays there until the handoff (hides Windows' first white frame)
     let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
     if ex & WS_EX_LAYERED.0 != 0 {
         let mut key = COLORREF(0);
@@ -259,32 +270,13 @@ fn app_window_visible(pid: u32) -> bool {
     probe.found
 }
 
-fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
-/// halo color/alpha at normalized distance `d` from center (0..1): accent core fading to purple, then out
-fn halo_at(d: f32) -> Option<(u8, u8, u8, f32)> {
-    if d < 0.4 {
-        let t = d / 0.4;
-        let mix = |a: f32, b: f32| a + (b - a) * t;
-        Some((mix(199.0, 142.0) as u8, mix(116.0, 50.0) as u8, mix(224.0, 155.0) as u8, mix(0.35, 0.12)))
-    } else if d < 0.7 {
-        Some((142, 50, 155, 0.12 * (1.0 - (d - 0.4) / 0.3)))
-    } else {
-        None
-    }
-}
-
 fn main() {
     // splash must never delay the app; only geometry is computed before spawn
     let Some(app) = app_exe_path() else { return };
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
-    let scale = unsafe { GetDpiForSystem() } as f32 / 96.0;
-    let px = |v: i32| (v as f32 * scale).round() as i32;
-    let (width, height) = (px(WIN_W), px(WIN_H));
+    let mut splash = Splash::load(unsafe { GetDpiForSystem() } as f32 / 96.0);
     let mut work = RECT::default();
     unsafe {
         let _ = SystemParametersInfoW(
@@ -294,34 +286,48 @@ fn main() {
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
         );
     }
+    let (width, height) = splash.as_ref().map_or((0, 0), |s| (s.win_w, s.win_h));
     let x = work.left + (work.right - work.left - width) / 2;
     let y = work.top + (work.bottom - work.top - height) / 2;
-    // title.png is 1024x1024, layout below assumes a square logo
-    let logo_w = px(LOGO_W);
-    let logo_y = (height - (logo_w + px(GAP) + px(BAR_H))) / 2;
-    let logo_x = (width - logo_w) / 2;
-    let splash_logo = format!("--splash-logo={},{},{},{}", x + logo_x, y + logo_y, logo_w, logo_w);
 
+    let started = Instant::now();
+    let mut command = Command::new(&app);
+    let dev = env::var_os(DEV_APP).is_some();
+    if let Some(dir) = env::var_os(DEV_APP_DIR) {
+        command.arg(dir);
+    }
     // deep links, flags pass straight through
-    let child: Option<Child> = Command::new(&app)
-        .args(env::args_os().skip(1))
-        .arg(&splash_logo)
-        .spawn()
-        .ok();
-    let Some(mut child) = child else { return };
+    command.args(env::args_os().skip(1));
+    if let Some(s) = &splash {
+        let px = |v: f32| (v * s.scale).round() as i32;
+        let (mx, my, size) = s.mark;
+        command.arg(format!("--splash-logo={},{},{},{}", x + px(mx), y + px(my), px(size), px(size)));
+        // start (unix ms), hold, loop, blink from/to (ms into the loop). the app stays
+        // transparent until the name has landed and the star is at rest, so the takeover never
+        // cuts the reveal short or lands mid-blink
+        let epoch = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        command.arg(format!(
+            "--splash-handoff={},{},{},{},{}",
+            epoch, s.hold_ms, s.loop_ms, s.blink_ms.0, s.blink_ms.1
+        ));
+    }
+    let Ok(mut child) = command.spawn() else { return };
+    if let Some(splash) = splash.as_mut() {
+        play(splash, &mut child, started, (x, y, width, height));
+    }
+    // dev runner (concurrently) treats our exit as the app quitting
+    if dev {
+        let _ = child.wait();
+    }
+}
+
+fn play(splash: &mut Splash, child: &mut Child, started: Instant, (x, y, width, height): (i32, i32, i32, i32)) {
     let pid = child.id();
 
     unsafe {
         let _ = SetCurrentProcessExplicitAppUserModelID(w!("com.yuma-dev.clips"));
     }
 
-    let logo = decode_logo().map(|src| {
-        let w = logo_w as usize;
-        let h = (w * src.height / src.width.max(1)).max(1);
-        downscale(&src, w, h)
-    });
-
-    let started = Instant::now();
     unsafe {
         let instance = match GetModuleHandleW(None) {
             Ok(h) => h,
@@ -339,7 +345,7 @@ fn main() {
         let hwnd = match CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             w!("ClipLibLauncherSplash"),
-            w!("ClipLib"),
+            w!("Setsu"),
             WS_POPUP,
             x,
             y,
@@ -355,13 +361,7 @@ fn main() {
         };
         let Some(mut canvas) = Canvas::new(width, height) else { return };
 
-        let bar_y = logo_y + logo_w + px(GAP);
-        let halo_r = px(HALO_RADIUS) as f32;
-        let (halo_cx, halo_cy) = ((logo_x + logo_w / 2) as f32, (logo_y + logo_w / 2) as f32);
-        let bar_x = (width - px(BAR_W)) / 2;
-        let bar_w = px(BAR_W);
-        let bar_h = px(BAR_H).max(1);
-
+        let mut played: Option<u64> = None;
         let mut shown = false;
         let mut fading_out: Option<Instant> = None;
         let mut msg = MSG::default();
@@ -378,41 +378,19 @@ fn main() {
                 }
             }
 
-            // frame: breathing halo, logo, sweep bar
-            canvas.clear();
-            {
-                let phase = (now.duration_since(started).as_secs_f32() / HALO_PERIOD.as_secs_f32()).fract();
-                let breath = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
-                let r = halo_r * (0.85 + 0.20 * breath);
-                let strength = 0.6 + 0.4 * breath;
-                let reach = (r * 0.7).ceil() as i32;
-                let (cx, cy) = (halo_cx.round() as i32, halo_cy.round() as i32);
-                for yy in (cy - reach).max(0)..(cy + reach).min(height) {
-                    for xx in (cx - reach).max(0)..(cx + reach).min(width) {
-                        let dx = xx as f32 - halo_cx;
-                        let dy = yy as f32 - halo_cy;
-                        let d = (dx * dx + dy * dy).sqrt() / r;
-                        if let Some((cr, cg, cb, a)) = halo_at(d) {
-                            canvas.blend(xx, yy, cr, cg, cb, (a * strength * 255.0) as u8);
-                        }
-                    }
+            // a late tick still applies every frame in between, each delta builds on the last
+            let due = now.duration_since(started).as_millis() as u64 * splash.fps / 1000;
+            let mut broken = false;
+            while played.map_or(true, |p| p < due) {
+                let step = played.map_or(0, |p| p + 1);
+                if !splash.apply(splash.frame_at(step), &mut canvas) {
+                    broken = true;
+                    break;
                 }
+                played = Some(step);
             }
-            if let Some(l) = &logo {
-                canvas.draw_image(l, logo_x, logo_y);
-            }
-            let t = (now.duration_since(started).as_secs_f32() / SWEEP_PERIOD.as_secs_f32()).fract();
-            // sweeps across the first 72% of the period, then rests (as the CSS did)
-            let sweep = if t < 0.72 { ease_out(t / 0.72) } else { 1.0 };
-            let head = -1.15 + sweep * 2.3; // in bar widths
-            for yy in 0..bar_h {
-                for xx in 0..bar_w {
-                    let u = xx as f32 / bar_w as f32;
-                    let d = (u - head).abs();
-                    let glow = (1.0 - d * 2.2).clamp(0.0, 1.0);
-                    let a = 0.15 + glow * 0.7;
-                    canvas.blend(bar_x + xx, bar_y + yy, 255, 255, 255, (a * 255.0) as u8);
-                }
+            if broken {
+                break;
             }
 
             let alpha = match fading_out {
@@ -420,10 +398,7 @@ fn main() {
                     let f = 1.0 - (now.duration_since(at).as_secs_f32() / FADE_OUT.as_secs_f32()).min(1.0);
                     (f * 255.0) as u8
                 }
-                None => {
-                    let f = (now.duration_since(started).as_secs_f32() / FADE_IN.as_secs_f32()).min(1.0);
-                    (ease_out(f) * 255.0) as u8
-                }
+                None => 255,
             };
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -454,9 +429,8 @@ fn main() {
                     break;
                 }
             }
-            std::thread::sleep(Duration::from_millis(16));
+            std::thread::sleep(Duration::from_millis(8));
         }
-        let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
-        let _ = WINDOW_EX_STYLE(0);
+        let _ = DestroyWindow(hwnd);
     }
 }

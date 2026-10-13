@@ -20,6 +20,7 @@ import Select from "../ui/Select";
 import Slider from "../ui/Slider";
 import { useSettings } from "../settings/SettingsContext";
 import AnalysisStep from "./AnalysisStep";
+import { afterIntro } from "../boot/bootHold";
 import {
   ClipdipProvider,
   clipdipBridge,
@@ -49,12 +50,15 @@ export default function OnboardingWizard({ openOnMount = false }: { openOnMount?
   const [open, setOpen] = useState(openOnMount);
   const autoShown = useRef(false);
 
-  // opens once when settings arrive and the version flag is behind
+  // opens once when settings arrive and the version flag is behind, after the boot reveal has
+  // settled so it never covers it; only unmount cancels the wait
+  const cancelWait = useRef<() => void>(() => {});
+  useEffect(() => () => cancelWait.current(), []);
   useEffect(() => {
     if (!ready || autoShown.current) return;
     if (Number(settings.onboardingVersion ?? 0) < ONBOARDING_VERSION) {
       autoShown.current = true;
-      setOpen(true);
+      cancelWait.current = afterIntro(() => setOpen(true));
     }
   }, [ready, settings.onboardingVersion]);
 

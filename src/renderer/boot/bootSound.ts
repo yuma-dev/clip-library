@@ -89,7 +89,7 @@ function play(name: SoundLayer, when: number): void {
 }
 
 /** Called the moment the reveal arms (the window turns opaque a frame later). */
-export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }): void {
+export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }, delaySec = 0): void {
   if (!enabled || started || !ctx) return;
   started = true;
   const wanted = (Object.keys(AT) as SoundLayer[]).filter((name) => layers[name]);
@@ -99,7 +99,7 @@ export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: tr
     const resume = ctx.state === "suspended" ? ctx.resume() : Promise.resolve();
     void resume.then(() => {
       if (!ctx) return;
-      const t0 = ctx.currentTime + 0.01;
+      const t0 = ctx.currentTime + 0.01 + delaySec;
       for (const name of wanted) play(name, t0 + AT[name]);
     });
   };

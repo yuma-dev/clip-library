@@ -60,3 +60,6 @@ DESIGN-SYSTEM.md
 ASSET-PIPELINE.md
 AGENTS.md
 .claude/
+
+# baked from assets/setsu by scripts/bake-splash.mjs (npm run bake:splash), ~15 MB
+clipdip/crates/launcher/splash.bin

@@ -79,6 +79,7 @@ export const SETTINGS_DEFAULTS: AppSettings = {
   showNewClipsIndicators: true,
   onboardingVersion: 0,
   analysisIntroSeen: false,
+  setsuIntroSeen: false,
   previewVolume: 0.1,
   ambientGlow: { ...AMBIENT_GLOW_DEFAULTS },
   cardGlow: { ...CARD_GLOW_DEFAULTS },

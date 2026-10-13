@@ -88,9 +88,16 @@ export function useLibraryGames(): LibraryGame[] {
   return games;
 }
 
+/** gamedb art is the 512px version Discord presence wants; lists show it at 16-30px. decoding and
+ * uploading 512px pngs for a grid of cards stalled the boot reveal, the cdn sizes it for us */
+export function listIconUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url.startsWith("https://cdn.discordapp.com/") ? url.replace(/([?&]size=)\d+/, (_, key: string) => `${key}64`) : url;
+}
+
 /** art when there is some, else the exe icon clipdip saved */
 export function gameIconSrc(g: { icon_url: string | null; iconPath?: string | null }): string | null {
-  if (g.icon_url) return g.icon_url;
+  if (g.icon_url) return listIconUrl(g.icon_url);
   if (g.iconPath) return `file://${g.iconPath}`;
   return null;
 }

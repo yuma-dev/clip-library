@@ -4446,6 +4446,89 @@ body.ui-blur-exit .app-body {
 
 /* onboarding wizard (3.0 intro) */
 
+/* the "ClipLib is now Setsu" card (RebrandIntro): one panel, the logo reveal on top */
+.ob-brand {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 94vw);
+  border: 0.5px solid var(--color-border);
+  border-radius: 20px;
+  background: var(--color-bg-card);
+  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+.ob-brand-stage {
+  display: grid;
+  place-items: center;
+  height: 210px;
+  background: radial-gradient(ellipse at 50% 60%, rgba(165, 6, 230, 0.16), transparent 70%), #050608;
+  border-bottom: 0.5px solid var(--color-border);
+}
+.ob-brand-copy {
+  padding: 22px 28px 24px;
+}
+.ob-brand-more {
+  margin-top: 10px;
+}
+.ob-brand-name {
+  font-weight: 650;
+  background: linear-gradient(120deg, #f39bff, #c27bff 55%, #8f7dff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* the readings behind the name: kanji large, reading above, meaning below */
+.ob-kanji {
+  display: grid;
+  grid-template-columns: 1.25fr repeat(3, 1fr);
+  gap: 8px;
+  margin: 14px 0 16px;
+  padding: 0;
+  list-style: none;
+}
+.ob-kanji-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px 11px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s, translate 0.2s;
+}
+.ob-kanji-tile:hover {
+  translate: 0 -2px;
+  border-color: rgba(199, 116, 224, 0.45);
+  background: rgba(199, 116, 224, 0.06);
+  box-shadow: 0 6px 22px rgba(165, 6, 230, 0.18);
+}
+/* setsuna, the one the name is shortened from */
+.ob-kanji-tile.is-root {
+  border-color: rgba(199, 116, 224, 0.35);
+  background: linear-gradient(160deg, rgba(232, 11, 238, 0.09), rgba(61, 3, 215, 0.06));
+}
+.ob-kanji-reading {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.ob-kanji-char {
+  font-family: "Yu Gothic UI", "Yu Gothic", "Meiryo", sans-serif;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: #f4f4f6;
+}
+.ob-kanji-tile:hover .ob-kanji-char {
+  text-shadow: 0 0 14px rgba(216, 120, 240, 0.55);
+}
+.ob-kanji-meaning {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
 .ob-backdrop {
   position: fixed;
   inset: 0;
@@ -4888,34 +4971,54 @@ body.ui-blur-exit .app-body {
   overflow: hidden;
 }
   /* 3D push, not scale(): scale() rasters at the largest scale (1.5x of the library: 32 MB texture, every thumbnail redecoded, measured 200-380ms stalls)
-     perspective push has no max scale, so the layer stays at 1x raster and the GPU upscales it; 1200/(1200-400) = 1.5x */
+     perspective push has no max scale, so the layer stays at 1x raster and the GPU upscales it; 1200/(1200-560) = 1.9x
+     starts as the portal opens (after the star breathes in, starPortal INHALE_MS) */
+/* the intro's first frame, held while the window is hidden so it is rastered in this pose
+   (bootReveal arm); keep in step with the from keyframes below */
+.app-body.boot-armed {
+  transform: perspective(1200px) translateZ(560px);
+}
+.rail.boot-armed {
+  opacity: 0.002;
+  transform: translateX(-40px);
+}
+.clip-group-header.boot-armed {
+  opacity: 0.002;
+  transform: translateY(-14px);
+}
+.clip-item.boot-armed {
+  opacity: 0.002;
+  transform: translateY(28px) scale(1.04);
+}
 .app-body.boot-dolly {
-  animation: boot-dolly 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 40ms both;
+  animation: boot-dolly 1100ms cubic-bezier(0.2, 0.8, 0.2, 1) 260ms both;
 }
 @keyframes boot-dolly {
-  from { transform: perspective(1200px) translateZ(400px); }
+  from { transform: perspective(1200px) translateZ(560px); }
   to { transform: perspective(1200px) translateZ(0); }
 }
-  /* depth parallax: rail from the left, headers from above, cards from below and a hair bigger, each on its own --boot-d */
+  /* depth parallax: rail from the left, headers from above, cards from below and a hair bigger, each on its own --boot-d
+     they start at 0.002, not 0: chromium skips rastering opacity 0, so every thumbnail rastered the frame its card
+     appeared (starPortal UNSEEN) */
 .rail.boot-par {
   animation: boot-par-rail 700ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
 }
 @keyframes boot-par-rail {
-  from { opacity: 0; transform: translateX(-40px); }
+  from { opacity: 0.002; transform: translateX(-40px); }
   to { opacity: 1; transform: none; }
 }
 .clip-group-header.boot-par {
   animation: boot-par-head 600ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
 }
 @keyframes boot-par-head {
-  from { opacity: 0; transform: translateY(-14px); }
+  from { opacity: 0.002; transform: translateY(-14px); }
   to { opacity: 1; transform: none; }
 }
 .clip-item.boot-par {
   animation: boot-par-card 700ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--boot-d, 0ms) both;
 }
 @keyframes boot-par-card {
-  from { opacity: 0; transform: translateY(28px) scale(1.04); }
+  from { opacity: 0.002; transform: translateY(28px) scale(1.04); }
   to { opacity: 1; transform: none; }
 }
   /* grid glow: one canvas behind the cards with blur baked in (buildGlowCanvas), only opacity moves
@@ -4944,21 +5047,51 @@ body.ui-blur-exit .app-body {
   overflow: hidden;
 }
   /* body's opacity ride is a solid cover fading out, so the body never needs its own offscreen surface */
+/* the portal: a canvas cover with a star-shaped hole (bootReveal.buildOverlay), zoomed about the
+   hole by starPortal.ts. a canvas is a fixed texture, the gpu scales it without re-rastering; the
+   hole's edge softens as it grows and the rim hides it early on. no masks or filters on these
+   layers: each is a render pass composited every frame */
 #boot-reveal .boot-cover {
-  position: absolute;
-  inset: 0;
-  background: #050608;
-  will-change: opacity;
-}
-#boot-reveal .boot-cover.run {
-  animation: boot-fade-out 380ms ease-out 40ms both;
-}
-#boot-reveal .boot-hero {
   position: absolute;
   will-change: transform, opacity;
 }
-#boot-reveal .boot-hero.run {
+/* the launcher's last frame in parts (glow, corners, letters, star) and the portal's rim */
+#boot-reveal .boot-part {
+  position: absolute;
+  will-change: transform, opacity;
+}
+#boot-reveal .boot-corner {
+  background-size: 100% 100%;
+}
+
+/* the pre-Setsu reveal (cover fade, logo through the camera), kept for the export hero scene
+   (src/renderer/export/heroScene.tsx) */
+#boot-reveal.boot-legacy .boot-cover {
+  inset: 0;
+  background: #050608;
+}
+#boot-reveal.boot-legacy .boot-cover.run {
+  animation: boot-fade-out 380ms ease-out 40ms both;
+}
+#boot-reveal.boot-legacy .boot-vignette.run {
+  animation: boot-fade-out 900ms ease 200ms both;
+}
+#boot-reveal.boot-legacy .boot-flash.run {
+  animation: boot-flash 760ms cubic-bezier(0.2, 0.8, 0.3, 1) 40ms both;
+}
+#boot-reveal.boot-legacy .boot-hero {
+  position: absolute;
+}
+#boot-reveal.boot-legacy .boot-hero.run {
   animation: boot-through 520ms cubic-bezier(0.6, 0, 0.9, 0.4) 20ms both;
+}
+@keyframes boot-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes boot-flash {
+  from { opacity: 0.9; transform: scale(0.3); }
+  to { opacity: 0; transform: scale(4.5); }
 }
 @keyframes boot-through {
   0% { transform: scale(1); opacity: 1; }
@@ -4971,13 +5104,6 @@ body.ui-blur-exit .app-body {
   will-change: opacity;
   background: radial-gradient(ellipse at var(--boot-ox, 50%) var(--boot-oy, 45%), transparent 35%, #050608 100%);
 }
-#boot-reveal .boot-vignette.run {
-  animation: boot-fade-out 900ms ease 200ms both;
-}
-@keyframes boot-fade-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
   /* afterglow mounted before the reveal at its starting scale (see the raster-scale note above) */
 #boot-reveal .boot-flash {
   position: absolute;
@@ -4987,12 +5113,9 @@ body.ui-blur-exit .app-body {
   transform: scale(0.3);
   opacity: 0.9;
 }
-#boot-reveal .boot-flash.run {
-  animation: boot-flash 760ms cubic-bezier(0.2, 0.8, 0.3, 1) 40ms both;
-}
-@keyframes boot-flash {
-  from { opacity: 0.9; transform: scale(0.3); }
-  to { opacity: 0; transform: scale(4.5); }
+/* the reveal's flash draws its gradient into the canvas itself (bootReveal), the div one is the export scene's */
+#boot-reveal canvas.boot-flash {
+  background: none;
 }
 /* Motes: tiny pre-rastered points of light, each on its own --boot-d. */
 #boot-reveal .boot-mote {

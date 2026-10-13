@@ -56,8 +56,10 @@ const streamWaiters: Array<() => void> = [];
 // set once main reveals the window; before that, frames are sparse in a
 // hidden window, so pacing decisions wait for this
 let revealed = false;
+const revealWaiters: Array<() => void> = [];
 export const markRevealed = (): void => {
   revealed = true;
+  for (const cb of revealWaiters.splice(0, revealWaiters.length)) cb();
 };
 export const isRevealed = (): boolean => revealed;
 
@@ -108,6 +110,42 @@ export function onBootRelease(cb: () => void): () => void {
   return () => {
     const i = waiters.indexOf(cb);
     if (i >= 0) waiters.splice(i, 1);
+  };
+}
+
+// a window that never gets the reveal event still gets its dialogs
+const AFTER_INTRO_CAP_MS = 12000;
+// the library gets a moment on screen before a dialog slides over it
+const AFTER_INTRO_BEAT_MS = 1200;
+
+/** Run `cb` once the window is on screen and the intro's visuals have settled (the streaming hold
+ *  lifts), so a dialog opening at launch never covers the reveal. Returns an unsubscribe. */
+export function afterIntro(cb: () => void): () => void {
+  let done = false;
+  let offStream = () => {};
+  let beat = 0;
+  const fire = () => {
+    if (done) return;
+    done = true;
+    window.clearTimeout(cap);
+    window.clearTimeout(beat);
+    cb();
+  };
+  const cap = window.setTimeout(fire, AFTER_INTRO_CAP_MS);
+  const onRevealed = () => {
+    offStream = onStreamingRelease(() => {
+      beat = window.setTimeout(fire, AFTER_INTRO_BEAT_MS);
+    });
+  };
+  if (revealed) onRevealed();
+  else revealWaiters.push(onRevealed);
+  return () => {
+    done = true;
+    window.clearTimeout(cap);
+    window.clearTimeout(beat);
+    offStream();
+    const i = revealWaiters.indexOf(onRevealed);
+    if (i >= 0) revealWaiters.splice(i, 1);
   };
 }
 

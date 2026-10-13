@@ -14,6 +14,7 @@ import {
 import { getShareUserForDiscordId, loadShareUsers } from "./shareIdentity";
 import { useAppNav } from "../shell/appNav";
 import { useProfile } from "../shell/useProfile";
+import { listIconUrl } from "./games";
 
 const MAX_AVATARS = 4;
 
@@ -62,7 +63,7 @@ function ParticipantAvatars({ discord, clipCreatedAt }: ParticipantAvatarsProps)
               style={{ zIndex: MAX_AVATARS - i }}
               onClick={() => void openParticipantProfile(p.id)}
             >
-              <img src={discordAvatarUrl(latest)} alt={name} draggable={false} loading="lazy" />
+              <img src={listIconUrl(discordAvatarUrl(latest)) ?? undefined} alt={name} draggable={false} loading="lazy" />
             </span>
           </UserPopover>
         );

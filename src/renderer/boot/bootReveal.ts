@@ -1,10 +1,15 @@
 // Boot reveal: hand-over from the native launcher's splash to the library. Main shows
-// the window at opacity 0, arms the intro (logo frozen over a dark grid), then the
-// camera flies through the logo into the grid at rest; transform/opacity only, so
-// nothing repaints, and any press/wheel/key ends it early and lands at rest.
+// the window at opacity 0, arms the intro (mark frozen over a dark cover), then the star
+// opens into a star-shaped portal onto the library (starPortal.ts); transform/opacity only,
+// so nothing repaints, and any press/wheel/key ends it early and lands at rest.
 import { bootMark } from "../perf/bootMarks";
 import type { BootRevealPayload } from "../../types/clips";
-import titleUrl from "../../../assets/title.png";
+import cornersUrl from "../../../assets/setsu/hero-corners.png";
+import glowUrl from "../../../assets/setsu/hero-glow.png";
+import {
+  animateCorner, animateFlash, animateGlow, animateHole, animateRim, animateStar, animateVignette,
+  landsAt, portalScaleK, zoom, FLASH_RATIO, GLOW_AT_MS, HOLE_RATIO, MOTES_AT_MS, SOUND_DELAY_MS, UNSEEN,
+} from "./starPortal";
 import { holdStreaming, holdCommits, releaseBoot, releaseStreaming, onBootRelease, onScrollInput, markRevealed } from "./bootHold";
 import { preloadBootSound, startBootSound, disposeBootSound } from "./bootSound";
 import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
@@ -15,24 +20,51 @@ let prefs: BootPrefs = getBootPrefs();
 
 const MEASURE_MS = 1200;
 const MEASURE_TAIL_MS = 6000;
-// The body, cards and glow are back to normal here; the hold lifts.
-const SETTLE_MS = 1300;
+// The body, cards and glow are back to normal here; the hold lifts. the last card lands by ~1.5s
+const SETTLE_MS = 1600;
 // motes drift on after the intro; overlay leaves when they finish or at this cap
-const OVERLAY_CAP_MS = 5000;
+const OVERLAY_CAP_MS = 5600;
 const MAX_CARDS = 64;
 const MOTES = 30;
-// motes fade out exactly when the chimes do (start +0.6s, run 3.8s, ends +4.4s)
+// each mote's own run ends here, counted from MOTES_AT_MS
 const MOTES_END_MS = 4400;
-// Parallax: rail first, then headers, then rows from the top down.
-const RAIL_MS = 60;
-const HEAD_MS = 120;
-const ROW_START_MS = 100;
-const ROW_STEP_MS = 55;
-const ROW_MAX = 8;
 // The glow canvas is drawn at a quarter of the viewport; the blur is baked
 // in at that scale (CSS scales it back up, blur hides the resolution).
 const GLOW_SCALE = 0.25;
 const GLOW_BLUR_PX = 11;
+// everything in the overlay that animates; the reveal starts, holds and waits on these
+const OVERLAY_PARTS = ".boot-cover, .boot-vignette, .boot-flash, .boot-part, .boot-mote";
+const STAR_PATH = "M500 63A437 437 0 0 0 937 500A437 437 0 0 0 500 937A437 437 0 0 0 63 500A437 437 0 0 0 500 63Z";
+
+/** a canvas `w` x `h` css px backed at `res` device px per css px, drawn once by `draw` in css px */
+function canvasPart(className: string, w: number, h: number, res: number, draw: (ctx: CanvasRenderingContext2D) => void): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.className = className;
+  c.width = Math.max(1, Math.round(w * res));
+  c.height = Math.max(1, Math.round(h * res));
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    ctx.scale(c.width / w, c.height / h);
+    draw(ctx);
+  }
+  return c;
+}
+
+/** STAR_PATH (a 1000 box) as a `size` px star centred in a `box` px square */
+function starAt(box: number, size: number): string {
+  const f = size / 1000;
+  const o = (box - size) / 2;
+  const p = (x: number, y: number) => `${(o + x * f).toFixed(2)} ${(o + y * f).toFixed(2)}`;
+  const r = (437 * f).toFixed(2);
+  return `M${p(500, 63)}A${r} ${r} 0 0 0 ${p(937, 500)}A${r} ${r} 0 0 0 ${p(500, 937)}A${r} ${r} 0 0 0 ${p(63, 500)}A${r} ${r} 0 0 0 ${p(500, 63)}Z`;
+}
+// the launcher's last frame, one layer per moving part (bake-splash.mjs): glow, corners, star
+const CORNERS = [
+  { dx: -1, dy: -1, clip: "inset(0 50% 50% 0)" },
+  { dx: 1, dy: -1, clip: "inset(0 0 50% 50%)" },
+  { dx: 1, dy: 1, clip: "inset(50% 0 0 50%)" },
+  { dx: -1, dy: 1, clip: "inset(50% 50% 0 0)" },
+];
 
 let body: HTMLElement | null = null;
 let shell: HTMLElement | null = null;
@@ -42,6 +74,7 @@ let cards: HTMLElement[] = [];
 let heads: HTMLElement[] = [];
 let rail: HTMLElement | null = null;
 let preparedLogo: BootRevealPayload["logo"] = null;
+let heroDecoded: Promise<unknown> = Promise.resolve();
 let installed = false;
 let handled = false;
 const reducedMotion = () =>
@@ -87,31 +120,64 @@ function seeded(seed: number): () => number {
   };
 }
 
+function img(className: string, src: string, css: string): HTMLImageElement {
+  const el = document.createElement("img");
+  el.className = className;
+  el.src = src;
+  el.draggable = false;
+  el.alt = "";
+  el.style.cssText = css;
+  return el;
+}
+
 function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
   const origin = originOf(logo);
-  const logoSize = logo ? logo.w : Math.round(Math.min(window.innerWidth, window.innerHeight) * 0.1);
+  // launched without the launcher: the star still opens the portal, from the middle
+  const markSize = logo ? logo.w : Math.round(Math.min(window.innerWidth, window.innerHeight) * 0.1);
+  const box = `left:${origin.x - markSize / 2}px;top:${origin.y - markSize / 2}px;width:${markSize}px;height:${markSize}px;`;
   const el = document.createElement("div");
   el.id = "boot-reveal";
+  el.dataset.k = String(portalScaleK(markSize));
 
-  // Solid at first (the library is not there yet), gone within the first
-  // 400 ms as the body arrives.
-  const cover = document.createElement("div");
-  cover.className = "boot-cover";
+  // the cover with a star-shaped hole in its middle, scaled about it: the portal. big enough to
+  // still cover the farthest window corner when the star breathes in to 0.93
+  const corners = [[0, 0], [window.innerWidth, 0], [0, window.innerHeight], [window.innerWidth, window.innerHeight]];
+  const reach = Math.max(...corners.map(([x, y]) => Math.hypot(x - origin.x, y - origin.y)));
+  const coverSize = Math.ceil((reach / 0.93) * 2) + 8;
+  const hole = markSize * HOLE_RATIO;
+  // the hole is cut in the svg's own path (evenodd), not with a css mask: a mask is a render pass the
+  // gpu composites every frame, and its first use compiled a shader mid-reveal (a 200-480ms freeze
+  // in traces). an svg path rasters once into the layer and the zoom only upscales it
+  // a canvas, not a css mask or an svg (see starPortal zoom): drawn once, the gpu scales the texture.
+  // half resolution is plenty, the hole's edge sits under the star until it grows soft anyway
+  const dpr = window.devicePixelRatio || 1;
+  const cover = canvasPart("boot-cover", coverSize, coverSize, dpr / 2, (ctx) => {
+    ctx.fillStyle = "#050608";
+    ctx.fill(new Path2D(`M0 0H${coverSize}V${coverSize}H0Z${starAt(coverSize, hole)}`), "evenodd");
+  });
+  cover.style.cssText = `left:${origin.x - coverSize / 2}px;top:${origin.y - coverSize / 2}px;width:${coverSize}px;height:${coverSize}px;`;
   el.appendChild(cover);
 
   // Darkness everywhere but around the logo; lifts as the library arrives.
   const vignette = document.createElement("div");
   vignette.className = "boot-vignette";
-  vignette.style.cssText = `--boot-ox:${origin.x}px;--boot-oy:${origin.y}px;`;
+  vignette.style.cssText = `--boot-ox:${origin.x}px;--boot-oy:${origin.y}px;opacity:${UNSEEN};`;
   el.appendChild(vignette);
 
   // afterglow bloom; mounted at its starting scale so the will-change layer keeps
-  // that raster scale, the 4.5x growth is just the GPU upscaling a small texture
-  const flashSize = logoSize * 3.2;
-  const flash = document.createElement("div");
-  flash.className = "boot-flash";
+  // that raster scale, the 5x growth is just the GPU upscaling a small texture
+  const flashSize = markSize * FLASH_RATIO;
+  const flash = canvasPart("boot-flash", flashSize, flashSize, dpr / 2, (ctx) => {
+    const r = flashSize / 2;
+    const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+    g.addColorStop(0, "rgba(199, 116, 224, 0.85)");
+    g.addColorStop(0.35, "rgba(142, 50, 155, 0.35)");
+    g.addColorStop(0.68, "rgba(142, 50, 155, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, flashSize, flashSize);
+  });
+  flash.style.cssText = `left:${origin.x - flashSize / 2}px;top:${origin.y - flashSize / 2}px;width:${flashSize}px;height:${flashSize}px;transform:${zoom(0.3)};opacity:${UNSEEN};`;
   if (!prefs.afterglow) flash.style.display = "none";
-  flash.style.cssText = `left:${origin.x - flashSize / 2}px;top:${origin.y - flashSize / 2}px;width:${flashSize}px;height:${flashSize}px;`;
   el.appendChild(flash);
 
   // motes: light drifting up from the clips; created here (layer must exist
@@ -126,21 +192,81 @@ function buildOverlay(logo: BootRevealPayload["logo"]): HTMLDivElement {
     const dy = -40 - rnd() * 90;
     const size = 2 + Math.round(rnd() * 2);
     const delay = 100 + j * 24;
-    m.style.cssText = `left:-10px;top:-10px;width:${size}px;height:${size}px;--boot-dx:${dx.toFixed(0)}px;--boot-dy:${dy.toFixed(0)}px;--boot-d:${delay}ms;--boot-dur:${MOTES_END_MS - delay}ms;`;
+    m.style.cssText = `left:-10px;top:-10px;width:${size}px;height:${size}px;--boot-dx:${dx.toFixed(0)}px;--boot-dy:${dy.toFixed(0)}px;--boot-d:${MOTES_AT_MS + delay}ms;--boot-dur:${MOTES_END_MS - delay}ms;`;
     motesLayer.appendChild(m);
   }
   el.appendChild(motesLayer);
 
+  // every part decoded before the window turns opaque, or it pops in at the handoff
+  const decodes: Promise<unknown>[] = [];
+  const decode = (i: HTMLImageElement) => {
+    if (typeof i.decode === "function") decodes.push(i.decode().catch(() => {}));
+    return i;
+  };
   if (logo) {
-    const hero = document.createElement("img");
-    hero.className = "boot-hero";
-    hero.src = titleUrl;
-    hero.draggable = false;
-    hero.alt = "";
-    hero.style.cssText = `left:${logo.x}px;top:${logo.y}px;width:${logo.w}px;height:${logo.h}px;`;
-    el.appendChild(hero);
+    el.appendChild(decode(img("boot-part boot-glowmark", glowUrl, box)));
+    // the corners are css backgrounds (clip-path per quarter), decoded through a spare image
+    const spare = new Image();
+    spare.src = cornersUrl;
+    decode(spare);
+    for (const c of CORNERS) {
+      const corner = document.createElement("div");
+      corner.className = "boot-part boot-corner";
+      corner.dataset.dx = String(c.dx);
+      corner.dataset.dy = String(c.dy);
+      corner.style.cssText = `${box}background-image:url("${cornersUrl}");clip-path:${c.clip};`;
+      el.appendChild(corner);
+    }
   }
+  // star and rim at 2x the screen's density: crisp at rest, they're fading by the time they're big
+  const star = canvasPart("boot-part boot-star", markSize, markSize, dpr * 2, (ctx) => {
+    ctx.scale(markSize / 1000, markSize / 1000);
+    ctx.fillStyle = "#fffeff";
+    ctx.fill(new Path2D(STAR_PATH));
+  });
+  star.style.cssText = box;
+  el.appendChild(star);
+  // the portal's edge: a thin lit outline of the hole with its glow baked in (a css drop-shadow was
+  // a render pass every frame and compiled a shader on first use). the canvas overhangs the mark
+  // for the glow, same centre
+  const rimPad = markSize * 0.25;
+  const rimSize = markSize + rimPad * 2;
+  const rim = canvasPart("boot-part boot-rim", rimSize, rimSize, dpr * 2, (ctx) => {
+    ctx.translate(rimPad, rimPad);
+    ctx.scale(markSize / 1000, markSize / 1000);
+    const path = new Path2D(STAR_PATH);
+    ctx.filter = "blur(30px)";
+    ctx.strokeStyle = "rgba(216, 68, 221, 0.9)";
+    ctx.lineWidth = 40;
+    ctx.stroke(path);
+    ctx.filter = "none";
+    ctx.strokeStyle = "#f3dcff";
+    ctx.lineWidth = 14;
+    ctx.stroke(path);
+  });
+  rim.style.cssText = `left:${origin.x - rimSize / 2}px;top:${origin.y - rimSize / 2}px;width:${rimSize}px;height:${rimSize}px;opacity:${UNSEEN};`;
+  el.appendChild(rim);
+  heroDecoded = Promise.all(decodes);
   return el;
+}
+
+/** one Web Animation per overlay part (starPortal.ts); created playing, the caller holds them */
+function startPortal(layer: HTMLElement): void {
+  const k = Number(layer.dataset.k) || 1;
+  const one = (sel: string) => layer.querySelector<HTMLElement>(sel);
+  const cover = one(".boot-cover");
+  if (cover) animateHole(cover);
+  const vignette = one(".boot-vignette");
+  if (vignette) animateVignette(vignette);
+  const flash = one(".boot-flash");
+  if (flash) animateFlash(flash);
+  const glow = one(".boot-glowmark");
+  if (glow) animateGlow(glow);
+  for (const c of layer.querySelectorAll<HTMLElement>(".boot-corner")) animateCorner(c, Number(c.dataset.dx), Number(c.dataset.dy), k);
+  const star = one(".boot-star");
+  if (star) animateStar(star);
+  const rim = one(".boot-rim");
+  if (rim) animateRim(rim);
 }
 
 /** content-visibility groups near the intro's 1.5x-to-1x push get laid out/painted
@@ -252,6 +378,7 @@ export async function prepareBootReveal(): Promise<void> {
   cards = visibleCards();
   heads = visibleHeaders();
   for (const el of [body, rail, ...heads, ...cards]) el?.classList.add("boot-pre");
+  arm();
   body?.classList.add("boot-nohover");
   markLiveGroups();
   glowCanvas = prefs.glow ? buildGlowCanvas(cards) : null;
@@ -305,7 +432,21 @@ function depromote(perFrame: number): void {
   step();
 }
 
+/** the library sits in the intro's first frame while the window is still hidden, so everything is
+ * rastered in the pose the animations start from. otherwise the first real frame re-rastered every
+ * card at its new scale mid-reveal (60-160ms stalls in traces). onReveal swaps this for the
+ * animations in the same task; their backwards fill holds the very same values */
+function arm(): void {
+  body?.classList.add("boot-armed");
+  if (prefs.parallax) for (const el of [rail, ...heads, ...cards]) el?.classList.add("boot-armed");
+}
+
+function disarm(): void {
+  for (const el of document.querySelectorAll(".boot-armed")) el.classList.remove("boot-armed");
+}
+
 function clearAll(): void {
+  disarm();
   settleGrid();
   depromote(8);
   detachWind();
@@ -414,14 +555,8 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
     placeBody(logo);
   }
   const layer = overlay;
-  const hero = layer.querySelector<HTMLImageElement>(".boot-hero");
-  if (hero && !hero.complete && typeof hero.decode === "function") {
-    try {
-      await hero.decode();
-    } catch {
-      /* a broken image just means no hero; the rest still runs */
-    }
-  }
+  // a broken image just means that part is missing, the rest still runs
+  await heroDecoded;
 
   // layout may have changed since prepare (fresh list landed): repick cards/headers
   // promote new ones, redraw glow at the new positions
@@ -436,30 +571,37 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   }
   placeMotes(cards);
 
-  // Parallax delays: rail, then headers, then cards by row from the top.
-  if (rail) rail.style.setProperty("--boot-d", `${RAIL_MS}ms`);
-  for (const el of heads) el.style.setProperty("--boot-d", `${HEAD_MS}ms`);
-  const tops = [...new Set(cards.map((el) => Math.round(el.getBoundingClientRect().top)))].sort((a, b) => a - b);
-  for (const el of cards) {
-    const row = Math.min(ROW_MAX, tops.indexOf(Math.round(el.getBoundingClientRect().top)));
-    el.style.setProperty("--boot-d", `${ROW_START_MS + Math.max(0, row) * ROW_STEP_MS}ms`);
+  // Parallax delays: each piece lands just before the portal's edge reaches it.
+  const origin = originOf(logo);
+  const k = Number(layer.dataset.k) || 1;
+  for (const el of [rail, ...heads, ...cards]) {
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    const dist = Math.hypot(r.left + r.width / 2 - origin.x, r.top + r.height / 2 - origin.y);
+    el.style.setProperty("--boot-d", `${Math.round(landsAt(dist, k))}ms`);
   }
   shell?.classList.add("boot-clip");
   body?.classList.add("boot-dolly");
   if (prefs.parallax) for (const el of [rail, ...heads, ...cards]) el?.classList.add("boot-par");
-  glowCanvas?.classList.add("run");
-  for (const el of layer.querySelectorAll(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")) el.classList.add("run");
+  disarm();
+  if (glowCanvas) {
+    glowCanvas.style.animationDelay = `${GLOW_AT_MS}ms`;
+    glowCanvas.classList.add("run");
+  }
+  for (const el of layer.querySelectorAll(OVERLAY_PARTS)) el.classList.add("run");
+  startPortal(layer);
   attachWind(layer);
 
   // hold every animation at its first frame til main confirms the window is opaque;
   // the pause runs on the compositor so releasing it costs nothing
-  const animated = [body, rail, ...heads, ...cards, glowCanvas, ...layer.querySelectorAll<HTMLElement>(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")];
+  const animated = [body, rail, ...heads, ...cards, glowCanvas, ...layer.querySelectorAll<HTMLElement>(OVERLAY_PARTS)];
   const held = animated.flatMap((el) => (el ? el.getAnimations() : []));
   for (const a of held) a.pause();
   await twoFrames();
   window.clips?.bootRevealArmed();
   for (const a of held) a.play();
-  startBootSound({ woosh: prefs.sound && prefs.woosh, chimes: prefs.sound && prefs.chimes, motes: prefs.sound && prefs.motesSound, wind: prefs.sound && prefs.wind });
+  // woosh as the portal opens, after the star breathes in
+  startBootSound({ woosh: prefs.sound && prefs.woosh, chimes: prefs.sound && prefs.chimes, motes: prefs.sound && prefs.motesSound, wind: prefs.sound && prefs.wind }, SOUND_DELAY_MS / 1000);
   measureFrames();
 
   // hold lifts at settle time or at once on input, then jumps to end state
@@ -496,7 +638,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   }, SETTLE_MS);
   // overlay comes down once its last animation finishes, never on a fixed
   // timer: a cut mid-fade reads as a pop
-  const overlayAnims = [...layer.querySelectorAll<HTMLElement>(".boot-cover, .boot-vignette, .boot-flash, .boot-hero, .boot-mote")].flatMap((el) => el.getAnimations());
+  const overlayAnims = [...layer.querySelectorAll<HTMLElement>(OVERLAY_PARTS)].flatMap((el) => el.getAnimations());
   const finished = Promise.allSettled(overlayAnims.map((a) => a.finished));
   const cap = new Promise<void>((resolve) => window.setTimeout(resolve, OVERLAY_CAP_MS));
   void Promise.race([finished, cap]).then(() => {

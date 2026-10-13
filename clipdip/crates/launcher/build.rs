@@ -10,6 +10,16 @@ fn main() {
             panic!("launcher icon resource not compiled (rc.exe from the Windows SDK is required): {error}");
         }
     }
+    // splash.bin is baked by scripts/bake-splash.mjs and not checked in; without it the launcher
+    // just starts the app (plain cargo builds of the workspace still work)
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("splash.bin");
+    match std::fs::read("splash.bin") {
+        Ok(bytes) => std::fs::write(&out, bytes).unwrap(),
+        Err(_) => {
+            println!("cargo:warning=splash.bin missing, run `npm run bake:splash` for the splash");
+            std::fs::write(&out, []).unwrap();
+        }
+    }
+    println!("cargo:rerun-if-changed=splash.bin");
     println!("cargo:rerun-if-changed=../../../icon.ico");
-    println!("cargo:rerun-if-changed=../../../assets/title.png");
 }

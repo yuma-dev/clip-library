@@ -705,7 +705,7 @@ dependencies = [
 name = "cliplib-launcher"
 version = "3.6.4"
 dependencies = [
- "png 0.17.16",
+ "miniz_oxide",
  "windows 0.58.0",
  "winresource",
 ]

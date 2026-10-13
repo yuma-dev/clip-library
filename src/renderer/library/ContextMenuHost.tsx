@@ -9,7 +9,7 @@ import { hideExportProgress, showExportProgress } from "../player/exportToast";
 import type { LocalClip } from "./types";
 import { Merge } from "lucide-react";
 import { mergePair, pairsFor } from "../storage/overlaps";
-import { getGameOfClip, getLibraryGames } from "./games";
+import { getGameOfClip, getLibraryGames, listIconUrl } from "./games";
 import type { GameSearchResult } from "../../types/clips";
 
 export interface ContextMenuHandle {
@@ -365,7 +365,7 @@ const ContextMenuHost = forwardRef<ContextMenuHandle, ContextMenuHostProps>(func
                   title={g.name}
                 >
                   {g.icon_url ? (
-                    <img className="ctx-game-icon" src={g.icon_url} alt="" loading="lazy" draggable={false} />
+                    <img className="ctx-game-icon" src={listIconUrl(g.icon_url) ?? undefined} alt="" loading="lazy" draggable={false} />
                   ) : (
                     <span className="ctx-game-icon" aria-hidden="true" />
                   )}
