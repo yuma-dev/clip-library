@@ -7,7 +7,7 @@ import type { BootRevealPayload } from "../../types/clips";
 import titleUrl from "../../../assets/title.png";
 import { holdStreaming, holdCommits, releaseBoot, releaseStreaming, onBootRelease, onScrollInput, markRevealed } from "./bootHold";
 import { preloadBootSound, startBootSound, disposeBootSound } from "./bootSound";
-import { getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
+import { bootSoundLevels, getBootPrefs, installBootPrefsConsole, type BootPrefs } from "./bootPrefs";
 import { trackPointer, rehoverUnderPointer } from "../library/rehover";
 
 // Read once per launch (dev console changes apply at the next one).
@@ -242,10 +242,11 @@ export async function prepareBootReveal(): Promise<void> {
   if (reducedMotion()) return;
   holdStreaming();
   trackPointer();
-  // Sound layers decode now; muted when hover previews are muted.
+  // Sound layers decode now; muted when hover previews are muted or every layer is at 0.
+  const silent = Object.values(bootSoundLevels(prefs)).every((v) => v <= 0);
   void Promise.resolve(window.clips?.getSettings?.())
-    .then((s) => preloadBootSound(Number(s?.previewVolume ?? 1) <= 0))
-    .catch(() => preloadBootSound(false));
+    .then((s) => preloadBootSound(silent || Number(s?.previewVolume ?? 1) <= 0))
+    .catch(() => preloadBootSound(silent));
   body = document.querySelector<HTMLElement>(".app-body");
   shell = document.querySelector<HTMLElement>(".app-shell");
   rail = document.querySelector<HTMLElement>(".rail");
@@ -459,7 +460,7 @@ async function onReveal(payload: BootRevealPayload): Promise<void> {
   await twoFrames();
   window.clips?.bootRevealArmed();
   for (const a of held) a.play();
-  startBootSound({ woosh: prefs.sound && prefs.woosh, chimes: prefs.sound && prefs.chimes, motes: prefs.sound && prefs.motesSound, wind: prefs.sound && prefs.wind });
+  startBootSound(bootSoundLevels(prefs));
   measureFrames();
 
   // hold lifts at settle time or at once on input, then jumps to end state

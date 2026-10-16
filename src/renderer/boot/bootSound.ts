@@ -14,8 +14,12 @@ const WIND_FADE_AT = 0;
 const WIND_FADE_FOR = 4.3;
 const AT = { woosh: 0, chimes: 0.6, motes: 0.6, wind: 0.6 };
 
+const URLS = { woosh: wooshUrl, chimes: chimesUrl, motes: motesUrl, wind: windUrl };
+
 export type SoundLayer = keyof typeof GAIN;
-type Layer = { source: AudioBufferSourceNode; gain: GainNode; startAt: number };
+export type SoundLevels = Record<SoundLayer, number>;
+const LAYERS = Object.keys(GAIN) as SoundLayer[];
+type Layer = { source: AudioBufferSourceNode; startAt: number };
 
 let ctx: AudioContext | null = null;
 let buffers: Partial<Record<SoundLayer, AudioBuffer>> = {};
@@ -29,12 +33,11 @@ let disposeWanted = false;
 
 // One layer failing to fetch or decode must not silence the rest: each
 // load settles on its own and only its layer is missing.
-async function load(name: SoundLayer, url: string): Promise<void> {
-  if (!ctx) return;
+async function load(c: AudioContext, into: Partial<Record<SoundLayer, AudioBuffer>>, name: SoundLayer): Promise<void> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(URLS[name]);
     const data = await res.arrayBuffer();
-    buffers[name] = await ctx.decodeAudioData(data);
+    into[name] = await c.decodeAudioData(data);
   } catch (error) {
     console.warn(`[boot sound] ${name} did not load: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -50,19 +53,19 @@ export function preloadBootSound(muted: boolean): void {
     enabled = false;
     return;
   }
-  loading = Promise.all([load("woosh", wooshUrl), load("chimes", chimesUrl), load("motes", motesUrl), load("wind", windUrl)]).then(() => undefined);
+  const c = ctx;
+  if (!c) return;
+  loading = Promise.all(LAYERS.map((name) => load(c, buffers, name))).then(() => undefined);
 }
 
-function play(name: SoundLayer, when: number): void {
-  if (!ctx) return;
-  const buffer = buffers[name];
-  if (!buffer) return;
-  const source = ctx.createBufferSource();
+// scale is the user's volume for this layer (0..1) on top of the tuned mix
+function schedule(c: AudioContext, name: SoundLayer, buffer: AudioBuffer, when: number, scale: number): AudioBufferSourceNode {
+  const source = c.createBufferSource();
   source.buffer = buffer;
-  const gain = ctx.createGain();
-  const level = GAIN[name] * MASTER;
+  const gain = c.createGain();
+  const level = GAIN[name] * MASTER * scale;
   gain.gain.value = level;
-  source.connect(gain).connect(ctx.destination);
+  source.connect(gain).connect(c.destination);
   // The wind fades out at play time; the clip itself carries no fade-out.
   let stopAt = 0;
   if (name === "wind") {
@@ -81,7 +84,15 @@ function play(name: SoundLayer, when: number): void {
   source.start(when);
   // stop() is only legal after start(); calling it first threw and silenced the wind
   if (stopAt) source.stop(stopAt);
-  playing[name] = { source, gain, startAt: when };
+  return source;
+}
+
+function play(name: SoundLayer, when: number, scale: number): void {
+  if (!ctx) return;
+  const buffer = buffers[name];
+  if (!buffer) return;
+  const source = schedule(ctx, name, buffer, when, scale);
+  playing[name] = { source, startAt: when };
   source.onended = () => {
     if (playing[name]?.source === source) delete playing[name];
     maybeClose();
@@ -89,10 +100,10 @@ function play(name: SoundLayer, when: number): void {
 }
 
 /** Called the moment the reveal arms (the window turns opaque a frame later). */
-export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: true, chimes: true, motes: true, wind: true }): void {
+export function startBootSound(levels: SoundLevels = { woosh: 1, chimes: 1, motes: 1, wind: 1 }): void {
   if (!enabled || started || !ctx) return;
   started = true;
-  const wanted = (Object.keys(AT) as SoundLayer[]).filter((name) => layers[name]);
+  const wanted = LAYERS.filter((name) => levels[name] > 0);
   if (!wanted.length) return;
   const go = () => {
     if (!ctx || !enabled) return;
@@ -100,7 +111,7 @@ export function startBootSound(layers: Record<SoundLayer, boolean> = { woosh: tr
     void resume.then(() => {
       if (!ctx) return;
       const t0 = ctx.currentTime + 0.01;
-      for (const name of wanted) play(name, t0 + AT[name]);
+      for (const name of wanted) play(name, t0 + AT[name], levels[name]);
     });
   };
   if (loading) void loading.then(go);
@@ -135,4 +146,50 @@ function closeNow(): void {
   buffers = {};
   playing = {};
   if (c) void c.close().catch(() => undefined);
+}
+
+// settings preview gets its own context: the intro's one is closed by then
+let preview: { ctx: AudioContext; buffers: Partial<Record<SoundLayer, AudioBuffer>>; ready: Promise<void>; live: AudioBufferSourceNode[] } | null = null;
+let previewGen = 0;
+
+/** Plays the intro mix at the given levels, cutting off any preview still playing. */
+export function previewBootSound(levels: SoundLevels): void {
+  if (!preview) {
+    let c: AudioContext;
+    try {
+      c = new AudioContext();
+    } catch {
+      return;
+    }
+    const into: Partial<Record<SoundLayer, AudioBuffer>> = {};
+    preview = { ctx: c, buffers: into, ready: Promise.all(LAYERS.map((name) => load(c, into, name))).then(() => undefined), live: [] };
+  }
+  const p = preview;
+  for (const source of p.live) {
+    try {
+      source.stop();
+    } catch {
+      /* already ended */
+    }
+  }
+  p.live = [];
+  const gen = ++previewGen;
+  void p.ready
+    .then(() => p.ctx.resume())
+    .then(() => {
+      // a newer preview started while this one was loading
+      if (gen !== previewGen || preview !== p) return;
+      const t0 = p.ctx.currentTime + 0.02;
+      for (const name of LAYERS) {
+        const buffer = p.buffers[name];
+        if (buffer && levels[name] > 0) p.live.push(schedule(p.ctx, name, buffer, t0 + AT[name], levels[name]));
+      }
+    })
+    .catch(() => undefined);
+}
+
+export function disposeBootSoundPreview(): void {
+  const p = preview;
+  preview = null;
+  if (p) void p.ctx.close().catch(() => undefined);
 }
