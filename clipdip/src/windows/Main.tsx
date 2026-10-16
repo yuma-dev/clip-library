@@ -2583,7 +2583,7 @@ export default function MainWindow() {
           output: { directory: "C:\\Users\\User\\Videos\\Clipdip", filename_stem: "[app] [HH].[mm].[ss] - [dd].[MM].[yyyy]", ffmpeg_path: null, keep_sidecars: false, audio_bitrate_bps: 192_000 },
           hotkey: { save_clip: "Ctrl+Alt+F10", rename_clip: "Ctrl+F10", toggle_recording: "Ctrl+Alt+F9" },
           notifications: { enabled: true, sound: true, corner: "top_right", auto_dismiss_secs: 10 },
-          metadata: { enabled: false, capture_icon: true, ignored_processes: [] },
+          metadata: { enabled: true, capture_icon: true, ignored_processes: [] },
           discord: { enabled: false },
         });
       });
