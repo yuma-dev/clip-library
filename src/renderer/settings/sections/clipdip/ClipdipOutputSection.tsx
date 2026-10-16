@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ExternalLink, FolderOpen, Library } from "lucide-react";
-import { SetGroup, SetRow } from "../../rows";
+import { SetGroup, SetRow, StatusLine } from "../../rows";
 import Toggle from "../../../ui/Toggle";
 import Slider from "../../../ui/Slider";
 import { useToast } from "../../../ui/Toast";
@@ -34,6 +34,12 @@ export default function ClipdipOutputSection() {
 
   const [varsOpen, setVarsOpen] = useState(false);
 
+  const [libraryFolder, setLibraryFolder] = useState<string | null>(null);
+  useEffect(() => {
+    window.clips.getClipLocation().then((l) => setLibraryFolder(l || null)).catch(() => {});
+  }, []);
+  const outsideLibrary = Boolean(output?.directory && libraryFolder && !isInsideFolder(String(output.directory), libraryFolder));
+
   const pickOutputDir = async () => {
     const dir = await window.clips.openFolderDialog();
     if (dir) patch({ output: { directory: dir } });
@@ -65,7 +71,10 @@ export default function ClipdipOutputSection() {
   return (
     <>
       <SetGroup title="Files" span2>
-        <SetRow title="Clips folder">
+        <SetRow
+          title="Clips folder"
+          status={outsideLibrary ? <StatusLine tone="error">Not inside your library folder, new clips won't show up in the library</StatusLine> : undefined}
+        >
           <CommitInput
             value={String(output?.directory ?? "")}
             mono
@@ -265,4 +274,11 @@ function DiscordConnection({
       ) : null}
     </SetRow>
   );
+}
+
+function isInsideFolder(dir: string, root: string): boolean {
+  const norm = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const d = norm(dir);
+  const r = norm(root);
+  return d === r || d.startsWith(`${r}\\`);
 }

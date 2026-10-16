@@ -253,6 +253,25 @@ async function ensureOutputDirectory() {
   await setConfig({ output: { directory: clipLocation } });
 }
 
+function isInsideFolder(dir, root) {
+  const rel = path.relative(path.resolve(root), path.resolve(dir));
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// library moved: clipdip follows, or its clips keep landing in a folder the library no longer
+// watches (support case: toast said saved, clip never showed up). a folder inside the new library
+// is still visible, so that one stays
+async function followLibraryFolder(clipLocation) {
+  if (!clipLocation) return;
+  const { exists, config } = await getConfig();
+  // no config yet: ensureOutputDirectory handles it on first start
+  if (!exists) return;
+  const current = config?.output?.directory;
+  if (current && isInsideFolder(current, clipLocation)) return;
+  logger.info(`Library moved, pointing clipdip output at: ${clipLocation}`);
+  await setConfig({ output: { directory: clipLocation } });
+}
+
 async function start() {
   // runs even when clipdip is already up: output dir is re-read per save, no reload needed
   await ensureOutputDirectory().catch((e) =>
@@ -733,6 +752,7 @@ module.exports = {
   init,
   getConfig,
   setConfig,
+  followLibraryFolder,
   getStatus,
   isRunning,
   start,
