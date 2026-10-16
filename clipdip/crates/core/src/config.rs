@@ -30,7 +30,15 @@ pub struct Config {
 }
 
 /// Bump when adding a migration to [`Config::migrate`].
-pub const CONFIG_REVISION: u32 = 1;
+pub const CONFIG_REVISION: u32 = 2;
+
+// markers from rev 1 builds hold "1"; a marker we can't read still means rev 1 ran
+fn marker_revision(marker: &Path) -> u32 {
+    match std::fs::read_to_string(marker) {
+        Ok(s) => s.trim().parse().unwrap_or(1),
+        Err(_) => 0,
+    }
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -130,7 +138,7 @@ impl Config {
                 // re-run migrations on the user's deliberate values; the sidecar
                 // marker survives that, so once it exists migrations only restamp
                 let marker = path.with_extension("toml.migrated");
-                if cfg.migrate(marker.exists()) {
+                if cfg.migrate(marker_revision(&marker)) {
                     let from_revision = cfg.config_revision; // already restamped; informational
                     // toml serializer is comment-lossy, keep a one-time pre-migration backup
                     let backup = path.with_extension("toml.bak");
@@ -187,18 +195,25 @@ impl Config {
         }
     }
 
-    /// Returns true if anything changed (caller persists). With `already_migrated`
-    /// value changes are skipped and only the revision is restamped.
-    fn migrate(&mut self, already_migrated: bool) -> bool {
+    /// Returns true if anything changed (caller persists). Revisions at or below
+    /// `marker_rev` already ran once, those only get restamped.
+    fn migrate(&mut self, marker_rev: u32) -> bool {
         if self.config_revision >= CONFIG_REVISION {
             return false;
         }
-        if !already_migrated && self.config_revision < 1 {
+        let pending = |rev: u32| self.config_revision < rev && marker_rev < rev;
+        if pending(1) {
             // rev 1: default gop_seconds moved 1.0 -> 2.0; pre-rev configs persist
             // exactly 1.0 since writers rewrite the whole file, so it means "old default"
             if (self.video.gop_seconds - 1.0).abs() < f32::EPSILON {
                 self.video.gop_seconds = 2.0;
             }
+        }
+        if pending(2) {
+            // rev 2: game metadata + icon default on. the old default was off, so a
+            // persisted false is almost always the old default, not a choice
+            self.metadata.enabled = true;
+            self.metadata.capture_icon = true;
         }
         self.config_revision = CONFIG_REVISION;
         true
@@ -676,7 +691,7 @@ impl Default for ProfileConfig {
 
 /// When enabled, each clip gets a `{directory}/.clip_metadata/{clip}.gameinfo`
 /// sidecar with the foreground window title, and optionally an extracted icon.
-/// Disabled by default since it touches the foreground HWND and process image.
+/// Touches the foreground HWND and process image; on by default since config rev 2.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetadataConfig {
@@ -691,7 +706,7 @@ pub struct MetadataConfig {
 impl Default for MetadataConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             capture_icon: true,
             ignored_processes: default_ignored_processes(),
         }
@@ -931,15 +946,15 @@ mod tests {
         let mut cfg: Config =
             toml::from_str("replay_seconds = 60\n[video]\ngop_seconds = 1.0\n").unwrap();
         assert_eq!(cfg.config_revision, 0);
-        assert!(cfg.migrate(false));
+        assert!(cfg.migrate(0));
         assert_eq!(cfg.video.gop_seconds, 2.0);
         assert_eq!(cfg.config_revision, CONFIG_REVISION);
-        assert!(!cfg.migrate(false)); // idempotent
+        assert!(!cfg.migrate(0)); // idempotent
 
         // deliberate non-default value: revision stamped, value untouched
         let mut cfg: Config =
             toml::from_str("replay_seconds = 60\n[video]\ngop_seconds = 0.5\n").unwrap();
-        assert!(cfg.migrate(false));
+        assert!(cfg.migrate(0));
         assert_eq!(cfg.video.gop_seconds, 0.5);
 
         // user chose 1.0 on purpose post-revision: kept
@@ -947,14 +962,36 @@ mod tests {
             "replay_seconds = 60\nconfig_revision = 1\n[video]\ngop_seconds = 1.0\n",
         )
         .unwrap();
-        assert!(!cfg.migrate(false));
+        assert!(cfg.migrate(0)); // rev 2 still pending
         assert_eq!(cfg.video.gop_seconds, 1.0);
 
         // stamp stripped by an old binary, marker says already migrated: restamp only
         let mut cfg: Config =
             toml::from_str("replay_seconds = 60\n[video]\ngop_seconds = 1.0\n").unwrap();
-        assert!(cfg.migrate(true));
+        assert!(cfg.migrate(1));
         assert_eq!(cfg.video.gop_seconds, 1.0);
+        assert_eq!(cfg.config_revision, CONFIG_REVISION);
+    }
+
+    #[test]
+    fn migration_turns_metadata_on_once() {
+        let old = "replay_seconds = 60\nconfig_revision = 1\n[metadata]\nenabled = false\ncapture_icon = false\n";
+        let mut cfg: Config = toml::from_str(old).unwrap();
+        assert!(cfg.migrate(1));
+        assert!(cfg.metadata.enabled && cfg.metadata.capture_icon);
+
+        // turned off after rev 2: kept
+        let mut cfg: Config =
+            toml::from_str("replay_seconds = 60\nconfig_revision = 2\n[metadata]\nenabled = false\n")
+                .unwrap();
+        assert!(!cfg.migrate(2));
+        assert!(!cfg.metadata.enabled);
+
+        // stamp stripped by an old binary, marker already at 2: restamp only
+        let mut cfg: Config = toml::from_str(old).unwrap();
+        cfg.config_revision = 0;
+        assert!(cfg.migrate(2));
+        assert!(!cfg.metadata.enabled);
         assert_eq!(cfg.config_revision, CONFIG_REVISION);
     }
 

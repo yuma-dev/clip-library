@@ -145,7 +145,7 @@ export default function ClipdipOutputSection() {
           description="Records which game each clip is from. The library uses it for titles and icons."
         >
           <Toggle
-            checked={Boolean(config?.metadata?.enabled)}
+            checked={config?.metadata?.enabled !== false}
             disabled={loading}
             onChange={(v) => patch({ metadata: { enabled: v } })}
             aria-label="Capture game metadata"
@@ -154,7 +154,7 @@ export default function ClipdipOutputSection() {
         <SetRow title="Extract game icon">
           <Toggle
             checked={config?.metadata?.capture_icon !== false}
-            disabled={loading || !config?.metadata?.enabled}
+            disabled={loading || config?.metadata?.enabled === false}
             onChange={(v) => patch({ metadata: { capture_icon: v } })}
             aria-label="Extract game icon"
           />
