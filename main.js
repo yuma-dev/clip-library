@@ -1875,6 +1875,9 @@ ipcMain.handle("set-clip-location", async (event, newLocation) => {
   const location = await setClipLocation(getSettings, newLocation);
   settings.clipLocation = newLocation; // Update cached settings
   fileWatcherModule.repointFileWatcher(newLocation);
+  await clipdipModule.followLibraryFolder(newLocation).catch((e) =>
+    logger.warn(`Clipdip output folder follow failed: ${e.message}`)
+  );
   return location;
 });
 
