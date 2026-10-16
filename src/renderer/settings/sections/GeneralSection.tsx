@@ -1,12 +1,14 @@
-import { useState } from "react";
-import { FolderOpen, Gamepad2, Tags } from "lucide-react";
+import { useEffect, useState } from "react";
+import { FolderOpen, Gamepad2, Play, Tags } from "lucide-react";
 import { SetGroup, SetRow } from "../rows";
 import Toggle from "../../ui/Toggle";
+import Slider from "../../ui/Slider";
 import TagManagerModal from "../TagManagerModal";
 import { useToast } from "../../ui/Toast";
 import type { UseClips } from "../../library/useClips";
 import type { UseLibraryFilter } from "../../library/useLibraryFilter";
-import { getBootPrefs, setBootPrefs, type BootPrefs } from "../../boot/bootPrefs";
+import { bootSoundLevels, getBootPrefs, setBootPrefs, type BootPrefs } from "../../boot/bootPrefs";
+import { disposeBootSoundPreview, previewBootSound, type SoundLayer } from "../../boot/bootSound";
 import { getGameOfClip, useGamesVersion } from "../../library/games";
 
 export default function GeneralSection({ lib, filter }: { lib: UseClips; filter: UseLibraryFilter }) {
@@ -16,7 +18,34 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
   // startup sound switches live with the intro's other preferences (localStorage, read at launch),
   // not settings.json
   const [boot, setBootState] = useState<BootPrefs>(() => getBootPrefs());
-  const setBoot = (patch: Partial<BootPrefs>) => setBootState(setBootPrefs(patch));
+  const setBoot = (patch: Partial<BootPrefs>) => {
+    const next = setBootPrefs(patch);
+    setBootState(next);
+    return next;
+  };
+  useEffect(() => disposeBootSoundPreview, []);
+  const levels = bootSoundLevels(boot);
+  // a layer at 0 is the old per-layer switch turned off, so old prefs still read right
+  const layerRow = (layer: SoundLayer, title: string, description: string, on: keyof BootPrefs, vol: keyof BootPrefs) => (
+    <SetRow key={layer} title={title} description={description}>
+      <Slider
+        value={boot[on] ? Math.round(Number(boot[vol]) * 100) : 0}
+        min={0}
+        max={100}
+        step={5}
+        disabled={!boot.sound}
+        format={(v) => `${v}%`}
+        onCommit={(v) => {
+          const next = setBoot(v > 0 ? { [on]: true, [vol]: v / 100 } : { [on]: false });
+          // solo the layer so its level is easy to judge
+          const solo = { woosh: 0, chimes: 0, motes: 0, wind: 0 };
+          solo[layer] = bootSoundLevels(next)[layer];
+          previewBootSound(solo);
+        }}
+        aria-label={`${title} volume`}
+      />
+    </SetRow>
+  );
 
   const changeLocation = async () => {
     setChangingLocation(true);
@@ -91,18 +120,31 @@ export default function GeneralSection({ lib, filter }: { lib: UseClips; filter:
         <SetRow title="Play a sound at startup" description="The layers below play with the intro. Applies at the next launch.">
           <Toggle checked={boot.sound} onChange={(v) => setBoot({ sound: v })} aria-label="Startup sound" />
         </SetRow>
-        <SetRow title="Woosh" description="As the logo flies through">
-          <Toggle checked={boot.woosh} onChange={(v) => setBoot({ woosh: v })} disabled={!boot.sound} aria-label="Woosh" />
+        <SetRow title="Volume">
+          <Slider
+            value={Math.round(boot.volume * 100)}
+            min={0}
+            max={100}
+            step={5}
+            disabled={!boot.sound}
+            format={(v) => `${v}%`}
+            onCommit={(v) => previewBootSound(bootSoundLevels(setBoot({ volume: v / 100 })))}
+            aria-label="Startup sound volume"
+          />
+          <button
+            type="button"
+            className="btn"
+            title="Play"
+            disabled={!boot.sound || Object.values(levels).every((l) => l <= 0)}
+            onClick={() => previewBootSound(levels)}
+          >
+            <Play size={14} />
+          </button>
         </SetRow>
-        <SetRow title="Chimes" description="As the library settles">
-          <Toggle checked={boot.chimes} onChange={(v) => setBoot({ chimes: v })} disabled={!boot.sound} aria-label="Chimes" />
-        </SetRow>
-        <SetRow title="Motes" description="Under the drifting lights">
-          <Toggle checked={boot.motesSound} onChange={(v) => setBoot({ motesSound: v })} disabled={!boot.sound} aria-label="Motes sound" />
-        </SetRow>
-        <SetRow title="Wind" description="Grass and birds far under the tail, fading out with the chimes">
-          <Toggle checked={boot.wind} onChange={(v) => setBoot({ wind: v })} disabled={!boot.sound} aria-label="Wind" />
-        </SetRow>
+        {layerRow("woosh", "Woosh", "As the logo flies through", "woosh", "wooshVolume")}
+        {layerRow("chimes", "Chimes", "As the library settles", "chimes", "chimesVolume")}
+        {layerRow("motes", "Motes", "Under the drifting lights", "motesSound", "motesVolume")}
+        {layerRow("wind", "Wind", "Grass and birds far under the tail, fading out with the chimes", "wind", "windVolume")}
       </SetGroup>
 
 

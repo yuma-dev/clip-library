@@ -5,8 +5,9 @@
 //   __bootIntro.set({ chimes: false })        change one or more
 //   __bootIntro.reset()                       back to the defaults
 //
-// Sound: sound (master), woosh, chimes, motesSound, wind. Visuals: afterglow, glow
-// (the grid lighting up), parallax, motes (the drifting points of light).
+// Sound: sound (master), woosh, chimes, motesSound, wind, plus 0..1 volumes for the
+// whole mix and each layer. Visuals: afterglow, glow (the grid lighting up), parallax,
+// motes (the drifting points of light).
 
 const KEY = "clip-library:boot-intro-v1";
 
@@ -17,6 +18,11 @@ export interface BootPrefs {
   chimes: boolean;
   motesSound: boolean;
   wind: boolean;
+  volume: number;
+  wooshVolume: number;
+  chimesVolume: number;
+  motesVolume: number;
+  windVolume: number;
   afterglow: boolean;
   glow: boolean;
   parallax: boolean;
@@ -29,6 +35,11 @@ export const BOOT_DEFAULTS: BootPrefs = {
   chimes: true,
   motesSound: true,
   wind: true,
+  volume: 1,
+  wooshVolume: 1,
+  chimesVolume: 1,
+  motesVolume: 1,
+  windVolume: 1,
   afterglow: true,
   glow: true,
   parallax: true,
@@ -41,9 +52,7 @@ export function getBootPrefs(): BootPrefs {
     if (!raw) return { ...BOOT_DEFAULTS };
     const parsed = JSON.parse(raw) as Partial<BootPrefs>;
     const out = { ...BOOT_DEFAULTS };
-    for (const k of Object.keys(BOOT_DEFAULTS) as (keyof BootPrefs)[]) {
-      if (typeof parsed[k] === "boolean") (out as Record<string, unknown>)[k] = parsed[k];
-    }
+    applyValid(out, parsed);
     return out;
   } catch {
     return { ...BOOT_DEFAULTS };
@@ -51,16 +60,39 @@ export function getBootPrefs(): BootPrefs {
 }
 
 export function setBootPrefs(patch: Partial<BootPrefs>): BootPrefs {
-  const next = { ...getBootPrefs() };
-  for (const k of Object.keys(BOOT_DEFAULTS) as (keyof BootPrefs)[]) {
-    if (typeof patch[k] === "boolean") (next as Record<string, unknown>)[k] = patch[k];
-  }
+  const next = getBootPrefs();
+  applyValid(next, patch);
   try {
     localStorage.setItem(KEY, JSON.stringify(next));
   } catch {
     /* storage unavailable: the change lasts for this session only */
   }
   return next;
+}
+
+// copies only keys whose type matches the default; volumes clamp to 0..1
+function applyValid(into: BootPrefs, from: Partial<BootPrefs>): void {
+  const target = into as unknown as Record<string, unknown>;
+  for (const k of Object.keys(BOOT_DEFAULTS) as (keyof BootPrefs)[]) {
+    const v = from[k];
+    if (typeof v !== typeof BOOT_DEFAULTS[k]) continue;
+    if (typeof v === "number") {
+      if (Number.isFinite(v)) target[k] = Math.min(1, Math.max(0, v));
+    } else {
+      target[k] = v;
+    }
+  }
+}
+
+/** Per-layer level the intro plays at; 0 means the layer stays silent. */
+export function bootSoundLevels(p: BootPrefs): Record<"woosh" | "chimes" | "motes" | "wind", number> {
+  const master = p.sound ? p.volume : 0;
+  return {
+    woosh: p.woosh ? master * p.wooshVolume : 0,
+    chimes: p.chimes ? master * p.chimesVolume : 0,
+    motes: p.motesSound ? master * p.motesVolume : 0,
+    wind: p.wind ? master * p.windVolume : 0,
+  };
 }
 
 export function resetBootPrefs(): BootPrefs {
