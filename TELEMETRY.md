@@ -1,7 +1,7 @@
-# ClipLib telemetry
+# Setsu telemetry
 
-ClipLib sends anonymous crash and error reports to a self-hosted server
-(`logs.yuma-homeserver.online`, operated by the ClipLib developer) so that
+Setsu sends anonymous crash and error reports to a self-hosted server
+(`logs.yuma-homeserver.online`, operated by the Setsu developer) so that
 failures on machines we do not own become visible and fixable. This document is
 the complete, auditable description of what is sent. The client code lives in
 [`main/telemetry`](main/telemetry/) and [`src/renderer/telemetry`](src/renderer/telemetry/),
@@ -17,9 +17,13 @@ signal anyone could act on.
 Telemetry can be turned off with one toggle in Settings, About. Off means off:
 no heartbeats, no events, no metrics, nothing.
 
-ClipLib and Clipdip have **separate** switches, shown next to each other in
-Settings, About. Turning one off does not turn the other off. Clipdip's own
+Setsu and Setsu Recorder have **separate** switches, shown next to each other in
+Settings, About. Turning one off does not turn the other off. The recorder's own
 document is [`clipdip/TELEMETRY.md`](clipdip/TELEMETRY.md).
+
+Setsu used to be called ClipLib and the recorder Clipdip. Identifiers kept the
+old names: the server still files these reports under product `cliplib`, and the
+registry keys, file paths and field values below are unchanged.
 
 ## Identity
 
@@ -27,12 +31,13 @@ Three random identifiers, none derived from your hardware:
 
 | id | what | where it lives |
 |---|---|---|
-| `install_id` | random UUID per install | Clipdip's `%LOCALAPPDATA%\clipdip\data\install_id` when that file exists, otherwise `<userData>\install_id` |
+| `install_id` | random UUID per install | the recorder's `%LOCALAPPDATA%\clipdip\data\install_id` when that file exists, otherwise `<userData>\install_id` |
 | `machine_key` | random UUID that survives an app reinstall, so a reinstall is not miscounted as a new user | registry value `HKCU\Software\ClipLib\telemetry_machine_key` |
 | `session_id` | random UUID per app run | memory only |
 
-**The install id is shared with Clipdip on purpose.** When Clipdip has already
-minted one on this machine, ClipLib adopts it rather than generating a second.
+**The install id is shared with Setsu Recorder on purpose.** When the recorder
+has already minted one on this machine, Setsu adopts it rather than generating a
+second.
 That is what lets one report read "this machine's capture failed, and forty
 seconds later its export failed" instead of being two unrelated rows. The
 heartbeat also carries `install_id_source` (`clipdip`, `local` or `ephemeral`)
@@ -40,7 +45,7 @@ so an install whose id file cannot be written is visible as such rather than
 looking like a new user on every launch.
 
 The `machine_key` works the same way: if `HKCU\Software\Clipdip` already holds
-one, ClipLib adopts that value; otherwise it generates a fresh UUID and writes
+one, Setsu adopts that value; otherwise it generates a fresh UUID and writes
 it under `HKCU\Software\ClipLib`.
 
 The `machine_key` is explicitly NOT derived from your Windows MachineGuid,
@@ -64,18 +69,18 @@ uptime, when the session started, and two blocks.
 - `app`, sent only when a value changed since the last beat. From your settings:
   export preset, export quality, export size goal, UI font, whether Discord Rich
   Presence is on, whether the controller is on, whether the ambient glow is on,
-  whether Clipdip is enabled, which onboarding version you completed, and a count
+  whether Setsu Recorder is enabled, which onboarding version you completed, and a count
   of how many keybindings you changed from the defaults. Plus a few measurements
   of the app's current state: the size of your library **as a bucket** rather
   than an exact number (for example `1k_5k`), its total size in GB, how many tags
   you have, whether hardware encoding is available, and whether the recorder, the
-  file watcher and a ClipLib sign-in are currently active. It never carries your
-  clip folder, the Clipdip binary path, your API token, the sharing server URL,
+  file watcher and a Setsu sign-in are currently active. It never carries your
+  clip folder, the recorder binary path, your API token, the sharing server URL,
   any tag name, or any clip name.
 
 **Events**, when something notable happens. Around 95 distinct codes across startup,
 the clip library, settings, metadata sidecars, thumbnails, ffmpeg and export,
-the file watcher, the updater, sharing and auth, the Clipdip bridge, the
+the file watcher, the updater, sharing and auth, the recorder bridge, the
 SteelSeries import, and the IPC layer. Every event carries a stable code, a
 kind, a severity, the surface it came from, a grouping fingerprint, and a small
 `context` object of numbers, booleans and short enum strings.
@@ -97,7 +102,7 @@ realtime factor, sharing API round trips, update download time and throughput,
 file watcher readiness, renderer long tasks and interaction latency. Nothing in
 a metric identifies which clip, folder or file was involved.
 
-**Daily usage rollup**, once per completed day. ClipLib already keeps a local
+**Daily usage rollup**, once per completed day. Setsu already keeps a local
 activity log for the year-end recap, in `activity_logs\`. That file stays on your
 machine and is never uploaded. What is sent is a counts-only projection of it,
 one object per day: how many distinct clips you watched (a count, derived from
@@ -118,8 +123,8 @@ also written at startup and removed on a clean exit, so a marker still present
 at the next launch produces an `unclean_shutdown` event.
 
 **Diagnostic bundles**, only when you press the upload button yourself in
-Settings, About: a zip of ClipLib's logs, your settings files, the local
-activity log, captured renderer console output, Clipdip's logs and status, a
+Settings, About: a zip of Setsu's logs, your settings files, the local
+activity log, captured renderer console output, the recorder's logs and status, a
 listing of any crash dumps, a system info file, and the note you typed. These
 are far more detailed than anything above, which is exactly why they are manual
 and require you to describe the problem first.
@@ -161,7 +166,7 @@ the next beat, because the next thing to happen may be the window dying.
   and how many it could not write, never what any of them said)
 - game names and window titles, even though they are derivable from filenames
 - Discord identity: usernames, user ids, server ids, voice rosters, avatars
-- your ClipLib account id, username, invite codes, or any token
+- your Setsu account id, username, invite codes, or any token
 - search queries
 - the contents of any config file, including `settings.json` values that hold
   paths or credentials
@@ -178,11 +183,11 @@ routinely embeds the name of the file that failed.
 
 ## The honest caveat: log tails
 
-Fatal events attach the last 128 KB of ClipLib's own log file, compressed. That
+Fatal events attach the last 128 KB of Setsu's own log file, compressed. That
 log is written for debugging, and unlike everything else described here it is
 not a curated list of fields.
 
-ClipLib scrubs the tail before compressing it with the same path rule described
+Setsu scrubs the tail before compressing it with the same path rule described
 above, so full paths are gone. **That is still not enough to make it
 anonymous.** Two things survive:
 
@@ -238,7 +243,7 @@ stored in full.
 
 ## Opting out
 
-Settings, About, "Anonymous diagnostics", the "ClipLib" switch. Turning it off
+Settings, About, "Anonymous diagnostics", the "Setsu" switch. Turning it off
 takes effect immediately, with no restart:
 
 - no heartbeat
@@ -252,8 +257,8 @@ takes effect immediately, with no restart:
 Manual diagnostic bundles are unaffected, because they only happen when you
 press the button.
 
-The Clipdip toggle sits directly below it and governs Clipdip only. Turning off
-one does not turn off the other.
+The Setsu Recorder toggle sits directly below it and governs the recorder only.
+Turning off one does not turn off the other.
 
 The registry `machine_key` remains on your machine but is never transmitted
 again; delete `HKCU\Software\ClipLib` to remove it entirely.
@@ -267,3 +272,6 @@ again; delete `HKCU\Software\ClipLib` to remove it entirely.
   end reasons and unclean-shutdown detection, and log tails restricted to fatal
   events. Prior to this, the library app sent nothing automatically; only
   Clipdip and the manual diagnostics upload reached the server.
+- 2026-10: renamed to Setsu (the recorder to Setsu Recorder). Nothing about what
+  is sent changed. Same server, same ids, same registry keys, product still
+  `cliplib`.

@@ -1,7 +1,7 @@
-# Clipdip telemetry
+# Setsu Recorder telemetry
 
-Clipdip sends anonymous crash and error reports to a self-hosted server
-(`logs.yuma-homeserver.online`, operated by the Clipdip developer in Germany)
+Setsu Recorder (formerly clipdip) sends anonymous crash and error reports to a self-hosted server
+(`logs.yuma-homeserver.online`, operated by the Setsu developer in Germany)
 so that capture failures on machines we do not own become visible and fixable.
 This document is the complete, auditable description of what is sent. The
 client code lives in [`crates/diagnostics`](crates/diagnostics/) and every
@@ -69,7 +69,7 @@ Free-text error messages are scrubbed before sending: any
 
 ## The honest caveat: log tails
 
-Error and crash events attach the last 256 KB of Clipdip's own log file,
+Error and crash events attach the last 256 KB of the recorder's own log file,
 compressed. That log is written for debugging and can contain paths from your
 clips folder, display names, and audio device names as they appeared in log
 lines. It is not scrubbed. This is a deliberate trade-off: the log tail is
@@ -97,7 +97,7 @@ stored in full.
 
 ## Opting out
 
-Settings toggle: "Telemetry" in the Clipdip section. Turning it off stops all
+Settings toggle: "Telemetry" in the Recorder section. Turning it off stops all
 network traffic immediately and deletes the local queue of unsent events. The
 registry `machine_key` remains on your machine but is never transmitted
 again; delete `HKCU\Software\Clipdip` to remove it entirely.

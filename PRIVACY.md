@@ -1,10 +1,10 @@
-# ClipLib Privacy Policy
+# Setsu Privacy Policy
 
-**Last updated: 29 July 2026**
+**Last updated: 17 October 2026**
 
 ## 1. Who is responsible (Controller)
 
-ClipLib is developed and operated by an individual developer based in Germany:
+Setsu (formerly ClipLib) is developed and operated by an individual developer based in Germany:
 
 > Fabian Silbermann
 > Germany
@@ -16,7 +16,7 @@ For any privacy question or to exercise your rights (see section 10), email the 
 
 ## 2. Data processed only on your device (never transmitted)
 
-Most of what ClipLib does happens entirely locally and never reaches us or any third party:
+Most of what Setsu does happens entirely locally and never reaches us or any third party:
 
 - **Your video clips** and any exported/trimmed copies.
 - **Per-clip metadata sidecars** (stored next to your clips in a `.clip_metadata` folder):
@@ -35,9 +35,9 @@ You can delete any of this at any time by deleting the corresponding files or yo
 
 ---
 
-## 3. ClipLib Sharing: `friends.cliplib.app` (opt-in)
+## 3. Setsu Sharing: `social.setsu.gg` (opt-in)
 
-ClipLib includes an **optional** sharing service. Nothing is uploaded until you sign in
+Setsu includes an **optional** sharing service. Nothing is uploaded until you sign in
 and choose to share.
 
 **Signing in.** Accounts use **Discord login**. When you authenticate, the sharing service
@@ -64,8 +64,8 @@ deleting your shared clips/account (contact us if you need help removing content
 
 ## 4. Updates: GitHub (automatic check)
 
-To keep the app current, ClipLib checks GitHub
-(`api.github.com` / `github.com/yuma-dev/clip-library`) for the latest release and, if you
+To keep the app current, Setsu checks GitHub
+(`api.github.com` / `github.com/yuma-dev/setsu`) for the latest release and, if you
 choose to update, downloads the installer from there. These requests send only a generic
 `User-Agent` header, **no account, no identifiers**. GitHub, as the host, may log the
 request under [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
@@ -74,10 +74,11 @@ request under [GitHub's Privacy Statement](https://docs.github.com/en/site-polic
 
 ## 5. Discord voice-channel data (recorded locally)
 
-ClipLib's recorder (**clipdip**) can, **if you connect it to Discord**, read **who is in
-your Discord voice channel at the moment a clip is recorded**, participants' Discord IDs,
-usernames, display names, and avatars, and store that roster **locally** in the clip's
-`.gameinfo` sidecar. This powers @mention autocomplete and the sharing "mentions" feature.
+Setsu's recorder (**Setsu Recorder**, formerly clipdip) can, **if you connect it to
+Discord**, read **who is in your Discord voice channel at the moment a clip is recorded**,
+participants' Discord IDs, usernames, display names, and avatars, and store that roster
+**locally** in the clip's `.gameinfo` sidecar. This powers @mention autocomplete and the
+sharing "mentions" feature.
 
 Important points:
 
@@ -85,10 +86,10 @@ Important points:
   device** and only leaves it if you **share a clip and @mention those people** (see
   section 3).
 - Connecting to Discord uses Discord's OAuth. A refresh token is stored locally
-  (`%APPDATA%\clipdip\…`) so the connection can be renewed. Token exchange happens with
+  (`%APPDATA%\clipdip\...`) so the connection can be renewed. Token exchange happens with
   `discord.com`.
 - **Please respect others' privacy**: only share clips identifying other people with their
-  awareness/consent, as also required by ClipLib's Terms.
+  awareness/consent, as also required by Setsu's Terms.
 
 The main app's **Discord Rich Presence** feature (which can show "Browsing clips" on your
 Discord profile) is **off by default** and talks only to your **local** Discord client, no
@@ -98,11 +99,11 @@ clip data is transmitted.
 
 ## 6. Diagnostics & crash telemetry: `logs.yuma-homeserver.online`
 
-To find and fix bugs, **both** parts of ClipLib can send **anonymous** diagnostics to a
+To find and fix bugs, **both** parts of Setsu can send **anonymous** diagnostics to a
 developer-operated server:
 
-- the **library app** (ClipLib itself), and
-- the **recorder** (**clipdip**), which runs as its own background app.
+- the **library app** (Setsu itself), and
+- the **recorder** (**Setsu Recorder**), which runs as its own background app.
 
 They report **separately** and have **separate opt-out switches**, both shown together in
 **Settings > About > Anonymous diagnostics**. Turning one off does not turn the other off.
@@ -110,10 +111,11 @@ This is designed to contain **no accounts and no personal identifiers**.
 
 **Identifiers used.** Random UUIDs only: a per-install ID, a per-session ID, and a
 per-machine key stored in your own Windows registry (`HKCU\Software\ClipLib` /
-`HKCU\Software\Clipdip`). The machine key is **not** derived from your hardware, your
-Windows MachineGuid, or your username; deleting the registry value makes you a new machine
-to us. The library app deliberately **reuses the recorder's install ID** when one exists, so
-the two products' reports about the same machine can be matched.
+`HKCU\Software\Clipdip`, the old names, kept on purpose). The machine key is **not**
+derived from your hardware, your Windows MachineGuid, or your username; deleting the
+registry value makes you a new machine to us. The library app deliberately **reuses the
+recorder's install ID** when one exists, so the two products' reports about the same
+machine can be matched.
 
 - **What the library app sends automatically (if not disabled):**
   - a **heartbeat** roughly every 15 minutes: the random IDs, app version, uptime, a
@@ -135,7 +137,7 @@ the two products' reports about the same machine can be matched.
   - a **daily usage rollup**: one set of counts per completed day, covering how many clips
     you watched and for how long in total, and how many renames, trims, deletes, tag
     changes, exports (by format and destination), shares and imports you made. It is
-    derived from the activity log ClipLib already keeps locally for the year-end recap.
+    derived from the activity log Setsu already keeps locally for the year-end recap.
     **That log itself is never uploaded**, and the rollup carries no clip names, custom
     names, tag text, folder paths or share ids.
   - a **session end** notice when the app closes.
@@ -174,9 +176,9 @@ rely on your **consent** (Art. 6(1)(a)).
 
 | Recipient | Purpose | What is sent | When |
 |---|---|---|---|
-| `friends.cliplib.app` (ClipLib Sharing, operated by us) | Accounts, clip sharing, social feed | Discord identity, uploaded video + title + tags + @mentions, banner, reactions/comments | Only after you sign in / share |
+| `social.setsu.gg` (Setsu Sharing, operated by us) | Accounts, clip sharing, social feed | Discord identity, uploaded video + title + tags + @mentions, banner, reactions/comments | Only after you sign in / share |
 | `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Crash/bug diagnostics for the **library app** | Random install/machine/session IDs, app version, hardware profile, feature settings, error events, aggregated timing metrics, log tails on fatal errors | Auto (opt-out) |
-| `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Crash/bug diagnostics for the **recorder (clipdip)** | Random install/machine/session IDs, app version, hardware and capture configuration, capture/encoder failures, log tails | Auto (separate opt-out) |
+| `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Crash/bug diagnostics for the **recorder (Setsu Recorder)** | Random install/machine/session IDs, app version, hardware and capture configuration, capture/encoder failures, log tails | Auto (separate opt-out) |
 | `logs.yuma-homeserver.online` (Diagnostics, operated by us) | Manual problem reports | One bundle: logs, settings files, activity log, console output, recorder logs and status, crash-dump listing, system info, your note | Only when you press "Export and upload" |
 | GitHub (`github.com`) | Update check & download | Generic User-Agent only | On update check/download |
 | Discord (`discord.com`) | Login & voice-roster read | OAuth login; reads your live voice-channel membership | Only if you connect Discord |
@@ -205,7 +207,7 @@ Recording and video processing (ffmpeg/ffprobe) run **entirely on your device**.
 
 ## 9. Where data is processed (international transfers)
 
-The ClipLib sharing and diagnostics servers are operated by the developer. Depending on the
+The Setsu sharing and diagnostics servers are operated by the developer. Depending on the
 hosting provider, data may be processed on servers **[in/outside the EU, to be confirmed by
 the operator]**. Where processing occurs outside the EU/EEA, we rely on appropriate
 safeguards under GDPR (e.g. Standard Contractual Clauses). Contact us for details.
@@ -241,7 +243,7 @@ under your direct control and can be deleted by you at any time.
 
 ## 12. Children
 
-ClipLib is not directed at children. You must be at least **16 years old** (the digital-consent
+Setsu is not directed at children. You must be at least **16 years old** (the digital-consent
 age under German GDPR) to use the sharing service. We do not knowingly collect data from
 children below this age.
 

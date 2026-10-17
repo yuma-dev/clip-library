@@ -1,11 +1,11 @@
-# ClipLib Terms of Service
+# Setsu Terms of Service
 
-**Last updated: 11 July 2026**
+**Last updated: 17 October 2026**
 
 ## 1. Acceptance
 
-By downloading, installing, or using ClipLib (the "**App**"), you agree to these Terms. If you
-do not agree, do not use the App.
+By downloading, installing, or using Setsu (formerly ClipLib, the "**App**"), you agree to these
+Terms. If you do not agree, do not use the App.
 
 These Terms are between you and the App's developer, an individual based in Germany:
 
@@ -18,13 +18,13 @@ These Terms are between you and the App's developer, an individual based in Germ
 
 ## 2. The Service
 
-ClipLib is a desktop application for organising, trimming, tagging, and exporting video clips,
+Setsu is a desktop application for organising, trimming, tagging, and exporting video clips,
 designed to complement recording software such as OBS Studio. It includes:
 
 - **Local features**: clip management, non-destructive editing, tagging, and export, all
   performed on your own computer;
-- an optional bundled recorder (**clipdip**);
-- an **optional sharing service** (`friends.cliplib.app`) for uploading and sharing clips.
+- an optional bundled recorder (**Setsu Recorder**, formerly clipdip);
+- an **optional sharing service** (`social.setsu.gg`) for uploading and sharing clips.
 
 The App is provided **free of charge**. There is no purchase, subscription, or fee.
 
@@ -32,8 +32,8 @@ The App is provided **free of charge**. There is no purchase, subscription, or f
 
 ## 3. License & open source
 
-ClipLib is distributed from its public repository at
-`https://github.com/yuma-dev/clip-library`. Your use of the source code is governed by the
+Setsu is distributed from its public repository at
+`https://github.com/yuma-dev/setsu`. Your use of the source code is governed by the
 license in that repository, if one is provided there. These Terms govern your use of the App
 and the sharing service.
 
@@ -48,7 +48,7 @@ that:
 - you will use the App **only for lawful purposes**;
 - you will **not upload or share** content that is illegal, infringing, malicious, or that
   violates anyone's rights;
-- you will **respect other people's privacy**, in particular, ClipLib can record which people
+- you will **respect other people's privacy**, in particular, Setsu can record which people
   are in your Discord voice channel at record time. Only share clips that identify, name, or
   @mention other people with their awareness and consent, as appropriate.
 
@@ -96,7 +96,7 @@ The App and the sharing service are provided **"as is" and "as available", witho
 any kind**, to the fullest extent permitted by law. We do not guarantee that the App will be
 error-free or that the sharing service will always be available.
 
-**Data safety note:** ClipLib's edits are non-destructive and reversible, **except deletion**.
+**Data safety note:** Setsu's edits are non-destructive and reversible, **except deletion**.
 Deleting a clip in the App permanently deletes the underlying video file. Keep your own backups
 of anything important.
 

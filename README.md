@@ -1,8 +1,9 @@
 ![Title Image](https://github.com/user-attachments/assets/0fee853d-ef4d-4706-b9ac-cf64b43dd0c2)
-<p align="center">Record, organize, trim, and mix your clips in one Windows app.<br>Use the built-in ClipDip recorder, or bring clips from OBS and others.</p>
+<p align="center">Record, organize, trim, and mix your clips in one Windows app.<br>Use the built-in Setsu Recorder, or bring clips from OBS and others.</p>
 <p align="center">
-  <a href="https://github.com/yuma-dev/clip-library/releases/latest"><strong>Download for Windows</strong></a>
-  &nbsp;·&nbsp; <a href="https://github.com/yuma-dev/clip-library/issues">Report an issue</a>
+  <a href="https://setsu.gg"><strong>setsu.gg</strong></a>
+  &nbsp;·&nbsp; <a href="https://github.com/yuma-dev/setsu/releases/latest"><strong>Download for Windows</strong></a>
+  &nbsp;·&nbsp; <a href="https://github.com/yuma-dev/setsu/issues">Report an issue</a>
 </p>
 
 <!-- media:hero — replace this block with the hosted walkthrough after publishing media. -->
@@ -17,9 +18,9 @@ https://github.com/user-attachments/assets/d89d87ab-a51d-4c95-9e15-b1fe48553f6f
 
 ## Save the moment. Keep the context.
 
-**ClipDip saves the last few moments with a hotkey.** Set your replay length, capture quality, audio sources, and shortcuts, then rename a new clip straight from the save notification.
+**Setsu Recorder saves the last few moments with a hotkey.** Set your replay length, capture quality, audio sources, and shortcuts, then rename a new clip straight from the save notification.
 
-Already have a recording setup? Point ClipLib at your clip folder. You can also import clips from SteelSeries Moments in the settings.
+Already have a recording setup? Point Setsu at your clip folder. You can also import clips from SteelSeries Moments in the settings.
 
 <table>
   <tr>
@@ -54,8 +55,8 @@ Already have a recording setup? Point ClipLib at your clip folder. You can also 
   <tr>
     <td width="45%" valign="middle">
       <h3>Remember who was there</h3>
-      <p>Connect Discord and ClipDip can attach voice-channel participants when you save a clip. Their avatars stay with the clip, and <code>@user</code> search helps you find moments together.</p>
-      <p>Discord integration is part of CLipDip, other Software will not have the Discord integration.</p>
+      <p>Connect Discord and Setsu Recorder can attach voice-channel participants when you save a clip. Their avatars stay with the clip, and <code>@user</code> search helps you find moments together.</p>
+      <p>Discord integration is part of Setsu Recorder, other software will not have the Discord integration.</p>
     </td>
     <td width="55%" align="center">
      <img width="480" height="338" alt="04-user-mentions" src="https://github.com/user-attachments/assets/f7af771c-89c5-433e-9411-5ad70b0f553c" />
@@ -67,11 +68,11 @@ Already have a recording setup? Point ClipLib at your clip folder. You can also 
 
 Copy a trimmed clip to the clipboard for quick sharing, or export a video or audio file. Export presets let you choose the balance between quality, resolution, frame rate, and file size.
 
-**No ClipLib account is needed to export and share your files yourself.**
+**No Setsu account is needed to export and share your files yourself.**
 
 ## Make it feel like your setup
 
-Tune the player, previews, ambient glow, interface font, keyboard shortcuts, export presets, and recording settings. ClipLib remembers per-clip settings such as volume and playback speed.
+Tune the player, previews, ambient glow, interface font, keyboard shortcuts, export presets, and recording settings. Setsu remembers per-clip settings such as volume and playback speed.
 
 <img width="480" height="360" alt="05-settings" src="https://github.com/user-attachments/assets/d0df76f0-4d05-4794-a4ed-f5218bcb666a" />
 
@@ -82,19 +83,21 @@ Tune the player, previews, ambient glow, interface font, keyboard shortcuts, exp
 - **Reversible trims:** trim metadata is kept separately from the source recording. Deleting a clip still deletes the file.
 - **A cleaner library:** collections for new, untagged, and trimmed clips, plus time-based groups.
 - **Your existing clips:** use a local folder or the SteelSeries Moments importer.
-- **Help when something breaks:** Settings → About → Generate Diagnostics Zip creates a bundle for a bug report.
+- **Help when something breaks:** the diagnostics zip in Settings > About bundles what a bug report needs.
 
 </details>
 
 ## Get started
 
-1. [Download the latest Windows release](https://github.com/yuma-dev/clip-library/releases/latest) and install ClipLib.
+1. [Download the latest Windows release](https://github.com/yuma-dev/setsu/releases/latest) (`Setsu Setup X.Y.Z.exe`) and install Setsu.
 2. Choose your clip folder.
-3. Set up ClipDip’s replay length, audio, and hotkeys. Or keep using your existing recorder.
+3. Set up Setsu Recorder's replay length, audio, and hotkeys. Or keep using your existing recorder.
 4. Optionally connect Discord to capture who was in the call.
 
-ClipDip’s built-in recording currently requires Windows and an NVIDIA GPU. You can use ClipLib with recordings from another recorder if your machine cannot run ClipDip.
+Setsu Recorder currently requires Windows and an NVIDIA GPU. You can use Setsu with recordings from another recorder if your machine cannot run Setsu Recorder.
+
+Setsu used to be called ClipLib, and the recorder used to be ClipDip. Updating from ClipLib keeps your library and settings, they still live in `%APPDATA%\Clips`.
 
 ---
 
-[Report an issue](https://github.com/yuma-dev/clip-library/issues) · [Privacy](PRIVACY.md) · [Terms](TERMS.md)
+[setsu.gg](https://setsu.gg) · [Report an issue](https://github.com/yuma-dev/setsu/issues) · [Privacy](PRIVACY.md) · [Terms](TERMS.md)
