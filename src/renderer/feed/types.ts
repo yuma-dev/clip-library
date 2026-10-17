@@ -117,7 +117,7 @@ export interface ApiTokenInfo {
   createdAt: string;
 }
 
-export const SERVER_URL = "https://friends.cliplib.app";
+export const SERVER_URL = "https://social.setsu.gg";
 
 // Emoji lookup (website ClipCard.tsx) + an ordered, labelled list for pickers.
 export const REACTION_EMOJI: Record<string, string> = {
@@ -154,7 +154,7 @@ export function getAvatarUrl(discordId: string, avatarHash: string | null, size 
 }
 
 /** Absolutize a server-relative media path (e.g. `thumbnailUrl`) against the
- * ClipLib server; main injects the auth header for friends.cliplib.app. */
+ * ClipLib server; main injects the auth header for social.setsu.gg. */
 export function mediaUrl(path: string | null | undefined): string {
   if (!path) return "";
   if (/^https?:\/\//i.test(path)) return path;

@@ -177,7 +177,8 @@ const logUploader = lazyModule('./main/log-uploader');
 const shareModule = require('./main/share');
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const IDLE_TIMEOUT = 5 * 60 * 1000;
-const CLIPLIB_PROTOCOL = 'cliplib';
+// cliplib:// stays registered for good: older recorder builds and links out there still use it
+const PROTOCOLS = ['setsu', 'cliplib'];
 const CLIPLIB_AUTH_SESSION_TTL_MS = 10 * 60 * 1000;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -521,14 +522,18 @@ storageModule.init({ ipcMain, getSettings, send: sendToRenderer });
 clipdipModule.init(getSettings);
 
 function registerCliplibProtocol() {
+  for (const protocol of PROTOCOLS) registerProtocol(protocol);
+}
+
+function registerProtocol(protocol) {
   try {
     if (process.defaultApp) {
       if (process.argv.length >= 2) {
-        app.setAsDefaultProtocolClient(CLIPLIB_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+        app.setAsDefaultProtocolClient(protocol, process.execPath, [path.resolve(process.argv[1])]);
         return;
       }
     }
-    app.setAsDefaultProtocolClient(CLIPLIB_PROTOCOL);
+    app.setAsDefaultProtocolClient(protocol);
   } catch (error) {
     // login can never complete without the protocol handler, and nothing in the UI says so.
     telemetry.event('protocol_registration_failed', {
@@ -536,13 +541,17 @@ function registerCliplibProtocol() {
       severity: telemetry.SEVERITY.ERROR,
       error
     });
-    logger.warn(`Failed to register ${CLIPLIB_PROTOCOL}:// protocol: ${error.message}`);
+    logger.warn(`Failed to register ${protocol}:// protocol: ${error.message}`);
   }
 }
 
 function extractCliplibProtocolUrl(args = []) {
   if (!Array.isArray(args)) return null;
-  return args.find((arg) => typeof arg === 'string' && arg.toLowerCase().startsWith(`${CLIPLIB_PROTOCOL}://`)) || null;
+  return (
+    args.find(
+      (arg) => typeof arg === 'string' && PROTOCOLS.some((p) => arg.toLowerCase().startsWith(`${p}://`))
+    ) || null
+  );
 }
 
 function focusMainWindow() {

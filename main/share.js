@@ -10,8 +10,10 @@ const { logActivity } = require('../utils/activity-tracker');
 const authStore = require('./cliplib-auth-store');
 const telemetry = require('./telemetry');
 
-const DEFAULT_SERVER_URL = 'https://friends.cliplib.app';
-const DESKTOP_AUTH_CALLBACK_URL = 'cliplib://auth';
+const DEFAULT_SERVER_URL = 'https://social.setsu.gg';
+// same backend; media urls cached from before the move still need the token
+const LEGACY_SERVER_URL = 'https://friends.cliplib.app';
+const DESKTOP_AUTH_CALLBACK_URL = 'setsu://auth';
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 const CONNECTION_TIMEOUT_MS = 10000;
 const UPLOAD_TIMEOUT_MS = 180000;
@@ -87,7 +89,8 @@ function buildDesktopAuthUrl(serverUrl, sessionId) {
 function parseDesktopAuthCallbackUrl(callbackUrl) {
   try {
     const parsed = new URL(callbackUrl);
-    if (parsed.protocol !== 'cliplib:') {
+    // cliplib: a login started on 3.6.x and finished after the update
+    if (parsed.protocol !== 'setsu:' && parsed.protocol !== 'cliplib:') {
       return { ok: false, error: 'Invalid protocol for auth callback.' };
     }
 
@@ -992,7 +995,7 @@ async function apiRequest(getSettings, request = {}) {
  * @param {Electron.Session} session
  */
 function installMediaAuthHeaders(session) {
-  const filter = { urls: [`${DEFAULT_SERVER_URL}/*`] };
+  const filter = { urls: [`${DEFAULT_SERVER_URL}/*`, `${LEGACY_SERVER_URL}/*`] };
   session.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
     authStore
       .getToken()
