@@ -91,7 +91,7 @@ export default function EmptyLibrary({ clipLocation }: { clipLocation: string })
         </p>
       ) : rec.supported ? (
         <p className="library-empty-sub">
-          Turn on ClipDip to save clips with a hotkey, or pick the folder your recorder already saves to.
+          Turn on Setsu Recorder to save clips with a hotkey, or pick the folder your recorder already saves to.
         </p>
       ) : (
         <p className="library-empty-sub">
@@ -116,7 +116,7 @@ export default function EmptyLibrary({ clipLocation }: { clipLocation: string })
       <div className="library-empty-actions">
         {rec?.supported && !enabled ? (
           <button type="button" className="btn btn-primary" onClick={() => nav.openSettings("clipdip-general")}>
-            <Videotape size={14} /> Set up ClipDip
+            <Videotape size={14} /> Set up Setsu Recorder
           </button>
         ) : null}
         <button type="button" className="btn btn-ghost" onClick={() => nav.openSettings("export")}>

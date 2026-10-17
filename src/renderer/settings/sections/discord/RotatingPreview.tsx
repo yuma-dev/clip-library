@@ -61,7 +61,7 @@ export default function RotatingPreview({
         onMouseLeave={() => setHover(false)}
       >
         <ProfilePreview activity={card} type={m?.type ?? 0} loading={Boolean(req) && fetched.loading} live={Boolean(m?.live)} />
-        {off ? <div className="dset-off-note">Off, Discord shows nothing from ClipLib here</div> : null}
+        {off ? <div className="dset-off-note">Off, Discord shows nothing from Setsu here</div> : null}
       </div>
       <MomentStepper
         moments={steps}

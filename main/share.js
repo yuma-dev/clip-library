@@ -777,7 +777,7 @@ async function uploadProfileBanner(getSettings, filePath) {
   const settings = await getSettings();
   const { serverUrl, apiToken } = await resolveSharingConfig(settings);
   if (!apiToken) {
-    return { success: false, status: 401, error: 'Not connected to ClipLib.' };
+    return { success: false, status: 401, error: 'Not connected to Setsu.' };
   }
 
   let fileStats;
@@ -903,7 +903,7 @@ async function fetchMentionableUsers(getSettings, overrides = {}) {
 }
 
 /**
- * authenticated JSON request against the ClipLib API; Bearer token stays main-side
+ * authenticated JSON request against the Setsu API; Bearer token stays main-side
  * @param {Function} getSettings
  * @param {{method?: string, path?: string, body?: any}} request - path relative to `/api`
  * @returns {Promise<{success: boolean, status?: number, data?: any, error?: string}>}
@@ -913,7 +913,7 @@ async function apiRequest(getSettings, request = {}) {
   const { serverUrl, apiToken } = await resolveSharingConfig(settings);
 
   if (!apiToken) {
-    return { success: false, status: 401, error: 'Not connected to ClipLib.' };
+    return { success: false, status: 401, error: 'Not connected to Setsu.' };
   }
 
   const method = typeof request.method === 'string' ? request.method.toUpperCase() : 'GET';
@@ -964,7 +964,7 @@ async function apiRequest(getSettings, request = {}) {
         success: false,
         status: response.status,
         data: bodyJson,
-        error: buildErrorMessage(response.status, bodyJson, bodyText, 'ClipLib request failed.')
+        error: buildErrorMessage(response.status, bodyJson, bodyText, 'Setsu request failed.')
       };
     }
     return { success: true, status: response.status, data: bodyJson };
@@ -976,7 +976,7 @@ async function apiRequest(getSettings, request = {}) {
       dims: { endpoint, status_class: timedOut ? 'timeout' : 'error' }
     });
     if (timedOut) {
-      return { success: false, error: 'ClipLib request timed out.' };
+      return { success: false, error: 'Setsu request timed out.' };
     }
     telemetry.event('share_api_failed', {
       kind: telemetry.KIND.ERROR,
@@ -985,12 +985,12 @@ async function apiRequest(getSettings, request = {}) {
       fingerprint: telemetry.hash32(`${method}|${endpoint}|transport`),
       coalesceMs: 60000
     });
-    return { success: false, error: `ClipLib request failed: ${error.message}` };
+    return { success: false, error: `Setsu request failed: ${error.message}` };
   }
 }
 
 /**
- * attaches the ClipLib token to renderer media requests (<video>/<img> src); JSON
+ * attaches the Setsu token to renderer media requests (<video>/<img> src); JSON
  * calls use apiRequest() instead. Sends Bearer + `token` cookie (some routes need cookie)
  * @param {Electron.Session} session
  */

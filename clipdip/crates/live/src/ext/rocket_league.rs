@@ -18,7 +18,7 @@ pub static MANIFEST: Manifest = Manifest {
     id: "rocket_league",
     name: "Rocket League",
     blurb: "Shows the score, time left and arena of your match.",
-    setup: Some("ClipLib turns on Rocket League's Stats API the first time you play. It works from the next game start."),
+    setup: Some("Setsu turns on Rocket League's Stats API the first time you play. It works from the next game start."),
     credits: &[Credit {
         project: "rlstatsapi",
         author: "xentrick",

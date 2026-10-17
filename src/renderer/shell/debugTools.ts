@@ -28,7 +28,7 @@ function buildLoadingScreen(): HTMLElement {
       @keyframes ls-test-sweep { 0% { transform: translateX(-115%); } 72%, 100% { transform: translateX(115%); } }
     </style>
     <div style="display:flex;flex-direction:column;align-items:center;gap:28px;">
-      <img src="${titleUrl}" alt="ClipLib" draggable="false"
+      <img src="${titleUrl}" alt="Setsu" draggable="false"
         style="width:140px;height:140px;object-fit:contain;filter:drop-shadow(0 4px 16px rgba(0,0,0,0.9));" />
       <div style="width:200px;height:2px;border-radius:999px;background:rgba(255,255,255,0.15);overflow:hidden;">
         <span style="display:block;width:100%;height:100%;transform:translateX(-115%);

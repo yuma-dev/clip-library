@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>ClipDip Overlay</title>
+  <title>Setsu Recorder Overlay</title>
   <style>
     /* All styling is inline so the overlay window has zero external
        requests during cold start — no Google Fonts, no Tailwind, no
@@ -765,7 +765,7 @@
           if (demo === "updating") card.classList.add("installing");
           document.getElementById("title").textContent =
             demo === "updated" ? "Updated to v1.0.1" :
-            demo === "updating" ? "Updating ClipDip…" : "New version ready";
+            demo === "updating" ? "Updating Setsu Recorder..." : "New version ready";
           const sub = document.getElementById("update-sub");
           if (demo === "update") {
             mk(sub, "Press");
@@ -773,7 +773,7 @@
             mk(sub, "to update to", "", "margin-left:0.1vh");
             mk(sub, "v1.0.1", "ver");
           } else if (demo === "updating") {
-            mk(sub, "Downloading v1.0.1, ClipDip restarts itself");
+            mk(sub, "Downloading v1.0.1, Setsu Recorder restarts itself");
           }
           requestAnimationFrame(() =>
             requestAnimationFrame(() => card.classList.add("entered")));
@@ -1106,7 +1106,7 @@
         if (mode === "installing") card.classList.add("installing");
         if (mode === "installed") card.classList.add("installed");
         titleEl.textContent =
-          mode === "installing" ? "Updating ClipDip…" :
+          mode === "installing" ? "Updating Setsu Recorder..." :
           mode === "installed"  ? "Updated to v" + state.updateVersion :
           mode === "failed"     ? "Update failed" :
                                   "New version ready";
@@ -1120,7 +1120,7 @@
           mkspan(updateSub, "to update to", "", "margin-left:0.1vh");
           mkspan(updateSub, "v" + state.updateVersion, "ver");
         } else if (mode === "installing") {
-          mkspan(updateSub, "Downloading v" + state.updateVersion + ", ClipDip restarts itself");
+          mkspan(updateSub, "Downloading v" + state.updateVersion + ", Setsu Recorder restarts itself");
         } else if (mode === "failed") {
           mkspan(updateSub, "Try again from the app");
         }

@@ -118,13 +118,13 @@ export default function CliplibSection() {
 
   if (!profile.connected) {
     return (
-      <SetGroup title="ClipLib account" span2>
+      <SetGroup title="Setsu account" span2>
         <SetRow
           title="Not connected"
-          description="Sign in to ClipLib to manage invite codes and API tokens."
+          description="Sign in to Setsu to manage invite codes and API tokens."
         >
           <button type="button" className="btn" onClick={profile.connect} disabled={profile.verifying}>
-            <LogIn size={14} /> {profile.verifying ? "Checking…" : "Connect ClipLib"}
+            <LogIn size={14} /> {profile.verifying ? "Checking…" : "Connect Setsu"}
           </button>
         </SetRow>
       </SetGroup>
@@ -133,7 +133,7 @@ export default function CliplibSection() {
 
   return (
     <>
-      <SetGroup title="ClipLib account" span2>
+      <SetGroup title="Setsu account" span2>
         <SetRow title="Signed in" description={profile.username || "Connected"}>
           <button type="button" className="btn" onClick={profile.disconnect}>
             <LogOut size={14} /> Sign out
@@ -154,7 +154,7 @@ export default function CliplibSection() {
               value={tokenLabel}
               onChange={(e) => setTokenLabel(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void generateToken()}
-              placeholder="Token name (e.g. ClipLib Desktop)"
+              placeholder="Token name (e.g. Setsu Desktop)"
             />
             <button
               type="button"
@@ -178,7 +178,7 @@ export default function CliplibSection() {
               {copied === "new-token" ? <Check size={14} /> : <Copy size={14} />}
               {copied === "new-token" ? "Copied!" : "Copy"}
             </button>
-            <p className="cliplib-warn">Save this token now — it won't be shown again.</p>
+            <p className="cliplib-warn">Save this token now, it won't be shown again.</p>
           </div>
         )}
 
@@ -206,7 +206,7 @@ export default function CliplibSection() {
       </SetGroup>
 
       <SetGroup title="Invite codes" span2>
-        <SetRow title="Invite friends" description="Create invite codes to bring friends onto ClipLib." stacked>
+        <SetRow title="Invite friends" description="Create invite codes to bring friends onto Setsu." stacked>
           <button
             type="button"
             className="btn"

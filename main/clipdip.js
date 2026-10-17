@@ -297,7 +297,7 @@ async function start() {
       severity: telemetry.SEVERITY.ERROR,
       context: { binary_found: false, errno: error?.code }
     });
-    return { success: false, error: `Clipdip binary not found at ${exe}` };
+    return { success: false, error: `Setsu Recorder binary not found at ${exe}` };
   }
   await ensureFfmpegPath().catch((e) => logger.warn(`ffmpeg path sync failed: ${e.message}`));
   // detached + unref + ignored stdio: clipdip outlives the library as its own tray app
@@ -612,7 +612,7 @@ function detectSupport() {
   if (supportPromise) return supportPromise;
   supportPromise = (async () => {
     if (process.platform !== 'win32') {
-      return { supported: false, reason: 'Clipdip only runs on Windows.' };
+      return { supported: false, reason: 'Setsu Recorder only runs on Windows.' };
     }
     try {
       await app.whenReady();
@@ -622,7 +622,7 @@ function detectSupport() {
       if (!devices.some((d) => Number(d?.vendorId) === NVIDIA_VENDOR_ID)) {
         return {
           supported: false,
-          reason: 'Clipdip needs an NVIDIA GPU — it records with NVENC, the encoder on NVIDIA cards.'
+          reason: 'Setsu Recorder needs an NVIDIA GPU. It records with NVENC, the encoder on NVIDIA cards.'
         };
       }
       return { supported: true, reason: null };

@@ -137,7 +137,7 @@ function Sidebar({
                   className={`rail-item${active ? " active" : ""}${locked ? " soon" : ""}`}
                   onClick={() => {
                     if (disabled) toast.show(`${label} is coming soon`);
-                    else if (locked) toast.show("Connect to ClipLib to browse the feed");
+                    else if (locked) toast.show("Connect to Setsu to browse the feed");
                     else onNavigate(id);
                   }}
                 >

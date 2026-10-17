@@ -119,7 +119,7 @@ function GameList(p: GameListProps) {
       </div>
 
       <div className="dl-scroll" onScroll={onScroll} onMouseLeave={leave}>
-        {p.failed ? <div className="dl-empty">Couldn't load the list. Is ClipLib's recorder installed?</div> : null}
+        {p.failed ? <div className="dl-empty">Couldn't load the list. Is Setsu Recorder installed?</div> : null}
         {!p.extensions && !p.failed ? (
           <div className="dl-group">
             {Array.from({ length: 6 }, (_, i) => (

@@ -722,7 +722,7 @@ impl Default for MetadataConfig {
 #[serde(default)]
 pub struct DiscordConfig {
     pub enabled: bool,
-    /// shows the detected game as rich presence ("clipping using ClipLib");
+    /// shows the detected game as rich presence ("clipping using Setsu");
     /// independent of `enabled`, which is only the call roster
     pub presence: bool,
     /// game ids (as in .gameinfo's `game.id`) that never show as presence

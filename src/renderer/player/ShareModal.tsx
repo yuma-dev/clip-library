@@ -245,9 +245,9 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
       onKeyDown={(e) => e.stopPropagation()}
       onKeyUp={(e) => e.stopPropagation()}
     >
-      <div className="share-modal" role="dialog" aria-label="Publish to ClipLib">
+      <div className="share-modal" role="dialog" aria-label="Publish to Setsu">
         <div className="share-modal-head">
-          <h2>Publish to ClipLib</h2>
+          <h2>Publish to Setsu</h2>
           <button
             type="button"
             className="share-modal-close"
@@ -361,7 +361,7 @@ export default function ShareModal({ open, onClose }: ShareModalProps) {
                 type="button"
                 className="share-modal-primary"
                 onClick={() => {
-                  toast.show("Published to ClipLib");
+                  toast.show("Published to Setsu");
                   onClose();
                 }}
               >

@@ -255,8 +255,8 @@ export function ActivityCard({ activity, type: fallbackType = 0 }: { activity: D
           </div>
         ) : null}
         <div className="dc-lines">
-          <Tip text={activity.name ?? "ClipLib"} truncated>
-            <span className="dc-name">{activity.name ?? "ClipLib"}</span>
+          <Tip text={activity.name ?? "Setsu"} truncated>
+            <span className="dc-name">{activity.name ?? "Setsu"}</span>
           </Tip>
           {activity.details ? (
             <Tip text={activity.details} truncated>

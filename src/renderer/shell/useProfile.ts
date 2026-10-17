@@ -41,7 +41,7 @@ function extractProfile(result: Record<string, unknown> | null): {
   return {
     username:
       first(user.username, user.displayName, user.name, result?.displayName, user.discordId) ||
-      "ClipLib User",
+      "Setsu User",
     avatarUrl,
   };
 }

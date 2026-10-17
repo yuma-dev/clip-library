@@ -1,5 +1,5 @@
 //! One module per game. Each exports `MANIFEST`; order here is the order in
-//! ClipLib's settings.
+//! Setsu's settings.
 
 pub mod abiotic_factor;
 pub mod assetto_corsa;

@@ -1,11 +1,11 @@
-//! "Playing <game>, clipping using ClipLib" rich presence. Its own pipe, but
+//! "Playing <game>, clipping using Setsu" rich presence. Its own pipe, but
 //! the same Discord app as the voice roster: that one is named ClipLib and
 //! owns the `logo` asset. SET_ACTIVITY needs no OAuth, so unlike the voice
 //! roster this works for every account.
 //!
 //! Live game details (clipdip-live) only fill text, the big image and the
-//! clock. ClipLib always keeps the logo badge, the one button and
-//! "Clipping using ClipLib" in whichever line is free.
+//! clock. Setsu always keeps the logo badge, the one button and
+//! "Clipping using Setsu" in whichever line is free.
 
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,7 @@ use crate::ipc::{Connection, OP_CLOSE, OP_PING};
 use crate::{handshake, is_capacity_error, request, ReqError, CLIENT_ID};
 
 const LOGO_ASSET: &str = "logo";
-const SITE_URL: &str = "https://cliplib.app";
+const SITE_URL: &str = "https://setsu.gg";
 /// Discord not running: try again this often while a game wants showing
 const RECONNECT_EVERY: Duration = Duration::from_secs(15);
 /// Discord takes ~5 activity updates per 20 s and silently drops the rest. A new game, a clear and
@@ -299,7 +299,7 @@ fn run(rx: Receiver<Cmd>) {
     }
 }
 
-/// The activity exactly as it would go to Discord, for ClipLib's settings preview.
+/// The activity exactly as it would go to Discord, for Setsu's settings preview.
 pub fn preview_activity(a: &GameActivity) -> Value {
     activity_json(a, Shape::Full, now_ms())
 }
@@ -328,7 +328,7 @@ fn clips(n: u32) -> String {
     format!("{} clip{}", thousands(n), if n == 1 { "" } else { "s" })
 }
 
-/// the line under "Clipping using ClipLib": a fresh save, then the session's count
+/// the line under "Clipping using Setsu": a fresh save, then the session's count
 fn live_line(a: &GameActivity, now: i64) -> Option<String> {
     let since = a.last_clip_ms.map(|t| (now - t).max(0));
     if since.map(|s| s < JUST_CLIPPED_MS).unwrap_or(false) {
@@ -356,7 +356,7 @@ fn fit(s: &str) -> Option<String> {
     }
 }
 
-const CLIPPING: &str = "Clipping using ClipLib";
+const CLIPPING: &str = "Clipping using Setsu";
 const JUST_CLIPPED: &str = "Just clipped something";
 
 fn activity_json(a: &GameActivity, shape: Shape, now: i64) -> Value {
@@ -395,7 +395,7 @@ fn activity_json(a: &GameActivity, shape: Shape, now: i64) -> Value {
         "timestamps": timestamps,
         "assets": assets,
         // the only button, extensions can't add one; other people see it, you never do
-        "buttons": [{ "label": "Get ClipLib", "url": SITE_URL }],
+        "buttons": [{ "label": "Get Setsu", "url": SITE_URL }],
     });
     let (details, state) = if shape == Shape::Plain {
         (Some(a.game.clone()), x_details.or(line).or_else(|| Some(CLIPPING.into())))
@@ -445,7 +445,7 @@ mod tests {
     fn full_shape_has_game_art_and_logo_badge() {
         let v = activity_json(&act(Some("https://cdn.discordapp.com/app-icons/1/2.png")), Shape::Full, NOW);
         assert_eq!(v["name"], "VALORANT");
-        assert_eq!(v["details"], "Clipping using ClipLib");
+        assert_eq!(v["details"], "Clipping using Setsu");
         assert!(v.get("state").is_none());
         assert_eq!(v["assets"]["large_image"], "https://cdn.discordapp.com/app-icons/1/2.png");
         assert_eq!(v["assets"]["small_image"], LOGO_ASSET);
@@ -474,7 +474,7 @@ mod tests {
         a.total_clips = Some(2125);
         let v = activity_json(&a, Shape::Full, NOW);
         assert_eq!(v["assets"]["large_text"], "VALORANT · 67 clips");
-        assert_eq!(v["assets"]["small_text"], "Clipping using ClipLib · 2,125 clips");
+        assert_eq!(v["assets"]["small_text"], "Clipping using Setsu · 2,125 clips");
     }
 
     #[test]
@@ -499,7 +499,7 @@ mod tests {
         a.game_clips = Some(3);
         let v = activity_json(&a, Shape::Full, NOW);
         assert_eq!(v["details"], "Ranked Solo/Duo, Ahri");
-        assert_eq!(v["state"], "Clipping using ClipLib");
+        assert_eq!(v["state"], "Clipping using Setsu");
         assert_eq!(v["assets"]["large_image"], "https://x/ahri.jpg");
         assert_eq!(v["assets"]["large_text"], "Ahri · 3 clips");
         assert_eq!(v["assets"]["small_image"], LOGO_ASSET);
@@ -515,10 +515,10 @@ mod tests {
         a.last_clip_ms = Some(NOW - 60_000);
         assert_eq!(activity_json(&a, Shape::Full, NOW)["state"], "5/2/7, 182 CS");
 
-        // no extension details: ClipLib keeps the first line, the extension's state the second
+        // no extension details: Setsu keeps the first line, the extension's state the second
         a.extra.details = None;
         let v = activity_json(&a, Shape::Full, NOW);
-        assert_eq!(v["details"], "Clipping using ClipLib");
+        assert_eq!(v["details"], "Clipping using Setsu");
         assert_eq!(v["state"], "5/2/7, 182 CS");
     }
 
@@ -531,8 +531,8 @@ mod tests {
         a.extra.end_ms = Some(NOW + 60_000);
         let v = activity_json(&a, Shape::Full, NOW);
         assert_eq!(v["details"].as_str().unwrap().chars().count(), 128);
-        // a 1 char state is invalid, ClipLib's line takes its place
-        assert_eq!(v["state"], "Clipping using ClipLib");
+        // a 1 char state is invalid, Setsu's line takes its place
+        assert_eq!(v["state"], "Clipping using Setsu");
         assert_eq!(v["timestamps"]["start"], NOW - 1000);
         assert_eq!(v["timestamps"]["end"], NOW + 60_000);
     }

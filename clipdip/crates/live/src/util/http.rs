@@ -11,7 +11,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 pub const USER_AGENT: &str = concat!(
     "yuma-dev/clipdip/",
     env!("CARGO_PKG_VERSION"),
-    " (cliplib.app)"
+    " (setsu.gg)"
 );
 
 /// For public APIs (Data Dragon, valorant-api.com, Modrinth).

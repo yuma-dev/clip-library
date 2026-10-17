@@ -676,7 +676,7 @@ async function handleCliplibProtocolUrl(protocolUrl) {
   if (!parsed.ok) {
     queueCliplibAuthEvent({
       status: 'error',
-      message: parsed.error || 'Invalid ClipLib auth callback.'
+      message: parsed.error || 'Invalid Setsu auth callback.'
     });
     return;
   }
@@ -685,7 +685,7 @@ async function handleCliplibProtocolUrl(protocolUrl) {
     pendingCliplibAuthSession = null;
     queueCliplibAuthEvent({
       status: 'error',
-      message: 'No active ClipLib login session. Start login again from Settings.'
+      message: 'No active Setsu login session. Start login again from Settings.'
     });
     return;
   }
@@ -693,7 +693,7 @@ async function handleCliplibProtocolUrl(protocolUrl) {
   if (parsed.session !== pendingCliplibAuthSession.session) {
     queueCliplibAuthEvent({
       status: 'error',
-      message: 'ClipLib login session mismatch. Please retry login.'
+      message: 'Setsu login session mismatch. Please retry login.'
     });
     return;
   }
@@ -739,7 +739,7 @@ async function handleCliplibProtocolUrl(protocolUrl) {
       await shareModule.clearStoredApiToken();
       queueCliplibAuthEvent({
         status: 'error',
-        message: verify?.error || 'ClipLib login succeeded but token verification failed.'
+        message: verify?.error || 'Setsu login succeeded but token verification failed.'
       });
       return;
     }
@@ -756,7 +756,7 @@ async function handleCliplibProtocolUrl(protocolUrl) {
     }
     queueCliplibAuthEvent({
       status: 'error',
-      message: `ClipLib login failed: ${error.message}`
+      message: `Setsu login failed: ${error.message}`
     });
   } finally {
     focusMainWindow();
@@ -1818,7 +1818,7 @@ ipcMain.handle('start-cliplib-auth', async (event, overrides) => {
     logger.error('Failed to start ClipLib desktop auth:', error);
     return {
       success: false,
-      error: `Unable to open ClipLib login: ${error.message}`
+      error: `Unable to open Setsu login: ${error.message}`
     };
   }
 });
@@ -1833,7 +1833,7 @@ ipcMain.handle('disconnect-cliplib-auth', async () => {
     logger.error('Failed to disconnect ClipLib auth:', error);
     return {
       success: false,
-      error: `Unable to disconnect ClipLib account: ${error.message}`
+      error: `Unable to disconnect Setsu account: ${error.message}`
     };
   }
 });

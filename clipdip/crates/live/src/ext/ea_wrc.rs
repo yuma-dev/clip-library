@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 const PORT: u16 = 20888;
 pub static MANIFEST: Manifest = Manifest {
     id: "ea_wrc", name: "EA SPORTS WRC", blurb: "Shows your stage time and distance covered.",
-    setup: Some("ClipLib adds a local telemetry endpoint. It works from the next start of WRC."),
+    setup: Some("Setsu adds a local telemetry endpoint. It works from the next start of WRC."),
     credits: &[Credit { project: "EA SPORTS WRC UDP Telemetry Guide", author: "Electronic Arts", url: "https://forums.ea.com/t5/s/tghpe58374/attachments/tghpe58374/wrc-general-discussion-en/2667/1/EA%20SPORTS%20WRC%20-%20UDP%20Telemetry%20Guide%20(v1.3).pdf", license: "docs" }],
     options: &[Opt::toggle("show_time", "Show stage time", "Elapsed time on the stage.", true),
         Opt::toggle("show_distance", "Show distance", "Distance covered and total stage length.", true)],

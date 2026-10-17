@@ -241,8 +241,10 @@ async function loadSettings() {
   } catch (error) {
     if (error.code === 'ENOENT') {
       logger.info('Settings file not found, creating with defaults');
-      await saveSettings(DEFAULT_SETTINGS);
-      return DEFAULT_SETTINGS;
+      // a fresh profile never knew the ClipLib name, so no rebrand card
+      const fresh = { ...DEFAULT_SETTINGS, setsuIntroSeen: true };
+      await saveSettings(fresh);
+      return fresh;
     }
     
     logger.error('Unexpected error loading settings:', error);

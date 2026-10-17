@@ -26,7 +26,7 @@ const DIAGNOSTICS_STAGE_LABELS: Record<string, string> = {
   "settings-snapshot": "Capturing settings snapshot",
   "activity-logs": "Bundling activity history",
   "console-buffers": "Capturing console output",
-  clipdip: "Gathering clipdip logs and state",
+  clipdip: "Gathering recorder logs and state",
   "crash-dumps": "Checking for crash dumps",
   complete: "Complete",
 };
@@ -38,7 +38,7 @@ const NOTE_EXAMPLES = [
   "pressed the clip button and nothing got saved",
   "exported a clip and it has no sound",
   "thumbnails are just black squares for some clips",
-  "clipdip keeps saying recording stopped every few minutes",
+  "the recorder keeps saying recording stopped every few minutes",
   "got a save failed notification, the file is 0 bytes",
   "app takes like 30 seconds to open since the update",
   "cant share clips, upload always fails at the end",
@@ -259,7 +259,7 @@ export default function AboutSection() {
         <img className="about-logo" src={logoUrl} alt="" draggable={false} />
         <div className="about-text">
           <div className="about-name">
-            ClipLib <span className="about-version">v{version}</span>
+            Setsu <span className="about-version">v{version}</span>
           </div>
           <div className="about-tag">A modern, fast, and efficient way to manage your clip collection.</div>
         </div>
@@ -302,7 +302,7 @@ export default function AboutSection() {
         </SetRow>
         <SetRow
           title="Send diagnostics"
-          description="One bundle with logs, settings, and system info from both ClipLib and clipdip"
+          description="One bundle with logs, settings, and system info from both Setsu and Setsu Recorder"
           status={
             <>
               {uploadStatus ? (
@@ -361,7 +361,7 @@ function TelemetryGroup() {
   const [clipdipBusy, setClipdipBusy] = useState(false);
 
   // one read on mount; clipdip answers only while running, the section that polls this lives under
-  // Settings -> Clipdip, not open here
+  // Settings -> Recorder, not open here
   useEffect(() => {
     let cancelled = false;
     clipdipBridge()
@@ -388,11 +388,11 @@ function TelemetryGroup() {
       const r = await clipdipBridge().setTelemetryEnabled(on);
       if (!r.ok) {
         setClipdip((s) => (s ? { ...s, enabled: !on } : s));
-        toast.show("Failed to update clipdip diagnostics", "error");
+        toast.show("Failed to update recorder diagnostics", "error");
       }
     } catch {
       setClipdip((s) => (s ? { ...s, enabled: !on } : s));
-      toast.show("Failed to update clipdip diagnostics", "error");
+      toast.show("Failed to update recorder diagnostics", "error");
     } finally {
       setClipdipBusy(false);
     }
@@ -403,21 +403,21 @@ function TelemetryGroup() {
   return (
     <SetGroup title="Anonymous diagnostics" span2>
       <SetRow
-        title="ClipLib"
-        description="Crashes, failures the app couldn't show you, and timing numbers, sent with random ids. Crash reports include a tail of ClipLib's log. No file names, no clip names, no tags, no account info."
+        title="Setsu"
+        description="Crashes, failures the app couldn't show you, and timing numbers, sent with random ids. Crash reports include a tail of Setsu's log. No file names, no clip names, no tags, no account info."
       >
         <Toggle
           checked={cliplibEnabled}
           onChange={(v) => void toggleCliplib(v)}
-          aria-label="Send anonymous ClipLib diagnostics"
+          aria-label="Send anonymous Setsu diagnostics"
         />
       </SetRow>
       <SetRow
-        title="Clipdip"
+        title="Setsu Recorder"
         description={
           clipdipAvailable
-            ? "Crashes, capture and encoder failures, and basic hardware info from the recorder, sent with random ids. Error reports include a tail of clipdip's log."
-            : "Available while Clipdip is running"
+            ? "Crashes, capture and encoder failures, and basic hardware info from the recorder, sent with random ids. Error reports include a tail of Setsu Recorder's log."
+            : "Available while Setsu Recorder is running"
         }
         status={
           <StatusLine tone="info">
@@ -429,7 +429,7 @@ function TelemetryGroup() {
           checked={clipdip?.enabled ?? true}
           onChange={(v) => void toggleClipdip(v)}
           disabled={clipdipBusy || !clipdipAvailable}
-          aria-label="Send anonymous clipdip diagnostics"
+          aria-label="Send anonymous Setsu Recorder diagnostics"
         />
       </SetRow>
       <SetRow

@@ -85,7 +85,7 @@ export default function ClipdipNotificationsSection() {
           title="Preview on screen"
           description={
             !running
-              ? "Available while Clipdip is running"
+              ? "Available while Setsu Recorder is running"
               : !notifEnabled
                 ? "Enable notifications to preview"
                 : undefined
@@ -149,10 +149,10 @@ function NotificationHistory({ running }: { running: boolean }) {
         title="Recent notifications"
         description={
           !running
-            ? "Available while Clipdip is running"
+            ? "Available while Setsu Recorder is running"
             : unsupported
-              ? "Requires a newer Clipdip version"
-              : "Every notice Clipdip has shown, with the full text of health alerts"
+              ? "Requires a newer Setsu Recorder version"
+              : "Every notice Setsu Recorder has shown, with the full text of health alerts"
         }
       />
       {running && !unsupported && items && items.length > 0 ? (

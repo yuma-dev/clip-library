@@ -127,7 +127,7 @@ async function showQuitConfirm(): Promise<void> {
   quitConfirmOpen = true;
   try {
     const ok = await deps.confirm({
-      title: "Quit ClipLib?",
+      title: "Quit Setsu?",
       message: "Close the app now?",
       confirmLabel: "Quit (A)",
       cancelLabel: "Cancel (B)",

@@ -45,7 +45,7 @@ export interface SectionDef {
 
 export const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
   {
-    label: "ClipLib",
+    label: "Setsu",
     items: [
       { id: "general", label: "General", icon: Settings2, blurb: "Library location, games, and tags" },
       { id: "discord", label: "Discord", icon: DiscordIcon, blurb: "Your status while you play and in the library" },
@@ -55,12 +55,12 @@ export const NAV_GROUPS: { label?: string; items: SectionDef[] }[] = [
       { id: "export", label: "Export & Import", icon: Clapperboard, blurb: "Export presets and clip imports" },
       { id: "storage", label: "Storage", icon: HardDrive, blurb: "What takes up space, and ways to get it back" },
       { id: "shortcuts", label: "Shortcuts", icon: Keyboard, blurb: "Player keyboard bindings" },
-      { id: "cliplib", label: "ClipLib", icon: Share2, blurb: "Account, invite codes, and API tokens" },
+      { id: "cliplib", label: "Setsu", icon: Share2, blurb: "Account, invite codes, and API tokens" },
       { id: "about", label: "About", icon: Info, blurb: "Version, updates, and diagnostics" },
     ],
   },
   {
-    label: "Clipdip",
+    label: "Recorder",
     items: [
       { id: "clipdip-general", label: "General", icon: Videotape, blurb: "Process, autostart, and diagnostics" },
       { id: "clipdip-video", label: "Video", icon: Video, blurb: "Replay buffer, capture, and quality" },

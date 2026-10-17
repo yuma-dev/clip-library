@@ -55,7 +55,7 @@ export default function AnalysisSection() {
       }
     >
       <p className="set-group-blurb">
-        ClipLib listens to each clip once and remembers what it heard: the level of every audio track for the waveform in the
+        Setsu listens to each clip once and remembers what it heard: the level of every audio track for the waveform in the
         player, and how loud the clip is overall for loudness matching. New recordings are picked up as they land. It runs in
         the background at low priority and waits while a clip plays or an export runs.
       </p>

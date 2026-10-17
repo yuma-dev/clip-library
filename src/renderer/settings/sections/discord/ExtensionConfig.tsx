@@ -70,7 +70,7 @@ export default function ExtensionConfig({ ext, settings, onChange, playing, game
         </div>
       ) : !on ? (
         <div className="dl-note">
-          <Info size={14} /> Off. Friends see the plain card for this game, with your clips and the ClipLib badge.
+          <Info size={14} /> Off. Friends see the plain card for this game, with your clips and the Setsu badge.
         </div>
       ) : live ? (
         <div className="dl-note live">

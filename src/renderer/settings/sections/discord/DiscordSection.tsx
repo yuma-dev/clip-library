@@ -57,17 +57,17 @@ const short = (name: string) => name.replace(/ of Legends and TFT$/, "").replace
 function libraryCard(a: PresenceActivity): DiscordActivity {
   return {
     type: a.type,
-    name: "ClipLib",
+    name: "Setsu",
     details: a.details,
     state: a.state ?? undefined,
     timestamps: a.startTimestamp || a.endTimestamp ? { start: a.startTimestamp, end: a.endTimestamp } : undefined,
     assets: {
       large_image: a.largeImageKey,
-      large_text: a.largeImageText ?? "ClipLib",
+      large_text: a.largeImageText ?? "Setsu",
       small_image: a.smallImageKey,
       small_text: a.smallImageText,
     },
-    buttons: [{ label: "Get ClipLib", url: "https://cliplib.app" }],
+    buttons: [{ label: "Get Setsu", url: "https://setsu.gg" }],
   };
 }
 
@@ -261,7 +261,7 @@ export default function DiscordSection({ lib }: { lib: UseClips }) {
           <div className="dset-compact">
             <div>
               <SetGroup title="While you play">
-                <SetRow title="Show the game you're in" description="With a ClipLib badge and your clips">
+                <SetRow title="Show the game you're in" description="With a Setsu badge and your clips">
                   <Toggle
                     checked={game.presence !== false}
                     disabled={game.presence === null}

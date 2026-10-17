@@ -37,7 +37,7 @@ interface ActiveToken {
 
 const MAX_SUGGESTIONS = 8;
 const EMPTY_PEOPLE_HINT =
-  "Start clipping with ClipDip to see who was in a call with you when you clipped.";
+  "Start clipping with Setsu Recorder to see who was in a call with you when you clipped.";
 
 function activeTokenAt(value: string, caret: number): ActiveToken | null {
   let start = caret;
@@ -242,7 +242,7 @@ function RailSearch({ filter, clips }: RailSearchProps) {
 
   return (
     <label className="r-search" data-rail-tip="Search clips · ? to shuffle">
-      <img className="r-search-logo" src={logoUrl} alt="ClipLib" draggable={false} />
+      <img className="r-search-logo" src={logoUrl} alt="Setsu" draggable={false} />
       <div className="r-search-field">
         <div className="r-search-hl" ref={overlayRef} aria-hidden="true">
           {runs.map((run, i) =>

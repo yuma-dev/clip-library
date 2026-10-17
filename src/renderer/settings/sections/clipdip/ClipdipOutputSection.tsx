@@ -56,7 +56,7 @@ export default function ClipdipOutputSection() {
   const openFolder = async () => {
     try {
       const r = await clipdipBridge().openClipsFolder();
-      if (!r.ok) toast.show("Start Clipdip to open its folder", "error");
+      if (!r.ok) toast.show("Start Setsu Recorder to open its folder", "error");
     } catch {
       toast.show("Failed to open folder", "error");
     }
@@ -196,7 +196,7 @@ export default function ClipdipOutputSection() {
         </SetRow>
         <SetRow
           title="FFmpeg path"
-          description="Managed by ClipLib unless overridden. Leave empty for the bundled ffmpeg."
+          description="Managed by Setsu unless overridden. Leave empty for the bundled ffmpeg."
         >
           <CommitInput
             value={String(output?.ffmpeg_path ?? "")}
@@ -225,7 +225,7 @@ function DiscordConnection({
   const featureOff = st === "disabled";
 
   const text = !running
-    ? "Start Clipdip to connect"
+    ? "Start Setsu Recorder to connect"
     : st === "connected"
       ? `Connected as ${status?.user ?? "?"}`
       : st === "connecting"

@@ -1060,7 +1060,7 @@ fn spawn_update_checker(app: AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
 
     if !SELF_UPDATER_ENABLED {
-        info!("self-updater disabled (ClipLib manages clipdip updates)");
+        info!("self-updater disabled (Setsu manages clipdip updates)");
         return;
     }
 
@@ -2115,7 +2115,7 @@ fn health_loop(
                         &app,
                         &corner,
                         "Capture keeps freezing",
-                        "Restarting Clipdip isn't helping. Restart your PC or check your \
+                        "Restarting Setsu Recorder isn't helping. Restart your PC or check your \
                          graphics drivers.",
                     );
                     continue;
@@ -2137,8 +2137,8 @@ fn health_loop(
                 notify_health(
                     &app,
                     &corner,
-                    "Capture froze, restarting Clipdip",
-                    "Screen capture stopped responding. Restarting Clipdip to recover…",
+                    "Capture froze, restarting Setsu Recorder",
+                    "Screen capture stopped responding. Restarting Setsu Recorder to recover...",
                 );
                 // let the toast surface before the process exits.
                 std::thread::sleep(Duration::from_millis(1200));
@@ -2866,7 +2866,7 @@ fn run_capture_loop(
                             "Capture stopped after repeated failures",
                             "Screen capture failed repeatedly and is now stopped. \
                              Check the capture settings (monitor / backend) and restart \
-                             capture from the Clipdip window.",
+                             capture from Setsu's recorder settings.",
                         );
                         drop(monitor.take());
                         *ring_handle.lock().unwrap() = None;
@@ -2984,7 +2984,7 @@ fn run_capture_loop(
 
 // helpers
 
-// legacy React settings window, retired: config now lives in ClipLib's
+// legacy React settings window, retired: config now lives in Setsu's
 // Settings -> Clipdip page. kept for reference.
 #[allow(dead_code)]
 fn open_main_window(app: &AppHandle) {
@@ -2994,7 +2994,7 @@ fn open_main_window(app: &AppHandle) {
         return;
     }
     if let Ok(w) = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("ClipLib")
+        .title("Setsu Recorder")
         .inner_size(980.0, 700.0)
         .min_inner_size(820.0, 580.0)
         .center()
@@ -3009,7 +3009,7 @@ fn open_main_window(app: &AppHandle) {
     }
 }
 
-/// opens ClipLib directly on its Clipdip settings page via the `cliplib://`
+/// opens Setsu directly on its recorder settings page via the `cliplib://`
 /// protocol; Windows starts (or focuses) the library.
 fn open_library(_app: &AppHandle) {
     use windows::core::w;
@@ -3027,10 +3027,10 @@ fn open_library(_app: &AppHandle) {
         )
     };
     // ShellExecuteW returns >32 on success; no fallback UI since an
-    // unregistered protocol means ClipLib itself was removed.
+    // unregistered protocol means Setsu itself was removed.
     if result.0 as usize <= 32 {
         warn!(
-            "cliplib:// protocol not available (ShellExecuteW={}) — is ClipLib installed?",
+            "cliplib:// protocol not available (ShellExecuteW={}), is Setsu installed?",
             result.0 as usize
         );
     }
@@ -3794,13 +3794,13 @@ fn main() {
 
             // build system tray
             let menu = Menu::with_items(app, &[
-                &MenuItem::with_id(app, "show", "Open ClipLib", true, None::<&str>)?,
+                &MenuItem::with_id(app, "show", "Open Setsu", true, None::<&str>)?,
                 &PredefinedMenuItem::separator(app)?,
-                &MenuItem::with_id(app, "quit", "Quit ClipLib", true, None::<&str>)?,
+                &MenuItem::with_id(app, "quit", "Quit Setsu Recorder", true, None::<&str>)?,
             ])?;
 
             let tooltip = format!(
-                "ClipLib\nSave clip: {}\nRecord: {}",
+                "Setsu Recorder\nSave clip: {}\nRecord: {}",
                 cfg_peek.hotkey.save_clip, cfg_peek.hotkey.toggle_recording
             );
 

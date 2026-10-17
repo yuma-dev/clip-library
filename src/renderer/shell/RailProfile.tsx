@@ -22,7 +22,7 @@ export default function RailProfile() {
       <button
         type="button"
         className="rail-profile rail-profile-connect"
-        data-rail-tip={profile.verifying ? "Checking…" : "Sign in to ClipLib"}
+        data-rail-tip={profile.verifying ? "Checking…" : "Sign in to Setsu"}
         onClick={profile.connect}
         disabled={profile.verifying}
       >
@@ -33,7 +33,7 @@ export default function RailProfile() {
           <span className="rail-profile-name">
             {profile.verifying ? "Checking…" : "Sign in"}
           </span>
-          <span className="rail-profile-sub">{profile.verifying ? "" : "Connect ClipLib"}</span>
+          <span className="rail-profile-sub">{profile.verifying ? "" : "Connect Setsu"}</span>
         </span>
       </button>
     );
@@ -45,8 +45,8 @@ export default function RailProfile() {
         type="button"
         className="rail-profile-open"
         onClick={openOwnProfile}
-        title="Open your ClipLib profile"
-        aria-label="Open your ClipLib profile"
+        title="Open your Setsu profile"
+        aria-label="Open your Setsu profile"
       >
         <span className="rail-avatar">
           <img

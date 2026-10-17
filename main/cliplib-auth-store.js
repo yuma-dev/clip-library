@@ -102,7 +102,7 @@ async function getToken() {
 async function setToken(token) {
   const trimmed = typeof token === 'string' ? token.trim() : '';
   if (!trimmed) {
-    throw new Error('Cannot store an empty ClipLib token.');
+    throw new Error('Cannot store an empty Setsu token.');
   }
   const record = buildRecord(trimmed);
   await fs.writeFile(STORE_PATH, JSON.stringify(record, null, 2), 'utf8');

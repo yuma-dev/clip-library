@@ -28,7 +28,7 @@ export default function ClipdipGeneralSection() {
     setBusy(true);
     try {
       const result = await clipdipBridge().setEnabled(on);
-      if (!result.success) toast.show(result.error || "Clipdip failed to start", "error");
+      if (!result.success) toast.show(result.error || "Setsu Recorder failed to start", "error");
     } finally {
       setBusy(false);
       refreshStatus();
@@ -49,7 +49,7 @@ export default function ClipdipGeneralSection() {
     setBusy(true);
     try {
       const result = await action();
-      if (!result.success) toast.show(result.error || "Clipdip action failed", "error");
+      if (!result.success) toast.show(result.error || "Setsu Recorder action failed", "error");
     } finally {
       setBusy(false);
       refreshStatus();
@@ -67,14 +67,14 @@ export default function ClipdipGeneralSection() {
 
   return (
     <>
-      <SetGroup title="Clipdip" span2 aside={<ClipdipStatusBadge />}>
+      <SetGroup title="Setsu Recorder" span2 aside={<ClipdipStatusBadge />}>
         <SetRow
-          title="Enable Clipdip"
+          title="Enable Setsu Recorder"
           description="Background replay-buffer recorder. Runs as its own tray app and keeps recording when the library is closed."
           status={
             unsupported ? (
               <StatusLine tone="error">
-                {status?.unsupportedReason ?? "This machine can't run Clipdip."}
+                {status?.unsupportedReason ?? "This machine can't run Setsu Recorder."}
               </StatusLine>
             ) : undefined
           }
@@ -83,7 +83,7 @@ export default function ClipdipGeneralSection() {
             checked={enabled && !unsupported}
             onChange={(v) => void toggleEnabled(v)}
             disabled={busy || unsupported}
-            aria-label="Enable Clipdip"
+            aria-label="Enable Setsu Recorder"
           />
         </SetRow>
         <SetRow title="Start with Windows">
@@ -91,15 +91,15 @@ export default function ClipdipGeneralSection() {
             checked={Boolean(status?.autostart)}
             onChange={(v) => void toggleAutostart(v)}
             disabled={!status || !status.binaryFound || unsupported}
-            aria-label="Start Clipdip with Windows"
+            aria-label="Start Setsu Recorder with Windows"
           />
         </SetRow>
         <SetRow
           title="Process"
-          description={running ? "Clipdip is recording into its replay buffer" : "Clipdip is not running"}
+          description={running ? "Setsu Recorder is recording into its replay buffer" : "Setsu Recorder is not running"}
           status={
             status && !status.binaryFound ? (
-              <StatusLine tone="error">Clipdip binary not found. Set its location below.</StatusLine>
+              <StatusLine tone="error">Setsu Recorder binary not found. Set its location below.</StatusLine>
             ) : undefined
           }
         >
@@ -136,8 +136,8 @@ export default function ClipdipGeneralSection() {
           </div>
         </SetRow>
         <SetRow
-          title="Clipdip binary"
-          description={<span className="set-mono">{binaryPath || "Bundled (resources/clipdip/clipdip.exe)"}</span>}
+          title="Setsu Recorder binary"
+          description={<span className="set-mono">{binaryPath || "Bundled (resources/clipdip/Setsu Recorder.exe)"}</span>}
         >
           <button type="button" className="btn" onClick={() => void pickBinary()}>
             <FolderOpen size={14} /> Choose exe
@@ -197,9 +197,9 @@ function TelemetryGroup() {
         title="Send anonymous diagnostics"
         description={
           !running
-            ? "Available while Clipdip is running"
+            ? "Available while Setsu Recorder is running"
             : configured
-              ? "Crashes, capture failures, and basic hardware info (GPU, OS, RAM) with random ids. Error reports include a tail of Clipdip's log. No file names, no window titles, no personal data. Full list in TELEMETRY.md."
+              ? "Crashes, capture failures, and basic hardware info (GPU, OS, RAM) with random ids. Error reports include a tail of Setsu Recorder's log. No file names, no window titles, no personal data. Full list in TELEMETRY.md."
               : "Not available in this build"
         }
       >

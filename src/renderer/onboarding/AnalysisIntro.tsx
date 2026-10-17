@@ -56,7 +56,7 @@ export default function AnalysisIntro() {
             className="ob-panel ob-panel--intro"
             role="dialog"
             aria-modal="true"
-            aria-label="ClipLib hears your clips"
+            aria-label="Setsu hears your clips"
             initial={{ y: 22, opacity: 0, scale: 0.98 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 14, opacity: 0 }}

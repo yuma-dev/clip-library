@@ -39,7 +39,7 @@ export default function AnalysisStep() {
     <div className="ob-copy ob-single ob-analysis">
       <h1 className="ob-title ob-analysis-title">
         <img className="ob-analysis-logo" src={logoUrl} alt="" draggable={false} />
-        ClipLib needs to analyze your clips.
+        Setsu needs to analyze your clips.
       </h1>
       <p className="ob-lede">
         It runs in the background and only while nothing is playing or exporting. You get two things

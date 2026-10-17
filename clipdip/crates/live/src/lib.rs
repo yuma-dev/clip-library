@@ -2,8 +2,8 @@
 //! Each extension reads one game's own local data (Riot's local APIs, Valve
 //! GSI, log files, UDP telemetry) and runs in its own helper process,
 //! `clipdip.exe --live-ext <id>`, so a panic, hang or bad payload there costs
-//! that card its extras and nothing else. ClipLib's parts of the card (logo
-//! badge, "Clipping using ClipLib", the one button) are added by the presence
+//! that card its extras and nothing else. Setsu's parts of the card (logo
+//! badge, "Clipping using Setsu", the one button) are added by the presence
 //! composer, extensions never see them.
 
 pub mod ext;
@@ -243,7 +243,7 @@ impl Settings {
 }
 
 impl Manifest {
-    /// Settings shape for ClipLib's settings page.
+    /// Settings shape for Setsu's settings page.
     pub fn describe(&self) -> serde_json::Value {
         use serde_json::json;
         let options: Vec<_> = self

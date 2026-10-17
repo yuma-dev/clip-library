@@ -280,7 +280,7 @@ function SizeEstimate({ replaySeconds }: { replaySeconds: number }) {
     <div className="clipdip-infobox">
       <Gauge size={13} className="clipdip-infobox-icon" />
       {!running ? (
-        <span>Size estimate is available while Clipdip is running.</span>
+        <span>Size estimate is available while Setsu Recorder is running.</span>
       ) : stats?.measuring && stats.memory_limited ? (
         <span>
           Memory limit reached: the buffer holds <b>{Math.round(stats.buffered_secs)} s</b> of your {replaySeconds} s

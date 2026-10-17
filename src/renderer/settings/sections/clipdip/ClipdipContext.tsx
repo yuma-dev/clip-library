@@ -228,7 +228,7 @@ export function ClipdipProvider({ active, children }: { active: boolean; childre
       });
       clipdipBridge()
         .setConfig(p)
-        .catch(() => toast.show("Failed to save clipdip setting", "error"));
+        .catch(() => toast.show("Failed to save recorder setting", "error"));
     },
     [toast],
   );

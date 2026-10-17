@@ -105,7 +105,7 @@ export default function SettingsRail({ back, onBack }: { back: Route; onBack: ()
                   <span className="settings-hit-text r-label">
                     <b>{h.game?.name ?? h.title ?? s.label}</b>
                     <small>
-                      {h.game ? "Discord, live game details" : h.title ? `${groupLabel === "Clipdip" ? "Clipdip " : ""}${s.label}` : s.blurb}
+                      {h.game ? "Discord, live game details" : h.title ? `${groupLabel === "Recorder" ? "Recorder " : ""}${s.label}` : s.blurb}
                     </small>
                   </span>
                 </button>
@@ -124,7 +124,7 @@ export default function SettingsRail({ back, onBack }: { back: Route; onBack: ()
                   <button
                     key={id}
                     type="button"
-                    data-rail-tip={group.label === "Clipdip" ? `Clipdip ${label}` : label}
+                    data-rail-tip={group.label === "Recorder" ? `Recorder ${label}` : label}
                     className={`rail-item${active ? " active" : ""}`}
                     onClick={() => openSection(id)}
                   >

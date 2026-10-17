@@ -807,7 +807,7 @@ function VideoPlayer({ clipLocation, clips, renameClip, removeClips, markClipsWa
                   id="share-button"
                   className={shareConnected ? undefined : "share-hidden"}
                   type="button"
-                  title="Publish to ClipLib"
+                  title="Publish to Setsu"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShareOpen(true);

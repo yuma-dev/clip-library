@@ -73,10 +73,10 @@ export default function FeedPage() {
           <div className="clip-empty-mark" aria-hidden="true">
             ◇
           </div>
-          <p className="clip-empty-title">Connect to ClipLib</p>
+          <p className="clip-empty-title">Connect to Setsu</p>
           <p className="clip-empty-sub">Sign in to browse the shared clip feed.</p>
           <button type="button" className="feed-connect-btn" onClick={profile.connect}>
-            Connect ClipLib
+            Connect Setsu
           </button>
         </div>
       </div>

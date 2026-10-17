@@ -291,7 +291,7 @@ export function UserPopoverContent({ headName, headHandle, headAvatar, linkable,
                 // registered but profile not yet fetched / fetch failed
                 <div className="user-popover-cliplib">
                   <span className="user-popover-cliplib-dot" aria-hidden="true" />
-                  On ClipLib{headHandle ? ` as @${headHandle}` : ""}
+                  On Setsu{headHandle ? ` as @${headHandle}` : ""}
                 </div>
               ) : null}
   </>;

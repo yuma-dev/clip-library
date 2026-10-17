@@ -182,7 +182,7 @@ function WizardShell({ onClose }: { onClose: (markSeen: boolean) => void }) {
         className="ob-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="What's new in ClipLib 3.0"
+        aria-label="What's new in Setsu 3.0"
         initial={{ y: 26, opacity: 0, scale: 0.98 }}
         animate={{ y: 0, opacity: 1, scale: 1 }}
         exit={{ y: 16, opacity: 0 }}
@@ -267,7 +267,7 @@ function WelcomeStep() {
   return (
     <div className="ob-welcome">
       <div className="ob-hero">
-        <img src={bannerUrl} alt="ClipLib 3.0" draggable={false} />
+        <img src={bannerUrl} alt="Setsu 3.0" draggable={false} />
       </div>
       <div className="ob-welcome-copy">
         <div className="ob-kicker">
@@ -275,7 +275,7 @@ function WelcomeStep() {
         </div>
         <h1 className="ob-title">Clips has a new Face</h1>
         <p className="ob-lede">
-          With a new logo, new look, new name and a full rebuild under the hood, ClipLib has
+          With a new logo, new look, new name and a full rebuild under the hood, Setsu has
           finally arrived in 2026. Here's what's new.
         </p>
         <ul className="ob-features">
@@ -289,7 +289,7 @@ function WelcomeStep() {
           <li>
             <Scissors size={15} />
             <div>
-              <strong>ClipDip clipping engine</strong>
+              <strong>Setsu Recorder</strong>
               <span>A standalone, no bloat replacement for ShadowPlay/OBS</span>
             </div>
           </li>
@@ -304,7 +304,7 @@ function WelcomeStep() {
             <Users size={15} />
             <div>
               <strong>Discord call integration</strong>
-              <span>ClipDip saves who was in the call.</span>
+              <span>Setsu Recorder saves who was in the call.</span>
             </div>
           </li>
         </ul>
@@ -334,18 +334,18 @@ function ClipdipStep({
     <div className="ob-split">
       <div className="ob-copy">
         <div className="ob-kicker">
-          <span className="dia">◇</span> Meet ClipDip
+          <span className="dia">◇</span> Meet Setsu Recorder
         </div>
-        <h1 className="ob-title">ClipLib can Clip now</h1>
+        <h1 className="ob-title">Setsu can Clip now</h1>
         <p className="ob-lede">
-          ClipDip sits in your tray and is ready to save the last {replaySeconds} seconds of your
+          Setsu Recorder sits in your tray and is ready to save the last {replaySeconds} seconds of your
           gameplay. Press the hotkey and the last moments land straight in your library. A long
           needed replacement to Shadowplay/OBS/Steelseries Moments. Currently only NVIDIA Cards
           supported, more to come.
         </p>
         {unsupported ? (
           <div className="ob-note error">
-            {unsupportedReason ?? "This machine can't run ClipDip (it needs Windows and an NVIDIA GPU)."}{" "}
+            {unsupportedReason ?? "This machine can't run Setsu Recorder (it needs Windows and an NVIDIA GPU)."}{" "}
             Everything else in 3.0 still works, and clips from other recorders show up like they
             always did.
           </div>
@@ -353,13 +353,13 @@ function ClipdipStep({
           <div className="ob-rows">
             <div className="ob-row">
               <div className="ob-row-info">
-                <div className="ob-row-title">Enable ClipDip</div>
+                <div className="ob-row-title">Enable Setsu Recorder</div>
                 <div className="ob-row-desc">
                   On by default. Flip it off if you want to stick with your current recorder. You
                   can change your mind anytime in Settings.
                 </div>
               </div>
-              <Toggle checked={enable} onChange={onEnable} aria-label="Enable ClipDip" />
+              <Toggle checked={enable} onChange={onEnable} aria-label="Enable Setsu Recorder" />
             </div>
             <div className="ob-row">
               <div className="ob-row-info">
@@ -372,7 +372,7 @@ function ClipdipStep({
                 checked={autostart && enable}
                 onChange={onAutostart}
                 disabled={!enable}
-                aria-label="Start ClipDip with Windows"
+                aria-label="Start Setsu Recorder with Windows"
               />
             </div>
             <div className="ob-row">
@@ -395,13 +395,13 @@ function ClipdipStep({
         )}
       </div>
       <div className="ob-stage ob-stage-clipdip">
-        <img src={overlayUrl} alt="ClipDip save notification" draggable={false} />
+        <img src={overlayUrl} alt="Setsu Recorder save notification" draggable={false} />
       </div>
     </div>
   );
 }
 
-// same config shape and bridge calls as Settings > ClipDip > Audio (ClipdipAudioSection), trimmed
+// same config shape and bridge calls as Settings > Recorder > Audio (ClipdipAudioSection), trimmed
 type AudioSourceKind = "system_loopback" | "microphone" | "process_loopback";
 interface AudioSource {
   kind: AudioSourceKind;
@@ -457,7 +457,7 @@ function AudioStep() {
         <h1 className="ob-title">Fix your audio after the fact</h1>
         <p className="ob-lede">
           Every source records to its own track. Mic too loud? Friend screaming? Pull that track
-          down in the player, long after the clip was saved. These are the sources ClipDip will
+          down in the player, long after the clip was saved. These are the sources Setsu Recorder will
           record:
         </p>
         <div className="ob-rows">
@@ -552,7 +552,7 @@ function HotkeysStep() {
       <h1 className="ob-title">The keys that save your clips</h1>
       <p className="ob-lede">
         These work globally, in any game. Click one to change it. Some games eat common combos
-        before ClipDip gets to see them, so slightly unusual ones work best.
+        before Setsu Recorder gets to see them, so slightly unusual ones work best.
       </p>
       <div className="ob-rows">
         {HOTKEYS.map(([key, title, description, fallback]) => (
@@ -595,17 +595,17 @@ function DiscordSetup() {
     state === "connected" ? "ok" : state === "needs_authorization" || state === "connecting" ? "wait" : "idle";
   const text =
     state === "clipdip_off"
-      ? "ClipDip isn't running right now, so there's nothing to set up yet. It links up with Discord on its own once it's recording."
+      ? "Setsu Recorder isn't running right now, so there's nothing to set up yet. It links up with Discord on its own once it's recording."
       : state === "connected"
         ? `Connected${d?.user ? ` as ${d.user}` : ""}. You're all set.`
         : state === "discord_not_running"
-          ? "Discord doesn't seem to be open. Start it and ClipDip will find it."
+          ? "Discord doesn't seem to be open. Start it and Setsu Recorder will find it."
           : state === "needs_authorization"
             ? "Discord is asking for permission. Check for a popup over in Discord."
             : state === "connecting"
               ? "Connecting to Discord..."
               : state === "disabled"
-                ? "The Discord link is turned off in ClipDip's config."
+                ? "The Discord link is turned off in Setsu Recorder's config."
                 : (d?.message ?? "Couldn't talk to Discord. It usually sorts itself out on the next try.");
   const showButton = state === "needs_authorization" || state === "error" || state === "discord_not_running";
 

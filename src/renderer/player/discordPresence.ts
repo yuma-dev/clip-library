@@ -156,9 +156,9 @@ function browseActivity(): PresenceActivity {
     details: "Browsing clips",
     state: facts.length ? facts[factIndex % facts.length] : null,
     largeImageKey: ART.browse,
-    largeImageText: total ? `${plural(total, "clip")}${folderBytes ? ` · ${formatBytes(folderBytes)}` : ""}` : "ClipLib",
+    largeImageText: total ? `${plural(total, "clip")}${folderBytes ? ` · ${formatBytes(folderBytes)}` : ""}` : "Setsu",
     smallImageKey: "logo",
-    smallImageText: "ClipLib",
+    smallImageText: "Setsu",
   };
 }
 

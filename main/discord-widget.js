@@ -149,7 +149,7 @@ async function gatherStats() {
     clips_this_week: files.filter((f) => f.stat.mtimeMs >= weekAgo).length,
     watched_hours: await watchedHours(),
     storage_gb: Math.round(totalBytes / 1e9),
-    last_clip_title: newest ? gameOf(newest.path) || path.basename(newest.path) : '—',
+    last_clip_title: newest ? gameOf(newest.path) || path.basename(newest.path) : '-',
   };
 }
 
@@ -157,7 +157,7 @@ async function pushStats(stats) {
   // type 1 = string, 2 = number. total_clips is a string so the widget shows
   // the full number instead of Discord's "2K" abbreviation
   const payload = {
-    username: 'ClipLib',
+    username: 'Setsu',
     data: {
       dynamic: [
         { type: 1, name: 'total_clips', value: String(stats.total_clips) },

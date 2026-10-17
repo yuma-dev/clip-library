@@ -2,7 +2,7 @@ const DiscordRPC = require('discord-rpc');
 const logger = require('../utils/logger');
 const clipdip = require('./clipdip');
 
-// the ClipLib app, shared with clipdip's game presence and voice roster; it has the `logo` asset
+// the Setsu app, shared with clipdip's game presence and voice roster; it has the `logo` asset
 const CLIENT_ID = '1523640943218000042';
 // clipdip shows "Playing <game>" under this same Discord app while a game runs; the library's
 // "Browsing clips" steps aside then, two pipes on one app would fight over the activity
@@ -15,7 +15,7 @@ const GAME_POLL_MS = 15000;
 const BUDGET = 5;
 const WINDOW_MS = 20000;
 const SLOW_MS = 15000;
-const BUTTONS = [{ label: 'Get ClipLib', url: 'https://cliplib.app' }];
+const BUTTONS = [{ label: 'Get Setsu', url: 'https://setsu.gg' }];
 // the renderer's browse art (player/discordPresence.ts ART), shown until it sends its own
 const BROWSE_ART = 'https://cdn.jsdelivr.net/gh/yuma-dev/cliplib-rpc-assets@v4/cliplib/browse.webp';
 
@@ -62,7 +62,7 @@ async function initDiscordRPC(getSettingsFn) {
     shown = null;
     sentAt = [];
     await checkGamePresence();
-    if (!desired) desired = buildActivity({ details: 'Browsing clips', largeImageKey: BROWSE_ART, smallImageKey: 'logo', smallImageText: 'ClipLib' });
+    if (!desired) desired = buildActivity({ details: 'Browsing clips', largeImageKey: BROWSE_ART, smallImageKey: 'logo', smallImageText: 'Setsu' });
     apply();
     clearInterval(gamePoll);
     gamePoll = setInterval(() => void checkGamePresence(), GAME_POLL_MS);
@@ -92,7 +92,7 @@ function buildActivity(spec) {
     details: fitText(spec.details),
     assets: {
       large_image: spec.largeImageKey || 'logo',
-      large_text: fitText(spec.largeImageText ?? 'ClipLib'),
+      large_text: fitText(spec.largeImageText ?? 'Setsu'),
     },
     buttons: BUTTONS,
     instance: false,

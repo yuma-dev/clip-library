@@ -1,4 +1,4 @@
-//! Pictures from ClipLib's own art pack (github.com/yuma-dev/cliplib-rpc-assets),
+//! Pictures from Setsu's own art pack (github.com/yuma-dev/cliplib-rpc-assets),
 //! served by jsDelivr. Built from wiki and Steam art by that repo's recipes;
 //! each extension knows its own keys. The tag is pinned so a live card never
 //! changes under someone, a new pack means a new tag here.

@@ -23,7 +23,7 @@ export default function ClipdipHotkeysSection() {
           />
         </SetRow>
       ))}
-      <StatusLine tone="info">Some games grab keys before Clipdip sees them; pick uncommon combos.</StatusLine>
+      <StatusLine tone="info">Some games grab keys before Setsu Recorder sees them; pick uncommon combos.</StatusLine>
     </SetGroup>
   );
 }
