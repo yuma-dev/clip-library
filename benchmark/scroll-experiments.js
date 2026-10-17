@@ -63,7 +63,7 @@ async function measure(page, action) {
 }
 
 async function main() {
-  const exe = exeOverride ? path.resolve(exeOverride) : path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe');
+  const exe = exeOverride ? path.resolve(exeOverride) : path.join(root, 'dist', 'win-unpacked', 'Setsu.exe');
   const template = path.join(root, 'benchmark', 'profiles', 'warm-template');
   const profile = path.join(os.tmpdir(), 'cliplib-bench', 'scroll-profile');
   if (!fs.existsSync(path.join(profile, 'settings.json'))) fs.cpSync(template, profile, { recursive: true });

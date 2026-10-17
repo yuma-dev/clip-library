@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Native splash launcher for ClipLib: plays the logo reveal instantly, starts the Electron app, fades out once its window is on screen"
+description = "Native splash launcher for Setsu: plays the logo reveal instantly, starts the Electron app, fades out once its window is on screen"
 
 [[bin]]
 name = "cliplib-launcher"

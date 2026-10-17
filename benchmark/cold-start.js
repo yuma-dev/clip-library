@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 // Cold-start benchmark against the PACKAGED app (dist/win-unpacked), launched
-// the way a user launches it: through the native splash launcher ClipLib.exe.
+// the way a user launches it: through the native splash launcher.
 //
-// Each run launches ClipLib.exe with an isolated, pre-seeded profile
+// Each run launches the launcher with an isolated, pre-seeded profile
 // (CLIPLIB_PROFILE_DIR) and CLIPLIB_BOOT_TRACE=1, then watches the
 // boot-trace.json the app writes (main/boot-trace.js) until the grid has
 // painted a real thumbnail and the fresh clip list has been reconciled.
@@ -200,7 +200,7 @@ async function runOnce(opts, index, exe) {
       if (!appAlive) break;
     }
   }
-  // ClipLib.exe (the launcher) exits once the app is on screen; the app's own pid is in the trace it wrote
+  // the launcher exits once the app is on screen; the app's own pid is in the trace it wrote
   for (const pid of new Set([trace?.pid, child.pid].filter(Boolean))) {
     try {
       execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
@@ -277,7 +277,7 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.makeProfile) return makeProfile();
 
-  const builtExe = path.join(root, 'dist', 'win-unpacked', 'ClipLib Launcher.exe');
+  const builtExe = path.join(root, 'dist', 'win-unpacked', 'Setsu Launcher.exe');
   const baseExe = opts.exe ? path.resolve(opts.exe) : builtExe;
   if (!fs.existsSync(baseExe)) throw new Error(`No packaged app at ${baseExe} (run npm run bench:build)`);
   fs.mkdirSync(scratchRoot, { recursive: true });

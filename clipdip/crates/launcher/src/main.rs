@@ -1,5 +1,5 @@
-//! ClipLib launcher, what shortcuts/taskbar pins point at. Plays the Setsu
-//! reveal within tens of ms of the click, starts `ClipLib.exe` with the same
+//! Setsu launcher, what shortcuts/taskbar pins point at. Plays the Setsu
+//! reveal within tens of ms of the click, starts `Setsu.exe` with the same
 //! args plus `--splash-logo=x,y,w,h` (physical pixels, so the app can take the
 //! mark over in place) and `--splash-handoff` (when it may), fades out once
 //! the app window is visible and opaque.
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
@@ -27,13 +27,14 @@ use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
     GetLayeredWindowAttributes, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-    IsWindowVisible, PeekMessageW, RegisterClassW, ShowWindow, SystemParametersInfoW,
+    IsWindowVisible, MessageBoxW, PeekMessageW, RegisterClassW, ShowWindow, SystemParametersInfoW,
     TranslateMessage, UpdateLayeredWindow, GWL_EXSTYLE, LWA_ALPHA, MSG, PM_REMOVE, SPI_GETWORKAREA,
-    SW_SHOWNOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, ULW_ALPHA, WNDCLASSW, WS_EX_LAYERED,
+    MB_ICONERROR, MB_OK, SW_SHOWNOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, ULW_ALPHA, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-const APP_EXE: &str = "ClipLib.exe";
+// ClipLib.exe: an old launcher left next to a new app or the other way round mid update
+const APP_EXES: [&str; 2] = ["Setsu.exe", "ClipLib.exe"];
 // baked by scripts/bake-splash.mjs from the setsu web component, format documented there.
 // empty when it was not baked, then there is no splash
 const SPLASH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/splash.bin"));
@@ -214,8 +215,17 @@ fn app_exe_path() -> Option<PathBuf> {
     }
     let exe = env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let app = dir.join(APP_EXE);
-    app.is_file().then_some(app)
+    APP_EXES.iter().map(|name| dir.join(name)).find(|app| app.is_file())
+}
+
+// a click that does nothing reads as a dead app, say why instead
+fn report_launch_failure(detail: &str) {
+    let text: Vec<u16> = format!("Setsu could not start: {detail}.\n\nReinstalling from setsu.gg fixes this.\0")
+        .encode_utf16()
+        .collect();
+    unsafe {
+        MessageBoxW(None, PCWSTR(text.as_ptr()), w!("Setsu"), MB_OK | MB_ICONERROR);
+    }
 }
 
 struct Probe {
@@ -272,7 +282,10 @@ fn app_window_visible(pid: u32) -> bool {
 
 fn main() {
     // splash must never delay the app; only geometry is computed before spawn
-    let Some(app) = app_exe_path() else { return };
+    let Some(app) = app_exe_path() else {
+        report_launch_failure("Setsu.exe is missing next to the launcher");
+        return;
+    };
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
@@ -311,7 +324,13 @@ fn main() {
             epoch, s.hold_ms, s.loop_ms, s.blink_ms.0, s.blink_ms.1
         ));
     }
-    let Ok(mut child) = command.spawn() else { return };
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            report_launch_failure(&error.to_string());
+            return;
+        }
+    };
     if let Some(splash) = splash.as_mut() {
         play(splash, &mut child, started, (x, y, width, height));
     }

@@ -13,7 +13,12 @@ const logger = require('../utils/logger');
 const telemetry = require('./telemetry');
 const { ffmpegPath } = require('./ffmpeg-binaries');
 
-const EXE_NAME = 'clipdip.exe';
+// shipped name; cargo builds clipdip.exe and scripts/vendor-clipdip.mjs renames it
+const EXE_NAME = 'Setsu Recorder.exe';
+const CARGO_EXE_NAME = 'clipdip.exe';
+// an install from before the rename still runs clipdip.exe until the update kills it, and a
+// Run value or binaryPath can point at one. same tauri identifier, so control flags reach either
+const EXE_NAMES = [EXE_NAME, CARGO_EXE_NAME].map((n) => n.toLowerCase());
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const RUN_VALUE = 'ClipLib';
 const RUN_VALUE_LEGACY = 'ClipDip';
@@ -37,13 +42,16 @@ async function resolveBinaryPath() {
   const override = settings?.clipdip?.binaryPath;
   if (override && typeof override === 'string' && override.trim()) {
     const p = override.trim();
-    // picker gives the exe; older settings hold its folder
-    return p.toLowerCase().endsWith('.exe') ? p : path.join(p, EXE_NAME);
+    // picker gives the exe; older settings hold its folder. an override that went missing (it
+    // pointed at the pre-rename resources\clipdip\clipdip.exe) falls through to the bundled one
+    const picks = p.toLowerCase().endsWith('.exe') ? [p] : [EXE_NAME, CARGO_EXE_NAME].map((n) => path.join(p, n));
+    const found = picks.find((candidate) => fs.existsSync(candidate));
+    if (found) return found;
   }
   if (!app.isPackaged) {
     // dev: fall back to the in-repo cargo build or vendored copy, no path config needed
     const candidates = [
-      path.resolve(__dirname, '..', 'clipdip', 'target', 'release', EXE_NAME),
+      path.resolve(__dirname, '..', 'clipdip', 'target', 'release', CARGO_EXE_NAME),
       path.resolve(__dirname, '..', 'vendor', 'clipdip', EXE_NAME)
     ];
     for (const candidate of candidates) {
@@ -181,12 +189,14 @@ function isRunning() {
     return Promise.resolve(runningCache.value);
   }
   return new Promise((resolve) => {
+    // unfiltered: /FI takes one image name and both count
     execFile(
       'tasklist',
-      ['/FI', `IMAGENAME eq ${EXE_NAME}`, '/FO', 'CSV', '/NH'],
-      { windowsHide: true },
+      ['/FO', 'CSV', '/NH'],
+      { windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout) => {
-        const running = !error && typeof stdout === 'string' && stdout.toLowerCase().includes(EXE_NAME);
+        const lines = !error && typeof stdout === 'string' ? stdout.toLowerCase().split(/\r?\n/) : [];
+        const running = lines.some((line) => EXE_NAMES.some((name) => line.startsWith(`"${name}"`)));
         if (error) {
           // failed probe reads as "not running" everywhere for the rest of the session
           telemetry.event('clipdip_isrunning_probe_failed', {
@@ -325,7 +335,7 @@ async function quit() {
   }
   logger.warn('Clipdip did not exit after --quit; force-killing');
   await new Promise((resolve) => {
-    execFile('taskkill', ['/F', '/IM', EXE_NAME], { windowsHide: true }, () => resolve());
+    execFile('taskkill', ['/F', '/IM', EXE_NAME, '/IM', CARGO_EXE_NAME], { windowsHide: true }, () => resolve());
   });
   runningCache = { value: false, at: 0 };
   return { success: true, forced: true };
@@ -537,9 +547,35 @@ function regQuery(valueName) {
 async function getAutostart() {
   for (const name of [RUN_VALUE, RUN_VALUE_LEGACY]) {
     const out = await regQuery(name);
-    if (out && out.toLowerCase().includes(EXE_NAME)) return true;
+    if (out && EXE_NAMES.some((name) => out.toLowerCase().includes(name))) return true;
   }
   return false;
+}
+
+function runValuePath(out) {
+  const match = /REG_\w+\s+(.+)$/m.exec(out || '');
+  return match ? match[1].trim().replace(/^"|"$/g, '') : null;
+}
+
+// the Run value holds the exe path, which an update that renames or moves the exe leaves dead
+// (3.7.0: clipdip.exe -> Setsu Recorder.exe). the installer rewrites it too, this covers installs
+// it missed. only an existing value is touched, no value means the user turned autostart off
+async function repairAutostart() {
+  if (!app.isPackaged) return;
+  const exe = await resolveBinaryPath();
+  for (const name of [RUN_VALUE, RUN_VALUE_LEGACY]) {
+    const current = runValuePath(await regQuery(name));
+    if (!current) continue;
+    if (name === RUN_VALUE && current.toLowerCase() === exe.toLowerCase()) return;
+    logger.info(`Repointing recorder autostart: ${current} -> ${exe}`);
+    await setAutostart(true);
+    telemetry.event('clipdip_autostart_repaired', {
+      kind: telemetry.KIND.CUSTOM,
+      severity: telemetry.SEVERITY.INFO,
+      context: { from_value: name, target_missing: !fs.existsSync(current) }
+    });
+    return;
+  }
 }
 
 function regRun(args) {
@@ -625,6 +661,7 @@ async function ensureStartedIfEnabled() {
   try {
     const settings = await getSettings();
     if (!settings?.clipdip?.enabled) return;
+    await repairAutostart().catch((e) => logger.warn(`Recorder autostart repair failed: ${e.message}`));
     // no isRunning early-return: start() no-ops if already running but still repairs a missing output folder
     const result = await start();
     if (!result.success) logger.warn(`Clipdip autostart-on-launch failed: ${result.error}`);

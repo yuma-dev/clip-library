@@ -19,8 +19,8 @@ const opt = (name, dflt) => {
 };
 
 async function main() {
-  // drives the Electron binary directly; the launcher is "ClipLib Launcher.exe"
-  const exe = path.resolve(opt('--exe', path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe')));
+  // drives the Electron binary directly; the launcher is "Setsu Launcher.exe"
+  const exe = path.resolve(opt('--exe', path.join(root, 'dist', 'win-unpacked', 'Setsu.exe')));
   const template = path.join(root, 'benchmark', 'profiles', 'warm-template');
   const profile = opt('--profile', path.join(os.tmpdir(), 'cliplib-bench', 'smoke-profile'));
   fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelayMs: 200 });

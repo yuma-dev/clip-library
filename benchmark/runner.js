@@ -25,7 +25,7 @@ function createIsolatedProfile() {
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
   const candidates = [path.join(appData, 'Clips'), path.join(appData, 'clips')];
   const source = candidates.find((dir) => fs.existsSync(path.join(dir, 'settings.json')));
-  if (!source) throw new Error('Could not find ClipLib settings.json to seed the benchmark profile');
+  if (!source) throw new Error('Could not find settings.json to seed the benchmark profile');
 
   const settings = JSON.parse(fs.readFileSync(path.join(source, 'settings.json'), 'utf8'));
   settings.enableDiscordRPC = false;

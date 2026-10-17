@@ -22,7 +22,7 @@ const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '..');
 const appDir = path.join(root, 'dist', 'win-unpacked');
-const launcher = path.join(appDir, 'ClipLib Launcher.exe');
+const launcher = path.join(appDir, 'Setsu Launcher.exe');
 const template = path.join(__dirname, 'profiles', 'warm-template');
 const profile = path.join(os.tmpdir(), 'cliplib-bench', 'reveal-frames');
 const PORT = 9444;

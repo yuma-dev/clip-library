@@ -1,7 +1,7 @@
 {
   "name": "clips",
-  "displayName": "ClipLib",
-  "version": "3.6.5",
+  "displayName": "Setsu",
+  "version": "3.7.0",
   "description": "A simple clipping gallery as a replacement for Steelseries Moments. Use it with any other clipping program.",
   "author": "yuma-dev",
   "main": "main.js",
@@ -43,14 +43,15 @@
   },
   "build": {
     "appId": "com.yuma-dev.clips",
-    "productName": "ClipLib",
+    "productName": "Setsu",
     "extraMetadata": {
-      "description": "ClipLib"
+      "description": "Setsu"
     },
     "protocols": [
       {
-        "name": "ClipLib",
+        "name": "Setsu",
         "schemes": [
+          "setsu",
           "cliplib"
         ]
       }
@@ -93,16 +94,16 @@
       "oneClick": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ClipLib",
-      "uninstallDisplayName": "ClipLib",
-      "artifactName": "ClipLib Setup ${version}.${ext}",
+      "shortcutName": "Setsu",
+      "uninstallDisplayName": "Setsu",
+      "artifactName": "Setsu Setup ${version}.${ext}",
       "deleteAppDataOnUninstall": false,
       "include": "build/installer.nsh"
     },
     "extraFiles": [
       {
-        "from": "vendor/launcher/ClipLib Launcher.exe",
-        "to": "ClipLib Launcher.exe"
+        "from": "vendor/launcher/Setsu Launcher.exe",
+        "to": "Setsu Launcher.exe"
       }
     ]
   },

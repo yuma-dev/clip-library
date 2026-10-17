@@ -3,8 +3,8 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../../../icon.ico");
-        res.set("ProductName", "ClipLib");
-        res.set("FileDescription", "ClipLib");
+        res.set("ProductName", "Setsu");
+        res.set("FileDescription", "Setsu");
         // fail loudly: shortcuts/pins take their icon from this exe
         if let Err(error) = res.compile() {
             panic!("launcher icon resource not compiled (rc.exe from the Windows SDK is required): {error}");

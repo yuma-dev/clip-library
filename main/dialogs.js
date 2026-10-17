@@ -63,7 +63,7 @@ async function showSaveDialog(mainWindow, type, clipName, customName) {
  */
 async function showExeDialog(mainWindow) {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Choose clipdip.exe',
+    title: 'Choose Setsu Recorder.exe',
     properties: ['openFile'],
     filters: [{ name: 'Programs', extensions: ['exe'] }]
   });

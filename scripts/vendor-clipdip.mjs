@@ -1,5 +1,6 @@
 // Copies the clipdip binary from the in-repo cargo build into vendor/clipdip/
-// so electron-builder ships it as resources/clipdip/. ffmpeg is not vendored
+// as "Setsu Recorder.exe" so electron-builder ships it as resources/clipdip/.
+// cargo keeps building clipdip.exe, the rename happens only here. ffmpeg is not vendored
 // here: both apps use vendor/ffmpeg (resources/ffmpeg/ in the package), which
 // main/clipdip.js writes into clipdip's output.ffmpeg_path.
 // Run via `npm run vendor:clipdip` (or as part of `npm run build`).
@@ -22,6 +23,6 @@ if (!existsSync(exe)) {
 // ffmpeg pair and an old preparer exe both lingered)
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
-const dest = join(outDir, "clipdip.exe");
+const dest = join(outDir, "Setsu Recorder.exe");
 copyFileSync(exe, dest);
-console.log(`vendor-clipdip: clipdip.exe (${(statSync(dest).size / 1048576).toFixed(1)} MB) -> ${outDir}`);
+console.log(`vendor-clipdip: Setsu Recorder.exe (${(statSync(dest).size / 1048576).toFixed(1)} MB) -> ${outDir}`);

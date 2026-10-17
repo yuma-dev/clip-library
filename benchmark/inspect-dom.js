@@ -16,7 +16,7 @@ const opt = (name, dflt) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : dflt;
 };
-const exe = opt('--exe', '') ? path.resolve(opt('--exe', '')) : path.join(root, 'dist', 'win-unpacked', 'ClipLib.exe');
+const exe = opt('--exe', '') ? path.resolve(opt('--exe', '')) : path.join(root, 'dist', 'win-unpacked', 'Setsu.exe');
 const waitMs = Number(opt('--wait', 12000));
 
 async function main() {

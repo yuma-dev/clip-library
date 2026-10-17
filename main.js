@@ -3,18 +3,16 @@ const bootTrace = require('./main/boot-trace');
 const { app, BrowserWindow, ipcMain, dialog, Menu, powerMonitor, shell, screen, crashReporter } = require("electron");
 app.setAppUserModelId('com.yuma-dev.clips');
 
-// Clips->ClipLib rename: Electron derives userData from productName, which would
-// abandon settings/thumbnails in the old %APPDATA%\Clips. Pin it if present; must run before any
-// userData use (incl. logger below).
+// userData is %APPDATA%\clips for every install: Electron names it after package.json `name`,
+// build.productName never reaches the packaged package.json. the pin just makes that explicit and
+// survives productName renames (ClipLib, Setsu). must run before any userData use (incl. logger below)
 {
   const path = require('path');
-  const fs = require('fs');
-  const legacyUserData = path.join(app.getPath('appData'), 'Clips');
   if (process.env.CLIPLIB_PROFILE_DIR) {
     // benchmark harness (benchmark/cold-start.js): isolated profile so runs never touch the real one.
     app.setPath('userData', path.resolve(process.env.CLIPLIB_PROFILE_DIR));
-  } else if (fs.existsSync(legacyUserData)) {
-    app.setPath('userData', legacyUserData);
+  } else {
+    app.setPath('userData', path.join(app.getPath('appData'), 'Clips'));
   }
 }
 
@@ -756,9 +754,13 @@ async function handleCliplibProtocolUrl(protocolUrl) {
   }
 }
 
-// retargets taskbar pins orphaned by the Clips->ClipLib exe rename: .lnk targets the exe's
-// full path, which the rename left pointing at a deleted file. Only touches pins targeting a
-// missing Clips.exe.
+// retargets taskbar pins orphaned by the Clips->ClipLib->Setsu exe renames: .lnk targets the exe's
+// full path, which a rename left pointing at a deleted file. Only touches pins whose target is one
+// of the old exe names and missing. the update usually unpins outright when the app exe name
+// changes, this catches the ones that survive.
+const LAUNCHER_EXE = 'Setsu Launcher.exe';
+const LEGACY_PIN_EXES = ['clips.exe', 'cliplib.exe', 'cliplib launcher.exe'];
+
 async function repairTaskbarPins() {
   if (!app.isPackaged) return;
   const fss = require('fs');
@@ -778,7 +780,7 @@ async function repairTaskbarPins() {
   // shell.readShortcutLink runs through COM synchronously on the main thread; reading every pin
   // that way was a 2s freeze per launch. an async byte read filters candidates first; only those hit COM.
   const execLower = process.execPath.toLowerCase();
-  const launcherLower = path.join(path.dirname(process.execPath), 'ClipLib Launcher.exe').toLowerCase();
+  const launcherLower = path.join(path.dirname(process.execPath), LAUNCHER_EXE).toLowerCase();
   const candidates = [];
   for (const name of entries) {
     if (!name.toLowerCase().endsWith('.lnk')) continue;
@@ -794,7 +796,7 @@ async function repairTaskbarPins() {
     const wide = buf.toString('utf16le').toLowerCase();
     const has = (needle) => ansi.includes(needle) || wide.includes(needle);
     if (has(launcherLower)) continue;
-    if (!has('clips.exe') && !has(execLower)) continue;
+    if (!LEGACY_PIN_EXES.some(has) && !has(execLower)) continue;
     candidates.push({ name, lnkPath });
   }
   for (const { name, lnkPath } of candidates) {
@@ -805,9 +807,9 @@ async function repairTaskbarPins() {
       const target = details?.target || '';
       const lowered = target.toLowerCase();
       // prefers the native launcher next to the app (instant splash), else the Electron binary.
-      const launcher = path.join(path.dirname(process.execPath), 'ClipLib Launcher.exe');
+      const launcher = path.join(path.dirname(process.execPath), LAUNCHER_EXE);
       const haveLauncher = fss.existsSync(launcher);
-      const orphanedLegacy = lowered.endsWith('\\clips.exe') && !fss.existsSync(target);
+      const orphanedLegacy = LEGACY_PIN_EXES.includes(path.basename(lowered)) && !fss.existsSync(target);
       // a pin created from the running window targets the Electron exe; move it to the launcher
       // once so pinned launches get the splash.
       const pinnedElectron = haveLauncher && lowered === process.execPath.toLowerCase();

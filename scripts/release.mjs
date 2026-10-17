@@ -11,7 +11,7 @@ import { execSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { generateChangelog } from './changelog.mjs';
@@ -157,6 +157,15 @@ function publishGitHubRelease(tag, notesFile, assets, options) {
 
   if (exists) {
     console.log(`Updating GitHub release ${tag}...`);
+    // --clobber only replaces same-named assets; an installer renamed in between (ClipLib to
+    // Setsu) would leave two .exe and the 2.x updater takes whichever comes first
+    const keep = new Set(assets.map((asset) => basename(asset)));
+    const listed = spawnSync('gh', ['release', 'view', tag, '--repo', githubSlug, '--json', 'assets', '-q', '.assets[].name'], { encoding: 'utf8' });
+    for (const name of String(listed.stdout || '').split(/\r?\n/)) {
+      if (name.toLowerCase().endsWith('.exe') && !keep.has(name)) {
+        runCommand('gh', ['release', 'delete-asset', tag, name, '--repo', githubSlug, '--yes'], { stdio: 'inherit' });
+      }
+    }
     runCommand('gh', ['release', 'upload', tag, ...assets, '--repo', githubSlug, '--clobber'], {
       stdio: 'inherit',
     });

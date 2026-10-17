@@ -1,7 +1,7 @@
-// Copies the native splash launcher into vendor/launcher/"ClipLib Launcher.exe"
-// for electron-builder to place at the install root next to ClipLib.exe (name
-// must stay stable, or the installer loses shortcut/taskbar pins on update).
-// Launcher starts ClipLib.exe and fades out once its window is on screen.
+// Copies the native splash launcher into vendor/launcher/"Setsu Launcher.exe"
+// for electron-builder to place at the install root next to Setsu.exe. renaming Setsu.exe
+// makes the update unpin the app (3.7.0 took that hit once for the Setsu rename).
+// Launcher starts Setsu.exe and fades out once its window is on screen.
 // Run via `npm run vendor:launcher` (or as part of `npm run build`).
 import { copyFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -19,6 +19,6 @@ if (!existsSync(exe)) {
 }
 
 mkdirSync(outDir, { recursive: true });
-const dest = join(outDir, "ClipLib Launcher.exe");
+const dest = join(outDir, "Setsu Launcher.exe");
 copyFileSync(exe, dest);
-console.log(`vendor-launcher: ClipLib Launcher.exe (${(statSync(dest).size / 1024).toFixed(0)} KB) -> ${outDir}`);
+console.log(`vendor-launcher: Setsu Launcher.exe (${(statSync(dest).size / 1024).toFixed(0)} KB) -> ${outDir}`);
