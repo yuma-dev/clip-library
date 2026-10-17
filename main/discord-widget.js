@@ -176,7 +176,7 @@ async function pushStats(stats) {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bot ${botToken}`,
-      'User-Agent': 'DiscordBot (https://github.com/yuma-dev/clip-library, 1.0.0)',
+      'User-Agent': 'DiscordBot (https://github.com/yuma-dev/setsu, 1.0.0)',
     },
     body: JSON.stringify(payload),
   });

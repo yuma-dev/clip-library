@@ -13,7 +13,7 @@ const telemetry = require('./telemetry');
 const pendingUpdateMarkerPath = () => path.join(app.getPath('userData'), 'pending-update.json');
 
 const GITHUB_OWNER = 'yuma-dev';
-const GITHUB_REPO = 'clip-library';
+const GITHUB_REPO = 'setsu';
 const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
 const GITHUB_RELEASES_LATEST_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
 const GITHUB_RELEASES_PREFIX = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`;
